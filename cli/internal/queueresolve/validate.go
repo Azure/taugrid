@@ -172,7 +172,7 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 			}
 			return report, fmt.Errorf(
 				"ClusterQueue %q has no compatible GPU quota flavor with exact node label %s=%q for resource %q and the rendered pod constraints; choose another queue or ask the platform owner to label a matching ResourceFlavor and GPU nodes",
-				target.ClusterQueue, topology.NodeLabelGPUClass, target.GPUClass, target.GPUResourceName)
+				target.ClusterQueue, topology.NodeLabelGPUClass, topology.GPUClassNodeLabelValue(target.GPUClass), target.GPUResourceName)
 		}
 		target.ResourceFlavor = flavor
 		report.ResourceFlavor = flavor
@@ -262,7 +262,7 @@ func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.Clu
 				continue
 			}
 			if target.GPUClass != "" && target.GPUClass != topology.GPUClassAny &&
-				strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) != target.GPUClass {
+				!topology.GPUClassMatchesNodeLabel(target.GPUClass, rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) {
 				continue
 			}
 			if int64(target.GPUCount) <= capacity {
@@ -372,11 +372,10 @@ func getResourceFlavor(ctx context.Context, r RawRunner, name string) (kueueapi.
 // gpuClassAllowedFlavors resolves which of a ClusterQueue's GPU-quota
 // ResourceFlavors satisfy an exact researcher gpu_class request.
 //
-// gpu_class is a Kueue ResourceFlavor node-label contract
-// (tau.azure.com/gpu-class), never a ResourceFlavor *name* heuristic: a
-// flavor named "nd-h200-v5" (or one that happens to contain "h100" in its
-// name, e.g. a mislabeled "legacy-h100-pool") only satisfies
-// gpu_class: h200-141gb if its spec.nodeLabels carries that exact value.
+// gpu_class is matched through KEC's ResourceFlavor node-label contract
+// (kubernetes.azure.com/sku-gpu-name), never a ResourceFlavor *name*
+// heuristic. A flavor named "aks-h200-ndisr-v5" satisfies gpu_class: h200
+// only when its spec.nodeLabels carries sku-gpu-name=H200.
 // "any" skips only the class-label equality check. Every candidate is still
 // read and checked against the rendered selectors, tolerations, and topology
 // request. A non-nil, possibly-empty map is always returned so callers never
@@ -409,7 +408,7 @@ func gpuClassAllowedFlavors(
 				continue
 			}
 			classMatches := class == "" || class == topology.GPUClassAny ||
-				strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass]) == class
+				topology.GPUClassMatchesNodeLabel(class, rf.Spec.NodeLabels[topology.NodeLabelGPUClass])
 			hasTopology := strings.TrimSpace(rf.Spec.TopologyName) != ""
 			topologyMatches := hasTopology == topologyRequest
 			if classMatches && topologyMatches &&
@@ -503,7 +502,7 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 		}
 		if !ok {
 			if gpuClass != "" && gpuClass != topology.GPUClassAny {
-				c.Reason = fmt.Sprintf("no GPU quota flavor has %s=%q", topology.NodeLabelGPUClass, gpuClass)
+				c.Reason = fmt.Sprintf("no GPU quota flavor has %s=%q", topology.NodeLabelGPUClass, topology.GPUClassNodeLabelValue(gpuClass))
 			} else {
 				c.Reason = "no matching GPU quota found"
 			}
@@ -593,7 +592,7 @@ func validateOptionalTopologyLabels(kind, name string, labels map[string]string,
 func validateResourceFlavor(rf kueueapi.ResourceFlavor, target validationTarget) error {
 	if target.GPUClass != "" && target.GPUClass != topology.GPUClassAny {
 		got := strings.TrimSpace(rf.Spec.NodeLabels[topology.NodeLabelGPUClass])
-		if got != target.GPUClass {
+		if !topology.GPUClassMatchesNodeLabel(target.GPUClass, got) {
 			return fmt.Errorf(
 				"ResourceFlavor %q has %s=%q, but gpu_class %q requires an exact node-label match; ask the platform owner to label the ResourceFlavor and matching GPU nodes",
 				rf.Metadata.Name, topology.NodeLabelGPUClass, got, target.GPUClass)

@@ -22,7 +22,7 @@ func testPolicy() topology.Policy {
 				Mode:           "fixed",
 				Placement:      "independent",
 				Shape:          "1xa100-80gb",
-				GPUClass:       "a100-80gb",
+				GPUClass:       "a100",
 				QueueName:      "research-training",
 				ClusterQueue:   "team-research-reserved-cq",
 				ResourceFlavor: "gpu-a100-80gb-dra",
@@ -35,7 +35,7 @@ func testPolicy() topology.Policy {
 				Mode:           "fixed",
 				Placement:      "single-node-nvlink",
 				Shape:          "8xa100-80gb",
-				GPUClass:       "a100-80gb",
+				GPUClass:       "a100",
 				QueueName:      "research-training",
 				ClusterQueue:   "team-research-reserved-cq",
 				ResourceFlavor: "gpu-a100-80gb-dra",
@@ -48,7 +48,7 @@ func testPolicy() topology.Policy {
 				Mode:           "fixed",
 				Placement:      "single-node-nvlink",
 				Shape:          "8xh200-141gb",
-				GPUClass:       "h200-141gb",
+				GPUClass:       "h200",
 				QueueName:      "research-large-memory",
 				ClusterQueue:   "team-research-reserved-cq",
 				ResourceFlavor: "gpu-h200-141gb-dra",
@@ -70,7 +70,7 @@ func TestBuildSnapshotMapsA100PressureAndH200Headroom(t *testing.T) {
 		t.Fatalf("groups=%d want 2: %#v", len(snap.Groups), snap.Groups)
 	}
 
-	a100 := findGroup(t, snap, "a100-80gb")
+	a100 := findGroup(t, snap, "a100")
 	if a100.Pending != 2 || a100.Admitted != 2 || a100.Reserving != 0 {
 		t.Fatalf("a100 queue counts wrong: %#v", a100)
 	}
@@ -87,7 +87,7 @@ func TestBuildSnapshotMapsA100PressureAndH200Headroom(t *testing.T) {
 		t.Fatalf("gpu request=%d want 8", a100.PendingWorkloads[0].GPURequested)
 	}
 
-	h200 := findGroup(t, snap, "h200-141gb")
+	h200 := findGroup(t, snap, "h200")
 	if h200.Pending != 0 || h200.Admitted != 0 {
 		t.Fatalf("h200 queue counts wrong: %#v", h200)
 	}
@@ -111,7 +111,7 @@ func TestBuildSnapshotFiltersNormalizeInput(t *testing.T) {
 	if len(snap.Groups) != 1 {
 		t.Fatalf("groups=%d want 1: %#v", len(snap.Groups), snap.Groups)
 	}
-	if snap.Groups[0].GPUClass != "h200-141gb" || snap.Groups[0].Lane != "large-memory" {
+	if snap.Groups[0].GPUClass != "h200" || snap.Groups[0].Lane != "large-memory" {
 		t.Fatalf("wrong filtered group: %#v", snap.Groups[0])
 	}
 	if len(snap.Hints) != 0 {
@@ -128,12 +128,12 @@ func TestSnapshotCarriesHintsAndPendingWorkloads(t *testing.T) {
 	for _, g := range snap.Groups {
 		classes[g.GPUClass] = g
 	}
-	for _, want := range []string{"a100-80gb", "h200-141gb"} {
+	for _, want := range []string{"a100", "h200"} {
 		if _, ok := classes[want]; !ok {
 			t.Fatalf("missing GPU class %q in groups: %#v", want, snap.Groups)
 		}
 	}
-	if got := classes["a100-80gb"].GPUReserved; got != 16 {
+	if got := classes["a100"].GPUReserved; got != 16 {
 		t.Fatalf("a100 GPUReserved=%d want 16", got)
 	}
 	if len(snap.Hints) == 0 {
@@ -184,7 +184,7 @@ func TestBuildSnapshotOrdersPendingWorkloadsByPriorityThenFIFO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group := findGroup(t, snap, "a100-80gb")
+	group := findGroup(t, snap, "a100")
 	if group.GPUHeadroom != 0 {
 		t.Fatalf("GPUHeadroom = %d, want constrained quota", group.GPUHeadroom)
 	}
@@ -220,7 +220,7 @@ func TestBuildSnapshotKeepsFIFOForEqualOrMissingPriority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group := findGroup(t, snap, "a100-80gb")
+	group := findGroup(t, snap, "a100")
 	if len(group.PendingWorkloads) != 2 ||
 		group.PendingWorkloads[0].Name != "older" ||
 		group.PendingWorkloads[1].Name != "newer" {
@@ -237,7 +237,7 @@ func TestSnapshotJSONIsMachineReadable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"gpuClass":"a100-80gb"`, `"gpuHeadroom":8`, `"pendingWorkloads"`} {
+	for _, want := range []string{`"gpuClass":"a100"`, `"gpuHeadroom":8`, `"pendingWorkloads"`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("missing %s in JSON: %s", want, raw)
 		}

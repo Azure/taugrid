@@ -1102,7 +1102,7 @@ func TestJSONSchemaAcceptsDeprecatedGPUClassAliases(t *testing.T) {
 		t.Fatalf("deprecated gpu_class aliases are not marked deprecated: %#v", deprecated)
 	}
 	got := deprecated["enum"].([]any)
-	want := []string{"a100-nvlink-80gb", "h100-standalone-95gb", "h200-nvlink-141gb"}
+	want := []string{"a10-4gb", "a10-8gb", "a10-12gb", "a10-24gb", "a100-40gb", "a100-80gb", "a100-nvlink-80gb", "h100-80gb", "h100-95gb", "h100-standalone-95gb", "h200-141gb", "h200-nvlink-141gb", "gb200-192gb", "gb300-288gb"}
 	if len(got) != len(want) {
 		t.Fatalf("deprecated aliases = %#v, want %v", got, want)
 	}

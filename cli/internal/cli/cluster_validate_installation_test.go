@@ -50,7 +50,7 @@ func TestClusterValidateInstallationUsesSharedReadinessPath(t *testing.T) {
 		t.Fatalf("validation options = %+v", got)
 	}
 	if !strings.Contains(out, "Waiting for TauGrid installation readiness") ||
-		!strings.Contains(out, "READY: 8/8 checks passed") {
+		!strings.Contains(out, "READY: 10/10 checks passed") {
 		t.Fatalf("validation output missing readiness report:\n%s", out)
 	}
 }

@@ -51,7 +51,7 @@ func TestClusterInstallUpgradesCRDsBeforeExistingRelease(t *testing.T) {
 			runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
 				switch args[0] {
 				case "list":
-					_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"tau-system"}]`)
+					_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"kueue-system"}]`)
 				case "get":
 					_, _ = io.WriteString(out, "{}")
 				case "template":

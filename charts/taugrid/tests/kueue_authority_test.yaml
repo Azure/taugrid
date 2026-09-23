@@ -1,122 +1,37 @@
-suite: TauGrid Kueue object authority
+suite: TauGrid Kueue Extension Controller contract
 templates:
   - authority-validation.yaml
-  - baseline-queue.yaml
 tests:
-  - it: keeps Tau as the default authority
-    template: baseline-queue.yaml
+  - it: rejects installation outside kueue-system
+    release:
+      namespace: tau-system
     asserts:
-      - hasDocuments:
-          count: 8
-      - equal:
-          path: kind
-          value: Topology
-        documentIndex: 0
-      - equal:
-          path: metadata.name
-          value: taugrid-default-cpu
-        documentIndex: 1
+      - failedTemplate:
+          errorMessage: TauGrid requires installing the release in namespace kueue-system because the bundled Kueue Extension Controller identity is namespace-bound
 
-  - it: uses KEC managed flavors without rendering competing objects
-    template: baseline-queue.yaml
+  - it: rejects disabling the bundled Kueue chart
     release:
       namespace: kueue-system
     set:
-      global.kueueObjectAuthority: aksExtension
-      kueue.aksExtension.enableKueueObjectsAutomation: true
-      baselineQueue.aksExtension.gpuFlavors:
-        - name: aks-h200-ndisr-v5
-          resources:
-            - name: nvidia.com/gpu
-              nominalQuota: "16"
+      components.kueue.enabled: false
     asserts:
-      - hasDocuments:
-          count: 5
-      - equal:
-          path: kind
-          value: ClusterQueue
-        documentIndex: 0
-      - equal:
-          path: spec.resourceGroups[0].flavors[0].name
-          value: aks-cpu
-        documentIndex: 0
-      - equal:
-          path: spec.resourceGroups[0].flavors[1].name
-          value: aks-h200-ndisr-v5
-        documentIndex: 0
-      - equal:
-          path: spec.resourceGroups[0].flavors[1].resources[2]
-          value:
-            name: nvidia.com/gpu
-            nominalQuota: "16"
-        documentIndex: 0
+      - failedTemplate:
+          errorMessage: TauGrid requires components.kueue.enabled=true because the Kueue Extension Controller is part of the bundled Kueue chart
 
-  - it: renders a CPU only KEC baseline when no GPU flavors are selected
-    template: baseline-queue.yaml
+  - it: rejects disabling KEC object automation
     release:
       namespace: kueue-system
     set:
-      global.kueueObjectAuthority: aksExtension
-      kueue.aksExtension.enableKueueObjectsAutomation: true
-    asserts:
-      - hasDocuments:
-          count: 5
-      - equal:
-          path: spec.resourceGroups
-          value:
-            - coveredResources:
-                - cpu
-                - memory
-              flavors:
-                - name: aks-cpu
-                  resources:
-                    - name: cpu
-                      nominalQuota: "100000"
-                    - name: memory
-                      nominalQuota: 100Ti
-        documentIndex: 0
-
-  - it: rejects disagreement between the authority and KEC automation
-    template: authority-validation.yaml
-    set:
-      global.kueueObjectAuthority: aksExtension
       kueue.aksExtension.enableKueueObjectsAutomation: false
     asserts:
       - failedTemplate:
-          errorMessage: global.kueueObjectAuthority and kueue.aksExtension.enableKueueObjectsAutomation disagree; select exactly one node/flavor authority
+          errorMessage: TauGrid requires kueue.aksExtension.enableKueueObjectsAutomation=true; KEC is the sole node and ResourceFlavor authority
 
-  - it: rejects KEC authority outside kueue-system
-    template: authority-validation.yaml
-    set:
-      global.kueueObjectAuthority: aksExtension
-      kueue.aksExtension.enableKueueObjectsAutomation: true
-    asserts:
-      - failedTemplate:
-          errorMessage: aksExtension authority requires installing the TauGrid release in namespace kueue-system
-
-  - it: rejects an unknown authority
-    template: authority-validation.yaml
-    set:
-      global.kueueObjectAuthority: both
-    asserts:
-      - failedTemplate:
-          errorMessage: global.kueueObjectAuthority must be tau or aksExtension
-
-  - it: rejects KEC GPU flavors with incomplete resource quotas
-    template: baseline-queue.yaml
+  - it: rejects Tau-created ResourceFlavors
     release:
       namespace: kueue-system
     set:
-      global.kueueObjectAuthority: aksExtension
-      kueue.aksExtension.enableKueueObjectsAutomation: true
-      baselineQueue.gpu.coveredResources:
-        - nvidia.com/gpu
-        - gpu.nvidia.com
-      baselineQueue.aksExtension.gpuFlavors:
-        - name: aks-h200-ndisr-v5
-          resources:
-            - name: nvidia.com/gpu
-              nominalQuota: "16"
+      taugrid-core.resourceFlavors.enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.aksExtension.gpuFlavors[aks-h200-ndisr-v5].resource names must match baselineQueue.gpu.coveredResources
+          errorMessage: TauGrid requires taugrid-core.resourceFlavors.enabled=false; KEC is the sole ResourceFlavor authority

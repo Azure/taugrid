@@ -40,7 +40,7 @@ prerequisites:
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
   --version 0.4.2 \
-  --namespace tau-system --create-namespace \
+  --namespace kueue-system --create-namespace \
   --wait --atomic
 ```
 

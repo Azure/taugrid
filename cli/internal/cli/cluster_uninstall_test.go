@@ -66,6 +66,16 @@ func TestClusterUninstallDrainsQueueBeforeUninstall(t *testing.T) {
 	}
 }
 
+func TestClusterUninstallRejectsNoHooks(t *testing.T) {
+	out, err := runCluster(t, "uninstall", "--yes", "--no-hooks")
+	if err == nil {
+		t.Fatal("expected --no-hooks to be rejected")
+	}
+	if !strings.Contains(err.Error(), "KEC uninstall hook") {
+		t.Fatalf("unexpected error: %v\n%s", err, out)
+	}
+}
+
 func TestClusterUninstallExposesWaitAndTimeoutEscapeHatch(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata), recordHelm(&calls))
@@ -200,9 +210,14 @@ func TestClusterUninstallReportsLeftoversOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("uninstall must still report the Helm failure")
 	}
-	for _, want := range []string{"jobqueue", "taugrid-default", "default-node-topology", "finalizers"} {
+	for _, want := range []string{"jobqueue", "finalizers"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("recovery guidance missing %q:\n%s", want, out)
+		}
+	}
+	for _, kecOwned := range []string{"resourceflavor", "topology"} {
+		if strings.Contains(strings.ToLower(out), kecOwned) {
+			t.Fatalf("recovery guidance must not name KEC-owned %s objects:\n%s", kecOwned, out)
 		}
 	}
 }
@@ -217,28 +232,16 @@ func TestClusterUninstallGuidanceUsesConfiguredQueueNames(t *testing.T) {
 		})
 
 	out, _ := runCluster(t, "uninstall", "--yes")
-	for _, want := range []string{"research-cq", "gpu-flavor", "rack-topology"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("recovery guidance missing configured name %q:\n%s", want, out)
-		}
+	if !strings.Contains(out, "research-cq") {
+		t.Fatalf("recovery guidance missing configured queue name:\n%s", out)
 	}
 	if strings.Contains(out, "jobqueue") {
 		t.Fatalf("recovery guidance used chart defaults over configured names:\n%s", out)
 	}
-}
-
-// A Topology is only rendered when baselineQueue.topology.enabled is set, so
-// naming it unconditionally would tell operators to delete a nonexistent object.
-func TestClusterUninstallGuidanceOmitsDisabledTopology(t *testing.T) {
-	values := `{"baselineQueue":{"enabled":false,"topology":{"enabled":false,"name":"rack-topology"}}}`
-	installFakeHelmWithRelease(t, installedRelease(values, deployedMetadata),
-		func(context.Context, io.Reader, io.Writer, io.Writer, []string) error {
-			return errors.New("context deadline exceeded")
-		})
-
-	out, _ := runCluster(t, "uninstall", "--yes")
-	if strings.Contains(out, "rack-topology") {
-		t.Fatalf("guidance named a Topology the chart never rendered:\n%s", out)
+	for _, kecOwnedName := range []string{"gpu-flavor", "rack-topology"} {
+		if strings.Contains(out, kecOwnedName) {
+			t.Fatalf("recovery guidance named KEC-owned object %q:\n%s", kecOwnedName, out)
+		}
 	}
 }
 

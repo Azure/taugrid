@@ -184,9 +184,9 @@ assert_namespaces() {
 
 default_manifest="$TEST_ROOT/default-custom-namespace.yaml"
 helm template namespace-check "$TEST_CHART_DIR" \
-  --namespace custom-system \
+  --namespace kueue-system \
   --include-crds >"$default_manifest"
-assert_namespaces "$default_manifest" custom-system kube-system
+assert_namespaces "$default_manifest" kueue-system kube-system
 
 for required in \
   'name: multikueueclusters.kueue.x-k8s.io' \
@@ -214,15 +214,15 @@ for deployment in \
   kuberay-operator \
   tau-core-controller \
   tau-portal; do
-  grep -Fq $'Deployment\t'"$deployment"$'\tcustom-system' < <(render_namespaces "$default_manifest") ||
-    fail "$deployment did not render in custom-system"
+  grep -Fq $'Deployment\t'"$deployment"$'\tkueue-system' < <(render_namespaces "$default_manifest") ||
+    fail "$deployment did not render in kueue-system"
 done
-grep -Eq $'^DaemonSet\tgpu-monitoring-.*\tcustom-system$' < <(render_namespaces "$default_manifest") ||
-  fail "gpu-monitoring did not render in custom-system"
+grep -Eq $'^DaemonSet\tgpu-monitoring-.*\tkueue-system$' < <(render_namespaces "$default_manifest") ||
+  fail "gpu-monitoring did not render in kueue-system"
 
 namespace_error="$TEST_ROOT/gpu-monitoring-namespace-error"
 if helm template namespace-check "$TEST_CHART_DIR" \
-  --namespace custom-system \
+  --namespace kueue-system \
   --set gpu-monitoring.namespace=other-system >"$TEST_ROOT/invalid-namespace.yaml" 2>"$namespace_error"; then
   fail "gpu-monitoring rendered outside the TauGrid release namespace"
 fi
@@ -231,7 +231,7 @@ grep -Fq 'gpu-monitoring.namespace is no longer supported; install the release w
 
 optional_manifest="$TEST_ROOT/optional-custom-namespace.yaml"
 helm template namespace-check "$TEST_CHART_DIR" \
-  --namespace custom-system \
+  --namespace kueue-system \
   --set taugrid-core.prewarm.enabled=true \
   --set taugrid-core.stellar.enabled=true \
   --set taugrid-core.stellar.kusto.queryCommand=/bin/true \
@@ -244,11 +244,11 @@ helm template namespace-check "$TEST_CHART_DIR" \
   --set taugrid-core.lifecycleRecorder.serviceAccount.name=tau-lifecycle-recorder \
   --set-string 'taugrid-core.lifecycleRecorder.serviceAccount.annotations.azure\.workload\.identity/client-id=test-client-id' \
   --set taugrid-core.lifecycleRecorder.rbac.create=true >"$optional_manifest"
-assert_namespaces "$optional_manifest" custom-system kube-system workload-system
+assert_namespaces "$optional_manifest" kueue-system kube-system workload-system
 
 for workload in baked-image-prewarm tau-stellar tau-lifecycle-recorder; do
-  grep -Eq $'^(DaemonSet|Deployment)\t'"$workload"$'\tcustom-system$' < <(render_namespaces "$optional_manifest") ||
-    fail "$workload did not render in custom-system"
+  grep -Eq $'^(DaemonSet|Deployment)\t'"$workload"$'\tkueue-system$' < <(render_namespaces "$optional_manifest") ||
+    fail "$workload did not render in kueue-system"
 done
 
 echo "TauGrid chart script tests passed"

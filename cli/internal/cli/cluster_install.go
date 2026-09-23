@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -22,44 +21,39 @@ import (
 
 const (
 	defaultTauGridRelease      = "taugrid"
-	defaultTauGridNamespace    = "tau-system"
+	defaultTauGridNamespace    = "kueue-system"
 	defaultTauGridChartVersion = "0.4.2"
 	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
-	defaultKueueAuthority      = "tau"
-	aksExtensionAuthority      = "aksExtension"
-	aksExtensionNamespace      = "kueue-system"
 )
 
 type clusterInstallSpec struct {
-	KubeContext    string
-	Release        string
-	Namespace      string
-	Chart          string
-	Version        string
-	Timeout        string
-	ValuesFiles    []string
-	SetValues      []string
-	SetString      []string
-	CreateNS       bool
-	Wait           bool
-	Atomic         bool
-	DryRun         bool
-	DependencyUp   bool
-	KueueAuthority string
+	KubeContext  string
+	Release      string
+	Namespace    string
+	Chart        string
+	Version      string
+	Timeout      string
+	ValuesFiles  []string
+	SetValues    []string
+	SetString    []string
+	CreateNS     bool
+	Wait         bool
+	Atomic       bool
+	DryRun       bool
+	DependencyUp bool
 }
 
 func newClusterInstallCmd() *cobra.Command {
 	spec := clusterInstallSpec{
-		Release:        defaultTauGridRelease,
-		Namespace:      defaultTauGridNamespace,
-		Chart:          defaultTauGridChart,
-		Version:        defaultTauGridChartVersion,
-		Timeout:        "15m",
-		CreateNS:       true,
-		Wait:           false,
-		Atomic:         false,
-		DependencyUp:   true,
-		KueueAuthority: defaultKueueAuthority,
+		Release:      defaultTauGridRelease,
+		Namespace:    defaultTauGridNamespace,
+		Chart:        defaultTauGridChart,
+		Version:      defaultTauGridChartVersion,
+		Timeout:      "15m",
+		CreateNS:     true,
+		Wait:         false,
+		Atomic:       false,
+		DependencyUp: true,
 	}
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -82,7 +76,7 @@ The platform pre-provisions and owns that claim, its StorageClass, CSI setup,
 cloud storage, access policy, and lifecycle outside TauGrid.`,
 		Example: `  tau cluster install
   tau cluster install --dry-run
-  tau cluster install --namespace tau-system --set portal.enabled=false --wait`,
+  tau cluster install --namespace kueue-system --set portal.enabled=false --wait`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateClusterInstallSpec(spec); err != nil {
 				return err
@@ -128,7 +122,6 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 				return err
 			}
 			settings := tauGridInstallationSettings(cmd, spec.KubeContext, spec.Release, spec.Namespace)
-			settings.KueueObjectAuthority = installationcheck.KueueObjectAuthority(spec.KueueAuthority)
 			if err := runTauGridInstallationValidation(
 				cmd.Context(),
 				installationRunner,
@@ -138,7 +131,6 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 					Timeout:                        validationTimeout,
 					PollInterval:                   defaultInstallationValidationPollInterval,
 					DisabledComponents:             settings.DisabledComponents,
-					KueueObjectAuthority:           settings.KueueObjectAuthority,
 					ExpectedAKSExtensionGPUFlavors: settings.ExpectedAKSExtensionGPUFlavors,
 				},
 				cmd.OutOrStdout(),
@@ -173,7 +165,6 @@ Next:
 	flags.BoolVar(&spec.Atomic, "atomic", spec.Atomic, "roll back on Helm failure (also enables Helm's generic watcher wait)")
 	flags.BoolVar(&spec.DryRun, "dry-run", false, "summarize the chart manifests offline without contacting the cluster")
 	flags.BoolVar(&spec.DependencyUp, "dependency-update", spec.DependencyUp, "update missing chart dependencies")
-	flags.StringVar(&spec.KueueAuthority, "kueue-object-authority", spec.KueueAuthority, "node-label and Kueue flavor authority: tau or aksExtension")
 	return cmd
 }
 
@@ -189,14 +180,8 @@ func validateClusterInstallSpec(spec clusterInstallSpec) error {
 			return fmt.Errorf("%s must not be empty", name)
 		}
 	}
-	switch spec.KueueAuthority {
-	case defaultKueueAuthority:
-	case aksExtensionAuthority:
-		if spec.Namespace != aksExtensionNamespace {
-			return fmt.Errorf("--kueue-object-authority=%s requires --namespace %s because the AKS extension ServiceAccount identity is namespace-bound", aksExtensionAuthority, aksExtensionNamespace)
-		}
-	default:
-		return fmt.Errorf("--kueue-object-authority must be %q or %q", defaultKueueAuthority, aksExtensionAuthority)
+	if spec.Namespace != defaultTauGridNamespace {
+		return fmt.Errorf("TauGrid requires --namespace %s because the bundled Kueue Extension Controller ServiceAccount identity is namespace-bound", defaultTauGridNamespace)
 	}
 	return nil
 }
@@ -215,7 +200,6 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Namespace:  %s
   Chart:      %s
   Version:    %s
-  Authority:  %s
   Helm wait:  %s
   Rollback:   %s
   Tau CRDs:   update from the selected chart before an existing-release upgrade; not rolled back by Helm
@@ -223,7 +207,7 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Opt-in:     Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
 
-`, spec.Release, spec.Namespace, spec.Chart, spec.Version, spec.KueueAuthority, helmWait, rollback)
+`, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
 }
 
 func runClusterInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.Writer, args []string) error {
@@ -400,8 +384,5 @@ func appendHelmValueArgs(args []string, spec clusterInstallSpec) []string {
 	for _, value := range spec.SetString {
 		args = append(args, "--set-string", value)
 	}
-	return append(args,
-		"--set-string", "global.kueueObjectAuthority="+spec.KueueAuthority,
-		"--set", "kueue.aksExtension.enableKueueObjectsAutomation="+strconv.FormatBool(spec.KueueAuthority == aksExtensionAuthority),
-	)
+	return args
 }

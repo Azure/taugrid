@@ -94,7 +94,7 @@ tau run --config examples/market-policy/tau.yaml
 
 Before submitting, set `storage.data_pvc` in the example to the writable PVC
 from your platform handoff. The RayJob resolves namespace and queue policy from
-the configured TauWorkspace, dispatches training to one `h200-141gb` worker,
+the configured TauWorkspace, dispatches training to one `h200` worker,
 and writes the same `tau-market-policy.json` format loaded above to durable
 workspace storage. The manifest pins TauGrid's public MCR Ray/CUDA image by
 digest and installs exact PyTorch and NumPy versions through `runtime.pip`, so

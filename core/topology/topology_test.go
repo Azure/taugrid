@@ -69,8 +69,8 @@ func TestBuild_ProtectedNVLinkPlan(t *testing.T) {
 	if plan.Labels[workloadPriorityLabel] != "taugrid-batch" {
 		t.Fatalf("missing workload priority label: %v", plan.Labels)
 	}
-	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
-		t.Fatalf("gpu class selector=%q want %q", got, GPUClassA10080GB)
+	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassNodeLabelValue(GPUClassA10080GB) {
+		t.Fatalf("gpu class selector=%q want %q", got, GPUClassNodeLabelValue(GPUClassA10080GB))
 	}
 	if got := plan.Labels[LabelGPUClass]; got != GPUClassA10080GB {
 		t.Fatalf("gpu class label=%q want %q", got, GPUClassA10080GB)
@@ -103,8 +103,8 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 		}
 	}
 
-	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
-		t.Fatalf("DRA gpu class selector=%q want %q", got, GPUClassA10080GB)
+	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassNodeLabelValue(GPUClassA10080GB) {
+		t.Fatalf("DRA gpu class selector=%q want %q", got, GPUClassNodeLabelValue(GPUClassA10080GB))
 	}
 	if plan.Labels[workloadPriorityLabel] != "taugrid-batch" {
 		t.Fatalf("missing workload priority label: %v", plan.Labels)
@@ -293,8 +293,8 @@ func TestNormalizeGPUClassLegacyAliases(t *testing.T) {
 			t.Errorf("IsSupportedGPUClass(%q)=false, want true", canonical)
 		}
 	}
-	if IsSupportedGPUClass("a100") {
-		t.Error("IsSupportedGPUClass(a100)=true, want false")
+	if IsSupportedGPUClass("v100") {
+		t.Error("IsSupportedGPUClass(v100)=true, want false")
 	}
 }
 
@@ -306,8 +306,8 @@ func TestBuildNormalizesLegacyGPUClassBeforeRendering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
-		t.Fatalf("legacy alias rendered selector %q, want %q", got, GPUClassA10080GB)
+	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassNodeLabelValue(GPUClassA10080GB) {
+		t.Fatalf("legacy alias rendered selector %q, want %q", got, GPUClassNodeLabelValue(GPUClassA10080GB))
 	}
 	if got := plan.Labels[LabelGPUClass]; got != GPUClassA10080GB {
 		t.Fatalf("legacy alias rendered label %q, want %q", got, GPUClassA10080GB)

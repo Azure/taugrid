@@ -1,8 +1,3 @@
-{{- $authority := default "tau" .Values.global.kueueObjectAuthority -}}
-{{- $rules := list -}}
-{{- if eq $authority "tau" -}}
-{{- $rules = concat (.Values.tauCluster.nodeLabelRules | default list) (.Values.tauCluster.extraNodeLabelRules | default list) -}}
-{{- end -}}
 apiVersion: tau.azure.com/v1alpha1
 kind: TauCluster
 metadata:
@@ -18,7 +13,7 @@ spec:
   managementMode: {{ .Values.tauCluster.managementMode }}
   deletionPolicy: {{ .Values.tauCluster.deletionPolicy }}
   nodes:
-    labelRules: {{- if $rules }}{{ toYaml $rules | nindent 6 }}{{- else }} []{{- end }}
+    labelRules: []
   queues:
 {{- toYaml .Values.tauCluster.queues | nindent 4 }}
   workloadProfiles:

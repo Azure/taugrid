@@ -69,7 +69,7 @@ Requires cluster-admin or equivalent RBAC to create privileged pods.`,
 	}
 
 	cmd.Flags().StringVar(&spec.KubeContext, "context", defaultKubeContext(), kubeContextHelp())
-	cmd.Flags().StringVar(&spec.GPUClass, "gpu-class", "", fmt.Sprintf("filter nodes by %s label value (e.g. h200-141gb)", workloadmeta.NodeLabelGPUClass))
+	cmd.Flags().StringVar(&spec.GPUClass, "gpu-class", "", fmt.Sprintf("filter nodes by %s label value (e.g. h200)", workloadmeta.NodeLabelGPUClass))
 	cmd.Flags().StringVar(&spec.Selector, "selector", "", "custom node label selector (alternative to --gpu-class)")
 	cmd.Flags().IntVar(&spec.MinHealthy, "min-healthy", 0, "fail if fewer than N nodes are healthy")
 	cmd.Flags().StringVar(&timeoutStr, "timeout", "2m", "per-pod validation timeout")
@@ -91,7 +91,7 @@ func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec va
 				return fmt.Errorf("--gpu-class any is unconstrained and cannot be combined with a --selector that references %s", workloadmeta.NodeLabelGPUClass)
 			}
 		} else {
-			selector = workloadmeta.NodeLabelGPUClass + "=" + gpuClass
+			selector = workloadmeta.NodeLabelGPUClass + "=" + topology.GPUClassNodeLabelValue(gpuClass)
 		}
 	}
 
@@ -253,9 +253,10 @@ func nodeInstanceType(labels map[string]string) string {
 func classifyGPUNodes(items []nodeItem, draDevices map[string]int) []gpuNodeInfo {
 	var nodes []gpuNodeInfo
 	for _, it := range items {
+		gpuClass, _ := topology.NormalizeGPUClass(it.Metadata.Labels[workloadmeta.NodeLabelGPUClass])
 		info := gpuNodeInfo{
 			Name:         it.Metadata.Name,
-			GPUClass:     it.Metadata.Labels[workloadmeta.NodeLabelGPUClass],
+			GPUClass:     gpuClass,
 			InstanceType: nodeInstanceType(it.Metadata.Labels),
 		}
 		switch whole, mig := countNVIDIAResources(it.Status.Allocatable); {
@@ -363,12 +364,17 @@ func classifyStrandedGPUNodes(items []nodeItem, draDevices map[string]int) []gpu
 		}
 		nodes = append(nodes, gpuNodeInfo{
 			Name:         it.Metadata.Name,
-			GPUClass:     it.Metadata.Labels[workloadmeta.NodeLabelGPUClass],
+			GPUClass:     normalizedNodeGPUClass(it.Metadata.Labels),
 			InstanceType: instanceType,
 		})
 	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	return nodes
+}
+
+func normalizedNodeGPUClass(labels map[string]string) string {
+	gpuClass, _ := topology.NormalizeGPUClass(labels[workloadmeta.NodeLabelGPUClass])
+	return gpuClass
 }
 
 // advertisesNVIDIAResource reports whether any nvidia.com/* extended resource is

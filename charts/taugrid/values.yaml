@@ -1,17 +1,13 @@
 # Shared cluster connection recorded once in the Helm release. Portal inherits
 # this read-only query identity, never the adx-mon ingestion/admin identity.
 global:
-  # Select exactly one node-label and Kueue flavor authority. The default keeps
-  # TauGrid's current portable behavior. aksExtension requires installing the
-  # release in kueue-system because the AKS extension identity is namespace-bound.
-  kueueObjectAuthority: tau
   adx:
     queryConnection:
       # Configure all three together; installation creates no Azure resources.
       endpoint: ""
       database: ""
       # Externally provisioned ADX Viewer identity federated to
-      # system:serviceaccount:tau-system:tau-portal with the default installation.
+      # system:serviceaccount:kueue-system:tau-portal with the default installation.
       clientID: ""
 
 components:
@@ -42,65 +38,24 @@ baselineQueue:
     matchExpressions:
       - key: tau.azure.com/workspace
         operator: Exists
-  topology:
-    enabled: true
-    name: default-node-topology
-    # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
-    # templates after queue resolution.
-    requiredLevel: kubernetes.io/hostname
-  flavor:
-    # New identity avoids mutating the topologyName of the chart 0.2.0
-    # taugrid-default ResourceFlavor, which Kueue treats as immutable.
-    name: taugrid-default-cpu
-    # The baseline flavor covers CPU and memory only. Keep it free of GPU labels
-    # and GPU taint tolerations so CPU-only workloads remain on general-purpose
-    # nodes when the cluster also has tainted GPU pools.
-    nodeLabels:
-      kubernetes.io/os: linux
-    tolerations: []
   resources:
     - name: cpu
       nominalQuota: "100000"
     - name: memory
       nominalQuota: 100Ti
   gpu:
-    enabled: true
     coveredResources:
       - nvidia.com/gpu
-    # CPU, memory, and GPU are node-local resources in one Kueue ResourceGroup.
-    # The CPU flavor receives zero GPU quota; each flavor below receives the
-    # CPU/memory quotas above plus its declared GPU quota. This makes Kueue
-    # assign one flavor across all pod resources without steering CPU-only jobs
-    # onto GPU nodes. The default generic flavor supports gpu_class: any. Replace
-    # it with class-labeled flavors when hardware is known; do not keep it beside
-    # class-specific flavors or specific-class work could consume generic quota.
-    # When topology is enabled, a selected GPU flavor is the sole TAS flavor.
-    flavors:
-      - name: taugrid-default-gpu
-        nodeLabels:
-          kubernetes.io/os: linux
-        nodeTaints:
-          - key: sku
-            value: gpu
-            effect: NoSchedule
-        tolerations: []
-        resources:
-          - name: nvidia.com/gpu
-            nominalQuota: "1000"
-  aksExtension:
-    # KEC derives GPU ResourceFlavor names from live node inventory, so TauGrid
-    # cannot safely guess them. List the KEC-managed flavor names that should
-    # receive baseline queue quota. An empty list leaves a CPU-only baseline
-    # queue using the always-created aks-cpu flavor.
-    gpuFlavors: []
+    # KEC derives GPU ResourceFlavor names from live node inventory. List the
+    # generated flavor names that should receive baseline queue quota. An empty
+    # list leaves a CPU-only baseline queue using the always-created aks-cpu.
+    flavors: []
 
 kueue:
   # TauGrid installs the Kueue MultiKueue capability by default. Operators still
   # own worker credentials, routing objects, and multi-cluster queue policy.
   aksExtension:
-    # Keep this aligned with global.kueueObjectAuthority. `tau cluster install`
-    # sets both values from --kueue-object-authority.
-    enableKueueObjectsAutomation: false
+    enableKueueObjectsAutomation: true
     enableMultiKueue: true
     controller:
       image:
@@ -188,11 +143,6 @@ tau-core-controller:
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
     pullPolicy: IfNotPresent
-  tauCluster:
-    # Inherits the controller chart's reviewed AKS GPU VM-size catalog, which
-    # reconciles gpu-class and gpu-series labels from instance-type. Append
-    # cluster-specific hardware without replacing that catalog.
-    extraNodeLabelRules: []
 
 # Portal is part of the default operator experience. The remaining first-party
 # services stay opt-in and all enabled services use release-versioned MCR tags.

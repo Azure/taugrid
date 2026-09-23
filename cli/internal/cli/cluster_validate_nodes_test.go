@@ -298,7 +298,7 @@ func TestRunClusterValidateNodesAnyRejectsClassSelector(t *testing.T) {
 		runner,
 		validateNodesSpec{
 			GPUClass: "any",
-			Selector: workloadmeta.NodeLabelGPUClass + " in (a100-80gb,h100-95gb)",
+			Selector: workloadmeta.NodeLabelGPUClass + " in (A100,H100)",
 		},
 		&strings.Builder{},
 		&strings.Builder{},
@@ -314,7 +314,7 @@ func TestRunClusterValidateNodesAnyRejectsClassSelector(t *testing.T) {
 func TestRunClusterValidateNodesNormalizesLegacyGPUClass(t *testing.T) {
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
-			fakeRawKey("get", "nodes", "-o", "json", "-l", workloadmeta.NodeLabelGPUClass+"=a100-80gb"): `{"items":[]}`,
+			fakeRawKey("get", "nodes", "-o", "json", "-l", workloadmeta.NodeLabelGPUClass+"=A100"): `{"items":[]}`,
 		},
 		errors: map[string]error{},
 	}
@@ -329,7 +329,7 @@ func TestRunClusterValidateNodesNormalizesLegacyGPUClass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(errOut.String(), `use "a100-80gb" instead`) {
+	if !strings.Contains(errOut.String(), `use "a100" instead`) {
 		t.Fatalf("missing legacy warning: %q", errOut.String())
 	}
 }
@@ -339,7 +339,7 @@ func TestRunClusterValidateNodesRejectsUnknownGPUClassBeforeQuery(t *testing.T) 
 	err := runClusterValidateNodes(
 		context.Background(),
 		runner,
-		validateNodesSpec{GPUClass: "a100"},
+		validateNodesSpec{GPUClass: "v100"},
 		&strings.Builder{},
 		&strings.Builder{},
 	)

@@ -50,20 +50,11 @@ type Options struct {
 	// are reported as skipped instead of failing. The zero value validates
 	// every component.
 	DisabledComponents             []Component
-	KueueObjectAuthority           KueueObjectAuthority
 	ExpectedAKSExtensionGPUFlavors []string
 }
 
-type KueueObjectAuthority string
-
-const (
-	KueueObjectAuthorityTau          KueueObjectAuthority = "tau"
-	KueueObjectAuthorityAKSExtension KueueObjectAuthority = "aksExtension"
-)
-
 type ReleaseConfiguration struct {
 	DisabledComponents             []Component
-	KueueObjectAuthority           KueueObjectAuthority
 	ExpectedAKSExtensionGPUFlavors []string
 }
 
@@ -100,16 +91,13 @@ var componentSwitches = []chartComponent{
 // given the release's coalesced Helm values as JSON.
 func DecodeReleaseConfiguration(helmValues []byte) (ReleaseConfiguration, error) {
 	var values struct {
-		Components map[string]any `json:"components"`
-		Global     struct {
-			KueueObjectAuthority string `json:"kueueObjectAuthority"`
-		} `json:"global"`
+		Components    map[string]any `json:"components"`
 		BaselineQueue struct {
-			AKSExtension struct {
+			GPU struct {
 				GPUFlavors []struct {
 					Name string `json:"name"`
-				} `json:"gpuFlavors"`
-			} `json:"aksExtension"`
+				} `json:"flavors"`
+			} `json:"gpu"`
 		} `json:"baselineQueue"`
 		TauGridCore struct {
 			Portal struct {
@@ -120,13 +108,8 @@ func DecodeReleaseConfiguration(helmValues []byte) (ReleaseConfiguration, error)
 	if err := json.Unmarshal(helmValues, &values); err != nil {
 		return ReleaseConfiguration{}, fmt.Errorf("decode Helm release values: %w", err)
 	}
-	configuration := ReleaseConfiguration{
-		KueueObjectAuthority: KueueObjectAuthorityTau,
-	}
-	if authority := strings.TrimSpace(values.Global.KueueObjectAuthority); authority != "" {
-		configuration.KueueObjectAuthority = KueueObjectAuthority(authority)
-	}
-	for _, flavor := range values.BaselineQueue.AKSExtension.GPUFlavors {
+	configuration := ReleaseConfiguration{}
+	for _, flavor := range values.BaselineQueue.GPU.GPUFlavors {
 		if name := strings.TrimSpace(flavor.Name); name != "" {
 			configuration.ExpectedAKSExtensionGPUFlavors = append(configuration.ExpectedAKSExtensionGPUFlavors, name)
 		}
@@ -282,19 +265,7 @@ func validateOptions(opts Options) error {
 	if opts.QueryTimeout < 0 {
 		return errors.New("query timeout must not be negative")
 	}
-	switch kueueObjectAuthority(opts) {
-	case KueueObjectAuthorityTau, KueueObjectAuthorityAKSExtension:
-	default:
-		return fmt.Errorf("unsupported Kueue object authority %q", opts.KueueObjectAuthority)
-	}
 	return nil
-}
-
-func kueueObjectAuthority(opts Options) KueueObjectAuthority {
-	if opts.KueueObjectAuthority == "" {
-		return KueueObjectAuthorityTau
-	}
-	return opts.KueueObjectAuthority
 }
 
 // Check evaluates every required readiness surface once without mutating the
@@ -317,16 +288,14 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 			results = append(results, checkChartDeployment(name, deployments, component.chartPrefix))
 		}
 	}
-	if kueueObjectAuthority(opts) == KueueObjectAuthorityAKSExtension {
-		switch {
-		case slices.Contains(opts.DisabledComponents, ComponentKueue):
-			results = append(results, skip("Kueue authority", "components.kueue.enabled is false in the Helm release"))
-		case listErr != nil:
-			results = append(results, fail("Kueue authority", fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.SystemNamespace)))
-		default:
-			results = append(results, checkLabelledDeployment("Kueue extension", deployments, "app.kubernetes.io/component", "extension-controller"))
-			results = append(results, checkAKSExtensionAuthority(ctx, runner, opts.ExpectedAKSExtensionGPUFlavors))
-		}
+	switch {
+	case slices.Contains(opts.DisabledComponents, ComponentKueue):
+		results = append(results, skip("Kueue authority", "components.kueue.enabled is false in the Helm release"))
+	case listErr != nil:
+		results = append(results, fail("Kueue authority", fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.SystemNamespace)))
+	default:
+		results = append(results, checkLabelledDeployment("Kueue extension", deployments, "app.kubernetes.io/component", "extension-controller"))
+		results = append(results, checkAKSExtensionAuthority(ctx, runner, opts.ExpectedAKSExtensionGPUFlavors))
 	}
 	if slices.Contains(opts.DisabledComponents, ComponentPortal) {
 		results = append(results, skip("Portal", "taugrid-core Portal is disabled in the Helm release"))

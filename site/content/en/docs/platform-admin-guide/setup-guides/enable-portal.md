@@ -10,7 +10,7 @@ aliases:
 
 {{< maturity status="alpha" reviewed="2026-08-13" >}}
 
-Portal is the unified, read-only browser entry point. `tau cluster install` enables its operator-facing Kubernetes path by default in the system release namespace (`tau-system` unless `--namespace` selects another namespace); it ships as part of the one TauGrid umbrella release rather than a separate `taugrid-core` Helm release.
+Portal is the unified, read-only browser entry point. `tau cluster install` enables its operator-facing Kubernetes path by default in the required `kueue-system` release namespace; it ships as part of the one TauGrid umbrella release rather than a separate `taugrid-core` Helm release.
 
 ## Understand the default boundary
 
@@ -209,7 +209,7 @@ tenant IDs from an unrelated environment.
      gatewayHTTPRoute:
        parentRefs:
          - name: tau-portal-entra
-           namespace: tau-system
+           namespace: kueue-system
            kind: Gateway
            sectionName: http
    ```

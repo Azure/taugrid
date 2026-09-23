@@ -68,7 +68,7 @@ that goal are welcome.
 helm install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
   --version 0.4.2 \
-  --namespace tau-system \
+  --namespace kueue-system \
   --create-namespace
 ```
 

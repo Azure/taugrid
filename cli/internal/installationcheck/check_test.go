@@ -40,12 +40,14 @@ func TestCheckReportsReadyInstallation(t *testing.T) {
 		"PASS  Kubernetes",
 		"PASS  Kueue",
 		"PASS  KubeRay",
+		"PASS  Kueue extension",
+		"PASS  Kueue authority",
 		"PASS  Portal",
 		"PASS  Tau controller",
 		"PASS  TauCluster",
 		"PASS  Baseline queue",
 		"PASS  Quota guard",
-		"READY: 8/8 checks passed",
+		"READY: 10/10 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -58,6 +60,7 @@ func TestCheckReportsActionableReadinessFailures(t *testing.T) {
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
 		output: `{"items":[
 			{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0}},
+			{"metadata":{"name":"taugrid-kueue-extension","generation":1,"labels":{"helm.sh/chart":"kueue-0.19.2","app.kubernetes.io/component":"extension-controller"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0}},
 			{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 		]}`,
@@ -78,7 +81,7 @@ func TestCheckReportsActionableReadinessFailures(t *testing.T) {
 		"Deployment taugrid-kueue-controller-manager is not ready",
 		"NodesReady=False (NoMatchingNodes: no nodes match the configured VM-size rules)",
 		"validationActions=[Warn]",
-		"NOT READY: 5/8 checks passed",
+		"NOT READY: 6/10 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -151,6 +154,7 @@ func TestCheckFindsPortalByStableComponentLabel(t *testing.T) {
 	key := "get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"
 	runner[key] = fakeResponse{output: `{"items":[
 		{"metadata":{"name":"taugrid-kueue-controller-manager","generation":1,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+		{"metadata":{"name":"taugrid-kueue-extension","generation":1,"labels":{"helm.sh/chart":"kueue-0.19.2","app.kubernetes.io/component":"extension-controller"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 		{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 		{"metadata":{"name":"custom-portal-name","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 	]}`}
@@ -216,7 +220,7 @@ func TestCheckSkipsDisabledTauCoreSurfaces(t *testing.T) {
 		"SKIP  Tau controller       components.tauCoreController.enabled is false in the Helm release",
 		"SKIP  TauCluster           components.tauCoreController.enabled is false in the Helm release",
 		"SKIP  Quota guard          components.tauCoreController.enabled is false in the Helm release",
-		"READY: 5/5 checks passed",
+		"READY: 7/7 checks passed",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary)
@@ -311,10 +315,9 @@ func TestDisabledComponentsRejectsUnreadableValues(t *testing.T) {
 	}
 }
 
-func TestDecodeReleaseConfigurationReadsKueueAuthority(t *testing.T) {
+func TestDecodeReleaseConfigurationReadsKECGPUFlavors(t *testing.T) {
 	configuration, err := DecodeReleaseConfiguration([]byte(`{
-		"global":{"kueueObjectAuthority":"aksExtension"},
-		"baselineQueue":{"aksExtension":{"gpuFlavors":[
+		"baselineQueue":{"gpu":{"flavors":[
 			{"name":"aks-h200-ndisr-v5"},
 			{"name":"aks-a100-ndamsr-v4"},
 			{"name":"aks-h200-ndisr-v5"}
@@ -322,9 +325,6 @@ func TestDecodeReleaseConfigurationReadsKueueAuthority(t *testing.T) {
 	}`))
 	if err != nil {
 		t.Fatalf("DecodeReleaseConfiguration errored: %v", err)
-	}
-	if configuration.KueueObjectAuthority != KueueObjectAuthorityAKSExtension {
-		t.Fatalf("authority = %q", configuration.KueueObjectAuthority)
 	}
 	want := []string{"aks-a100-ndamsr-v4", "aks-h200-ndisr-v5"}
 	if !slices.Equal(configuration.ExpectedAKSExtensionGPUFlavors, want) {
@@ -336,7 +336,6 @@ func TestCheckReportsReadyAKSExtensionAuthority(t *testing.T) {
 	runner := readyAKSExtensionRunner()
 	opts := testOptions()
 	opts.SystemNamespace = "kueue-system"
-	opts.KueueObjectAuthority = KueueObjectAuthorityAKSExtension
 	opts.ExpectedAKSExtensionGPUFlavors = []string{"aks-h200-ndisr-v5"}
 
 	report := Check(context.Background(), runner, opts)
@@ -362,7 +361,6 @@ func TestCheckRejectsUnclassifiedAKSUserNode(t *testing.T) {
 	}
 	opts := testOptions()
 	opts.SystemNamespace = "kueue-system"
-	opts.KueueObjectAuthority = KueueObjectAuthorityAKSExtension
 
 	report := Check(context.Background(), runner, opts)
 	if report.Ready() || !strings.Contains(report.Summary(), "KEC has not classified 1 user node(s), including gpu-0") {
@@ -479,6 +477,7 @@ func readyRunner() fakeRunner {
 		"get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json": {
 			output: `{"items":[
 				{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+				{"metadata":{"name":"taugrid-kueue-extension","generation":1,"labels":{"helm.sh/chart":"kueue-0.19.2","app.kubernetes.io/component":"extension-controller"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 				{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 				{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 			]}`,
@@ -497,6 +496,21 @@ func readyRunner() fakeRunner {
 		},
 		"get validatingadmissionpolicybinding tau-quota-approval-guard --output=json": {
 			output: `{"spec":{"policyName":"tau-quota-approval-guard","validationActions":["Deny"]}}`,
+		},
+		"get nodes --output=json": {
+			output: `{"items":[
+				{"metadata":{"name":"cpu-0","labels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/node-type":"cpu"}}},
+				{"metadata":{"name":"gpu-0","labels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/sku-series":"NDisr_v5","kubernetes.azure.com/sku-gpu-name":"H200"}}}
+			]}`,
+		},
+		"get topology.kueue.x-k8s.io aks-default --output=json": {
+			output: `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"aks-managed-kueue-extension"}},"spec":{"levels":[{"nodeLabel":"kubernetes.io/hostname"}]}}`,
+		},
+		"get resourceflavors --selector app.kubernetes.io/managed-by=aks-managed-kueue-extension --output=json": {
+			output: `{"items":[
+				{"metadata":{"name":"aks-cpu"},"spec":{"nodeLabels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/node-type":"cpu"},"topologyName":"aks-default"}},
+				{"metadata":{"name":"aks-h200-ndisr-v5"},"spec":{"nodeLabels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/sku-series":"NDisr_v5","kubernetes.azure.com/sku-gpu-name":"H200"},"topologyName":"aks-default"}}
+			]}`,
 		},
 	}
 }

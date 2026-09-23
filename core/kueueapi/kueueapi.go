@@ -242,9 +242,9 @@ func (cq ClusterQueue) MaxGPUCapacity(flavor, resourceName string) (int64, bool)
 // example gpu_class: any, or no gpu_class requested at all) and every
 // GPU-quota flavor is a candidate; a non-nil map (even an empty one) means
 // only the named flavors qualify. Callers must resolve allowedFlavors by
-// comparing each candidate ResourceFlavor's spec.nodeLabels against the
-// tau.azure.com/gpu-class contract -- never by matching a substring of the
-// flavor's own name. A ClusterQueue's JSON representation does not carry
+// comparing each candidate ResourceFlavor's spec.nodeLabels against KEC's
+// kubernetes.azure.com/sku-gpu-name contract -- never by matching a substring
+// of the flavor's own name. A ClusterQueue's JSON representation does not carry
 // ResourceFlavor node labels, so this function cannot do that matching
 // itself; see queueresolve.gpuClassAllowedFlavors for the exact-match
 // resolution this depends on.

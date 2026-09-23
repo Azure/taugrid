@@ -47,7 +47,7 @@ Components the release turned off through components.<name>.enabled are reported
 as SKIP and do not fail validation, so a cluster that keeps its own Kueue or
 KubeRay can still use this command as a gate.`,
 		Example: `  tau cluster validate installation
-  tau cluster validate installation --release taugrid --namespace tau-system --timeout 10m`,
+  tau cluster validate installation --release taugrid --namespace kueue-system --timeout 10m`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			timeout, err := time.ParseDuration(timeoutText)
@@ -74,7 +74,6 @@ KubeRay can still use this command as a gate.`,
 					Timeout:                        timeout,
 					PollInterval:                   pollInterval,
 					DisabledComponents:             settings.DisabledComponents,
-					KueueObjectAuthority:           settings.KueueObjectAuthority,
 					ExpectedAKSExtensionGPUFlavors: settings.ExpectedAKSExtensionGPUFlavors,
 				},
 				cmd.OutOrStdout(),
@@ -117,18 +116,14 @@ func tauGridInstallationSettings(
 	cmd *cobra.Command,
 	kubeContext, release, namespace string,
 ) installationcheck.ReleaseConfiguration {
-	settings := installationcheck.ReleaseConfiguration{
-		KueueObjectAuthority: installationcheck.KueueObjectAuthorityTau,
-	}
+	settings := installationcheck.ReleaseConfiguration{}
 	values, err := tauGridReleaseValues(cmd, kubeContext, release, namespace)
 	if err == nil {
 		settings, err = installationcheck.DecodeReleaseConfiguration(values)
 	}
 	if err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "Cannot read Helm release %s values (%v); validating every component.\n", release, err)
-		return installationcheck.ReleaseConfiguration{
-			KueueObjectAuthority: installationcheck.KueueObjectAuthorityTau,
-		}
+		return installationcheck.ReleaseConfiguration{}
 	}
 	return settings
 }

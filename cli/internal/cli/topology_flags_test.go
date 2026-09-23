@@ -702,11 +702,11 @@ func TestResolveAutoQueueUsesRenderedSchedulingContract(t *testing.T) {
 			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "opaque-a100", "-o", "json"): fmt.Sprintf(`{
 				"metadata":{"name":"opaque-a100"},
 				"spec":{
-					"nodeLabels":{"%s":"a100-80gb","nvidia.com/mig.config":"all-1g.10gb"},
+					"nodeLabels":{"%s":"A100","nvidia.com/mig.config":"all-1g.10gb"},
 					"nodeTaints":[{"key":"sku","value":"gpu","effect":"NoSchedule"}],
 					"topologyName":"default-node-topology"
 				}
-			}`, workloadmeta.LabelGPUClass),
+			}`, workloadmeta.NodeLabelGPUClass),
 		},
 		errors: map[string]error{},
 	}

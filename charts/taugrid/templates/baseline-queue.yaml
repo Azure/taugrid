@@ -1,79 +1,9 @@
 {{- if .Values.baselineQueue.enabled }}
-{{- $authority := default "tau" .Values.global.kueueObjectAuthority }}
-{{- $aksExtensionAuthority := eq $authority "aksExtension" }}
-{{- $requiredTopology := default "kubernetes.io/hostname" .Values.baselineQueue.topology.requiredLevel }}
-{{- $aksGPUFlavors := .Values.baselineQueue.aksExtension.gpuFlavors | default list }}
-{{- $gpuFlavors := .Values.baselineQueue.gpu.flavors }}
-{{- $gpuEnabled := .Values.baselineQueue.gpu.enabled }}
-{{- $cpuFlavorName := .Values.baselineQueue.flavor.name }}
-{{- if $aksExtensionAuthority }}
-{{- $gpuFlavors = $aksGPUFlavors }}
-{{- $gpuEnabled = gt (len $aksGPUFlavors) 0 }}
-{{- $cpuFlavorName = "aks-cpu" }}
-{{- end }}
-{{- if not $aksExtensionAuthority }}
-{{- if and .Values.baselineQueue.gpu.enabled (empty .Values.baselineQueue.gpu.flavors) }}
-{{- fail "baselineQueue.gpu.flavors must contain at least one flavor when baselineQueue.gpu.enabled is true" }}
-{{- end }}
-{{- if and .Values.baselineQueue.gpu.enabled (or (hasKey .Values.baselineQueue.flavor.nodeLabels "tau.azure.com/gpu-class") (hasKey .Values.baselineQueue.flavor.nodeLabels "kueue.azure.com/gpu-series") (hasKey .Values.baselineQueue.flavor.nodeLabels "tau.azure.com/gpu-series")) }}
-{{- fail "baselineQueue.flavor is the CPU/memory flavor and must not set GPU class or series labels; move GPU placement labels to baselineQueue.gpu.flavors before upgrading" }}
-{{- end }}
-{{- if .Values.baselineQueue.gpu.enabled }}
-{{- range $toleration := .Values.baselineQueue.flavor.tolerations }}
-{{- $operator := default "Equal" $toleration.operator }}
-{{- if or (and (eq $operator "Exists") (empty $toleration.key)) (eq $toleration.key "nvidia.com/gpu") (and (eq $toleration.key "sku") (or (eq $operator "Exists") (eq (default "" $toleration.value) "gpu"))) }}
-{{- fail "baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading" }}
-{{- end }}
-{{- range $gpuFlavor := $.Values.baselineQueue.gpu.flavors }}
-{{- range $taint := $gpuFlavor.nodeTaints }}
-{{- $keyMatches := or (empty $toleration.key) (eq $toleration.key $taint.key) }}
-{{- $effectMatches := or (empty $toleration.effect) (eq $toleration.effect $taint.effect) }}
-{{- $valueMatches := or (eq $operator "Exists") (and (eq $operator "Equal") (eq (default "" $toleration.value) (default "" $taint.value))) }}
-{{- if and $keyMatches $effectMatches $valueMatches }}
-{{- fail "baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading" }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- if $aksExtensionAuthority }}
-{{- range $gpuFlavor := $aksGPUFlavors }}
-{{- if empty $gpuFlavor.name }}
-{{- fail "baselineQueue.aksExtension.gpuFlavors[].name is required" }}
-{{- end }}
-{{- $resourceNames := list }}
-{{- range $resource := $gpuFlavor.resources }}
-{{- $resourceNames = append $resourceNames $resource.name }}
-{{- end }}
-{{- if not (deepEqual (sortAlpha $resourceNames) (sortAlpha $.Values.baselineQueue.gpu.coveredResources)) }}
-{{- fail (printf "baselineQueue.aksExtension.gpuFlavors[%s].resource names must match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- if .Values.baselineQueue.gpu.enabled }}
-{{- range $resource := .Values.baselineQueue.resources }}
-{{- if has $resource.name $.Values.baselineQueue.gpu.coveredResources }}
-{{- fail (printf "resource %s appears in both baselineQueue.resources and baselineQueue.gpu.coveredResources; remove GPU resources from baselineQueue.resources before upgrading" $resource.name) }}
-{{- end }}
-{{- end }}
-{{- end }}
-{{- if not $aksExtensionAuthority }}
+{{- $gpuFlavors := .Values.baselineQueue.gpu.flavors | default list }}
+{{- $gpuEnabled := gt (len $gpuFlavors) 0 }}
 {{- range $gpuFlavor := $gpuFlavors }}
-{{- if $gpuEnabled }}
-{{- if empty $gpuFlavor.nodeTaints }}
-{{- fail (printf "baselineQueue.gpu.flavors[%s].nodeTaints must contain at least one GPU admission taint so CPU-only workloads cannot fall through to GPU quota" $gpuFlavor.name) }}
-{{- end }}
-{{- range $taint := $gpuFlavor.nodeTaints }}
-{{- range $toleration := $gpuFlavor.tolerations }}
-{{- $keyMatches := or (empty $toleration.key) (eq $toleration.key $taint.key) }}
-{{- $effectMatches := or (empty $toleration.effect) (eq $toleration.effect $taint.effect) }}
-{{- $operator := default "Equal" $toleration.operator }}
-{{- $valueMatches := or (eq $operator "Exists") (and (eq $operator "Equal") (eq (default "" $toleration.value) (default "" $taint.value))) }}
-{{- if and $keyMatches $effectMatches $valueMatches }}
-{{- fail (printf "baselineQueue.gpu.flavors[%s] toleration for nodeTaint %s would make GPU quota eligible for CPU-only workloads; Tau GPU pods already carry GPU-node tolerations" $gpuFlavor.name $taint.key) }}
-{{- end }}
-{{- end }}
+{{- if empty $gpuFlavor.name }}
+{{- fail "baselineQueue.gpu.flavors[].name is required" }}
 {{- end }}
 {{- $resourceNames := list }}
 {{- range $resource := $gpuFlavor.resources }}
@@ -83,69 +13,10 @@
 {{- fail (printf "baselineQueue.gpu.flavors[%s].resource names must match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
 {{- end }}
 {{- end }}
-{{- end }}
-{{- end }}
-{{- if not $aksExtensionAuthority }}
-{{- if .Values.baselineQueue.topology.enabled }}
-apiVersion: kueue.x-k8s.io/v1beta2
-kind: Topology
-metadata:
-  name: {{ .Values.baselineQueue.topology.name }}
-  labels:
-    {{- include "taugrid.labels" . | nindent 4 }}
-spec:
-  levels:
-    {{- if ne $requiredTopology "kubernetes.io/hostname" }}
-    - nodeLabel: {{ $requiredTopology }}
-    {{- end }}
-    - nodeLabel: kubernetes.io/hostname
----
-{{- end }}
-apiVersion: kueue.x-k8s.io/v1beta2
-kind: ResourceFlavor
-metadata:
-  name: {{ .Values.baselineQueue.flavor.name }}
-  labels:
-    {{- include "taugrid.labels" . | nindent 4 }}
-spec:
-  {{- with .Values.baselineQueue.flavor.nodeLabels }}
-  nodeLabels:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- with .Values.baselineQueue.flavor.tolerations }}
-  tolerations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
----
 {{- if $gpuEnabled }}
-{{- range $gpuFlavor := $gpuFlavors }}
-apiVersion: kueue.x-k8s.io/v1beta2
-kind: ResourceFlavor
-metadata:
-  name: {{ $gpuFlavor.name }}
-  labels:
-    {{- include "taugrid.labels" $ | nindent 4 }}
-  {{- if $.Values.baselineQueue.topology.enabled }}
-  annotations:
-    kueue.x-k8s.io/podset-required-topology: {{ $requiredTopology | quote }}
-  {{- end }}
-spec:
-  {{- with $gpuFlavor.nodeLabels }}
-  nodeLabels:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- with $gpuFlavor.nodeTaints }}
-  nodeTaints:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- with $gpuFlavor.tolerations }}
-  tolerations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- if $.Values.baselineQueue.topology.enabled }}
-  topologyName: {{ $.Values.baselineQueue.topology.name }}
-  {{- end }}
----
+{{- range $resource := .Values.baselineQueue.resources }}
+{{- if has $resource.name $.Values.baselineQueue.gpu.coveredResources }}
+{{- fail (printf "resource %s appears in both baselineQueue.resources and baselineQueue.gpu.coveredResources" $resource.name) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -172,7 +43,7 @@ spec:
         {{- end }}
         {{- end }}
       flavors:
-        - name: {{ $cpuFlavorName }}
+        - name: aks-cpu
           resources:
             {{- range .Values.baselineQueue.resources }}
             - name: {{ .name }}
@@ -184,7 +55,6 @@ spec:
               nominalQuota: "0"
             {{- end }}
             {{- end }}
-        {{- if $gpuEnabled }}
         {{- range $gpuFlavor := $gpuFlavors }}
         - name: {{ $gpuFlavor.name }}
           resources:
@@ -196,7 +66,6 @@ spec:
             - name: {{ .name }}
               nominalQuota: {{ .nominalQuota | quote }}
             {{- end }}
-        {{- end }}
         {{- end }}
 ---
 apiVersion: scheduling.k8s.io/v1
@@ -237,5 +106,5 @@ metadata:
   labels:
     {{- include "taugrid.labels" . | nindent 4 }}
 value: 1200
-description: Elevated Kueue admission priority for approved TauGrid workloads.
+description: Elevated Kueue admission priority for TauGrid workloads.
 {{- end }}

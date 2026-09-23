@@ -125,27 +125,17 @@ Install TauGrid:
 tau cluster install --context "$TAU_CONTEXT"
 ```
 
-The default distribution installs Kueue, KubeRay, the Tau controller and CRDs,
-a portable baseline queue, GPU monitoring profiles, and the TauGrid Portal.
-The chart excludes provider GPU drivers and storage drivers.
+The distribution installs Kueue, the AKS Kueue Extension Controller (KEC),
+KubeRay, the Tau controller and CRDs, a baseline queue, GPU monitoring
+profiles, and the TauGrid Portal. The chart excludes provider GPU drivers and
+storage drivers.
 
-On AKS, the optional Kueue Extension Controller can own node classification and
-node-derived Kueue flavors instead of Tau. This mode installs every TauGrid
-system component in `kueue-system` because the extension identity is bound to
-that namespace:
-
-```bash
-tau cluster install \
-  --context "$TAU_CONTEXT" \
-  --namespace kueue-system \
-  --kueue-object-authority aksExtension
-```
-
-The default remains `tau`, which keeps the portable Tau node-label and flavor
-contract in `tau-system`. Do not run both authorities. If KEC-managed GPU
-flavors should receive baseline quota, list their generated names under
-`baselineQueue.aksExtension.gpuFlavors` in the values file. See the
-[cluster install values reference](../../reference/cluster-install-values/#kueue-object-authority).
+All system components run in `kueue-system` because the bundled KEC identity is
+namespace-bound. KEC is the sole authority for AKS node classification,
+Topology, and ResourceFlavors; Tau emits no competing node label rules or
+scheduling objects. If KEC-managed GPU flavors should receive baseline quota,
+list their generated names under `baselineQueue.gpu.flavors`. See the
+[cluster install values reference](../../reference/cluster-install-values/#kueue-extension-controller).
 
 If the platform needs different queue quotas, GPU labels, or component
 settings, keep the complete reviewed configuration in one values file:
@@ -187,7 +177,7 @@ For a single-operator evaluation, create the default workspace:
 
 ```bash
 export TAU_WORKSPACE="taugrid-default"
-export TAU_SYSTEM_NAMESPACE="tau-system" # use kueue-system for aksExtension authority
+export TAU_SYSTEM_NAMESPACE="kueue-system"
 
 tau workspace create "$TAU_WORKSPACE" \
   --context "$TAU_CONTEXT" \

@@ -14,40 +14,30 @@ Print this reference from your terminal:
 tau cluster explain-values
 ```
 
-The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. `tau cluster install` defaults it to `tau-system`; `--namespace <name>` moves the Kueue, KubeRay, Tau controller, Portal, GPU monitoring, and other enabled first-party workloads together. The first-party charts follow their Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. TauGrid requires `kueue-system` because the bundled Kueue Extension Controller ServiceAccount identity is namespace-bound. The first-party charts follow that Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
 
-## Kueue object authority
+## Kueue Extension Controller
 
-TauGrid supports exactly one node-label and Kueue Topology/ResourceFlavor
-authority:
-
-| CLI/value | Default | Description |
-| --- | --- | --- |
-| `--kueue-object-authority tau` / `global.kueueObjectAuthority: tau` | selected | Tau reconciles its reviewed node labels and the chart creates the baseline Topology and ResourceFlavors |
-| `--kueue-object-authority aksExtension` / `global.kueueObjectAuthority: aksExtension` | not selected | The AKS Kueue Extension Controller (KEC) classifies AKS user nodes and creates `aks-default`, `aks-cpu`, and inventory-derived GPU ResourceFlavors |
-| `kueue.aksExtension.enableKueueObjectsAutomation` | `false` | Must agree with the authority value; `tau cluster install` sets it automatically |
-
-KEC is identity-bound to the
-`system:serviceaccount:kueue-system:kueue-extension-controller` ServiceAccount.
-Therefore KEC mode requires `--namespace kueue-system`:
+The AKS Kueue Extension Controller (KEC) is TauGrid's sole authority for AKS
+node classification, Topology, and ResourceFlavors. The chart always enables
+`kueue.aksExtension.enableKueueObjectsAutomation` and requires the entire
+release in `kueue-system`:
 
 ```bash
 tau cluster install \
   --context "$TAU_CONTEXT" \
-  --namespace kueue-system \
-  --kueue-object-authority aksExtension \
   --values taugrid-values.yaml
 ```
 
-TauGrid suppresses `TauCluster.spec.nodes.labelRules` and does not render
-competing Topology or ResourceFlavor objects in this mode. The CPU baseline
-uses `aks-cpu`. KEC GPU flavor names are derived from live inventory, for
-example `aks-h200-ndisr-v5`; opt selected flavors into baseline quota:
+TauGrid renders `TauCluster.spec.nodes.labelRules: []` and does not render
+competing Topology or ResourceFlavor objects. The CPU baseline uses `aks-cpu`.
+KEC GPU flavor names are derived from live inventory, for example
+`aks-h200-ndisr-v5`; opt selected flavors into baseline quota:
 
 ```yaml
 baselineQueue:
-  aksExtension:
-    gpuFlavors:
+  gpu:
+    flavors:
       - name: aks-h200-ndisr-v5
         resources:
           - name: nvidia.com/gpu
@@ -58,13 +48,6 @@ An empty list creates a CPU-only baseline queue. Installation readiness checks
 the KEC Deployment, user-node classification, `aks-default`, `aks-cpu`, every
 selected GPU flavor, and the active ClusterQueue. KEC `/readyz` alone is not a
 semantic readiness signal.
-
-For direct Helm use, set both authority values explicitly and install the
-entire umbrella release in `kueue-system`. Never enable KEC automation while
-retaining Tau node-label rules or Tau-created flavors. Switching an existing
-release between authorities requires draining queues and migrating flavor
-references; topology-bearing ResourceFlavor fields cannot be treated as an
-in-place flag change.
 
 ## MultiKueue capability
 
@@ -86,7 +69,7 @@ Toggle sub-charts with `components.<key>.enabled`:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `components.kueue.enabled` | `true` | Kueue job scheduler |
+| `components.kueue.enabled` | `true` | Required Kueue chart containing both Kueue and KEC |
 | `components.kuberayOperator.enabled` | `true` | KubeRay operator |
 | `components.tauCoreController.enabled` | `true` | Tau core controller (TauWorkspace, TauCluster) |
 | `components.taugridCore.enabled` | `true` | Include the services chart, including the default Portal |
@@ -94,28 +77,25 @@ Toggle sub-charts with `components.<key>.enabled`:
 
 ## Baseline Queue
 
-A portable Kueue queue bootstrapped on first install. These quotas bound concurrent Kueue admission; Kubernetes scheduling still enforces real capacity. Production operators should replace them with deliberate capacity policy.
+A Kueue ClusterQueue bootstrapped on first install. It references KEC-managed
+ResourceFlavors; TauGrid does not create or mutate scheduling primitives.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `baselineQueue.enabled` | bool | `true` | Create the ClusterQueue, LocalQueue, ResourceFlavors, and Topology |
+| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (DNS label) |
 | `baselineQueue.namespaceSelector` | object | `matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]` | Namespaces that receive the LocalQueue |
-| `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
-| `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Required topology level copied from managed GPU flavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
-| `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory flavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti | CPU/memory admission quota |
-| `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
 | `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resources covered by the node-resource group |
-| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu` | GPU flavors and per-flavor quotas |
-| `baselineQueue.aksExtension.gpuFlavors` | list | empty | KEC-generated GPU flavor names and quotas to reference when `aksExtension` is authoritative |
+| `baselineQueue.gpu.flavors` | list | empty | KEC-generated GPU flavor names and quotas to reference |
 
-CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all of its requested resources. `taugrid-default-cpu` has zero GPU quota, while the generic `taugrid-default-gpu` has CPU/memory plus GPU quota and supports `gpu_class: any` on a fresh install. When hardware is known, replace the GPU flavor list with class-specific flavors and label matching nodes with the canonical A10, A100, H100, H200, GB200, or GB300 class from `policy.gpu_class`. Only GPU flavors carry `topologyName` and the managed `kueue.x-k8s.io/podset-required-topology` metadata annotation. Connected TauGrid submission copies that requirement onto generated GPU pod templates when no explicit placement policy is present. Raw Kubernetes manifests remain expert-controlled. The CPU/memory flavor remains non-TAS. For upgrades with saved legacy values, remove GPU resources from `baselineQueue.resources` and move all GPU class/series labels and GPU-node tolerations out of `baselineQueue.flavor` before adding their replacements under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's `nodeTaints`. TauGrid fails template rendering if the old mixed values would duplicate GPU coverage or constrain CPU-only admission. Replace the generic GPU flavor with class-specific flavors rather than keeping both: exact class quota must not fall back to an unlabeled ResourceFlavor.
+CPU-only admission uses `aks-cpu`. When GPU flavors are selected, CPU, memory,
+and GPU share one resource group: `aks-cpu` receives zero GPU quota, and each
+selected GPU flavor receives CPU, memory, and its declared GPU quota.
 
 ## Portal
 
-The following are defaults of the TauGrid umbrella distribution used by `tau cluster install`. The standalone `taugrid-core` chart keeps Portal disabled, so platforms that install that child chart directly must opt in explicitly. Portal follows the Helm release namespace selected by `tau cluster install --namespace`; the CLI default is `tau-system`.
+The following are defaults of the TauGrid umbrella distribution used by `tau cluster install`. The standalone `taugrid-core` chart keeps Portal disabled, so platforms that install that child chart directly must opt in explicitly. Portal runs in the required `kueue-system` release namespace.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -128,22 +108,16 @@ These defaults make the Portal shell, Runs and run-detail views, Cluster Nodes v
 
 ### `baselineQueue.gpu.flavors`
 
-Declare GPU-node taints (for example `sku=gpu:NoSchedule`) in each GPU flavor's `nodeTaints`. This makes the flavor ineligible for CPU-only pods if generic CPU quota is exhausted. TauGrid injects `sku=gpu` and `nvidia.com/gpu` tolerations into GPU workloads, so those workloads remain eligible. Keep a matching taint out of the flavor's `tolerations`: repeating it there would make Kueue automatically tolerate it for every pod and remove the CPU-isolation guard.
+List only ResourceFlavor names that KEC has generated from live AKS GPU node
+inventory. TauGrid references these objects and does not own their selectors,
+topology, taints, or tolerations.
 
 ```yaml
 # taugrid-values.yaml
 baselineQueue:
   gpu:
     flavors:
-      - name: a100-pool
-        nodeLabels:
-          kubernetes.io/os: linux
-          tau.azure.com/gpu-class: a100-80gb
-        nodeTaints:
-          - key: sku
-            value: gpu
-            effect: NoSchedule
-        tolerations: []
+      - name: aks-h200-ndisr-v5
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "1"
@@ -157,38 +131,20 @@ The remaining top-level keys pass values directly to embedded sub-charts:
 | --- | --- | --- |
 | `kueue.*` | Kueue v0.19 | `controllerManager.manager.image`, `managerConfig`, `aksExtension` |
 | `kuberay-operator.*` | KubeRay v1.6 | `image`, `configuration`, `podAnnotations` |
-| `tau-core-controller.*` | Tau controller | `image`, `tauCluster.nodeLabelRules` |
+| `tau-core-controller.*` | Tau controller | `image`, `tauCluster.workloadProfiles` |
 | `taugrid-core.*` | Services chart | `prewarm.enabled`, `stellar.enabled`, `portal.enabled` |
 | `gpu-monitoring.*` | GPU monitoring | `gpuSkus`, `daemonset`, `metricsCollector`, `namespace` |
 
 ## Example: GPU Cluster
 
-TauGrid's controller derives the node contract from `node.kubernetes.io/instance-type` and repairs drift:
-
-| AKS VM size                 | GPU series        | GPU class    |
-| --------------------------- | ----------------- | ------------ |
-| `Standard_NC24ads_A100_v4`  | `nc24ads-a100-v4` | `a100-80gb`  |
-| `Standard_ND96amsr_A100_v4` | `ndm-a100-v4`     | `a100-80gb`  |
-| `Standard_NC40ads_H100_v5`  | `nc-h100-v5`      | `h100-95gb`  |
-| `Standard_ND96isr_H200_v5`  | `nd-h200-v5`      | `h200-141gb` |
-
-Use `tau-core-controller.tauCluster.extraNodeLabelRules` for another reviewed VM size. Setting `nodeLabelRules` replaces the built-in catalog. CPU-only clusters and GPU pools scaled to zero remain ready when no catalog entry currently matches.
+After KEC has generated a GPU ResourceFlavor, reference its exact name:
 
 ```yaml
-# taugrid-values.yaml: H200 cluster with GPU taints
+# taugrid-values.yaml: H200 cluster
 baselineQueue:
   gpu:
     flavors:
-      - name: h200-pool
-        nodeLabels:
-          kubernetes.io/os: linux
-          kueue.azure.com/gpu-series: nd-h200-v5
-          tau.azure.com/gpu-class: h200-141gb
-        nodeTaints:
-          - key: sku
-            value: gpu
-            effect: NoSchedule
-        tolerations: []
+      - name: aks-h200-ndisr-v5
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "8"

@@ -57,11 +57,12 @@ otherwise leave them undeletable.
 Helm removes resources owned by the release. Kubernetes CRDs, user-created
 custom resources, retained namespaces, cloud infrastructure, node labels,
 storage, and workspace data are intentionally not deleted. Release-owned queue
-policy and the TauCluster singleton are removed. Remove or migrate TauWorkspace
-objects before uninstalling the controller.`,
+policy and the TauCluster singleton are removed. KEC's uninstall hook removes
+its generated scheduling objects, so --no-hooks is not supported. Remove or
+migrate TauWorkspace objects before uninstalling the controller.`,
 		Example: `  tau cluster uninstall --dry-run
   tau cluster uninstall --yes
-  tau cluster uninstall --yes --release taugrid --namespace tau-system`,
+  tau cluster uninstall --yes --release taugrid --namespace kueue-system`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateClusterUninstallSpec(spec); err != nil {
 				return err
@@ -108,6 +109,9 @@ cluster.`)
 }
 
 func validateClusterUninstallSpec(spec clusterUninstallSpec) error {
+	if spec.NoHooks {
+		return fmt.Errorf("--no-hooks is not supported because the mandatory KEC uninstall hook removes its generated scheduling objects")
+	}
 	required := map[string]string{
 		"--release":   spec.Release,
 		"--namespace": spec.Namespace,
@@ -124,25 +128,19 @@ func validateClusterUninstallSpec(spec clusterUninstallSpec) error {
 	return nil
 }
 
-// baselineQueuePolicy names the cluster-scoped Kueue objects the chart owns.
-// They are the ones that strand on a finalizer when Kueue is removed first, so
-// both the drain report and the recovery guidance need their real names.
+// baselineQueuePolicy names the cluster-scoped Kueue object the chart owns.
+// It can strand on a finalizer when Kueue is removed first, so both the drain
+// report and recovery guidance need its real name.
 type baselineQueuePolicy struct {
 	// Known is false when the release values could not be read, so the names
 	// below are chart defaults rather than this cluster's actual ones.
 	Known        bool
 	Enabled      bool
 	ClusterQueue string
-	Flavor       string
-	Topology     string
 }
 
 func (q baselineQueuePolicy) objects() []string {
-	objects := []string{"clusterqueue/" + q.ClusterQueue, "resourceflavor/" + q.Flavor}
-	if q.Topology != "" {
-		objects = append(objects, "topology/"+q.Topology)
-	}
-	return objects
+	return []string{"clusterqueue/" + q.ClusterQueue}
 }
 
 // tauGridBaselineQueue reads the release's coalesced values so the drain and
@@ -153,8 +151,6 @@ func (q baselineQueuePolicy) objects() []string {
 func tauGridBaselineQueue(cmd *cobra.Command, spec clusterUninstallSpec) baselineQueuePolicy {
 	defaults := baselineQueuePolicy{
 		ClusterQueue: "jobqueue",
-		Flavor:       "taugrid-default",
-		Topology:     "default-node-topology",
 	}
 	raw, err := tauGridReleaseValues(cmd, spec.KubeContext, spec.Release, spec.Namespace)
 	if err != nil {
@@ -164,13 +160,6 @@ func tauGridBaselineQueue(cmd *cobra.Command, spec clusterUninstallSpec) baselin
 		BaselineQueue struct {
 			Enabled *bool  `json:"enabled"`
 			Name    string `json:"name"`
-			Flavor  struct {
-				Name string `json:"name"`
-			} `json:"flavor"`
-			Topology struct {
-				Enabled *bool  `json:"enabled"`
-				Name    string `json:"name"`
-			} `json:"topology"`
 		} `json:"baselineQueue"`
 	}
 	if err := json.Unmarshal(raw, &values); err != nil {
@@ -182,12 +171,6 @@ func tauGridBaselineQueue(cmd *cobra.Command, spec clusterUninstallSpec) baselin
 	// means the release predates it, and the chart default is enabled.
 	policy := baselineQueuePolicy{Known: true, Enabled: queue.Enabled == nil || *queue.Enabled}
 	policy.ClusterQueue = cmp.Or(queue.Name, defaults.ClusterQueue)
-	policy.Flavor = cmp.Or(queue.Flavor.Name, defaults.Flavor)
-	// The chart renders a Topology only when it is enabled, so a disabled one
-	// must stay unnamed or the guidance points at an object that never existed.
-	if queue.Topology.Enabled == nil || *queue.Topology.Enabled {
-		policy.Topology = cmp.Or(queue.Topology.Name, defaults.Topology)
-	}
 	return policy
 }
 

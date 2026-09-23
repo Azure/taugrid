@@ -17,7 +17,6 @@ func TestReferenceMarkdownContainsCriticalFields(t *testing.T) {
 		"baselineQueue.name",
 		"components.kueue.enabled",
 		"components.gpuMonitoring.enabled",
-		"tau-core-controller.tauCluster.nodeLabelRules",
 		"taugrid-core.stellar.enabled",
 		"taugrid-core.portal.enabled",
 		"taugrid-core.portal.serviceAccount.create",
@@ -37,11 +36,10 @@ func TestReferenceMarkdownIsMarkdownTable(t *testing.T) {
 	}
 }
 
-func TestReferenceMarkdownGPUExamplePassesQueueSafetyContract(t *testing.T) {
+func TestReferenceMarkdownGPUExampleUsesKECFlavor(t *testing.T) {
 	md := ReferenceMarkdown()
 	for _, required := range []string{
-		"nodeTaints:",
-		"tolerations: []",
+		"name: aks-h200-ndisr-v5",
 		"name: nvidia.com/gpu",
 		`nominalQuota: "1"`,
 	} {

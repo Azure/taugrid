@@ -8,6 +8,8 @@ templates:
 tests:
   - it: keeps Kueue integrations and AKS DRA mapping
     template: charts/kueue/templates/manager/manager-config.yaml
+    release:
+      namespace: kueue-system
     asserts:
       - matchRegex:
           path: data["controller_manager_config.yaml"]
@@ -21,6 +23,8 @@ tests:
 
   - it: uses the pinned MCR Kueue image
     template: charts/kueue/templates/manager/manager.yaml
+    release:
+      namespace: kueue-system
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
@@ -39,6 +43,8 @@ tests:
 
   - it: configures the AKS KubeRay container defaults
     template: charts/kuberay-operator/templates/configmap.yaml
+    release:
+      namespace: kueue-system
     asserts:
       - matchRegex:
           path: data["config.yaml"]
@@ -49,6 +55,8 @@ tests:
 
   - it: uses the pinned MCR KubeRay image and scrape annotations
     template: charts/kuberay-operator/templates/deployment.yaml
+    release:
+      namespace: kueue-system
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image

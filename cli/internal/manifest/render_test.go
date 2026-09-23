@@ -1680,8 +1680,8 @@ runtime:
 	if got := dig(job, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
 		t.Errorf("Job gpu class label=%v want %s", got, topology.GPUClassA10080GB)
 	}
-	if got := dig(job, "spec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
-		t.Errorf("Job gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	if got := dig(job, "spec", "template", "spec", "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB) {
+		t.Errorf("Job gpu class selector=%v want %s", got, topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB))
 	}
 	for key, want := range map[string]string{
 		workloadmeta.AnnotationStellarExperimentID: "presettrain:exact",
@@ -1725,7 +1725,7 @@ func TestBuildSchedulingMetadataRejectsGPUClassSelectorForAny(t *testing.T) {
 	_, err := buildSchedulingMetadata(RenderOptions{
 		TopologyOptions: topology.Options{GPUClass: topology.GPUClassAny},
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
@@ -1741,7 +1741,7 @@ func TestBuildSchedulingMetadataRejectsSelectorConflictingWithProfileGPUClass(t 
 	_, err := buildSchedulingMetadata(RenderOptions{
 		TopologyProfile: &p,
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
@@ -1757,7 +1757,7 @@ func TestBuildSchedulingMetadataRejectsClassSelectorForProfileAny(t *testing.T) 
 	_, err := buildSchedulingMetadata(RenderOptions{
 		TopologyProfile: &p,
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
@@ -2964,8 +2964,8 @@ runtime:
 		t.Errorf("head retained workload node selector: %v", got)
 	}
 	workerSpec := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec")
-	if got := dig(workerSpec, "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassA10080GB {
-		t.Errorf("Ray worker gpu class selector=%v want %s", got, topology.GPUClassA10080GB)
+	if got := dig(workerSpec, "nodeSelector", workloadmeta.NodeLabelGPUClass); got != topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB) {
+		t.Errorf("Ray worker gpu class selector=%v want %s", got, topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB))
 	}
 	if got := dig(workerSpec, "nodeSelector", topology.ManagedGPUSeriesLabel); got != "nd-h200-v5" {
 		t.Errorf("worker GPU-series selector = %v, want nd-h200-v5", got)

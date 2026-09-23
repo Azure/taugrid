@@ -51,8 +51,6 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
 		"--set-string", "kuberay-operator.labels.environment=dev",
-		"--set-string", "global.kueueObjectAuthority=tau",
-		"--set", "kueue.aksExtension.enableKueueObjectsAutomation=false",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("helm args:\n got: %#v\nwant: %#v", got, want)
@@ -66,11 +64,10 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	for _, want := range []string{
 		"Helm wait:  bootstrap only (Tau readiness validation still runs after queue policy)",
 		"Rollback:   disabled",
-		"Authority:  tau",
 		"Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal",
 		"Opt-in:     Stellar, lifecycle recorder, image prewarm",
-		"tau workspace create --system-namespace tau-system --principal-name <external-group-or-team> --apply",
-		"kubectl get workspaces.tau.azure.com -n tau-system",
+		"tau workspace create --system-namespace kueue-system --principal-name <external-group-or-team> --apply",
+		"kubectl get workspaces.tau.azure.com -n kueue-system",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install output missing %q:\n%s", want, out)
@@ -79,7 +76,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	if strings.Contains(out, "kubectl get tauworkspace ") {
 		t.Fatalf("install output names a nonexistent resource type:\n%s", out)
 	}
-	if !strings.Contains(out, "READY: 8/8 checks passed") {
+	if !strings.Contains(out, "READY: 10/10 checks passed") {
 		t.Fatalf("install output missing readiness report:\n%s", out)
 	}
 	if !strings.Contains(out, "TauGrid is installed and ready as Helm release") {
@@ -90,43 +87,9 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	}
 }
 
-func TestClusterInstallConfiguresAKSExtensionAuthority(t *testing.T) {
-	var calls [][]string
-	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
-		calls = append(calls, append([]string(nil), args...))
-		return nil
-	})
-
-	out, err := runCluster(t, "install",
-		"--namespace", aksExtensionNamespace,
-		"--kueue-object-authority", aksExtensionAuthority)
-	if err != nil {
-		t.Fatalf("install errored: %v\n%s", err, out)
-	}
-	if len(calls) != 2 {
-		t.Fatalf("Helm upgrade calls = %d, want 2", len(calls))
-	}
-	for _, args := range calls {
-		if !containsArgPair(args, "--set-string", "global.kueueObjectAuthority=aksExtension") ||
-			!containsArgPair(args, "--set", "kueue.aksExtension.enableKueueObjectsAutomation=true") {
-			t.Fatalf("AKS extension authority values missing: %#v", args)
-		}
-	}
-	if !strings.Contains(out, "Authority:  aksExtension") {
-		t.Fatalf("install plan missing authority:\n%s", out)
-	}
-}
-
-func TestClusterInstallRejectsAKSExtensionOutsideKueueSystem(t *testing.T) {
-	out, err := runCluster(t, "install", "--kueue-object-authority", aksExtensionAuthority)
+func TestClusterInstallRejectsNamespaceOutsideKueueSystem(t *testing.T) {
+	out, err := runCluster(t, "install", "--namespace", "tau-system")
 	if err == nil || !strings.Contains(err.Error(), "requires --namespace kueue-system") {
-		t.Fatalf("error = %v, output = %s", err, out)
-	}
-}
-
-func TestClusterInstallRejectsUnknownKueueAuthority(t *testing.T) {
-	out, err := runCluster(t, "install", "--kueue-object-authority", "both")
-	if err == nil || !strings.Contains(err.Error(), `must be "tau" or "aksExtension"`) {
 		t.Fatalf("error = %v, output = %s", err, out)
 	}
 }
@@ -243,7 +206,7 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
 		switch {
 		case len(args) > 0 && args[0] == "list":
-			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"tau-system"}]`)
+			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"kueue-system"}]`)
 			return nil
 		case len(args) > 1 && args[0] == "get" && args[1] == "values":
 			_, _ = io.WriteString(out, "{}")
@@ -321,7 +284,7 @@ func TestClusterInstallRejectsReleaseInAnotherNamespace(t *testing.T) {
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	_, err := runCluster(t, "install", "--namespace", "new-system")
+	_, err := runCluster(t, "install")
 	if err == nil || !strings.Contains(err.Error(), `Helm release "taugrid" already exists in namespace old-system`) ||
 		!strings.Contains(err.Error(), "cannot be changed in place") {
 		t.Fatalf("cross-namespace release error = %v", err)
@@ -331,23 +294,14 @@ func TestClusterInstallRejectsReleaseInAnotherNamespace(t *testing.T) {
 	}
 }
 
-func TestClusterInstallCustomNamespaceFlowsIntoNextSteps(t *testing.T) {
+func TestClusterInstallRejectsCustomNamespace(t *testing.T) {
 	installFakeHelm(t, func(context.Context, io.Reader, io.Writer, io.Writer, []string) error {
 		return nil
 	})
 
 	out, err := runCluster(t, "install", "--namespace", "custom-system")
-	if err != nil {
-		t.Fatalf("install errored: %v\n%s", err, out)
-	}
-	for _, want := range []string{
-		"namespace custom-system",
-		"tau workspace create --system-namespace custom-system",
-		"kubectl get workspaces.tau.azure.com -n custom-system",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("custom install output missing %q:\n%s", want, out)
-		}
+	if err == nil || !strings.Contains(err.Error(), "requires --namespace kueue-system") {
+		t.Fatalf("custom namespace error = %v\n%s", err, out)
 	}
 }
 
@@ -381,8 +335,6 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 		"--kube-context", "aks-dev",
 		"--dependency-update",
 		"--values", "cluster.yaml",
-		"--set-string", "global.kueueObjectAuthority=tau",
-		"--set", "kueue.aksExtension.enableKueueObjectsAutomation=false",
 	}
 	if !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("dry-run helm args:\n got: %#v\nwant: %#v", calls[0], want)
@@ -704,7 +656,7 @@ func TestEnsureSystemNamespaceMigrationAllowsMissingCRDs(t *testing.T) {
 }
 
 func readyInstallationReport() installationcheck.Report {
-	names := []string{"Kubernetes", "Kueue", "KubeRay", "Portal", "Tau controller", "TauCluster", "Baseline queue", "Quota guard"}
+	names := []string{"Kubernetes", "Kueue", "KubeRay", "Kueue extension", "Kueue authority", "Portal", "Tau controller", "TauCluster", "Baseline queue", "Quota guard"}
 	results := make([]installationcheck.Result, 0, len(names))
 	for _, name := range names {
 		results = append(results, installationcheck.Result{Name: name, Status: installationcheck.StatusPass, Detail: "ready"})

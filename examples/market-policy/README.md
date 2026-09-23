@@ -58,7 +58,7 @@ tau run logs market-policy
 ```
 
 The Ray driver requests a one-GPU remote task. Kueue admits the worker with the
-portable `h200-141gb` GPU class, and the task fails if CUDA is unavailable. The
+KEC-native `h200` GPU class, and the task fails if CUDA is unavailable. The
 public TauGrid Ray/CUDA image is pinned by MCR digest, while `runtime.pip` pins
 PyTorch and NumPy to the versions used by the trainer. The workspace therefore
 needs package-index access while Ray prepares the runtime environment. On an

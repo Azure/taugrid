@@ -53,44 +53,6 @@
           "minLength": 1,
           "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
         },
-        "topology": {
-          "type": "object",
-          "required": [
-            "enabled",
-            "name"
-          ],
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "name": {
-              "type": "string",
-              "minLength": 1
-            },
-            "requiredLevel": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        },
-        "flavor": {
-          "type": "object",
-          "required": [
-            "name"
-          ],
-          "properties": {
-            "name": {
-              "type": "string",
-              "minLength": 1
-            },
-            "nodeLabels": {
-              "type": "object"
-            },
-            "tolerations": {
-              "type": "array"
-            }
-          }
-        },
         "resources": {
           "type": "array",
           "minItems": 1,
@@ -123,14 +85,10 @@
         "gpu": {
           "type": "object",
           "required": [
-            "enabled",
             "coveredResources",
             "flavors"
           ],
           "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
             "coveredResources": {
               "type": "array",
               "items": {
@@ -144,23 +102,12 @@
                 "type": "object",
                 "required": [
                   "name",
-                  "nodeTaints",
                   "resources"
                 ],
                 "properties": {
                   "name": {
                     "type": "string",
                     "minLength": 1
-                  },
-                  "nodeLabels": {
-                    "type": "object"
-                  },
-                  "nodeTaints": {
-                    "type": "array",
-                    "minItems": 1
-                  },
-                  "tolerations": {
-                    "type": "array"
                   },
                   "resources": {
                     "type": "array",
@@ -200,8 +147,6 @@
       "required": [
         "enabled",
         "name",
-        "topology",
-        "flavor",
         "gpu",
         "resources"
       ]

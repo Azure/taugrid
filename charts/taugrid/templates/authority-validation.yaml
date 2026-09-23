@@ -2,18 +2,15 @@
 Copyright (c) Microsoft Corporation.
 Licensed under the MIT License.
 */}}
-{{- $authority := default "tau" .Values.global.kueueObjectAuthority -}}
-{{- if not (has $authority (list "tau" "aksExtension")) -}}
-{{- fail "global.kueueObjectAuthority must be tau or aksExtension" -}}
+{{- if ne .Release.Namespace "kueue-system" -}}
+{{- fail "TauGrid requires installing the release in namespace kueue-system because the bundled Kueue Extension Controller identity is namespace-bound" -}}
 {{- end -}}
-{{- $aksExtensionAuthority := eq $authority "aksExtension" -}}
-{{- $aksAutomationEnabled := default false .Values.kueue.aksExtension.enableKueueObjectsAutomation -}}
-{{- if ne $aksExtensionAuthority $aksAutomationEnabled -}}
-{{- fail "global.kueueObjectAuthority and kueue.aksExtension.enableKueueObjectsAutomation disagree; select exactly one node/flavor authority" -}}
+{{- if not .Values.components.kueue.enabled -}}
+{{- fail "TauGrid requires components.kueue.enabled=true because the Kueue Extension Controller is part of the bundled Kueue chart" -}}
 {{- end -}}
-{{- if and $aksExtensionAuthority (ne .Release.Namespace "kueue-system") -}}
-{{- fail "aksExtension authority requires installing the TauGrid release in namespace kueue-system" -}}
+{{- if not .Values.kueue.aksExtension.enableKueueObjectsAutomation -}}
+{{- fail "TauGrid requires kueue.aksExtension.enableKueueObjectsAutomation=true; KEC is the sole node and ResourceFlavor authority" -}}
 {{- end -}}
-{{- if and $aksExtensionAuthority (not .Values.components.kueue.enabled) -}}
-{{- fail "aksExtension authority requires components.kueue.enabled=true" -}}
+{{- if (index .Values "taugrid-core").resourceFlavors.enabled -}}
+{{- fail "TauGrid requires taugrid-core.resourceFlavors.enabled=false; KEC is the sole ResourceFlavor authority" -}}
 {{- end -}}

@@ -43,21 +43,28 @@ const (
 	// GPUClassAny is explicit unconstrained hardware selection: it renders no
 	// class selector and lets Kueue admit against any available GPU flavor.
 	GPUClassAny = "any"
-	// GPU classes are canonical, hardware-only values. They name model and
-	// usable device memory; interconnect and placement belong solely to
-	// Topology.Placement. Each value is also the exact
-	// tau.azure.com/gpu-class node-label/ResourceFlavor contract.
-	GPUClassA104GB          = "a10-4gb"
-	GPUClassA108GB          = "a10-8gb"
-	GPUClassA1012GB         = "a10-12gb"
-	GPUClassA1024GB         = "a10-24gb"
-	GPUClassA10040GB        = "a100-40gb"
-	GPUClassA10080GB        = "a100-80gb"
-	GPUClassH10080GB        = "h100-80gb"
-	GPUClassH10095GB        = "h100-95gb"
-	GPUClassH200141GB       = "h200-141gb"
-	GPUClassGB200192GB      = "gb200-192gb"
-	GPUClassGB300288GB      = "gb300-288gb"
+	// GPU classes are the hardware names represented by KEC's
+	// kubernetes.azure.com/sku-gpu-name node and ResourceFlavor selector.
+	// Interconnect, placement, and SKU series remain separate contracts.
+	GPUClassA10   = "a10"
+	GPUClassA100  = "a100"
+	GPUClassH100  = "h100"
+	GPUClassH200  = "h200"
+	GPUClassGB200 = "gb200"
+	GPUClassGB300 = "gb300"
+	// Deprecated source-compatibility aliases collapse memory-specific Tau
+	// classes to the hardware granularity KEC can represent.
+	GPUClassA104GB          = GPUClassA10
+	GPUClassA108GB          = GPUClassA10
+	GPUClassA1012GB         = GPUClassA10
+	GPUClassA1024GB         = GPUClassA10
+	GPUClassA10040GB        = GPUClassA100
+	GPUClassA10080GB        = GPUClassA100
+	GPUClassH10080GB        = GPUClassH100
+	GPUClassH10095GB        = GPUClassH100
+	GPUClassH200141GB       = GPUClassH200
+	GPUClassGB200192GB      = GPUClassGB200
+	GPUClassGB300288GB      = GPUClassGB300
 	LabelTeam               = workloadmeta.LabelTeam
 	LabelLane               = workloadmeta.LabelLane
 	LabelGPUClass           = workloadmeta.LabelGPUClass
@@ -120,24 +127,30 @@ var labelValueRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$`)
 // validation, rendering, status, and explain surface operates on the
 // canonical value, and no new aliases should be added here.
 var legacyGPUClassAliases = map[string]string{
-	"a100-nvlink-80gb":     GPUClassA10080GB,
-	"h100-standalone-95gb": GPUClassH10095GB,
-	"h200-nvlink-141gb":    GPUClassH200141GB,
+	"a10-4gb":              GPUClassA10,
+	"a10-8gb":              GPUClassA10,
+	"a10-12gb":             GPUClassA10,
+	"a10-24gb":             GPUClassA10,
+	"a100-40gb":            GPUClassA100,
+	"a100-80gb":            GPUClassA100,
+	"a100-nvlink-80gb":     GPUClassA100,
+	"h100-80gb":            GPUClassH100,
+	"h100-95gb":            GPUClassH100,
+	"h100-standalone-95gb": GPUClassH100,
+	"h200-141gb":           GPUClassH200,
+	"h200-nvlink-141gb":    GPUClassH200,
+	"gb200-192gb":          GPUClassGB200,
+	"gb300-288gb":          GPUClassGB300,
 }
 
 var supportedGPUClasses = []string{
 	GPUClassAny,
-	GPUClassA104GB,
-	GPUClassA108GB,
-	GPUClassA1012GB,
-	GPUClassA1024GB,
-	GPUClassA10040GB,
-	GPUClassA10080GB,
-	GPUClassH10080GB,
-	GPUClassH10095GB,
-	GPUClassH200141GB,
-	GPUClassGB200192GB,
-	GPUClassGB300288GB,
+	GPUClassA10,
+	GPUClassA100,
+	GPUClassH100,
+	GPUClassH200,
+	GPUClassGB200,
+	GPUClassGB300,
 }
 
 // SupportedGPUClasses returns the canonical researcher-facing GPU classes.
@@ -170,6 +183,24 @@ func IsSupportedGPUClass(v string) bool {
 	return false
 }
 
+// GPUClassNodeLabelValue returns the exact KEC selector value for a canonical
+// researcher-facing gpu_class.
+func GPUClassNodeLabelValue(v string) string {
+	canonical, _ := NormalizeGPUClass(v)
+	if canonical == "" || canonical == GPUClassAny {
+		return ""
+	}
+	return strings.ToUpper(canonical)
+}
+
+// GPUClassMatchesNodeLabel reports whether a KEC sku-gpu-name label represents
+// the requested researcher-facing gpu_class.
+func GPUClassMatchesNodeLabel(gpuClass, nodeLabelValue string) bool {
+	canonical, _ := NormalizeGPUClass(gpuClass)
+	labelClass, _ := NormalizeGPUClass(nodeLabelValue)
+	return canonical != "" && canonical != GPUClassAny && canonical == labelClass
+}
+
 func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) error {
 	canonical, _ := NormalizeGPUClass(gpuClass)
 	selected := strings.TrimSpace(selector[workloadmeta.NodeLabelGPUClass])
@@ -179,8 +210,9 @@ func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) e
 	if canonical == GPUClassAny {
 		return fmt.Errorf("gpu_class %q is unconstrained and cannot be combined with node selector %s=%q", canonical, workloadmeta.NodeLabelGPUClass, selected)
 	}
-	if selected != canonical {
-		return fmt.Errorf("gpu_class %q requires %s=%q, but the workload node selector uses %q", canonical, workloadmeta.NodeLabelGPUClass, canonical, selected)
+	expected := GPUClassNodeLabelValue(canonical)
+	if selected != expected {
+		return fmt.Errorf("gpu_class %q requires %s=%q, but the workload node selector uses %q", canonical, workloadmeta.NodeLabelGPUClass, expected, selected)
 	}
 	return nil
 }
@@ -272,7 +304,7 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	if spec.gpuClass != "" {
 		plan.Labels[LabelGPUClass] = spec.gpuClass
 		if spec.gpuClass != GPUClassAny {
-			plan.NodeSelector[workloadmeta.NodeLabelGPUClass] = spec.gpuClass
+			plan.NodeSelector[workloadmeta.NodeLabelGPUClass] = GPUClassNodeLabelValue(spec.gpuClass)
 		}
 	}
 	if spec.workloadPriorityClassName != "" {

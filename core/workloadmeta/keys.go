@@ -85,10 +85,9 @@ const (
 	AnnotationTopologyGPUProfile = "tau.azure.com/topology-gpu-profile"
 )
 
-// Node-scoped topology labels. NodeLabelGPUClass intentionally shares its key
-// with LabelGPUClass.
+// Node-scoped topology labels managed by the AKS Kueue Extension Controller.
 const (
-	NodeLabelGPUClass = "tau.azure.com/gpu-class"
+	NodeLabelGPUClass = "kubernetes.azure.com/sku-gpu-name"
 )
 
 // GPU resource contract.

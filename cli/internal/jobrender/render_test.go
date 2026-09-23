@@ -1172,8 +1172,8 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	}
 	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	nodeSelector := pod["nodeSelector"].(map[string]any)
-	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
-		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB) {
+		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB))
 	}
 }
 
@@ -1212,8 +1212,8 @@ func TestRender_LegacyGPUClassAliasRendersCanonicalContract(t *testing.T) {
 	}
 	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	nodeSelector := pod["nodeSelector"].(map[string]any)
-	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
-		t.Fatalf("gpu class selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB) {
+		t.Fatalf("gpu class selector=%v want %s", nodeSelector, runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB))
 	}
 }
 
@@ -1225,7 +1225,7 @@ func TestRender_RejectsConflictingGPUClassNodeSelector(t *testing.T) {
 		QueueName: "jobqueue",
 		GPUClass:  runtopology.GPUClassA10080GB,
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassH10095GB,
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassNodeLabelValue(runtopology.GPUClassH10095GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
@@ -1241,7 +1241,7 @@ func TestRender_RejectsGPUClassSelectorForAny(t *testing.T) {
 		QueueName: "jobqueue",
 		GPUClass:  runtopology.GPUClassAny,
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
@@ -1258,7 +1258,7 @@ func TestRender_RejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
 		Command:   []string{"true"},
 		QueueName: "jobqueue",
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
@@ -1275,7 +1275,7 @@ func TestRender_RejectsClassSelectorForProfileAny(t *testing.T) {
 		Command:   []string{"true"},
 		QueueName: "jobqueue",
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
@@ -1299,8 +1299,8 @@ func TestRender_ClearNodeSelectorPreservesGPUClassContract(t *testing.T) {
 	m := parseYAML(t, out)
 	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	nodeSelector := pod["nodeSelector"].(map[string]any)
-	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassA10080GB {
-		t.Fatalf("gpu class selector=%v want %s", nodeSelector, runtopology.GPUClassA10080GB)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB) {
+		t.Fatalf("gpu class selector=%v want %s", nodeSelector, runtopology.GPUClassNodeLabelValue(runtopology.GPUClassA10080GB))
 	}
 	if nodeSelector["rack"] != "r1" {
 		t.Fatalf("caller selector missing: %v", nodeSelector)
@@ -1430,8 +1430,8 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 	spec := m["spec"].(map[string]any)
 	pod := spec["template"].(map[string]any)["spec"].(map[string]any)
 	nodeSelector := pod["nodeSelector"].(map[string]any)
-	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassH10095GB {
-		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassH10095GB)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != runtopology.GPUClassNodeLabelValue(runtopology.GPUClassH10095GB) {
+		t.Fatalf("gpu class node selector=%v want %s", nodeSelector, runtopology.GPUClassNodeLabelValue(runtopology.GPUClassH10095GB))
 	}
 	if pod["priorityClassName"] != "taugrid-default" {
 		t.Fatalf("pod priority=%v", pod["priorityClassName"])

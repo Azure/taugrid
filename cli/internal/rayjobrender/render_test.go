@@ -408,8 +408,8 @@ func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
 	}
 	workers := rayjob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)["workerGroupSpecs"].([]any)
 	nodeSelector := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["nodeSelector"].(map[string]any)
-	if nodeSelector[workloadmeta.NodeLabelGPUClass] != topology.GPUClassA10080GB {
-		t.Fatalf("worker gpu class selector=%v want %s", nodeSelector, topology.GPUClassA10080GB)
+	if nodeSelector[workloadmeta.NodeLabelGPUClass] != topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB) {
+		t.Fatalf("worker gpu class selector=%v want %s", nodeSelector, topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB))
 	}
 }
 
@@ -426,7 +426,7 @@ func TestRenderRejectsGPUClassSelectorForAny(t *testing.T) {
 			GPUClass:  topology.GPUClassAny,
 		},
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unconstrained") {
@@ -447,7 +447,7 @@ func TestRenderRejectsSelectorConflictingWithProfileGPUClass(t *testing.T) {
 		},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), workloadmeta.NodeLabelGPUClass) {
@@ -468,7 +468,7 @@ func TestRenderRejectsClassSelectorForProfileAny(t *testing.T) {
 		},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 		NodeSelector: map[string]string{
-			workloadmeta.NodeLabelGPUClass: topology.GPUClassA10080GB,
+			workloadmeta.NodeLabelGPUClass: topology.GPUClassNodeLabelValue(topology.GPUClassA10080GB),
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "unconstrained") {

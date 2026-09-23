@@ -1082,7 +1082,7 @@ func TestSelectQueueRejectsMisleadingAndUnlabeledFlavors(t *testing.T) {
 		GPUClass:        topology.GPUClassH10095GB,
 		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
 	})
-	if err == nil || !strings.Contains(err.Error(), `gpu_class "h100-95gb"`) {
+	if err == nil || !strings.Contains(err.Error(), `gpu_class "h100"`) {
 		t.Fatalf("expected unavailable gpu_class error, got %v; candidates=%+v", err, candidates)
 	}
 	if len(candidates) != 1 || !strings.Contains(candidates[0].Reason, topology.NodeLabelGPUClass) {

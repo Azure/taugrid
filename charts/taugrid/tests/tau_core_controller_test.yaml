@@ -6,17 +6,17 @@ tests:
   - it: renders the controller into the TauGrid release namespace
     template: charts/tau-core-controller/templates/deployment.yaml
     release:
-      namespace: tau-system
+      namespace: kueue-system
     asserts:
       - equal:
           path: metadata.namespace
-          value: tau-system
+          value: kueue-system
       - equal:
           path: metadata.labels["app.kubernetes.io/part-of"]
           value: taugrid
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --platform-namespace=tau-system
+          content: --platform-namespace=kueue-system
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
@@ -38,7 +38,7 @@ tests:
           path: spec.template.spec.containers[0].image
           value: my-registry.example.com/tau-core-controller:v0.1.0
 
-  - it: ships automatic class and series mappings for reviewed AKS GPU SKUs
+  - it: delegates node classification to KEC
     template: charts/tau-core-controller/templates/taucluster.yaml
     asserts:
       - equal:
@@ -46,19 +46,7 @@ tests:
           value: Reconcile
       - lengthEqual:
           path: spec.nodes.labelRules
-          count: 14
-      - equal:
-          path: spec.nodes.labelRules[0].match.vmSizes[0]
-          value: Standard_NV6ads_A10_v5
-      - equal:
-          path: spec.nodes.labelRules[0].labels["kueue.azure.com/gpu-series"]
-          value: nvads-a10-v5
-      - equal:
-          path: spec.nodes.labelRules[0].labels["tau.azure.com/gpu-class"]
-          value: a10-4gb
-      - equal:
-          path: spec.nodes.labelRules[13].labels["tau.azure.com/gpu-class"]
-          value: gb300-288gb
+          count: 0
       - equal:
           path: spec.queues.ownership
           value: External
@@ -68,16 +56,3 @@ tests:
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
-
-  - it: suppresses Tau node label authority when KEC is selected
-    template: charts/tau-core-controller/templates/taucluster.yaml
-    set:
-      global.kueueObjectAuthority: aksExtension
-      kueue.aksExtension.enableKueueObjectsAutomation: true
-    asserts:
-      - equal:
-          path: spec.nodes.labelRules
-          value: []
-      - equal:
-          path: spec.queues.ownership
-          value: External
