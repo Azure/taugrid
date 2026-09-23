@@ -34,17 +34,17 @@ source "${REPO_ROOT}/scripts/lib/kind.sh"
 # shellcheck source=../../lib/image-specs.sh
 source "${REPO_ROOT}/scripts/lib/image-specs.sh"
 
-[[ "$(taugrid_image_names)" == $'tau\ntaugrid-portal\ntau-core-controller\nexperiment-metrics-collector' ]]
+[[ "$(taugrid_image_names)" == $'tau\ntaugrid-portal\ntau-core-controller\ntaugrid-metrics-collector' ]]
 taugrid_image_spec taugrid-portal
 [[ "${TAUGRID_IMAGE_REPOSITORY}" == taugrid-portal ]]
 [[ "${TAUGRID_IMAGE_DOCKERFILE}" == images/taugrid-portal/Dockerfile ]]
 [[ "${TAUGRID_IMAGE_CONTEXT}" == . ]]
 [[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/taugrid-portal/Dockerfile portal core" ]]
-taugrid_image_spec experiment-metrics-collector
-[[ "${TAUGRID_IMAGE_REPOSITORY}" == experiment-metrics-collector ]]
-[[ "${TAUGRID_IMAGE_DOCKERFILE}" == images/experiment-metrics-collector/Dockerfile ]]
+taugrid_image_spec taugrid-metrics-collector
+[[ "${TAUGRID_IMAGE_REPOSITORY}" == taugrid-metrics-collector ]]
+[[ "${TAUGRID_IMAGE_DOCKERFILE}" == images/taugrid-metrics-collector/Dockerfile ]]
 [[ "${TAUGRID_IMAGE_CONTEXT}" == . ]]
-[[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/experiment-metrics-collector/Dockerfile metrics/experiment-metrics-collector core" ]]
+[[ "${TAUGRID_IMAGE_SOURCE_PATHS[*]}" == "images/taugrid-metrics-collector/Dockerfile metrics/experiment-metrics-collector core" ]]
 assert_failure 2 "unknown TauGrid image: unknown" taugrid_image_spec unknown
 
 [[ "$(tau_kind_select_engine podman docker)" == podman ]]

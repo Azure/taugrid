@@ -231,7 +231,7 @@ metrics:
 
 `metrics.offload.runtime` has one supported executable contract:
 `collector-v1`, which is also the default. The pinned image must contain the
-standalone `experiment-metrics-collector`; Tau does not infer compatibility from
+standalone `taugrid-metrics-collector`; Tau does not infer compatibility from
 the image name.
 This selection belongs to the run configuration and rendered workload sidecar;
 the TauGrid charts do not own a collector-sidecar selector.

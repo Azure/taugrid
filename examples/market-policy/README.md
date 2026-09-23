@@ -38,7 +38,7 @@ tau run --config examples/market-policy/tau.yaml --dry-run=client
 ```
 
 Set `TAU_METRICS_OFFLOAD_IMAGE` to an immutable
-`experiment-metrics-collector` image and provide the approved ADX cluster,
+`taugrid-metrics-collector` image and provide the approved ADX cluster,
 database, and Workload Identity client ID environment values. The standalone
 collector writes canonical `tau.experiment.metric.v1` NDJSON plus immutable
 manifests, checkpoints, and required ADX delivery receipts to its typed spool.

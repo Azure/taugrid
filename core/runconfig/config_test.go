@@ -629,7 +629,7 @@ metrics:
     - /data/shared/eval-*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/experiment-metrics-collector:0.1.0
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0
     out: /var/run/tau/metrics-offload
     adx_cluster_uri: https://example.kusto.windows.net
     adx_database: TauGrid
@@ -645,7 +645,7 @@ experiment:
 
 	if !cfg.Metrics.Offload.Enabled ||
 		cfg.Metrics.Offload.Runtime != "" ||
-		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/experiment-metrics-collector:0.1.0" ||
+		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0" ||
 		cfg.Metrics.Offload.Out != "/var/run/tau/metrics-offload" ||
 		len(cfg.Metrics.History) != 2 {
 		t.Fatalf("unexpected metrics config: %+v", cfg.Metrics)
@@ -676,7 +676,7 @@ metrics:
   offload:
     enabled: true
     runtime: collector-v1
-    image: mcr.microsoft.com/aks/ai-runtime/experiment-metrics-collector:0.1.0
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0
     delivery_mode: adx-required
     adx_cluster_uri: https://example.kusto.windows.net
     adx_database: TauGrid

@@ -43,4 +43,4 @@ portal/frontend/*.tsbuildinfo
 
 # Standalone experiment metrics collector builds
 metrics/experiment-metrics-collector/bin/
-metrics/experiment-metrics-collector/experiment-metrics-collector
+metrics/experiment-metrics-collector/taugrid-metrics-collector

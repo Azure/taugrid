@@ -26,10 +26,10 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GOEXPERIMENT=none CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags "-s -w -X github.com/Azure/taugrid/core/version.Version=${VERSION} -X github.com/Azure/taugrid/core/version.Commit=${COMMIT} -X github.com/Azure/taugrid/core/version.Date=${DATE}" \
-    -o /experiment-metrics-collector ./cmd/experiment-metrics-collector
+    -o /taugrid-metrics-collector ./cmd/taugrid-metrics-collector
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
 
-COPY --from=builder /experiment-metrics-collector /usr/local/bin/experiment-metrics-collector
+COPY --from=builder /taugrid-metrics-collector /usr/local/bin/taugrid-metrics-collector
 USER 65532:65532
-ENTRYPOINT ["/usr/local/bin/experiment-metrics-collector"]
+ENTRYPOINT ["/usr/local/bin/taugrid-metrics-collector"]

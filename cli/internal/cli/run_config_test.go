@@ -66,7 +66,7 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 	// The example deliberately names policy.workspace. With no usable
 	// kubeconfig in this test, success guards that client dry-run retains the
 	// name for metrics metadata without fetching the live TauWorkspace.
-	const offloadImage = "registry.example.com/experiment-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
@@ -90,7 +90,7 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 }
 
 func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T) {
-	const offloadImage = "registry.example.com/experiment-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")

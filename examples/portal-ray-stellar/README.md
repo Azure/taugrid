@@ -24,7 +24,7 @@ links:
 ## Prerequisites
 
 1. **A pinned metrics-offload image.** Pin the
-   **experiment-metrics-collector** image by digest. `collector-v1` is the sole
+   **taugrid-metrics-collector** image by digest. `collector-v1` is the sole
    runtime contract and `adx-required` is the sole delivery mode. A `:latest`
    tag is rejected.
 2. **A namespace with a Ready TauWorkspace and a writable `/data` PVC.** The
@@ -42,7 +42,7 @@ transient SQLite/spool buffers resolve under the `/var/run/tau` emptyDir, not
 ```bash
 # from the repository root
 make install-tau-cli
-export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-experiment-metrics-collector@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
 export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
 export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
 export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
