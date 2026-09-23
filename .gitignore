@@ -37,10 +37,29 @@ charts/taugrid/charts
 # Portal frontend dependencies and local build metadata
 portal/frontend/node_modules/
 portal/frontend/*.tsbuildinfo
-
 # Impeccable local detector cache
 .impeccable/hook.cache.json
 
 # Standalone experiment metrics collector builds
 metrics/experiment-metrics-collector/bin/
 metrics/experiment-metrics-collector/taugrid-metrics-collector
+
+# Agent scratch: briefs, reports, throwaway environments.
+.codex-review/
+sdk/python/python/share/
+sdk/python/python/build/
+sdk/python/python/tau.egg-info/
+
+# Local Jupyter extension build output and e2e artifacts
+sdk/python/python/labextension/node_modules/
+sdk/python/python/labextension/lib/
+sdk/python/python/labextension/tsconfig.tsbuildinfo
+jupyter-*-e2e*.png
+tools/jupyter-*.png
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Jupyter checkpoints
+.ipynb_checkpoints/

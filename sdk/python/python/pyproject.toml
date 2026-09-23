@@ -16,6 +16,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+widgets = [
+    "kubernetes>=30.1.0",
+    "ipywidgets>=8.1.0",
+    "ipython>=8.0.0",
+    "jupyter_server>=2.0.0",
+]
 dev = [
     "pytest>=9.1.1",
     "ruff==0.16.8",
@@ -24,8 +30,17 @@ lightning = [
     "lightning>=2.6.6",
 ]
 
+[project.entry-points."ipython.extensions"]
+taugrid = "tau.widgets.ipython:load_ipython_extension"
+
+[project.entry-points."jupyter_server.extension"]
+taugrid = "tau.jupyter"
+
 [tool.setuptools.packages.find]
 include = ["tau*"]
+
+[tool.setuptools.package-data]
+tau = ["labextension/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "tau.__version__" }

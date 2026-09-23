@@ -1,0 +1,936 @@
+/* Copyright (c) Microsoft Corporation.
+   Licensed under the MIT License. */
+
+/* TauGrid plugin styling.
+   This is the TauGrid Portal design applied to the JupyterLab surfaces: the same
+   tokens, type scale, cards, stat tiles, badges, tables, buttons, focus ring and
+   chart treatment as portal/frontend/src/styles.css and stellar/charts.css.
+
+   The Portal is a light-only product (color-scheme: light), so the plugin adopts
+   its fixed palette rather than following the JupyterLab theme. Chrome around the
+   panel still belongs to JupyterLab. */
+
+.taugrid-widget,
+.taugrid-panel {
+  --bg: #f4f6f8;
+  --panel: #fff;
+  --line: #e4e8ee;
+  --text: #1a2230;
+  --muted: #5c6a7d;
+  --accent: #2563eb;
+  --accent-bg: #eaf1fe;
+  --hover: #f2f6fc;
+  --ok: #15803d;
+  --ok-bg: #e7f6ec;
+  --warn: #b91c1c;
+  --warn-bg: #fdecec;
+  --amber: #b45309;
+  --amber-bg: #fef4e6;
+  --code-bg: #eef1f6;
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.taugrid-widget {
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.taugrid-panel {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 22px 24px 32px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.taugrid-panel *,
+.taugrid-panel *::before,
+.taugrid-panel *::after {
+  box-sizing: border-box;
+}
+
+.taugrid-panel code {
+  background: var(--code-bg);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+}
+
+.taugrid-panel :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* --- page head ---------------------------------------------------------- */
+
+.taugrid-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 110ch;
+  margin-bottom: 18px;
+}
+
+.taugrid-heading h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.taugrid-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.taugrid-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* --- controls ----------------------------------------------------------- */
+
+.taugrid-find,
+.taugrid-log-form,
+.taugrid-review-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.taugrid-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 120px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.taugrid-input {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid #dfe6f7;
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 5px 9px;
+  font: inherit;
+  font-weight: 400;
+}
+
+select.taugrid-input {
+  max-width: 100%;
+}
+
+.taugrid-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--accent);
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.taugrid-button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.taugrid-button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.taugrid-primary {
+  border-color: transparent;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  padding: 9px 16px;
+  font-weight: 650;
+}
+
+.taugrid-primary:hover:not(:disabled) {
+  background: #1d4fd7;
+}
+
+.taugrid-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.taugrid-watch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* --- banners, notes, errors -------------------------------------------- */
+
+.taugrid-muted,
+.taugrid-summary,
+.taugrid-server-message {
+  color: var(--muted);
+}
+
+.taugrid-summary,
+.taugrid-server-message {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.taugrid-validation,
+.taugrid-error,
+.taugrid-error-text,
+.taugrid-next-action {
+  overflow-wrap: anywhere;
+}
+
+.taugrid-validation,
+.taugrid-error,
+.taugrid-error-text {
+  border: 1px solid #f4b9b9;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 12px;
+  padding: 10px 12px;
+  margin: 12px 0 0;
+}
+
+.taugrid-error h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+/* --- run list (sidebar) ------------------------------------------------- */
+
+.taugrid-sidebar {
+  padding: 16px 14px 24px;
+  background: var(--bg);
+}
+
+.taugrid-browser {
+  margin-top: 16px;
+}
+
+.taugrid-namespace-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.taugrid-browser h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.taugrid-browser p {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+/* Runs table. The Portal renders run collections as table.jobs, so the sidebar
+   matches that treatment rather than a list of cards. */
+.taugrid-runs-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.taugrid-runs-table caption {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  padding-bottom: 6px;
+}
+
+.taugrid-runs-table th,
+.taugrid-runs-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.taugrid-runs-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.taugrid-runs-table tbody tr:hover {
+  background: var(--hover);
+}
+
+.taugrid-runs-table td {
+  overflow-wrap: anywhere;
+}
+
+.taugrid-run-link {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  padding: 0;
+  text-align: left;
+}
+
+.taugrid-run-link:hover {
+  text-decoration: underline;
+}
+.taugrid-details {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.taugrid-details summary {
+  cursor: pointer;
+  padding: 13px 12px;
+  font-weight: 650;
+  font-size: 13px;
+}
+
+.taugrid-exact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  border-top: 1px solid var(--line);
+  padding: 12px;
+}
+
+/* --- run detail --------------------------------------------------------- */
+
+.taugrid-run {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgb(20 30 50 / 4%);
+  padding: 22px;
+  margin-top: 18px;
+  max-width: 110ch;
+}
+
+.taugrid-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.taugrid-state-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.taugrid-state-mark {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+
+.taugrid-tone-success .taugrid-state-mark { background: var(--ok); }
+.taugrid-tone-warning .taugrid-state-mark { background: var(--amber); }
+.taugrid-tone-error .taugrid-state-mark { background: var(--warn); }
+.taugrid-tone-info .taugrid-state-mark { background: var(--accent); }
+
+.taugrid-run-name {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-run-namespace {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* stat tiles — the Portal's Overview headline metrics */
+.taugrid-signals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  margin: 18px 0 0;
+}
+
+.taugrid-signal {
+  border: 1px solid var(--line);
+  border-top: 3px solid transparent;
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px 18px;
+  min-width: 0;
+}
+
+.taugrid-signal dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+
+.taugrid-signal dd {
+  margin: 10px 0 0;
+  font-size: 28px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-signal-detail {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-signal.taugrid-tone-good,
+.taugrid-signal.taugrid-tone-ready,
+.taugrid-signal.taugrid-tone-complete { border-top-color: var(--ok); }
+.taugrid-signal.taugrid-tone-good dd,
+.taugrid-signal.taugrid-tone-ready dd,
+.taugrid-signal.taugrid-tone-complete dd { color: var(--ok); }
+.taugrid-signal.taugrid-tone-warn,
+.taugrid-signal.taugrid-tone-queued { border-top-color: var(--amber); }
+.taugrid-signal.taugrid-tone-warn dd,
+.taugrid-signal.taugrid-tone-queued dd { color: var(--amber); }
+.taugrid-signal.taugrid-tone-error,
+.taugrid-signal.taugrid-tone-failed { border-top-color: var(--warn); }
+.taugrid-signal.taugrid-tone-error dd,
+.taugrid-signal.taugrid-tone-failed dd { color: var(--warn); }
+.taugrid-signal.taugrid-tone-running,
+.taugrid-signal.taugrid-tone-info { border-top-color: var(--accent); }
+.taugrid-signal.taugrid-tone-running dd,
+.taugrid-signal.taugrid-tone-info dd { color: var(--accent); }
+
+.taugrid-lifecycle,
+.taugrid-observations {
+  margin-top: 26px;
+}
+
+.taugrid-phase-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+.taugrid-phase-list > li {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px 16px;
+}
+
+.taugrid-phase-list > li.taugrid-phase-done,
+.taugrid-phase-list > li.taugrid-phase-active { border-left-color: var(--ok); }
+
+.taugrid-phase-list > li.taugrid-phase-pending { border-left-color: var(--amber); }
+
+.taugrid-phase-list > li.taugrid-phase-warning { border-left-color: var(--warn); }
+
+.taugrid-phase-list > li > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.taugrid-phase-list > li > p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.taugrid-phase-state,
+.taugrid-badge {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 8px;
+}
+
+/* --- pods --------------------------------------------------------------- */
+
+.taugrid-pod-section h3,
+.taugrid-diagnostics h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 26px 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.taugrid-count {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.taugrid-pods {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.taugrid-pod {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  font-size: 13px;
+}
+
+.taugrid-pod:hover {
+  background: var(--hover);
+}
+
+.taugrid-pod-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.taugrid-readiness {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 8px;
+}
+
+.taugrid-ready {
+  border-color: transparent;
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.taugrid-pod-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 6px 14px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.taugrid-pod-facts div {
+  min-width: 0;
+}
+
+.taugrid-pod-facts dt {
+  margin: 0;
+  color: var(--muted);
+}
+
+.taugrid-pod-facts dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* --- diagnostics -------------------------------------------------------- */
+
+.taugrid-note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.taugrid-note {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--muted);
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px 16px;
+}
+
+.taugrid-note.taugrid-tone-error { border-left-color: var(--warn); }
+.taugrid-note.taugrid-tone-warning { border-left-color: var(--amber); }
+.taugrid-note.taugrid-tone-info { border-left-color: var(--accent); }
+
+.taugrid-note-severity {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  padding: 2px 8px;
+  margin-bottom: 8px;
+  text-transform: capitalize;
+}
+
+.taugrid-next-action {
+  margin: 8px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  font-size: 12px;
+}
+
+.taugrid-next-action strong {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.taugrid-identifiers {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.taugrid-identifiers div {
+  margin-top: 4px;
+}
+
+/* --- logs --------------------------------------------------------------- */
+
+.taugrid-log-text {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- metrics and the loss curve ---------------------------------------- */
+
+.taugrid-metrics {
+  margin-top: 26px;
+}
+
+/* .taugrid-loss-curve is the <svg> itself; the polyline and points draw with
+   currentColor, so the series colour is set here. */
+.taugrid-loss-curve {
+  display: block;
+  width: 100%;
+  height: 210px;
+  color: var(--accent);
+  background:
+    linear-gradient(90deg, rgb(232 232 232 / 45%) 1px, transparent 1px),
+    linear-gradient(180deg, rgb(232 232 232 / 55%) 1px, transparent 1px);
+  background-size: 64px 100%, 100% 56px;
+}
+
+.taugrid-loss-curve text {
+  fill: #83899e;
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.taugrid-loss-curve polyline {
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.taugrid-loss-curve circle {
+  fill: currentColor;
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+
+.taugrid-loss-samples {
+  margin-top: 12px;
+}
+
+.taugrid-loss-table table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.taugrid-loss-table caption {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+}
+
+.taugrid-loss-table th,
+.taugrid-loss-table td {
+  text-align: right;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.taugrid-loss-table th:first-child,
+.taugrid-loss-table td:first-child {
+  text-align: left;
+}
+
+.taugrid-loss-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.taugrid-loss-table tbody tr:hover {
+  background: var(--hover);
+}
+
+.taugrid-metrics-source,
+.taugrid-metrics-freshness,
+.taugrid-metrics-truncation,
+.taugrid-metrics-empty,
+.taugrid-metrics-error,
+.taugrid-watch-state {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-metrics-error {
+  border: 1px solid #f4b9b9;
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  padding: 10px 12px;
+}
+
+/* --- submission review -------------------------------------------------- */
+
+.taugrid-review {
+  max-width: 100%;
+  width: 1040px;
+  margin-inline: auto;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-submit-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.taugrid-submit-steps li { display: flex; align-items: baseline; gap: 8px; }
+.taugrid-submit-steps li[aria-current="step"] { color: var(--accent); font-weight: 650; }
+.taugrid-submit-steps span { font-variant-numeric: tabular-nums; }
+.taugrid-submit-status { min-height: 2em; }
+.taugrid-submit-section { margin-block: 24px; min-width: 0; }
+.taugrid-submit-section .taugrid-heading { margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+.taugrid-review h2 { font-size: 16px; font-weight: 700; margin: 0 0 10px; }
+.taugrid-review h3 { font-size: 14px; font-weight: 650; margin: 20px 0 8px; }
+.taugrid-review p { max-width: 80ch; }
+.taugrid-review .taugrid-field { min-width: 0; }
+.taugrid-review .taugrid-input { width: 100%; }
+.taugrid-destination-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
+.taugrid-profile-facts { margin-top: 18px; }
+.taugrid-submit-warning { border-left: 3px solid var(--amber); padding: 8px 12px; background: var(--amber-bg); color: var(--amber); }
+.taugrid-submit-receipt { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-top: 24px; }
+.taugrid-submit-receipt dd { margin: 4px 0 12px; overflow-wrap: anywhere; }
+.taugrid-run-identity { font-size: 16px; }
+.taugrid-write-boundary { border-top: 2px solid var(--accent); padding-top: 20px; }
+.taugrid-submit-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.taugrid-review .taugrid-button { white-space: normal; text-align: left; }
+.taugrid-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.taugrid-file-name small { display: block; color: var(--muted); }
+.taugrid-package-list { list-style: none; padding: 0; margin: 0; }
+.taugrid-package-list li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; border-bottom: 1px solid var(--line); padding: 8px 0; }
+.taugrid-package-list strong { font-variant-numeric: tabular-nums; }
+.taugrid-submit-confirmation { overflow-wrap: anywhere; }
+
+.taugrid-plan {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
+  gap: 14px;
+  margin: 18px 0 0;
+}
+
+.taugrid-plan > div {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 16px 18px;
+  min-width: 0;
+}
+
+.taugrid-plan dt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.taugrid-plan dd {
+  margin: 10px 0 0;
+  font-size: 14px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-submitted {
+  margin: 12px 0 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--ok-bg);
+  color: var(--ok);
+  font-size: 13px;
+  font-weight: 650;
+  padding: 8px 12px;
+}
+
+@media (max-width: 800px) {
+  .taugrid-panel {
+    padding: 16px;
+  }
+
+  .taugrid-heading {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .taugrid-run {
+    padding: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taugrid-panel * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+/* --- files to ship with the notebook ----------------------------------- */
+
+.taugrid-files {
+  margin-top: 22px;
+}
+
+.taugrid-files h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.taugrid-files p {
+  margin: 0 0 10px;
+}
+
+.taugrid-file-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.taugrid-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.taugrid-file:hover {
+  border-color: var(--accent);
+}
+
+.taugrid-file input {
+  flex: 0 0 auto;
+}
+
+.taugrid-file code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.taugrid-file .taugrid-muted {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}

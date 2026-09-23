@@ -17,3 +17,8 @@ charts/adx-mon/charts/
 # Generated portal bundles contain third-party JavaScript; licenses are shipped
 # alongside them in assets/THIRD_PARTY_LICENSES.txt. Check first-party source.
 portal/internal/portalapi/assets/assets/
+
+# Generated JupyterLab extension bundles contain third-party JavaScript;
+# licenses are shipped alongside them in static/third-party-licenses.json.
+# Check first-party source instead.
+sdk/python/python/tau/labextension/static/
