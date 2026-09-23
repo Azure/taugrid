@@ -22,12 +22,12 @@ import (
 )
 
 type checkpointSet struct {
-	SchemaVersion  string                      `json:"schema_version"`
-	ConfigIdentity string                      `json:"config_identity"`
-	NextSequence   uint64                      `json:"next_sequence"`
-	Sources        map[string]SourceCheckpoint `json:"sources"`
-	Terminal       *terminalCheckpoint         `json:"terminal,omitempty"`
-	UpdatedAt      string                      `json:"updated_at"`
+	SchemaVersion  string                        `json:"schema_version"`
+	ConfigIdentity string                        `json:"config_identity"`
+	NextSequence   uint64                        `json:"next_sequence"`
+	Sources        map[string]SourceCheckpoint   `json:"sources"`
+	Terminals      map[string]terminalCheckpoint `json:"terminals"`
+	UpdatedAt      string                        `json:"updated_at"`
 }
 
 type terminalCheckpoint struct {
@@ -81,6 +81,7 @@ func loadCheckpoints(path, configIdentity string) (checkpointSet, bool, error) {
 				ConfigIdentity: configIdentity,
 				NextSequence:   1,
 				Sources:        map[string]SourceCheckpoint{},
+				Terminals:      map[string]terminalCheckpoint{},
 			}, false, nil
 		}
 		return checkpointSet{}, false, err
@@ -90,14 +91,16 @@ func loadCheckpoints(path, configIdentity string) (checkpointSet, bool, error) {
 		return checkpointSet{}, true, fmt.Errorf("read checkpoint %s: %w", path, err)
 	}
 	if result.SchemaVersion != CheckpointSchemaV1 || result.ConfigIdentity == "" ||
-		result.NextSequence == 0 || result.Sources == nil {
+		result.NextSequence == 0 || result.Sources == nil || result.Terminals == nil {
 		return checkpointSet{}, true, fmt.Errorf("checkpoint %s has invalid schema or fields", path)
 	}
 	if result.ConfigIdentity != configIdentity {
 		return checkpointSet{}, true, fmt.Errorf("checkpoint %s has different collector or sink configuration", path)
 	}
-	if result.Terminal != nil && (result.Terminal.Sequence == 0 || !validDigest(result.Terminal.ChunkDigest)) {
-		return checkpointSet{}, true, fmt.Errorf("checkpoint %s has invalid terminal reference", path)
+	for observationID, terminal := range result.Terminals {
+		if !validDigest(observationID) || terminal.Sequence == 0 || !validDigest(terminal.ChunkDigest) {
+			return checkpointSet{}, true, fmt.Errorf("checkpoint %s has invalid terminal reference", path)
+		}
 	}
 	for source, checkpoint := range result.Sources {
 		if checkpoint.Path != source || checkpoint.Offset < 0 || checkpoint.Lines < 0 ||
@@ -115,9 +118,9 @@ func cloneCheckpoints(checkpoints checkpointSet) checkpointSet {
 	for path, checkpoint := range checkpoints.Sources {
 		clone.Sources[path] = checkpoint
 	}
-	if checkpoints.Terminal != nil {
-		terminal := *checkpoints.Terminal
-		clone.Terminal = &terminal
+	clone.Terminals = make(map[string]terminalCheckpoint, len(checkpoints.Terminals))
+	for observationID, terminal := range checkpoints.Terminals {
+		clone.Terminals[observationID] = terminal
 	}
 	return clone
 }
@@ -339,13 +342,19 @@ func newHistoryManifest(configIdentity string, checkpoint SourceCheckpoint, read
 	}
 }
 
-func newTerminalManifest(configIdentity string, sequence uint64, completionPath string, raw []byte) chunkManifest {
+func newTerminalManifest(
+	configIdentity string,
+	sequence uint64,
+	completionPath string,
+	observationID string,
+	raw []byte,
+) chunkManifest {
 	return chunkManifest{
 		ConfigIdentity: configIdentity,
 		Kind:           "terminal",
 		Sequence:       sequence,
 		SourcePath:     completionPath,
-		SourceFileID:   "completion-status",
+		SourceFileID:   "completion-status/" + observationID,
 		EventCount:     1,
 		NDJSON:         raw,
 	}
@@ -389,7 +398,9 @@ func validateManifest(path string, manifest chunkManifest, configIdentity string
 			return fmt.Errorf("pending chunk %s has invalid history range", path)
 		}
 	case "terminal":
-		if manifest.SourcePath == "" || manifest.SourceFileID != "completion-status" ||
+		if manifest.SourcePath == "" ||
+			!strings.HasPrefix(manifest.SourceFileID, "completion-status/") ||
+			!validDigest(strings.TrimPrefix(manifest.SourceFileID, "completion-status/")) ||
 			manifest.StartOffset != 0 || manifest.EndOffset != 0 ||
 			manifest.StartLines != 0 || manifest.EndLines != 0 {
 			return fmt.Errorf("pending chunk %s has invalid terminal metadata", path)
