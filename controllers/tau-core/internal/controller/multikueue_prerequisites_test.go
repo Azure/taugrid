@@ -133,6 +133,15 @@ func TestKubernetesMultiKueuePrerequisites(t *testing.T) {
 			},
 			wantMessage: "no Active worker clusters",
 		},
+		{
+			name: "stale active worker fails closed",
+			objects: []client.Object{
+				testManagerAdmissionCheck("dispatch-beta", multiKueueAdmissionCheckController, true, "config-a"),
+				testMultiKueueConfig("config-a", "worker-a"),
+				testStaleActiveMultiKueueCluster("worker-a"),
+			},
+			wantMessage: "no Active worker clusters",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,6 +197,17 @@ func testMultiKueueConfig(name string, clusters ...string) *unstructured.Unstruc
 func testMultiKueueCluster(name string, active bool) *unstructured.Unstructured {
 	object := testKueueObject(multiKueueClusterGVK, name)
 	object.Object["status"] = map[string]any{"conditions": testActiveConditions(active)}
+	return object
+}
+
+func testStaleActiveMultiKueueCluster(name string) *unstructured.Unstructured {
+	object := testKueueObject(multiKueueClusterGVK, name)
+	object.SetGeneration(2)
+	object.Object["status"] = map[string]any{"conditions": []any{map[string]any{
+		"type":               "Active",
+		"status":             "True",
+		"observedGeneration": int64(1),
+	}}}
 	return object
 }
 

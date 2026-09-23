@@ -3,6 +3,11 @@
 # kustomize/ should keep the same value.
 partOf: taugrid
 
+global:
+  # Standalone installs keep Tau node-label authority unless an umbrella chart
+  # explicitly selects the AKS Kueue Extension Controller.
+  kueueObjectAuthority: tau
+
 # The controller image is publicly available from MCR. Override the repository,
 # tag, or digest only to run a mirrored or pre-release build.
 image:

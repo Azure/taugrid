@@ -21,6 +21,28 @@ helm upgrade --install taugrid \
 
 Use `tau cluster explain-values` to print the full field reference.
 
+### Kueue object authority
+
+The default `tau` authority keeps Tau node-label reconciliation and
+Helm-created Topology/ResourceFlavor objects. AKS clusters can instead select
+the AKS Kueue Extension Controller:
+
+```bash
+tau cluster install \
+  --namespace kueue-system \
+  --kueue-object-authority aksExtension \
+  --values taugrid-values.yaml
+```
+
+KEC mode requires the `kueue-system` release namespace, suppresses Tau node
+label rules, references the KEC-created `aks-cpu` flavor, and omits competing
+Topology/ResourceFlavor objects. Add inventory-derived GPU flavor names under
+`baselineQueue.aksExtension.gpuFlavors` when they should receive baseline
+quota. The CLI sets both `global.kueueObjectAuthority` and
+`kueue.aksExtension.enableKueueObjectsAutomation`; direct Helm users must keep
+those values aligned. Switching an existing cluster between authorities is a
+drain-and-migrate operation, not an in-place flag flip.
+
 ### Cluster-level ADX query connection
 
 Record the existing cluster's **query** connection once in `taugrid-values.yaml`:

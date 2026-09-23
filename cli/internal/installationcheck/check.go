@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,9 @@ const (
 	tauControllerName = "tau-core-controller"
 	tauClusterName    = "cluster"
 	quotaGuardName    = "tau-quota-approval-guard"
+	aksTopologyName   = "aks-default"
+	aksCPUFlavorName  = "aks-cpu"
+	aksManagedBy      = "aks-managed-kueue-extension"
 )
 
 // Runner is the read-only kubectl surface used by installation validation.
@@ -45,7 +49,22 @@ type Options struct {
 	// DisabledComponents names chart components the release turned off. They
 	// are reported as skipped instead of failing. The zero value validates
 	// every component.
-	DisabledComponents []Component
+	DisabledComponents             []Component
+	KueueObjectAuthority           KueueObjectAuthority
+	ExpectedAKSExtensionGPUFlavors []string
+}
+
+type KueueObjectAuthority string
+
+const (
+	KueueObjectAuthorityTau          KueueObjectAuthority = "tau"
+	KueueObjectAuthorityAKSExtension KueueObjectAuthority = "aksExtension"
+)
+
+type ReleaseConfiguration struct {
+	DisabledComponents             []Component
+	KueueObjectAuthority           KueueObjectAuthority
+	ExpectedAKSExtensionGPUFlavors []string
 }
 
 // Component identifies a chart component covered by installation validation.
@@ -79,9 +98,19 @@ var componentSwitches = []chartComponent{
 
 // DisabledComponents reports which validated components a release turned off,
 // given the release's coalesced Helm values as JSON.
-func DisabledComponents(helmValues []byte) ([]Component, error) {
+func DecodeReleaseConfiguration(helmValues []byte) (ReleaseConfiguration, error) {
 	var values struct {
-		Components  map[string]any `json:"components"`
+		Components map[string]any `json:"components"`
+		Global     struct {
+			KueueObjectAuthority string `json:"kueueObjectAuthority"`
+		} `json:"global"`
+		BaselineQueue struct {
+			AKSExtension struct {
+				GPUFlavors []struct {
+					Name string `json:"name"`
+				} `json:"gpuFlavors"`
+			} `json:"aksExtension"`
+		} `json:"baselineQueue"`
 		TauGridCore struct {
 			Portal struct {
 				Enabled *bool `json:"enabled"`
@@ -89,8 +118,21 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 		} `json:"taugrid-core"`
 	}
 	if err := json.Unmarshal(helmValues, &values); err != nil {
-		return nil, fmt.Errorf("decode Helm release values: %w", err)
+		return ReleaseConfiguration{}, fmt.Errorf("decode Helm release values: %w", err)
 	}
+	configuration := ReleaseConfiguration{
+		KueueObjectAuthority: KueueObjectAuthorityTau,
+	}
+	if authority := strings.TrimSpace(values.Global.KueueObjectAuthority); authority != "" {
+		configuration.KueueObjectAuthority = KueueObjectAuthority(authority)
+	}
+	for _, flavor := range values.BaselineQueue.AKSExtension.GPUFlavors {
+		if name := strings.TrimSpace(flavor.Name); name != "" {
+			configuration.ExpectedAKSExtensionGPUFlavors = append(configuration.ExpectedAKSExtensionGPUFlavors, name)
+		}
+	}
+	sort.Strings(configuration.ExpectedAKSExtensionGPUFlavors)
+	configuration.ExpectedAKSExtensionGPUFlavors = slices.Compact(configuration.ExpectedAKSExtensionGPUFlavors)
 	var disabled []Component
 	for _, component := range componentSwitches {
 		// Helm leaves a subchart installed unless its condition reads an
@@ -109,7 +151,16 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 	if !tauGridCoreEnabled || (values.TauGridCore.Portal.Enabled != nil && !*values.TauGridCore.Portal.Enabled) {
 		disabled = append(disabled, ComponentPortal)
 	}
-	return disabled, nil
+	configuration.DisabledComponents = disabled
+	return configuration, nil
+}
+
+func DisabledComponents(helmValues []byte) ([]Component, error) {
+	configuration, err := DecodeReleaseConfiguration(helmValues)
+	if err != nil {
+		return nil, err
+	}
+	return configuration.DisabledComponents, nil
 }
 
 // Status is the outcome of one readiness check.
@@ -231,7 +282,19 @@ func validateOptions(opts Options) error {
 	if opts.QueryTimeout < 0 {
 		return errors.New("query timeout must not be negative")
 	}
+	switch kueueObjectAuthority(opts) {
+	case KueueObjectAuthorityTau, KueueObjectAuthorityAKSExtension:
+	default:
+		return fmt.Errorf("unsupported Kueue object authority %q", opts.KueueObjectAuthority)
+	}
 	return nil
+}
+
+func kueueObjectAuthority(opts Options) KueueObjectAuthority {
+	if opts.KueueObjectAuthority == "" {
+		return KueueObjectAuthorityTau
+	}
+	return opts.KueueObjectAuthority
 }
 
 // Check evaluates every required readiness surface once without mutating the
@@ -252,6 +315,17 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 			results = append(results, fail(name, fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.SystemNamespace)))
 		default:
 			results = append(results, checkChartDeployment(name, deployments, component.chartPrefix))
+		}
+	}
+	if kueueObjectAuthority(opts) == KueueObjectAuthorityAKSExtension {
+		switch {
+		case slices.Contains(opts.DisabledComponents, ComponentKueue):
+			results = append(results, skip("Kueue authority", "components.kueue.enabled is false in the Helm release"))
+		case listErr != nil:
+			results = append(results, fail("Kueue authority", fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", listErr, opts.SystemNamespace)))
+		default:
+			results = append(results, checkLabelledDeployment("Kueue extension", deployments, "app.kubernetes.io/component", "extension-controller"))
+			results = append(results, checkAKSExtensionAuthority(ctx, runner, opts.ExpectedAKSExtensionGPUFlavors))
 		}
 	}
 	if slices.Contains(opts.DisabledComponents, ComponentPortal) {
@@ -390,7 +464,8 @@ func getDeploymentList(ctx context.Context, runner Runner, namespace, release st
 
 func checkChartDeployment(component string, deployments []deploymentDoc, chartPrefix string) Result {
 	return checkMatchingDeployment(component, deployments, func(deployment deploymentDoc) bool {
-		return strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], chartPrefix)
+		return strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], chartPrefix) &&
+			deployment.Metadata.Labels["app.kubernetes.io/component"] != "extension-controller"
 	})
 }
 
@@ -497,6 +572,128 @@ func checkTauCluster(ctx context.Context, runner Runner) Result {
 		return fail("TauCluster", fmt.Sprintf("NodesReady=%s (%s); review TauCluster node label rules and matching nodes", condition.Status, detail))
 	}
 	return pass("TauCluster", fmt.Sprintf("generation %d observed; NodesReady=True", cluster.Metadata.Generation))
+}
+
+type aksNodeListDoc struct {
+	Items []struct {
+		Metadata struct {
+			Name   string            `json:"name"`
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	} `json:"items"`
+}
+
+type aksTopologyDoc struct {
+	Metadata struct {
+		Labels map[string]string `json:"labels"`
+	} `json:"metadata"`
+	Spec struct {
+		Levels []struct {
+			NodeLabel string `json:"nodeLabel"`
+		} `json:"levels"`
+	} `json:"spec"`
+}
+
+type aksResourceFlavorListDoc struct {
+	Items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			NodeLabels   map[string]string `json:"nodeLabels"`
+			TopologyName string            `json:"topologyName"`
+		} `json:"spec"`
+	} `json:"items"`
+}
+
+func checkAKSExtensionAuthority(ctx context.Context, runner Runner, expectedGPUFlavors []string) Result {
+	var nodes aksNodeListDoc
+	if err := getJSON(ctx, runner, []string{"get", "nodes", "--output=json"}, &nodes); err != nil {
+		return fail("Kueue authority", fmt.Sprintf("%v; inspect AKS user-node labels", err))
+	}
+	userNodes := 0
+	var unclassified []string
+	for _, node := range nodes.Items {
+		labels := node.Metadata.Labels
+		if labels["kubernetes.azure.com/mode"] != "user" {
+			continue
+		}
+		userNodes++
+		nodeType := labels["kubernetes.azure.com/node-type"]
+		series := labels["kubernetes.azure.com/sku-series"]
+		gpuName := labels["kubernetes.azure.com/sku-gpu-name"]
+		if nodeType == "cpu" || series != "" && gpuName != "" {
+			continue
+		}
+		unclassified = append(unclassified, node.Metadata.Name)
+	}
+	if len(unclassified) > 0 {
+		sort.Strings(unclassified)
+		return fail("Kueue authority", fmt.Sprintf(
+			"KEC has not classified %d user node(s), including %s; inspect kueue-extension-controller logs and node instance-type labels",
+			len(unclassified),
+			unclassified[0],
+		))
+	}
+
+	var topology aksTopologyDoc
+	if err := getJSON(ctx, runner, []string{"get", "topology.kueue.x-k8s.io", aksTopologyName, "--output=json"}, &topology); err != nil {
+		return fail("Kueue authority", fmt.Sprintf("%v; KEC must create Topology %s", err, aksTopologyName))
+	}
+	if topology.Metadata.Labels["app.kubernetes.io/managed-by"] != aksManagedBy ||
+		len(topology.Spec.Levels) != 1 ||
+		topology.Spec.Levels[0].NodeLabel != "kubernetes.io/hostname" {
+		return fail("Kueue authority", fmt.Sprintf("Topology %s does not match the KEC managed hostname topology contract", aksTopologyName))
+	}
+
+	var flavors aksResourceFlavorListDoc
+	if err := getJSON(ctx, runner, []string{
+		"get", "resourceflavors",
+		"--selector", "app.kubernetes.io/managed-by=" + aksManagedBy,
+		"--output=json",
+	}, &flavors); err != nil {
+		return fail("Kueue authority", fmt.Sprintf("%v; inspect KEC-managed ResourceFlavors", err))
+	}
+	byName := make(map[string]struct {
+		NodeLabels   map[string]string
+		TopologyName string
+	}, len(flavors.Items))
+	for _, flavor := range flavors.Items {
+		byName[flavor.Metadata.Name] = struct {
+			NodeLabels   map[string]string
+			TopologyName string
+		}{
+			NodeLabels:   flavor.Spec.NodeLabels,
+			TopologyName: flavor.Spec.TopologyName,
+		}
+	}
+	cpu, ok := byName[aksCPUFlavorName]
+	if !ok {
+		return fail("Kueue authority", fmt.Sprintf("KEC-managed ResourceFlavor %s is missing", aksCPUFlavorName))
+	}
+	if cpu.TopologyName != aksTopologyName ||
+		cpu.NodeLabels["kubernetes.azure.com/mode"] != "user" ||
+		cpu.NodeLabels["kubernetes.azure.com/node-type"] != "cpu" {
+		return fail("Kueue authority", fmt.Sprintf("ResourceFlavor %s does not match the KEC CPU flavor contract", aksCPUFlavorName))
+	}
+	var missing []string
+	for _, name := range expectedGPUFlavors {
+		flavor, found := byName[name]
+		if !found || flavor.TopologyName != aksTopologyName {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fail("Kueue authority", fmt.Sprintf("selected KEC GPU ResourceFlavors are not converged: %s", strings.Join(missing, ", ")))
+	}
+	return pass("Kueue authority", fmt.Sprintf(
+		"KEC classified %d user node(s); %s, %s, and %d selected GPU flavor(s) are converged",
+		userNodes,
+		aksTopologyName,
+		aksCPUFlavorName,
+		len(expectedGPUFlavors),
+	))
 }
 
 type clusterQueueListDoc struct {

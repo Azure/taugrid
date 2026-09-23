@@ -2,6 +2,7 @@ suite: TauGrid AKS dependency defaults
 templates:
   - charts/kueue/templates/manager/manager-config.yaml
   - charts/kueue/templates/manager/manager.yaml
+  - charts/kueue/templates/extension-controller-deployment.yaml
   - charts/kuberay-operator/templates/configmap.yaml
   - charts/kuberay-operator/templates/deployment.yaml
 tests:
@@ -24,6 +25,17 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: mcr.microsoft.com/oss/v2/kueue/kueue:v0.19.2
+
+  - it: uses the pinned MCR Kueue extension image
+    template: charts/kueue/templates/extension-controller-deployment.yaml
+    release:
+      namespace: kueue-system
+    set:
+      kueue.aksExtension.enableKueueObjectsAutomation: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/kueue-extension-controller@sha256:6fe37b9f1d6202679ec6c184eea684b046f91d6d7814eb64d1aa06e70a57e347
 
   - it: configures the AKS KubeRay container defaults
     template: charts/kuberay-operator/templates/configmap.yaml

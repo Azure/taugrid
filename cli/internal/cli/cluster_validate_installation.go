@@ -64,16 +64,18 @@ KubeRay can still use this command as a gate.`,
 			if pollInterval <= 0 {
 				return fmt.Errorf("invalid --poll-interval: must be greater than zero")
 			}
-			disabled := disabledTauGridComponents(cmd, kubeContext, release, namespace)
+			settings := tauGridInstallationSettings(cmd, kubeContext, release, namespace)
 			return runTauGridInstallationValidation(
 				cmd.Context(),
 				newInstallationCheckRunner(kubeContext),
 				installationcheck.Options{
-					Release:            release,
-					SystemNamespace:    namespace,
-					Timeout:            timeout,
-					PollInterval:       pollInterval,
-					DisabledComponents: disabled,
+					Release:                        release,
+					SystemNamespace:                namespace,
+					Timeout:                        timeout,
+					PollInterval:                   pollInterval,
+					DisabledComponents:             settings.DisabledComponents,
+					KueueObjectAuthority:           settings.KueueObjectAuthority,
+					ExpectedAKSExtensionGPUFlavors: settings.ExpectedAKSExtensionGPUFlavors,
 				},
 				cmd.OutOrStdout(),
 			)
@@ -111,15 +113,22 @@ func runTauGridInstallationValidation(
 // An unreadable release degrades to validating every component rather than
 // aborting: the command still works without Helm on PATH, and a bad read can
 // only produce a false failure, never a false pass.
-func disabledTauGridComponents(cmd *cobra.Command, kubeContext, release, namespace string) []installationcheck.Component {
-	var disabled []installationcheck.Component
+func tauGridInstallationSettings(
+	cmd *cobra.Command,
+	kubeContext, release, namespace string,
+) installationcheck.ReleaseConfiguration {
+	settings := installationcheck.ReleaseConfiguration{
+		KueueObjectAuthority: installationcheck.KueueObjectAuthorityTau,
+	}
 	values, err := tauGridReleaseValues(cmd, kubeContext, release, namespace)
 	if err == nil {
-		disabled, err = installationcheck.DisabledComponents(values)
+		settings, err = installationcheck.DecodeReleaseConfiguration(values)
 	}
 	if err != nil {
 		fmt.Fprintf(cmd.OutOrStdout(), "Cannot read Helm release %s values (%v); validating every component.\n", release, err)
-		return nil
+		return installationcheck.ReleaseConfiguration{
+			KueueObjectAuthority: installationcheck.KueueObjectAuthorityTau,
+		}
 	}
-	return disabled
+	return settings
 }

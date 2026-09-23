@@ -68,3 +68,16 @@ tests:
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
+
+  - it: suppresses Tau node label authority when KEC is selected
+    template: charts/tau-core-controller/templates/taucluster.yaml
+    set:
+      global.kueueObjectAuthority: aksExtension
+      kueue.aksExtension.enableKueueObjectsAutomation: true
+    asserts:
+      - equal:
+          path: spec.nodes.labelRules
+          value: []
+      - equal:
+          path: spec.queues.ownership
+          value: External

@@ -1,0 +1,19 @@
+{{/*
+Copyright (c) Microsoft Corporation.
+Licensed under the MIT License.
+*/}}
+{{- $authority := default "tau" .Values.global.kueueObjectAuthority -}}
+{{- if not (has $authority (list "tau" "aksExtension")) -}}
+{{- fail "global.kueueObjectAuthority must be tau or aksExtension" -}}
+{{- end -}}
+{{- $aksExtensionAuthority := eq $authority "aksExtension" -}}
+{{- $aksAutomationEnabled := default false .Values.kueue.aksExtension.enableKueueObjectsAutomation -}}
+{{- if ne $aksExtensionAuthority $aksAutomationEnabled -}}
+{{- fail "global.kueueObjectAuthority and kueue.aksExtension.enableKueueObjectsAutomation disagree; select exactly one node/flavor authority" -}}
+{{- end -}}
+{{- if and $aksExtensionAuthority (ne .Release.Namespace "kueue-system") -}}
+{{- fail "aksExtension authority requires installing the TauGrid release in namespace kueue-system" -}}
+{{- end -}}
+{{- if and $aksExtensionAuthority (not .Values.components.kueue.enabled) -}}
+{{- fail "aksExtension authority requires components.kueue.enabled=true" -}}
+{{- end -}}

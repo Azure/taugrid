@@ -51,6 +51,8 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
 		"--set-string", "kuberay-operator.labels.environment=dev",
+		"--set-string", "global.kueueObjectAuthority=tau",
+		"--set", "kueue.aksExtension.enableKueueObjectsAutomation=false",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("helm args:\n got: %#v\nwant: %#v", got, want)
@@ -64,6 +66,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	for _, want := range []string{
 		"Helm wait:  bootstrap only (Tau readiness validation still runs after queue policy)",
 		"Rollback:   disabled",
+		"Authority:  tau",
 		"Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal",
 		"Opt-in:     Stellar, lifecycle recorder, image prewarm",
 		"tau workspace create --system-namespace tau-system --principal-name <external-group-or-team> --apply",
@@ -84,6 +87,47 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	}
 	if !strings.Contains(out, "pre-provision a Bound PVC") {
 		t.Fatalf("install output missing external storage handoff:\n%s", out)
+	}
+}
+
+func TestClusterInstallConfiguresAKSExtensionAuthority(t *testing.T) {
+	var calls [][]string
+	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+		calls = append(calls, append([]string(nil), args...))
+		return nil
+	})
+
+	out, err := runCluster(t, "install",
+		"--namespace", aksExtensionNamespace,
+		"--kueue-object-authority", aksExtensionAuthority)
+	if err != nil {
+		t.Fatalf("install errored: %v\n%s", err, out)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("Helm upgrade calls = %d, want 2", len(calls))
+	}
+	for _, args := range calls {
+		if !containsArgPair(args, "--set-string", "global.kueueObjectAuthority=aksExtension") ||
+			!containsArgPair(args, "--set", "kueue.aksExtension.enableKueueObjectsAutomation=true") {
+			t.Fatalf("AKS extension authority values missing: %#v", args)
+		}
+	}
+	if !strings.Contains(out, "Authority:  aksExtension") {
+		t.Fatalf("install plan missing authority:\n%s", out)
+	}
+}
+
+func TestClusterInstallRejectsAKSExtensionOutsideKueueSystem(t *testing.T) {
+	out, err := runCluster(t, "install", "--kueue-object-authority", aksExtensionAuthority)
+	if err == nil || !strings.Contains(err.Error(), "requires --namespace kueue-system") {
+		t.Fatalf("error = %v, output = %s", err, out)
+	}
+}
+
+func TestClusterInstallRejectsUnknownKueueAuthority(t *testing.T) {
+	out, err := runCluster(t, "install", "--kueue-object-authority", "both")
+	if err == nil || !strings.Contains(err.Error(), `must be "tau" or "aksExtension"`) {
+		t.Fatalf("error = %v, output = %s", err, out)
 	}
 }
 
@@ -337,6 +381,8 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 		"--kube-context", "aks-dev",
 		"--dependency-update",
 		"--values", "cluster.yaml",
+		"--set-string", "global.kueueObjectAuthority=tau",
+		"--set", "kueue.aksExtension.enableKueueObjectsAutomation=false",
 	}
 	if !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("dry-run helm args:\n got: %#v\nwant: %#v", calls[0], want)

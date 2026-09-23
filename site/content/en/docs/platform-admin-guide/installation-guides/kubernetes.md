@@ -129,6 +129,24 @@ The default distribution installs Kueue, KubeRay, the Tau controller and CRDs,
 a portable baseline queue, GPU monitoring profiles, and the TauGrid Portal.
 The chart excludes provider GPU drivers and storage drivers.
 
+On AKS, the optional Kueue Extension Controller can own node classification and
+node-derived Kueue flavors instead of Tau. This mode installs every TauGrid
+system component in `kueue-system` because the extension identity is bound to
+that namespace:
+
+```bash
+tau cluster install \
+  --context "$TAU_CONTEXT" \
+  --namespace kueue-system \
+  --kueue-object-authority aksExtension
+```
+
+The default remains `tau`, which keeps the portable Tau node-label and flavor
+contract in `tau-system`. Do not run both authorities. If KEC-managed GPU
+flavors should receive baseline quota, list their generated names under
+`baselineQueue.aksExtension.gpuFlavors` in the values file. See the
+[cluster install values reference](../../reference/cluster-install-values/#kueue-object-authority).
+
 If the platform needs different queue quotas, GPU labels, or component
 settings, keep the complete reviewed configuration in one values file:
 
@@ -169,7 +187,7 @@ For a single-operator evaluation, create the default workspace:
 
 ```bash
 export TAU_WORKSPACE="taugrid-default"
-export TAU_SYSTEM_NAMESPACE="tau-system"
+export TAU_SYSTEM_NAMESPACE="tau-system" # use kueue-system for aksExtension authority
 
 tau workspace create "$TAU_WORKSPACE" \
   --context "$TAU_CONTEXT" \

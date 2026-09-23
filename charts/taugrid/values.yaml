@@ -1,6 +1,10 @@
 # Shared cluster connection recorded once in the Helm release. Portal inherits
 # this read-only query identity, never the adx-mon ingestion/admin identity.
 global:
+  # Select exactly one node-label and Kueue flavor authority. The default keeps
+  # TauGrid's current portable behavior. aksExtension requires installing the
+  # release in kueue-system because the AKS extension identity is namespace-bound.
+  kueueObjectAuthority: tau
   adx:
     queryConnection:
       # Configure all three together; installation creates no Azure resources.
@@ -83,12 +87,27 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "1000"
+  aksExtension:
+    # KEC derives GPU ResourceFlavor names from live node inventory, so TauGrid
+    # cannot safely guess them. List the KEC-managed flavor names that should
+    # receive baseline queue quota. An empty list leaves a CPU-only baseline
+    # queue using the always-created aks-cpu flavor.
+    gpuFlavors: []
 
 kueue:
   # TauGrid installs the Kueue MultiKueue capability by default. Operators still
   # own worker credentials, routing objects, and multi-cluster queue policy.
   aksExtension:
+    # Keep this aligned with global.kueueObjectAuthority. `tau cluster install`
+    # sets both values from --kueue-object-authority.
+    enableKueueObjectsAutomation: false
     enableMultiKueue: true
+    controller:
+      image:
+        repository: mcr.microsoft.com/aks/ai-runtime/kueue-extension-controller
+        tag: ""
+        digest: sha256:6fe37b9f1d6202679ec6c184eea684b046f91d6d7814eb64d1aa06e70a57e347
+        pullPolicy: IfNotPresent
   controllerManager:
     manager:
       image:

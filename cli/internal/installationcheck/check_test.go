@@ -311,6 +311,65 @@ func TestDisabledComponentsRejectsUnreadableValues(t *testing.T) {
 	}
 }
 
+func TestDecodeReleaseConfigurationReadsKueueAuthority(t *testing.T) {
+	configuration, err := DecodeReleaseConfiguration([]byte(`{
+		"global":{"kueueObjectAuthority":"aksExtension"},
+		"baselineQueue":{"aksExtension":{"gpuFlavors":[
+			{"name":"aks-h200-ndisr-v5"},
+			{"name":"aks-a100-ndamsr-v4"},
+			{"name":"aks-h200-ndisr-v5"}
+		]}}
+	}`))
+	if err != nil {
+		t.Fatalf("DecodeReleaseConfiguration errored: %v", err)
+	}
+	if configuration.KueueObjectAuthority != KueueObjectAuthorityAKSExtension {
+		t.Fatalf("authority = %q", configuration.KueueObjectAuthority)
+	}
+	want := []string{"aks-a100-ndamsr-v4", "aks-h200-ndisr-v5"}
+	if !slices.Equal(configuration.ExpectedAKSExtensionGPUFlavors, want) {
+		t.Fatalf("GPU flavors = %v, want %v", configuration.ExpectedAKSExtensionGPUFlavors, want)
+	}
+}
+
+func TestCheckReportsReadyAKSExtensionAuthority(t *testing.T) {
+	runner := readyAKSExtensionRunner()
+	opts := testOptions()
+	opts.SystemNamespace = "kueue-system"
+	opts.KueueObjectAuthority = KueueObjectAuthorityAKSExtension
+	opts.ExpectedAKSExtensionGPUFlavors = []string{"aks-h200-ndisr-v5"}
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("AKS extension report not ready:\n%s", report.Summary())
+	}
+	for _, want := range []string{
+		"PASS  Kueue extension",
+		"PASS  Kueue authority",
+		"aks-default, aks-cpu, and 1 selected GPU flavor(s) are converged",
+		"READY: 10/10 checks passed",
+	} {
+		if !strings.Contains(report.Summary(), want) {
+			t.Fatalf("summary missing %q:\n%s", want, report.Summary())
+		}
+	}
+}
+
+func TestCheckRejectsUnclassifiedAKSUserNode(t *testing.T) {
+	runner := readyAKSExtensionRunner()
+	runner["get nodes --output=json"] = fakeResponse{
+		output: `{"items":[{"metadata":{"name":"gpu-0","labels":{"kubernetes.azure.com/mode":"user","node.kubernetes.io/instance-type":"Standard_ND96isr_H200_v5"}}}]}`,
+	}
+	opts := testOptions()
+	opts.SystemNamespace = "kueue-system"
+	opts.KueueObjectAuthority = KueueObjectAuthorityAKSExtension
+
+	report := Check(context.Background(), runner, opts)
+	if report.Ready() || !strings.Contains(report.Summary(), "KEC has not classified 1 user node(s), including gpu-0") {
+		t.Fatalf("unclassified user node was not rejected:\n%s", report.Summary())
+	}
+}
+
 func TestWaitReturnsSuccessfulReadinessReport(t *testing.T) {
 	report, err := Wait(context.Background(), readyRunner(), testOptions())
 	if err != nil {
@@ -440,4 +499,35 @@ func readyRunner() fakeRunner {
 			output: `{"spec":{"policyName":"tau-quota-approval-guard","validationActions":["Deny"]}}`,
 		},
 	}
+}
+
+func readyAKSExtensionRunner() fakeRunner {
+	runner := fakeRunner{}
+	for key, response := range readyRunner() {
+		runner[strings.ReplaceAll(key, "tau-system", "kueue-system")] = response
+	}
+	runner["get deployments --namespace kueue-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
+		output: `{"items":[
+			{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.19.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+			{"metadata":{"name":"taugrid-kueue-extension","generation":1,"labels":{"helm.sh/chart":"kueue-0.19.2","app.kubernetes.io/component":"extension-controller"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+			{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.4.2","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+		]}`,
+	}
+	runner["get nodes --output=json"] = fakeResponse{
+		output: `{"items":[
+			{"metadata":{"name":"cpu-0","labels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/node-type":"cpu"}}},
+			{"metadata":{"name":"gpu-0","labels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/sku-series":"NDisr_v5","kubernetes.azure.com/sku-gpu-name":"H200"}}}
+		]}`,
+	}
+	runner["get topology.kueue.x-k8s.io aks-default --output=json"] = fakeResponse{
+		output: `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"aks-managed-kueue-extension"}},"spec":{"levels":[{"nodeLabel":"kubernetes.io/hostname"}]}}`,
+	}
+	runner["get resourceflavors --selector app.kubernetes.io/managed-by=aks-managed-kueue-extension --output=json"] = fakeResponse{
+		output: `{"items":[
+			{"metadata":{"name":"aks-cpu"},"spec":{"nodeLabels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/node-type":"cpu"},"topologyName":"aks-default"}},
+			{"metadata":{"name":"aks-h200-ndisr-v5"},"spec":{"nodeLabels":{"kubernetes.azure.com/mode":"user","kubernetes.azure.com/sku-series":"NDisr_v5","kubernetes.azure.com/sku-gpu-name":"H200"},"topologyName":"aks-default"}}
+		]}`,
+	}
+	return runner
 }

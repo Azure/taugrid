@@ -1,5 +1,17 @@
 {{- if .Values.baselineQueue.enabled }}
+{{- $authority := default "tau" .Values.global.kueueObjectAuthority }}
+{{- $aksExtensionAuthority := eq $authority "aksExtension" }}
 {{- $requiredTopology := default "kubernetes.io/hostname" .Values.baselineQueue.topology.requiredLevel }}
+{{- $aksGPUFlavors := .Values.baselineQueue.aksExtension.gpuFlavors | default list }}
+{{- $gpuFlavors := .Values.baselineQueue.gpu.flavors }}
+{{- $gpuEnabled := .Values.baselineQueue.gpu.enabled }}
+{{- $cpuFlavorName := .Values.baselineQueue.flavor.name }}
+{{- if $aksExtensionAuthority }}
+{{- $gpuFlavors = $aksGPUFlavors }}
+{{- $gpuEnabled = gt (len $aksGPUFlavors) 0 }}
+{{- $cpuFlavorName = "aks-cpu" }}
+{{- end }}
+{{- if not $aksExtensionAuthority }}
 {{- if and .Values.baselineQueue.gpu.enabled (empty .Values.baselineQueue.gpu.flavors) }}
 {{- fail "baselineQueue.gpu.flavors must contain at least one flavor when baselineQueue.gpu.enabled is true" }}
 {{- end }}
@@ -24,6 +36,21 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- if $aksExtensionAuthority }}
+{{- range $gpuFlavor := $aksGPUFlavors }}
+{{- if empty $gpuFlavor.name }}
+{{- fail "baselineQueue.aksExtension.gpuFlavors[].name is required" }}
+{{- end }}
+{{- $resourceNames := list }}
+{{- range $resource := $gpuFlavor.resources }}
+{{- $resourceNames = append $resourceNames $resource.name }}
+{{- end }}
+{{- if not (deepEqual (sortAlpha $resourceNames) (sortAlpha $.Values.baselineQueue.gpu.coveredResources)) }}
+{{- fail (printf "baselineQueue.aksExtension.gpuFlavors[%s].resource names must match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if .Values.baselineQueue.gpu.enabled }}
 {{- range $resource := .Values.baselineQueue.resources }}
 {{- if has $resource.name $.Values.baselineQueue.gpu.coveredResources }}
@@ -31,8 +58,9 @@
 {{- end }}
 {{- end }}
 {{- end }}
-{{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
-{{- if $.Values.baselineQueue.gpu.enabled }}
+{{- if not $aksExtensionAuthority }}
+{{- range $gpuFlavor := $gpuFlavors }}
+{{- if $gpuEnabled }}
 {{- if empty $gpuFlavor.nodeTaints }}
 {{- fail (printf "baselineQueue.gpu.flavors[%s].nodeTaints must contain at least one GPU admission taint so CPU-only workloads cannot fall through to GPU quota" $gpuFlavor.name) }}
 {{- end }}
@@ -56,6 +84,8 @@
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end }}
+{{- if not $aksExtensionAuthority }}
 {{- if .Values.baselineQueue.topology.enabled }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: Topology
@@ -87,8 +117,8 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 ---
-{{- if .Values.baselineQueue.gpu.enabled }}
-{{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
+{{- if $gpuEnabled }}
+{{- range $gpuFlavor := $gpuFlavors }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
@@ -118,6 +148,7 @@ spec:
 ---
 {{- end }}
 {{- end }}
+{{- end }}
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
@@ -135,26 +166,26 @@ spec:
         {{- range .Values.baselineQueue.resources }}
         - {{ .name }}
         {{- end }}
-        {{- if .Values.baselineQueue.gpu.enabled }}
+        {{- if $gpuEnabled }}
         {{- range .Values.baselineQueue.gpu.coveredResources }}
         - {{ . }}
         {{- end }}
         {{- end }}
       flavors:
-        - name: {{ .Values.baselineQueue.flavor.name }}
+        - name: {{ $cpuFlavorName }}
           resources:
             {{- range .Values.baselineQueue.resources }}
             - name: {{ .name }}
               nominalQuota: {{ .nominalQuota | quote }}
             {{- end }}
-            {{- if .Values.baselineQueue.gpu.enabled }}
+            {{- if $gpuEnabled }}
             {{- range .Values.baselineQueue.gpu.coveredResources }}
             - name: {{ . }}
               nominalQuota: "0"
             {{- end }}
             {{- end }}
-        {{- if .Values.baselineQueue.gpu.enabled }}
-        {{- range $gpuFlavor := .Values.baselineQueue.gpu.flavors }}
+        {{- if $gpuEnabled }}
+        {{- range $gpuFlavor := $gpuFlavors }}
         - name: {{ $gpuFlavor.name }}
           resources:
             {{- range $.Values.baselineQueue.resources }}
