@@ -81,7 +81,9 @@ for ((attempt = 1; attempt <= maximum_attempts; attempt++)); do
 
     if [[ -n "$management_command_statuses" ]]; then
       management_command_terminal_failure="$(printf '%s\n' "$management_command_statuses" | awk -F '\t' '
-        $2 == $3 && $4 == "False" && $5 !~ /[Tt][Hh][Rr][Oo][Tt][Tt][Ll]|[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Rr][Aa][Tt][Ee][Ll][Ii][Mm][Ii][Tt][Pp][Oo][Ll][Ii][Cc][Yy]|[Tt][Oo][Oo][Mm][Aa][Nn][Yy][Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/ {
+        $2 == $3 && $4 == "False" &&
+          $5 !~ /[Tt][Hh][Rr][Oo][Tt][Tt][Ll]|[Rr][Ee][Qq][Uu][Ee][Ss][Tt][Rr][Aa][Tt][Ee][Ll][Ii][Mm][Ii][Tt][Pp][Oo][Ll][Ii][Cc][Yy]|[Tt][Oo][Oo][Mm][Aa][Nn][Yy][Rr][Ee][Qq][Uu][Ee][Ss][Tt][Ss]/ &&
+          $5 !~ /[Ff]ailed to resolve (table|materialized-view)|[Tt]able .* (does not exist|was not found)|[Mm]aterialized[- ]view .* (does not exist|was not found)/ {
           print $1 " (generation=" $2 ", observedGeneration=" $3 ", status=" $4 ", error=" $5 ")"
         }')"
       if [[ -n "$management_command_terminal_failure" ]]; then

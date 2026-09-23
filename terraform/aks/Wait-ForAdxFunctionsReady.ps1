@@ -89,6 +89,12 @@ function Test-RetryableAdxThrottle {
     return $ErrorMessage -match "(?i)throttl|requestratelimitpolicy|toomanyrequests"
 }
 
+function Test-RetryableAdxDependency {
+    param([string] $ErrorMessage)
+
+    return $ErrorMessage -match "(?i)failed to resolve (table|materialized-view)|table .* (does not exist|was not found)|materialized[- ]view .* (does not exist|was not found)"
+}
+
 function Format-FunctionDiagnostic {
     param([object] $FunctionState)
 
@@ -185,7 +191,8 @@ for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
             $_.Generation -eq $_.ObservedGeneration -and $_.Status -eq "False"
         })
         $terminalManagementCommandFailures = @($currentManagementCommandFailures | Where-Object {
-            -not (Test-RetryableAdxThrottle -ErrorMessage $_.Error)
+            -not (Test-RetryableAdxThrottle -ErrorMessage $_.Error) -and
+            -not (Test-RetryableAdxDependency -ErrorMessage $_.Error)
         })
         if ($terminalManagementCommandFailures.Count -gt 0) {
             $diagnostics = @($terminalManagementCommandFailures | ForEach-Object {
