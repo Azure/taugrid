@@ -3,7 +3,8 @@
 
 import { QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import { JobDetailBoard } from './Workloads';
@@ -31,13 +32,23 @@ function detail(overrides: Partial<JobDetail>): JobDetail {
   };
 }
 
-function renderDetail(payload: JobDetail) {
-  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(JSON.stringify(payload), {
-    status: 200, headers: { 'content-type': 'application/json' },
-  }))));
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{location.pathname + location.search}</output>;
+}
+
+function renderDetail(payload: JobDetail, initialEntry = '/portal/workloads/uid-1') {
+  vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+    const body = String(input).includes('/logs?')
+      ? { pod: 'head', container: 'ray-head', previous: false, content: 'training', tailLines: 200, limitBytes: 262144 }
+      : payload;
+    return Promise.resolve(new Response(JSON.stringify(body), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+  }));
   const client = createPortalQueryClient();
-  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/portal/workloads/uid-1']}>
-    <WorkspaceProvider scope={scope} managed><Routes><Route path="/portal/workloads/:resourceUID" element={<JobDetailBoard/>}/></Routes></WorkspaceProvider>
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[initialEntry]}>
+    <WorkspaceProvider scope={scope} managed><LocationProbe/><Routes><Route path="/portal/workloads/:resourceUID" element={<JobDetailBoard/>}/></Routes></WorkspaceProvider>
   </MemoryRouter></QueryClientProvider>);
 }
 
@@ -80,5 +91,37 @@ describe('Workload detail lifecycle', () => {
     }));
     expect(await screen.findByRole('meter', { name: 'Peak GPU temperature: 84.0 °C' })).toHaveAttribute('aria-valuemax', '100');
     expect(screen.getByRole('meter', { name: 'Peak GPU power consumption: 675.0 W' })).toHaveAttribute('aria-valuemax', '1000');
+  });
+
+  it('keeps workload and workspace scope in all log navigation links', async () => {
+    const payload = detail({
+      pods: [{
+        name: 'head', phase: 'Running', node: 'gpu-a', restarts: 1,
+        containers: [{ name: 'ray-head', ready: true, restarts: 1, state: 'running', previousAvailable: true }],
+      }],
+    });
+    renderDetail(payload, '/portal/workloads/uid-1?view=pods&workspace=flex');
+
+    await userEvent.click(await screen.findByRole('link', { name: 'ray-head' }));
+    let url = new URL(screen.getByTestId('location').textContent || '', 'https://portal.example');
+    expect(url.pathname).toBe('/portal/workloads/uid-1');
+    expect(url.searchParams.get('view')).toBe('logs');
+    expect(url.searchParams.get('pod')).toBe('head');
+    expect(url.searchParams.get('container')).toBe('ray-head');
+    expect(url.searchParams.get('workspace')).toBe('flex');
+
+    await userEvent.click(await screen.findByRole('link', { name: 'Choose another container' }));
+    url = new URL(screen.getByTestId('location').textContent || '', 'https://portal.example');
+    expect(url.pathname).toBe('/portal/workloads/uid-1');
+    expect(url.searchParams.get('view')).toBe('logs');
+    expect(url.searchParams.get('pod')).toBeNull();
+    expect(url.searchParams.get('workspace')).toBe('flex');
+
+    expect(screen.getByRole('link', { name: 'current' })).toHaveAttribute(
+      'href', '/portal/workloads/uid-1?view=logs&pod=head&container=ray-head&workspace=flex',
+    );
+    expect(screen.getByRole('link', { name: 'previous' })).toHaveAttribute(
+      'href', '/portal/workloads/uid-1?view=logs&pod=head&container=ray-head&previous=true&workspace=flex',
+    );
   });
 });

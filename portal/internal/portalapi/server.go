@@ -1507,7 +1507,7 @@ func (s *Server) resolveLiveWorkload(ctx context.Context, scope WorkspaceScope, 
 	if !scope.Managed && namespace == "" {
 		namespace = s.runs.Namespace
 	}
-	live, err := runs.Board(ctx, s.runs.Reader, runs.Options{Namespace: namespace})
+	live, err := runs.Board(ctx, s.runs.Reader, runs.Options{Namespace: namespace, Queue: scope.LocalQueue})
 	if err != nil {
 		return jobdetail.Snapshot{}, false, err
 	}

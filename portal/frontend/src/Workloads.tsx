@@ -75,6 +75,7 @@ export function RunsBoard() {
 }
 export function JobDetailBoard() {
   const { resourceUID = '' } = useParams();
+  const workloadPath = '/portal/workloads/' + encodeURIComponent(resourceUID);
   const query = useBoard<JobDetail>('/api/portal/workloads/' + encodeURIComponent(resourceUID), !!resourceUID, retainJobSections);
   const partial = Object.values(query.data?.diagnostics || {}).some(diagnostic => diagnostic.state === 'unavailable');
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
@@ -102,7 +103,7 @@ export function JobDetailBoard() {
       {active === 'overview' && <JobOverview snap={snap}/>}
       {active === 'pods' && <SourceResult diagnostic={snap.diagnostics?.pods} label="Pods">{!snap.pods?.length ? <Empty>No pods found for this run — it may not be scheduled yet, or the objects were garbage-collected.</Empty>
         : <Table headers={['Name', 'Phase', 'Node', 'Containers', '#Restarts']} rows={snap.pods.map(p => [text(p.name), <Status value={p.phase}/>, p.nodePath ? <ScopedLink to={p.nodePath}>{text(p.node)}</ScopedLink> : text(p.node),
-          p.containers?.map(c => <span key={c.name}><ScopedLink to={`?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}`}>{c.name}</ScopedLink> <Status value={c.state}/>{' '}</span>) || '—', p.restarts ?? 0])}/>}</SourceResult>}
+          p.containers?.map(c => <span key={c.name}><ScopedLink to={`${workloadPath}?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}`}>{c.name}</ScopedLink> <Status value={c.state}/>{' '}</span>) || '—', p.restarts ?? 0])}/>}</SourceResult>}
       {active === 'events' && <SourceResult diagnostic={snap.diagnostics?.events} label="Events">{!snap.events?.length ? <Empty>No recent events for this run.</Empty>
         : <Table headers={['Type', 'Reason', 'Message', '#Count', 'Last']} rows={snap.events.map(e => [<Status value={e.type} tone={e.type === 'Warning' ? 'fail' : 'done'}/>, text(e.reason), text(e.message), e.count ?? 0, text(e.last)])}/>}</SourceResult>}
       {active === 'logs' && <WorkloadLogs snap={snap}/>}
@@ -115,6 +116,7 @@ export function JobDetailBoard() {
 }
 function WorkloadLogs({ snap }: { snap: JobDetail }) {
   const params = new URLSearchParams(useLocation().search);
+  const workloadPath = '/portal/workloads/' + encodeURIComponent(snap.resourceUid || '');
   const pod = params.get('pod') || '';
   const container = params.get('container') || '';
   const previous = params.get('previous') === 'true';
@@ -126,12 +128,12 @@ function WorkloadLogs({ snap }: { snap: JobDetail }) {
   if (snap.objectState === 'deleted') return <Empty>Logs are not retained after the Kubernetes workload and pods are deleted.</Empty>;
   if (!pod || !container) return <><Note>Choose a workload-owned container. Logs are fetched on demand as bounded snapshots and are not streamed or stored by the Portal.</Note>
     {!snap.pods?.length ? <Empty>No live pods are available.</Empty> : <Table headers={['Pod', 'Container', 'State', 'Snapshots']} rows={snap.pods.flatMap(p => (p.containers || []).map(c => [
-      p.name, c.name, <Status value={c.state}/>, <><ScopedLink to={`?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}`}>current</ScopedLink>
-        {c.previousAvailable && <> · <ScopedLink to={`?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}&previous=true`}>previous</ScopedLink></>}</>,
+      p.name, c.name, <Status value={c.state}/>, <><ScopedLink to={`${workloadPath}?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}`}>current</ScopedLink>
+        {c.previousAvailable && <> · <ScopedLink to={`${workloadPath}?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}&previous=true`}>previous</ScopedLink></>}</>,
     ]))}/>}</>;
   if (!selected) return <Empty warn>The selected pod or container no longer belongs to this workload.</Empty>;
   return <><div className="detail-meta"><strong>{pod}</strong><Status value={container} tone="kind"/><Status value={previous ? 'previous' : 'current'}/>
-    <ScopedLink to="?view=logs" className="back">Choose another container</ScopedLink></div>
+    <ScopedLink to={`${workloadPath}?view=logs`} className="back">Choose another container</ScopedLink></div>
     <BoardResult query={query} label="Container logs">{log => <><Note>{log.tailLines} line tail · {log.limitBytes} byte limit
       {log.truncated ? ' · truncated' : ''}{log.redactionApplied ? ' · sensitive-looking values redacted' : ''}</Note>
       <pre className="log-snapshot">{log.content || 'No log output was returned.'}</pre></>}</BoardResult></>;

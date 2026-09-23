@@ -159,6 +159,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
+  # Workload detail: fetch bounded current/previous container log snapshots.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   # Job detail: surface namespaced scheduling, image-pull, and failure Events.
   - apiGroups: [""]
     resources: ["events"]

@@ -1474,6 +1474,109 @@ func (r *jobDetailAPIReader) GetPodLogs(_ context.Context, _, pod, container str
 	return []byte("step=1 Authorization: Bearer top-secret\nloss=0.2\n"), nil
 }
 
+type queueScopedDetailReader struct {
+	jobDetailAPIReader
+}
+
+func (*queueScopedDetailReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[
+		{"metadata":{"name":"alpha-queue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}},
+		{"metadata":{"name":"beta-queue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}}
+	]}`, namespace, namespace)), nil
+}
+
+func (*queueScopedDetailReader) ListClusterQueues(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"alpha-train","namespace":"shared","uid":"alpha-uid","creationTimestamp":"2026-07-02T10:00:00Z",
+		 "labels":{"tau.azure.com/job":"alpha-train","tau.azure.com/run-id":"alpha-run","kueue.x-k8s.io/queue-name":"alpha-queue"}},"status":{"active":1}},
+		{"metadata":{"name":"beta-train","namespace":"shared","uid":"beta-uid","creationTimestamp":"2026-07-02T10:00:00Z",
+		 "labels":{"tau.azure.com/job":"beta-train","tau.azure.com/run-id":"beta-run","kueue.x-k8s.io/queue-name":"beta-queue"}},"status":{"active":1}}
+	]}`), nil
+}
+
+func (*queueScopedDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) GetJob(_ context.Context, _, name string) ([]byte, error) {
+	switch name {
+	case "alpha-train":
+		return []byte(`{"metadata":{"name":"alpha-train","namespace":"shared","uid":"alpha-uid",
+			"labels":{"batch.kubernetes.io/job-name":"alpha-train","tau.azure.com/run-id":"alpha-run"}},"status":{"active":1}}`), nil
+	case "beta-train":
+		return []byte(`{"metadata":{"name":"beta-train","namespace":"shared","uid":"beta-uid",
+			"labels":{"batch.kubernetes.io/job-name":"beta-train","tau.azure.com/run-id":"beta-run"}},"status":{"active":1}}`), nil
+	default:
+		return nil, errors.New("job not found")
+	}
+}
+
+func (*queueScopedDetailReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"alpha-pod","uid":"alpha-pod-uid","labels":{"batch.kubernetes.io/job-name":"alpha-train"},"ownerReferences":[{"uid":"alpha-uid","controller":true}]},
+		 "spec":{"containers":[{"name":"trainer"}]},"status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}},
+		{"metadata":{"name":"beta-pod","uid":"beta-pod-uid","labels":{"batch.kubernetes.io/job-name":"beta-train"},"ownerReferences":[{"uid":"beta-uid","controller":true}]},
+		 "spec":{"containers":[{"name":"trainer"}]},"status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}}
+	]}`), nil
+}
+
+func (*queueScopedDetailReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestManagedWorkloadDetailAndLogsStayWithinLocalQueue(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{ID: "alpha", Team: "alpha", Cluster: "cluster-a", Namespace: "shared", LocalQueue: "alpha-queue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+			{ID: "beta", Team: "beta", Cluster: "cluster-a", Namespace: "shared", LocalQueue: "beta-queue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &queueScopedDetailReader{}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace},
+		Runs:               RunsOptions{Reader: reader},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := managedRequest(t, server, "/api/portal/workloads/alpha-uid?workspace=alpha"); rec.Code != http.StatusOK {
+		t.Fatalf("alpha detail = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid?workspace=alpha"); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-queue detail = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid/logs?workspace=alpha&pod=beta-pod&container=trainer"); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-queue logs = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogPod != "" {
+		t.Fatalf("cross-queue log request reached Kubernetes for pod %q", reader.lastLogPod)
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid?workspace=beta"); rec.Code != http.StatusOK {
+		t.Fatalf("beta detail in beta workspace = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	reader := &jobDetailAPIReader{}
 	server, err := NewServer(Options{
