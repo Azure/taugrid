@@ -61,4 +61,24 @@ describe('Workload detail lifecycle', () => {
     expect(screen.getByLabelText('Workload lifecycle')).toHaveTextContent(`Admission ${payload.stages.admission}`);
     expect(screen.getByLabelText('Workload lifecycle')).toHaveTextContent(`Application ${payload.stages.application}`);
   });
+
+  it('shows temperature and power consumption gauges with absolute readings', async () => {
+    renderDetail(detail({
+      telemetry: {
+        start: '2026-09-23T00:00:00Z', end: '2026-09-23T01:00:00Z', gpuCount: 1,
+        sampleCount: 80, utilizationSampleCount: 10, averageUtilizationPct: 92, coverage: 'observed',
+        gpus: [{
+          instance: 'gpu-a', pod: 'worker-0', gpu: '0', samples: 80, utilizationSamples: 10,
+          averageUtilizationPct: 92, peakUtilizationPct: 99, maxTemperatureCelsius: 84,
+          maxPowerWatts: 675, maxMemoryUsedMB: 74000, maxRowRemapFailure: 0,
+        }],
+      },
+      diagnostics: {
+        workloads: { state: 'ready' }, pods: { state: 'ready' }, events: { state: 'empty' },
+        tracking: { state: 'ready' }, telemetry: { state: 'ready' },
+      },
+    }));
+    expect(await screen.findByRole('meter', { name: 'Peak GPU temperature: 84.0 °C' })).toHaveAttribute('aria-valuemax', '100');
+    expect(screen.getByRole('meter', { name: 'Peak GPU power consumption: 675.0 W' })).toHaveAttribute('aria-valuemax', '1000');
+  });
 });

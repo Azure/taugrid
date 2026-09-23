@@ -13,6 +13,15 @@ function RunName({ run, namespace }: { run: Run; namespace?: string }) {
     : ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name)}>{run.name}</ScopedLink> : text(run.name);
 }
 function Status({ value, tone = '' }: { value?: string; tone?: string }) { return <span className={'badge ' + tone}>{text(value)}</span>; }
+function Gauge({ label, value, max, unit, tone = '' }: { label: string; value?: number; max: number; unit: string; tone?: string }) {
+  if (value == null) return <span>—</span>;
+  const pct = Math.max(0, Math.min(100, value / max * 100));
+  return <div className={`workload-gauge ${tone}`} role="meter" aria-label={`${label}: ${value.toFixed(1)} ${unit}`}
+    aria-valuemin={0} aria-valuemax={max} aria-valuenow={value}>
+    <div><strong>{value.toFixed(1)}</strong><span>{unit}</span></div>
+    <span className="workload-gauge-track" aria-hidden="true"><span style={{ width: `${pct}%` }}/></span>
+  </div>;
+}
 function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiagnostic; label: string; children: ReactNode }) {
   if (!diagnostic) return <Note warn>{label}: source status not reported by this portal version.</Note>;
   if (diagnostic.state === 'ready' || diagnostic.state === 'empty') return <>{children}</>;
@@ -160,8 +169,10 @@ function JobOverview({ snap }: { snap: JobDetail }) {
           `${gpu.pod} · ${gpu.instance} / ${gpu.gpu}`,
           gpu.averageUtilizationPct == null ? '—' : `${gpu.averageUtilizationPct.toFixed(1)}%`,
           gpu.peakUtilizationPct == null ? '—' : `${gpu.peakUtilizationPct.toFixed(1)}%`,
-          gpu.maxTemperatureCelsius == null ? '—' : `${gpu.maxTemperatureCelsius.toFixed(1)} °C`,
-          gpu.maxPowerWatts == null ? '—' : `${gpu.maxPowerWatts.toFixed(1)} W`,
+          <Gauge label="Peak GPU temperature" value={gpu.maxTemperatureCelsius} max={100} unit="°C"
+            tone={gpu.maxTemperatureCelsius != null && gpu.maxTemperatureCelsius >= 90 ? 'critical' : gpu.maxTemperatureCelsius != null && gpu.maxTemperatureCelsius >= 80 ? 'warm' : ''}/>,
+          <Gauge label="Peak GPU power consumption" value={gpu.maxPowerWatts} max={1000} unit="W"
+            tone={gpu.maxPowerWatts != null && gpu.maxPowerWatts >= 800 ? 'warm' : ''}/>,
           gpu.maxMemoryUsedMB == null ? '—' : `${gpu.maxMemoryUsedMB.toFixed(0)} MB`,
           (gpu.maxRowRemapFailure || gpu.maxUncorrectableRemappedRows) ? <Status value="attention" tone="fail"/> : <Status value="no reported remap errors" tone="done"/>,
         ])}/></>}</SourceResult></>;
