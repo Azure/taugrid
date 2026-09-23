@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
+	"github.com/Azure/taugrid/core/queue"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/expapi"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
@@ -511,10 +512,19 @@ type healthCard struct {
 // queueCard is the Jobs/Queue headline: summed pending/admitted counts and GPU
 // pressure across all queue groups. Drills down to /portal/jobs.
 type queueCard struct {
-	Pending     int   `json:"pending"`
-	Admitted    int   `json:"admitted"`
-	GPUUsed     int64 `json:"gpuUsed"`
-	GPUHeadroom int64 `json:"gpuHeadroom"`
+	Pending     int         `json:"pending"`
+	Admitted    int         `json:"admitted"`
+	GPUUsed     int64       `json:"gpuUsed"`
+	GPUHeadroom int64       `json:"gpuHeadroom"`
+	Queues      []queueLane `json:"queues"`
+}
+
+type queueLane struct {
+	Namespace    string `json:"namespace"`
+	Queue        string `json:"queue"`
+	ClusterQueue string `json:"clusterQueue,omitempty"`
+	Pending      int    `json:"pending"`
+	Admitted     int    `json:"admitted"`
 }
 
 // costCard is the Cost headline: total GPU-hours over the window and the idle
@@ -709,8 +719,26 @@ func (s *Server) resolveQueueCard(ctx context.Context, resp *overviewResponse, s
 		resp.Cards.Queue = &queueCard{
 			Pending: summary.Pending, Admitted: summary.Admitted,
 			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
+			Queues: queueLanes(snap.Groups),
 		}
 	}
+}
+
+func queueLanes(groups []queue.Group) []queueLane {
+	out := make([]queueLane, 0)
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		key := group.Namespace + "\x00" + group.Queue
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, queueLane{
+			Namespace: group.Namespace, Queue: group.Queue, ClusterQueue: group.ClusterQueue,
+			Pending: group.Pending, Admitted: group.Admitted,
+		})
+	}
+	return out
 }
 
 // resolveRunning pre-resolves the overview's "running now" cross-links from the

@@ -26,28 +26,51 @@ export function Empty({ children, warn = false }: { children: ReactNode; warn?: 
 export function Note({ children, warn = false }: { children: ReactNode; warn?: boolean }) {
   return <p className={'note' + (warn ? ' warn' : '')}>{children}</p>;
 }
-export function BoardResult<T>({ query: result, label, children, hint = '', partial = false, live = false }: {
+export function BoardResult<T>({
+  query: result, label, children, hint = '', partial = false, live = false, sources = [], autoRefreshMs = 0,
+}: {
   query: UseQueryResult<T, Error>; label: string; children: (data: T) => ReactNode; hint?: string; partial?: boolean; live?: boolean;
+  sources?: { label: string; query: UseQueryResult<unknown, Error> }[]; autoRefreshMs?: number;
 }) {
   const query = readableQuery(result);
+  const related = sources.map(source => ({ label: source.label, query: readableQuery(source.query), result: source.query }));
+  const queries = [{ label, query, result }, ...related];
   const hasData = query.data !== undefined;
   const embedded = live && hasData && !query.error;
-  const action = query.error || partial ? 'Retry' : 'Refresh';
+  const refreshing = queries.some(source => source.query.isFetching);
+  const sourceUnavailable = related.some(source => source.query.error);
+  const action = query.error || sourceUnavailable || partial ? 'Retry' : 'Refresh';
   const status = embedded ? 'Embedded live dashboard; freshness is managed inside the dashboard.'
-    : query.isFetching ? (hasData ? 'Refreshing; showing the previous snapshot.' : 'Loading snapshot…')
+    : refreshing ? (hasData ? 'Refreshing all sources; showing previous snapshots where available.' : 'Loading snapshot…')
       : query.error ? (hasData ? 'Stale snapshot; refresh failed.' : 'Unavailable.')
-        : partial ? 'Some sources unavailable; see section diagnostics.'
+        : sourceUnavailable || partial ? 'Some sources unavailable; see source diagnostics.'
+          : autoRefreshMs > 0 ? `Auto-refreshing every ${Math.round(autoRefreshMs / 1000)} seconds.`
           : query.isStale ? 'Stale snapshot; refresh for current data.' : 'Snapshot; not live.';
   return <section className="data-panel" aria-label={label}>
     <div className="panel-status">
-      <span role="status">{label}: {status}{!embedded && hasData && query.dataUpdatedAt > 0 && <>
+      <span role="status">{label}: {status}{!embedded && sources.length === 0 && hasData && query.dataUpdatedAt > 0 && <>
         {' '}Last successful response <time dateTime={new Date(query.dataUpdatedAt).toISOString()}>{new Date(query.dataUpdatedAt).toLocaleString()}</time>.
       </>}</span>
-      {!embedded && <button type="button" className="btn" aria-label={action + ' ' + label} disabled={query.isFetching}
-        onClick={() => { void query.refetch(); }}>{query.isFetching ? 'Refreshing…' : action}</button>}
+      {!embedded && <button type="button" className="btn" aria-label={action + ' ' + label} disabled={refreshing}
+        onClick={() => { void Promise.all(queries.map(source => source.result.refetch())); }}>{refreshing ? 'Refreshing…' : action}</button>}
     </div>
-    <div aria-busy={query.isFetching}>
+    {sources.length > 0 && <div className="panel-source-status" aria-label={`${label} source freshness`}>
+      {queries.map(source => <span key={source.label}>
+        <strong>{source.label}</strong>: {source.query.error
+          ? source.query.data === undefined ? 'unavailable' : 'refresh failed; stale data retained'
+          : source.query.isFetching ? source.query.data === undefined ? 'loading' : 'refreshing'
+            : source.query.isStale ? 'stale' : 'current'}
+        {source.query.dataUpdatedAt > 0 && <> · <time dateTime={new Date(source.query.dataUpdatedAt).toISOString()}>
+          {new Date(source.query.dataUpdatedAt).toLocaleString()}
+        </time></>}
+      </span>)}
+    </div>}
+    <div aria-busy={refreshing}>
       {query.error && <div className="empty warn" role="alert">{label} {hasData ? 'refresh failed' : 'unavailable'}: {query.error.message}{hint}. {staleReadMessage(query)}</div>}
+      {related.filter(source => source.query.error).map(source =>
+        <div className="empty warn" role="alert" key={source.label}>{source.label} {source.query.data === undefined ? 'unavailable' : 'refresh failed'}:
+          {' '}{source.query.error?.message}. {staleReadMessage(source.query)}
+        </div>)}
       {query.data !== undefined && children(query.data)}
     </div>
   </section>;
