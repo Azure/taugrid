@@ -163,18 +163,9 @@ func conditionIsTrue(object *unstructured.Unstructured, conditionType string) bo
 		if !ok {
 			continue
 		}
-		if condition["type"] != conditionType || condition["status"] != "True" {
-			continue
+		if condition["type"] == conditionType && condition["status"] == "True" {
+			return true
 		}
-		if observed, ok := condition["observedGeneration"].(int64); ok &&
-			observed < object.GetGeneration() {
-			continue
-		}
-		if observed, ok := condition["observedGeneration"].(float64); ok &&
-			int64(observed) < object.GetGeneration() {
-			continue
-		}
-		return true
 	}
 	return false
 }
