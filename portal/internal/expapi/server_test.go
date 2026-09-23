@@ -563,6 +563,26 @@ func TestV2CanonicalKustoReadsFromMetricsFileWithoutLiveTransport(t *testing.T) 
 	if detailResponse.Run.RunID != "run-a" || detailResponse.Run.ExperimentID != "experiment-a" {
 		t.Fatalf("run detail response=%+v", detailResponse)
 	}
+
+	series := httptest.NewRecorder()
+	server.Handler().ServeHTTP(series, httptest.NewRequest(
+		http.MethodGet,
+		"/api/v2/stellar/runs/run-a/series?project=project-a&target=experiment-a&metric=loss&start_step=10&end_step=10&max_points=10",
+		nil,
+	))
+	if series.Code != http.StatusOK {
+		t.Fatalf("series status=%d body=%s", series.Code, series.Body.String())
+	}
+	var seriesResponse v2SeriesResponse
+	if err := json.Unmarshal(series.Body.Bytes(), &seriesResponse); err != nil {
+		t.Fatal(err)
+	}
+	if seriesResponse.RunID != "run-a" || seriesResponse.Metric != "loss" ||
+		seriesResponse.SourcePoints != 1 || seriesResponse.ReturnedPoints != 1 ||
+		len(seriesResponse.Points) != 1 || seriesResponse.Points[0].Step != 10 ||
+		seriesResponse.Points[0].Value != 0.25 {
+		t.Fatalf("series response=%+v", seriesResponse)
+	}
 }
 
 func TestV2RunListPaginatesWithValidatedOpaqueCursor(t *testing.T) {
