@@ -557,9 +557,13 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		}
 	}
 
+	grace := int64(600)
+	if isHead && o.MetricsOffload.Enabled() {
+		grace = metricsoffload.ShutdownGracePeriodSeconds(o.MetricsOffload.DoneTimeout, grace)
+	}
 	pod := map[string]any{
 		"restartPolicy":                 "Never",
-		"terminationGracePeriodSeconds": int64(600),
+		"terminationGracePeriodSeconds": grace,
 		"containers":                    containers,
 		"volumes":                       volumes(o, isHead),
 	}

@@ -629,8 +629,11 @@ metrics:
     - /data/shared/eval-*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0
     out: /var/run/tau/metrics-offload
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_client_id: 00000000-0000-0000-0000-000000000001
 experiment:
   project: pretraining.v1
   name: modernbert-fineweb
@@ -641,10 +644,153 @@ experiment:
 	}
 
 	if !cfg.Metrics.Offload.Enabled ||
-		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2" ||
+		cfg.Metrics.Offload.Runtime != "" ||
+		cfg.Metrics.Offload.Image != "mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0" ||
 		cfg.Metrics.Offload.Out != "/var/run/tau/metrics-offload" ||
 		len(cfg.Metrics.History) != 2 {
 		t.Fatalf("unexpected metrics config: %+v", cfg.Metrics)
+	}
+}
+
+func TestMetricsOffloadRuntimeDefaultsAndValidates(t *testing.T) {
+	if got, err := ResolveMetricsOffloadRuntime(""); err != nil || got != MetricsOffloadRuntimeCollectorV1 {
+		t.Fatalf("default runtime = %q, %v; want %q", got, err, MetricsOffloadRuntimeCollectorV1)
+	}
+	if got, err := ResolveMetricsOffloadRuntime(MetricsOffloadRuntimeCollectorV1); err != nil || got != MetricsOffloadRuntimeCollectorV1 {
+		t.Fatalf("collector runtime = %q, %v", got, err)
+	}
+	if _, err := parse([]byte(`metrics:
+  offload:
+    runtime: future-v2
+`), "tau.yaml"); err == nil || !strings.Contains(err.Error(), "metrics.offload.runtime") {
+		t.Fatalf("unknown runtime error = %v", err)
+	}
+}
+
+func TestParseAcceptsTypedADXRequiredDelivery(t *testing.T) {
+	cfg, err := parse([]byte(`name: tracked-job
+engine: job
+entrypoint: train.sh
+metrics:
+  history: [metrics.jsonl]
+  offload:
+    enabled: true
+    runtime: collector-v1
+    image: mcr.microsoft.com/aks/ai-runtime/taugrid-metrics-collector:0.1.0
+    delivery_mode: adx-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_table: TauExpMetricEventsV1
+    adx_mapping: TauExpMetricEventsV1Json
+    adx_client_id: 00000000-0000-0000-0000-000000000001
+    adx_max_attempts: 4
+    adx_retry_backoff: 2s
+    adx_final_status_timeout: 5m
+experiment:
+  project: pretraining
+  name: modernbert
+`), "tau.yaml")
+	if err != nil {
+		t.Fatalf("parse typed ADX delivery: %v", err)
+	}
+	if got := cfg.Metrics.Offload; got.DeliveryMode != MetricsOffloadDeliveryADXRequired ||
+		got.ADXDatabase != "TauGrid" || got.ADXMaxAttempts != 4 {
+		t.Fatalf("unexpected typed ADX config: %+v", got)
+	}
+}
+
+func TestTypedADXRequiredDeliveryRejectsLegacyRuntime(t *testing.T) {
+	for name, body := range map[string]string{
+		"portal runtime": `enabled: true
+    runtime: portal-v1
+    delivery_mode: adx-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_client_id: id`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parse([]byte("metrics:\n  history: [metrics.jsonl]\n  offload:\n    "+body+"\nexperiment:\n  project: project\n  name: experiment\n"), "tau.yaml")
+			if err == nil {
+				t.Fatalf("parse unexpectedly accepted invalid typed ADX config")
+			}
+		})
+	}
+}
+
+func TestTypedADXRequiredDeliveryBoundsAttempts(t *testing.T) {
+	_, err := parse([]byte(`metrics:
+  history: [metrics.jsonl]
+  offload:
+    enabled: true
+    runtime: collector-v1
+    delivery_mode: adx-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: Metrics
+    adx_client_id: id
+    adx_max_attempts: 11
+experiment:
+  project: project
+  name: experiment
+`), "tau.yaml")
+	if err == nil || !strings.Contains(err.Error(), "adx_max_attempts") {
+		t.Fatalf("unbounded attempts error = %v", err)
+	}
+}
+
+func TestMetricsOffloadTerminalDrainTimeoutCoversDelayedSuccessAndExhaustion(t *testing.T) {
+	got, err := MetricsOffloadTerminalDrainTimeout(4, 2*time.Second, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := 20*time.Minute + 44*time.Second
+	if got != want {
+		t.Fatalf("terminal drain timeout = %s, want %s", got, want)
+	}
+	if got <= 2*time.Minute {
+		t.Fatalf("terminal drain timeout = %s, must cover delayed ADX success beyond 120s", got)
+	}
+
+	got, err = MetricsOffloadTerminalDrainTimeout(
+		MetricsOffloadMaxADXAttempts,
+		0,
+		0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = 109*time.Minute + time.Second
+	if got != want {
+		t.Fatalf("exhausted default delivery timeout = %s, want %s", got, want)
+	}
+}
+
+func TestMetricsOffloadTerminalDrainTimeoutRejectsUnboundedDelivery(t *testing.T) {
+	_, err := MetricsOffloadTerminalDrainTimeout(
+		MetricsOffloadMaxADXAttempts,
+		time.Minute,
+		12*time.Minute,
+	)
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("terminal drain timeout error = %v, want maximum bound", err)
+	}
+
+	_, err = parse([]byte(`metrics:
+  history: [metrics.jsonl]
+  offload:
+    enabled: true
+    runtime: collector-v1
+    delivery_mode: adx-required
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: Metrics
+    adx_client_id: id
+    adx_max_attempts: 10
+    adx_final_status_timeout: 12m
+experiment:
+  project: project
+  name: experiment
+`), "tau.yaml")
+	if err == nil || !strings.Contains(err.Error(), "exceeds maximum") {
+		t.Fatalf("unbounded config error = %v, want maximum bound", err)
 	}
 }
 
@@ -660,6 +806,9 @@ metrics:
   history: [metrics-history-attempt-*/*.jsonl]
   offload:
     enabled: true
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_client_id: 00000000-0000-0000-0000-000000000001
 experiment:
   project: pretraining
   name: modernbert-ray
@@ -694,6 +843,9 @@ metrics:
   history: [metrics-history-attempt-*/*.jsonl]
   offload:
     enabled: true
+    adx_cluster_uri: https://example.kusto.windows.net
+    adx_database: TauGrid
+    adx_client_id: 00000000-0000-0000-0000-000000000001
 experiment:
   project: modernbert
   title: "ModernBERT FineWeb: Round 1"

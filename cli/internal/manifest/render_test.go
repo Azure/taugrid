@@ -359,11 +359,13 @@ storage:
 		WorkloadKind:     WorkloadKindRayJob,
 		MainScript:       []byte("# trainer\n"),
 		MetricsOffload: MetricsOffloadOptions{
-			Image:               "registry.example.com/taugrid/tau:20260618.1",
-			Project:             "vit-enc-vision",
-			Tags:                map[string]string{"dataset": "vision", "recipe": "vit-enc"},
-			RemoteWriteEndpoint: "http://${NODE_IP}:3100/receive",
-			Interval:            5 * time.Second,
+			Image:         "registry.example.com/taugrid/collector:20260618.1",
+			Project:       "vit-enc-vision",
+			Tags:          map[string]string{"dataset": "vision", "recipe": "vit-enc"},
+			Interval:      5 * time.Second,
+			ADXClusterURI: "https://example.kusto.windows.net",
+			ADXDatabase:   "TauGrid",
+			ADXClientID:   "00000000-0000-0000-0000-000000000001",
 		},
 	})
 	if err != nil {
@@ -384,34 +386,37 @@ storage:
 
 	assertEnvVar(t, "ray-head", rayHead, "TAU_GROUP", "demo-experiment")
 	assertEnvVar(t, "ray-head", rayHead, "TAU_EXPERIMENT", "demo-experiment")
-	if got := sidecar["image"]; got != "registry.example.com/taugrid/tau:20260618.1" {
+	if got := sidecar["image"]; got != "registry.example.com/taugrid/collector:20260618.1" {
 		t.Fatalf("sidecar image = %v", got)
 	}
 	for name, value := range map[string]string{
-		"TAU_EXP_STORE":                             "/data/checkpoints/finetunes/vision-demo/metrics-expstore",
-		"TAU_METRICS_HISTORY":                       "/data/checkpoints/finetunes/vision-demo/metrics-history.jsonl",
-		"TAU_METRICS_OFFLOAD_RUN":                   "vision-demo",
-		"TAU_METRICS_OFFLOAD_PROJECT":               "vit-enc-vision",
-		"TAU_METRICS_OFFLOAD_EXPERIMENT":            "demo-experiment",
-		"TAU_METRICS_OFFLOAD_GROUP":                 "demo-experiment",
-		"TAU_METRICS_OFFLOAD_TAGS":                  "dataset=vision,recipe=vit-enc",
-		"TAU_METRICS_OFFLOAD_SOURCE":                "stellar-online",
-		"TAU_METRICS_OFFLOAD_OUT":                   "/data/checkpoints/finetunes/vision-demo/metrics-offload",
-		"TAU_METRICS_OFFLOAD_COMPLETION_FILE":       "/data/checkpoints/finetunes/vision-demo/metrics-completion.json",
-		"TAU_METRICS_OFFLOAD_INTERVAL":              "5s",
-		"TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT": "http://${NODE_IP}:3100/receive",
-		"TAU_GROUP":                                 "demo-experiment",
+		"TAU_EXP_STORE":                       "/data/checkpoints/finetunes/vision-demo/metrics-expstore",
+		"TAU_METRICS_HISTORY":                 "/data/checkpoints/finetunes/vision-demo/metrics-history.jsonl",
+		"TAU_METRICS_OFFLOAD_RUN":             "vision-demo",
+		"TAU_METRICS_OFFLOAD_PROJECT":         "vit-enc-vision",
+		"TAU_METRICS_OFFLOAD_EXPERIMENT":      "demo-experiment",
+		"TAU_METRICS_OFFLOAD_GROUP":           "demo-experiment",
+		"TAU_METRICS_OFFLOAD_TAGS":            "dataset=vision,recipe=vit-enc",
+		"TAU_METRICS_OFFLOAD_SOURCE":          "stellar-online",
+		"TAU_METRICS_OFFLOAD_OUT":             "/data/checkpoints/finetunes/vision-demo/metrics-offload",
+		"TAU_METRICS_OFFLOAD_COMPLETION_FILE": "/data/checkpoints/finetunes/vision-demo/metrics-completion.json",
+		"TAU_METRICS_OFFLOAD_INTERVAL":        "5s",
+		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":   "adx-required",
+		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI": "https://example.kusto.windows.net",
+		"TAU_METRICS_OFFLOAD_ADX_DATABASE":    "TauGrid",
+		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":   "00000000-0000-0000-0000-000000000001",
+		"TAU_GROUP":                           "demo-experiment",
 	} {
 		assertEnvVar(t, "metrics-offload", sidecar, name, value)
 	}
-	assertStringSlice(t, "metrics-offload command", dig(sidecar, "command"), []string{metricsoffload.SidecarCommand})
+	assertStringSlice(t, "metrics-offload command", dig(sidecar, "command"), []string{metricsoffload.CollectorSidecarCommand})
 	doneFile := "/data/checkpoints/finetunes/vision-demo/metrics-done.json"
-	assertStringSlice(t, "metrics-offload args", dig(sidecar, "args"), []string{"experiment", "offload", "metrics", "--watch", "--done-file", doneFile})
+	assertStringSlice(t, "metrics-offload args", dig(sidecar, "args"), []string{"collect", "--watch", "--done-file", doneFile})
 	s := string(out)
 	for _, want := range []string{
 		"TAU_METRICS_COMPLETION='/data/checkpoints/finetunes/vision-demo/metrics-completion.json'",
 		"TAU_METRICS_DONE='" + doneFile + "'",
-		"TAU_METRICS_DONE_TIMEOUT=120",
+		"TAU_METRICS_DONE_TIMEOUT=1833",
 		`while [ ! -f "$TAU_METRICS_DONE" ]`,
 	} {
 		if !strings.Contains(s, want) {
@@ -420,6 +425,69 @@ storage:
 	}
 	if strings.Contains(s, "tau experiment --store") {
 		t.Fatalf("metrics offload sidecar should invoke tau directly via argv, not a shell script:\n%s", s)
+	}
+	if got := dig(workload, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "labels", workloadmeta.LabelAzureWorkloadIdentityUse); got != "true" {
+		t.Fatalf("metrics offload head pod workload identity label = %v, want true", got)
+	}
+}
+
+func TestRenderRayJobCollectorTypedADXEnvironment(t *testing.T) {
+	raw := []byte(`
+schema_version: 1
+name: typed-adx-demo
+research:
+  experiment: demo-experiment
+compute: { gpus: 1 }
+runtime:
+  pip: [torch==2.4.0]
+`)
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	out, err := Render(RenderOptions{
+		Manifest:         m,
+		ManifestRaw:      raw,
+		ManifestFilename: "typed-adx-demo.yaml",
+		WorkloadKind:     WorkloadKindRayJob,
+		MainScript:       []byte("# trainer\n"),
+		MetricsOffload: MetricsOffloadOptions{
+			Runtime:               metricsoffload.RuntimeCollectorV1,
+			Image:                 "registry.example.com/taugrid/collector:20260918.1",
+			Project:               "typed-adx",
+			DeliveryMode:          metricsoffload.DeliveryADXRequired,
+			ADXClusterURI:         "https://example.kusto.windows.net",
+			ADXDatabase:           "TauGrid",
+			ADXClientID:           "00000000-0000-0000-0000-000000000001",
+			ADXMaxAttempts:        4,
+			ADXRetryBackoff:       2 * time.Second,
+			ADXFinalStatusTimeout: 5 * time.Minute,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	workload := unmarshalLast(t, out)
+	sidecar := containerByName(t, rayJobHeadContainers(t, workload), "metrics-offload")
+	assertStringSlice(t, "metrics-offload command", dig(sidecar, "command"), []string{metricsoffload.CollectorSidecarCommand})
+	for name, value := range map[string]string{
+		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":            "adx-required",
+		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI":          "https://example.kusto.windows.net",
+		"TAU_METRICS_OFFLOAD_ADX_DATABASE":             "TauGrid",
+		"TAU_METRICS_OFFLOAD_ADX_TABLE":                "TauExpMetricEventsV1",
+		"TAU_METRICS_OFFLOAD_ADX_MAPPING":              "TauExpMetricEventsV1Json",
+		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":            "00000000-0000-0000-0000-000000000001",
+		"TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS":         "4",
+		"TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF":        "2s",
+		"TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT": "5m0s",
+	} {
+		assertEnvVar(t, "metrics-offload", sidecar, name, value)
+	}
+	if got := string(out); !strings.Contains(got, "TAU_METRICS_DONE_TIMEOUT=1244") {
+		t.Fatalf("RayJob terminal drain deadline does not cover exhausted ADX delivery:\n%s", got)
+	}
+	if got := dig(workload, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "terminationGracePeriodSeconds"); got != 1274 {
+		t.Fatalf("RayJob head termination grace=%v, want 1274", got)
 	}
 }
 
@@ -611,8 +679,11 @@ runtime:
 		WorkloadKind:     WorkloadKindRayJobEval,
 		MainScript:       []byte("# eval\n"),
 		MetricsOffload: MetricsOffloadOptions{
-			Image:   "registry.example.com/tau@sha256:0123456789abcdef",
-			Project: "vit-enc-vision",
+			Image:         "registry.example.com/collector@sha256:0123456789abcdef",
+			Project:       "vit-enc-vision",
+			ADXClusterURI: "https://example.kusto.windows.net",
+			ADXDatabase:   "TauGrid",
+			ADXClientID:   "00000000-0000-0000-0000-000000000001",
 		},
 	})
 	if err != nil {
@@ -628,9 +699,9 @@ runtime:
 	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/vision-eval/metrics-history.jsonl")
 	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_OFFLOAD_RUN", "vision-eval")
 	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_OFFLOAD_GROUP", "demo-experiment")
-	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT", "http://${NODE_IP}:3100/receive")
+	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_OFFLOAD_DELIVERY_MODE", "adx-required")
 	assertStringSlice(t, "metrics-offload args", dig(sidecar, "args"), []string{
-		"experiment", "offload", "metrics", "--watch", "--done-file",
+		"collect", "--watch", "--done-file",
 		"/data/checkpoints/finetunes/vision-eval/metrics-done.json",
 	})
 }
@@ -978,8 +1049,11 @@ runtime:
 		WorkloadKind:     WorkloadKindRayJob,
 		MainScript:       []byte("# trainer\n"),
 		MetricsOffload: MetricsOffloadOptions{
-			Image:   "registry.example.com/taugrid/tau:701039b",
-			Project: "vit-enc-vision",
+			Image:         "registry.example.com/taugrid/collector:701039b",
+			Project:       "vit-enc-vision",
+			ADXClusterURI: "https://example.kusto.windows.net",
+			ADXDatabase:   "TauGrid",
+			ADXClientID:   "00000000-0000-0000-0000-000000000001",
 		},
 	})
 	if err != nil {
@@ -987,13 +1061,13 @@ runtime:
 	}
 	workload := unmarshalLast(t, out)
 	sidecar := containerByName(t, rayJobHeadContainers(t, workload), "metrics-offload")
-	assertStringSlice(t, "metrics-offload command", dig(sidecar, "command"), []string{metricsoffload.SidecarCommand})
+	assertStringSlice(t, "metrics-offload command", dig(sidecar, "command"), []string{metricsoffload.CollectorSidecarCommand})
 	assertStringSlice(t, "metrics-offload args", dig(sidecar, "args"), []string{
-		"experiment", "offload", "metrics", "--watch", "--done-file",
+		"collect", "--watch", "--done-file",
 		"/data/checkpoints/finetunes/shellless-sidecar/metrics-done.json",
 	})
 	assertEnvVar(t, "metrics-offload", sidecar, "TAU_EXP_STORE", "/data/checkpoints/finetunes/shellless-sidecar/metrics-expstore")
-	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT", "http://${NODE_IP}:3100/receive")
+	assertEnvVar(t, "metrics-offload", sidecar, "TAU_METRICS_OFFLOAD_DELIVERY_MODE", "adx-required")
 }
 
 func TestRenderMetricsOffloadRejectsUnsafeImages(t *testing.T) {

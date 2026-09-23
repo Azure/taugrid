@@ -282,7 +282,7 @@ func TestRayJobShapeAndKueueAdmission(t *testing.T) {
 	if record.LocalQueue != "jobqueue" || record.ClusterQueue != "taugrid-cq" || !record.AdmittedAt.Equal(admitted) {
 		t.Fatalf("Kueue data = %+v", record)
 	}
-	if record.ExperimentTracking != "tracked" || record.ExperimentSource != "stellar" || record.WorkspaceID != "sample" || record.ResultScope != "az://results/research" || record.Tags["dataset"] != "fineweb" {
+	if record.ExperimentID != "q-42" || record.ExperimentTracking != "tracked" || record.ExperimentSource != "stellar" || record.WorkspaceID != "sample" || record.ResultScope != "az://results/research" || record.Tags["dataset"] != "fineweb" {
 		t.Fatalf("Stellar metadata = %+v", record)
 	}
 }
@@ -462,7 +462,7 @@ func TestResourceVersionOnlyUpdateIsNotATransition(t *testing.T) {
 
 func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 	record := Record{
-		Group: "group", OwnerKind: "Job", OwnerName: "run",
+		ExperimentID: "experiment", Group: "group", OwnerKind: "Job", OwnerName: "run",
 		SubmittedAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(),
 		AdmittedAt: time.Unix(3, 0).UTC(), PodStartedAt: time.Unix(4, 0).UTC(),
 		CompletionAt: time.Unix(5, 0).UTC(),
@@ -473,7 +473,7 @@ func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 	}
 	encoded := string(data)
 	for _, field := range []string{
-		`"run_group_id"`, `"owning_resource_kind"`,
+		`"experiment_id"`, `"run_group_id"`, `"owning_resource_kind"`,
 		`"owning_resource_name"`, `"submit_time"`, `"created_time"`,
 		`"kueue_admitted_time"`, `"pod_start_time"`, `"completion_time"`,
 	} {
@@ -486,7 +486,7 @@ func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 func TestLifecycleMappingReferencesRecordFields(t *testing.T) {
 	record := Record{
 		ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "observation", DurableID: "durable", RunID: "run",
-		WorkspaceID: "workspace", ResultScope: "scope", Project: "project",
+		WorkspaceID: "workspace", ResultScope: "scope", Project: "project", ExperimentID: "experiment",
 		Group: "group", Tags: map[string]string{"key": "value"},
 		OwnerKind: "Job", OwnerName: "job", Namespace: "ray", Cluster: "cluster",
 		ResourceUID: "uid", ResourceVersion: "1", Generation: 1,

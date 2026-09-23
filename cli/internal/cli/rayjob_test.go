@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,10 @@ import (
 // (run.go, resolveRunTarget). These tests drive that same path directly.
 
 func runRayJobDryRun(t *testing.T, name string, mutate func(*runDispatchOptions)) string {
+	return runRayJobDryRunWithCapture(t, name, "tau run --config tau.yaml", mutate)
+}
+
+func runRayJobDryRunWithCapture(t *testing.T, name, captureCommand string, mutate func(*runDispatchOptions)) string {
 	t.Helper()
 	options := defaultRunDispatchOptions()
 	options.engine = "rayjob"
@@ -33,7 +38,7 @@ func runRayJobDryRun(t *testing.T, name string, mutate func(*runDispatchOptions)
 		t.Fatalf("newRunRayJobRequest: %v", err)
 	}
 	var out, stderr bytes.Buffer
-	if err := executeRunRayJob(context.Background(), &out, &stderr, &request, "tau run --config tau.yaml"); err != nil {
+	if err := executeRunRayJob(context.Background(), &out, &stderr, &request, captureCommand); err != nil {
 		t.Fatalf("ray dry-run failed: %v\nstderr:\n%s", err, stderr.String())
 	}
 	return out.String()
@@ -92,6 +97,52 @@ func TestRayJobDispatchRendersRDMA(t *testing.T) {
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("RDMA RayJob dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestRayJobMetricsCollectorArgsStableAcrossRetryResume(t *testing.T) {
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "registry.example.com/taugrid/collector:v0.6.0")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS", "2")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF", "1s")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT", "1m")
+	script := writeRayScript(t, t.TempDir())
+	base := func(o *runDispatchOptions) {
+		o.script = script
+		o.profileName = "azure.research.training.l"
+		o.workspace = "research-workspace"
+		o.namespace = "research-workspace"
+		o.dataPVC = "research-workspace"
+		o.output = "/data/research-workspace/ray-stable"
+		o.metricsSessionID = "session-stable"
+		o.metricsOffloadEnabled = true
+		o.metricsHistory = []string{"metrics-history-attempt-*/*.jsonl"}
+		o.checkpointPath = "/data/research-workspace/ray-stable/checkpoints"
+		o.experiment = runExperimentMetadata{
+			Project:      "pretraining",
+			ExperimentID: "ray-stable",
+			RunGroupID:   "default",
+		}
+	}
+	initial := runRayJobDryRunWithCapture(t, "ray-stable", "tau run --config tau.yaml", base)
+	retry := runRayJobDryRunWithCapture(t, "ray-stable", "tau run --config tau.yaml (retry 2/3)", func(o *runDispatchOptions) {
+		base(o)
+		o.env = appendRetryEnv(o.env, "/data/research-workspace/ray-stable/checkpoints/attempt-1", 2, 3, "Evicted")
+	})
+	resume := runRayJobDryRunWithCapture(t, "ray-stable", "tau run resume ray-stable --config tau.yaml", func(o *runDispatchOptions) {
+		base(o)
+		o.env = append(o.env, "TAU_RESUME_FROM=/data/research-workspace/ray-stable/checkpoints/manual")
+	})
+	want := renderedMetricsOffloadArgs(t, initial)
+	for name, rendered := range map[string]string{"retry": retry, "resume": resume} {
+		if got := renderedMetricsOffloadArgs(t, rendered); !slices.Equal(got, want) {
+			t.Fatalf("final Ray collector args changed on %s:\ninitial: %v\n%s: %v", name, want, name, got)
+		}
+		if !strings.Contains(rendered, "tau_metrics_ready_timeout=151") {
+			t.Fatalf("final Ray %s startup deadline does not cover pending ADX replay:\n%s", name, rendered)
 		}
 	}
 }

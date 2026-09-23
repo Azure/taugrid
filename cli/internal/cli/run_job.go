@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,10 +33,8 @@ type runJobRequest struct {
 }
 
 const (
-	directMetricsReadyFile    = "/var/run/tau/metrics-ready"
-	directMetricsDoneFile     = "/var/run/tau/metrics-done"
-	directMetricsReadyTimeout = 2 * time.Minute
-	directMetricsDoneTimeout  = 2 * time.Minute
+	directMetricsReadyFile = "/var/run/tau/metrics-ready"
+	directMetricsDoneFile  = "/var/run/tau/metrics-done"
 )
 
 func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest, error) {
@@ -323,7 +322,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	capture = addLaunchMetadata(capture, opts.GPUClass, resolvedProfileName, o.script, o.launcher, max(1, o.nodes), gpuCountFromProfile(p))
 	// Direct Job rendering only supports the standard device-plugin resource.
 	capture = addLaunchGPUResources(capture, "device-plugin", "")
-	opts.MetricsOffload.Tags = addLaunchTag(opts.MetricsOffload.Tags, capture)
+	opts.MetricsOffload.Tags = addStableMetricsLaunchTag(opts.MetricsOffload.Tags, capture)
 	opts.Labels, opts.Annotations = experiment.MergeMetadata(opts.Labels, opts.Annotations, capture)
 	opts.Labels = workloadmeta.StampWorkspace(opts.Labels, o.workspace)
 	if o.submissionID != "" {
@@ -522,16 +521,42 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	}
 
 	policy := metricsoffload.Options{
-		Image: strings.TrimSpace(o.metricsOffloadImage),
-		Out:   strings.TrimSpace(o.metricsOffloadOut),
+		Runtime:        strings.TrimSpace(o.metricsOffloadRuntime),
+		Image:          strings.TrimSpace(o.metricsOffloadImage),
+		Out:            strings.TrimSpace(o.metricsOffloadOut),
+		DeliveryMode:   strings.TrimSpace(o.metricsOffloadDeliveryMode),
+		ADXClusterURI:  strings.TrimSpace(o.metricsOffloadADXClusterURI),
+		ADXDatabase:    strings.TrimSpace(o.metricsOffloadADXDatabase),
+		ADXTable:       strings.TrimSpace(o.metricsOffloadADXTable),
+		ADXMapping:     strings.TrimSpace(o.metricsOffloadADXMapping),
+		ADXClientID:    strings.TrimSpace(o.metricsOffloadADXClientID),
+		ADXMaxAttempts: o.metricsOffloadADXMaxAttempts,
+	}
+	if raw := strings.TrimSpace(o.metricsOffloadADXRetryBackoff); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.adx_retry_backoff must be a positive duration (got %q)", raw)
+		}
+		policy.ADXRetryBackoff = value
+	}
+	if raw := strings.TrimSpace(o.metricsOffloadADXFinalStatusTimeout); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value <= 0 {
+			return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.adx_final_status_timeout must be a positive duration (got %q)", raw)
+		}
+		policy.ADXFinalStatusTimeout = value
 	}
 	if err := applyDirectMetricsOffloadEnvPolicy(&policy); err != nil {
+		return metricsoffload.Runtime{}, err
+	}
+	runtime, err := metricsoffload.ResolveRuntime(policy.Runtime)
+	if err != nil {
 		return metricsoffload.Runtime{}, err
 	}
 	if strings.TrimSpace(policy.Image) == "" {
 		return metricsoffload.Runtime{}, fmt.Errorf("metrics.offload.enabled requires metrics.offload.image or TAU_METRICS_OFFLOAD_IMAGE")
 	}
-	if err := metricsoffload.ValidatePinnedImage(policy.Image); err != nil {
+	if err := metricsoffload.ValidateRuntimeImage(runtime, policy.Image); err != nil {
 		return metricsoffload.Runtime{}, err
 	}
 
@@ -554,15 +579,11 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	if cluster = strings.TrimSpace(cluster); cluster != "" {
 		protected[exptelemetry.TauClusterTag] = cluster
 	}
-	if attempt := runDispatchEnvValue(o.env, "TAU_RETRY_ATTEMPT"); attempt != "" {
-		protected[exptelemetry.TauRetryAttemptTag] = attempt
-	}
 	tags := metricsoffload.MergeTags(policy.Tags, o.experiment.Tags, protected)
 	interval := policy.Interval
 	if interval == 0 {
 		interval = metricsoffload.DefaultInterval
 	}
-	endpoint := firstNonEmpty(policy.RemoteWriteEndpoint, metricsoffload.DefaultRemoteWriteEndpoint)
 	source := firstNonEmpty(policy.Source, metricsoffload.DefaultSource)
 	group := firstNonEmpty(o.experiment.RunGroupID, policy.Group, "default")
 	checkpointURI := strings.TrimSpace(o.checkpointPath)
@@ -581,8 +602,17 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	// pod-local checkpoint durability.
 	runtimeRoot := path.Join(metricsoffload.RuntimeMountPath, "metrics", o.metricsSessionID)
 	durableRoot := path.Join(outputDir, ".tau", "metrics", o.metricsSessionID)
+	doneTimeout, err := metricsoffload.TerminalDrainTimeout(
+		policy.ADXMaxAttempts,
+		policy.ADXRetryBackoff,
+		policy.ADXFinalStatusTimeout,
+	)
+	if err != nil {
+		return metricsoffload.Runtime{}, err
+	}
 
 	return metricsoffload.Runtime{
+		Runtime:                 runtime,
 		Image:                   policy.Image,
 		RunID:                   runID,
 		Project:                 o.experiment.Project,
@@ -594,15 +624,23 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 		Out:                     firstNonEmpty(policy.Out, path.Join(durableRoot, "offload")),
 		History:                 history,
 		CompletionFile:          "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint:     endpoint,
 		Interval:                interval,
 		ArtifactURI:             outputDir,
 		CheckpointURI:           checkpointURI,
 		BaselineExistingHistory: true,
 		ReadyFile:               directMetricsReadyFile,
-		ReadyTimeout:            directMetricsReadyTimeout,
+		ReadyTimeout:            doneTimeout,
 		DoneFile:                directMetricsDoneFile,
-		DoneTimeout:             directMetricsDoneTimeout,
+		DoneTimeout:             doneTimeout,
+		DeliveryMode:            policy.DeliveryMode,
+		ADXClusterURI:           policy.ADXClusterURI,
+		ADXDatabase:             policy.ADXDatabase,
+		ADXTable:                policy.ADXTable,
+		ADXMapping:              policy.ADXMapping,
+		ADXClientID:             policy.ADXClientID,
+		ADXMaxAttempts:          policy.ADXMaxAttempts,
+		ADXRetryBackoff:         policy.ADXRetryBackoff,
+		ADXFinalStatusTimeout:   policy.ADXFinalStatusTimeout,
 	}, nil
 }
 
@@ -624,10 +662,16 @@ func validateMetricsSessionID(sessionID string) error {
 
 func applyDirectMetricsOffloadEnvPolicy(opts *metricsoffload.Options) error {
 	for env, target := range map[string]*string{
-		"TAU_METRICS_OFFLOAD_IMAGE":                 &opts.Image,
-		"TAU_METRICS_OFFLOAD_SOURCE":                &opts.Source,
-		"TAU_METRICS_OFFLOAD_OUT":                   &opts.Out,
-		"TAU_METRICS_OFFLOAD_REMOTE_WRITE_ENDPOINT": &opts.RemoteWriteEndpoint,
+		"TAU_METRICS_OFFLOAD_RUNTIME":         &opts.Runtime,
+		"TAU_METRICS_OFFLOAD_IMAGE":           &opts.Image,
+		"TAU_METRICS_OFFLOAD_SOURCE":          &opts.Source,
+		"TAU_METRICS_OFFLOAD_OUT":             &opts.Out,
+		"TAU_METRICS_OFFLOAD_DELIVERY_MODE":   &opts.DeliveryMode,
+		"TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI": &opts.ADXClusterURI,
+		"TAU_METRICS_OFFLOAD_ADX_DATABASE":    &opts.ADXDatabase,
+		"TAU_METRICS_OFFLOAD_ADX_TABLE":       &opts.ADXTable,
+		"TAU_METRICS_OFFLOAD_ADX_MAPPING":     &opts.ADXMapping,
+		"TAU_METRICS_OFFLOAD_ADX_CLIENT_ID":   &opts.ADXClientID,
 	} {
 		if value := strings.TrimSpace(os.Getenv(env)); value != "" {
 			*target = value
@@ -640,17 +684,26 @@ func applyDirectMetricsOffloadEnvPolicy(opts *metricsoffload.Options) error {
 		}
 		opts.Interval = interval
 	}
-	return nil
-}
-
-func runDispatchEnvValue(values []string, name string) string {
-	prefix := name + "="
-	for i := len(values) - 1; i >= 0; i-- {
-		if strings.HasPrefix(values[i], prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(values[i], prefix))
+	if value := strings.TrimSpace(os.Getenv("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS")); value != "" {
+		attempts, err := strconv.Atoi(value)
+		if err != nil || attempts <= 0 || attempts > metricsoffload.MaxADXAttempts {
+			return fmt.Errorf("TAU_METRICS_OFFLOAD_ADX_MAX_ATTEMPTS must be between 1 and %d (got %q)", metricsoffload.MaxADXAttempts, value)
+		}
+		opts.ADXMaxAttempts = attempts
+	}
+	for env, target := range map[string]*time.Duration{
+		"TAU_METRICS_OFFLOAD_ADX_RETRY_BACKOFF":        &opts.ADXRetryBackoff,
+		"TAU_METRICS_OFFLOAD_ADX_FINAL_STATUS_TIMEOUT": &opts.ADXFinalStatusTimeout,
+	} {
+		if value := strings.TrimSpace(os.Getenv(env)); value != "" {
+			duration, err := time.ParseDuration(value)
+			if err != nil || duration <= 0 {
+				return fmt.Errorf("%s must be a positive duration (got %q)", env, value)
+			}
+			*target = duration
 		}
 	}
-	return ""
+	return nil
 }
 
 func resolvePVCMounts(volumeSpecs, mountSpecs []string) (string, []jobrender.Volume, []jobrender.VolumeMount, error) {

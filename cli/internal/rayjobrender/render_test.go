@@ -602,6 +602,7 @@ func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 
 func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	runtime := metricsoffload.Runtime{
+		Runtime:                 metricsoffload.RuntimeCollectorV1,
 		Image:                   "registry.example.com/taugrid/tau@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		RunID:                   "modernbert-ray",
 		Project:                 "pretraining",
@@ -613,7 +614,9 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 		Out:                     "/data/research-workspace/runs/modernbert-ray/.tau/metrics/session/offload",
 		History:                 []string{"/data/research-workspace/runs/modernbert-ray/metrics-history-attempt-*/*.jsonl"},
 		CompletionFile:          "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint:     "http://${NODE_IP}:3100/receive",
+		ADXClusterURI:           "https://example.kusto.windows.net",
+		ADXDatabase:             "TauGrid",
+		ADXClientID:             "00000000-0000-0000-0000-000000000001",
 		Interval:                10 * time.Second,
 		ArtifactURI:             "/data/research-workspace/runs/modernbert-ray",
 		BaselineExistingHistory: true,
@@ -679,6 +682,19 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	pod := head["template"].(map[string]any)["spec"].(map[string]any)
 	if got := containerNames(t, pod["containers"].([]any)); !strings.Contains(got, "metrics-offload") {
 		t.Fatalf("head containers = %s", got)
+	}
+	headContainers := pod["containers"].([]any)
+	metricsContainer := headContainers[len(headContainers)-1].(map[string]any)
+	if got := fmt.Sprint(metricsContainer["command"]); got != fmt.Sprint([]any{metricsoffload.CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %s", got)
+	}
+	if got := fmt.Sprint(metricsContainer["args"]); !strings.Contains(got, "collect --watch") {
+		t.Fatalf("collector args = %s", got)
+	}
+	workers := cluster["workerGroupSpecs"].([]any)
+	workerPod := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := containerNames(t, workerPod["containers"].([]any)); strings.Contains(got, "metrics-offload") {
+		t.Fatalf("worker containers unexpectedly include metrics offload: %s", got)
 	}
 }
 
@@ -1259,6 +1275,34 @@ func TestRenderGracePeriodDefaultIs600(t *testing.T) {
 	gi64, _ = g.(int64)
 	if gi != 600 && gi64 != 600 {
 		t.Errorf("worker terminationGracePeriodSeconds=%v want 600", g)
+	}
+}
+
+func TestRenderGracePeriodCoversHeadMetricsShutdown(t *testing.T) {
+	runtime := metricsoffload.Runtime{
+		Image: "example.test/collector:v1", RunID: "run", Project: "project",
+		Experiment: "experiment", Group: "group", Store: "/data/store", Out: "/data/out",
+		History: []string{"/data/history.jsonl"}, CompletionFile: "/data/completion",
+		ADXClusterURI: "https://example.kusto.windows.net", ADXDatabase: "TauGrid",
+		ADXClientID: "00000000-0000-0000-0000-000000000001", Interval: time.Second,
+		DoneTimeout: 15 * time.Minute,
+	}
+	out, err := Render(Options{
+		Name: "gp-metrics", Namespace: "tau", ScriptName: "train.py",
+		Script: []byte("print('train')\n"), Workers: 1, GPUsPerWorker: 1,
+		DataPVC: "data", MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headPod := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := headPod["terminationGracePeriodSeconds"]; got != 930 {
+		t.Fatalf("head terminationGracePeriodSeconds=%v, want 930", got)
+	}
+	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := workerPod["terminationGracePeriodSeconds"]; got != 600 {
+		t.Fatalf("worker terminationGracePeriodSeconds=%v, want 600", got)
 	}
 }
 
