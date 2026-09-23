@@ -26,6 +26,7 @@ type CatalogQueryOptions struct {
 	TargetType        string
 	RunGroupID        string
 	RunIDs            []string
+	RunIdentities     []CatalogRunIdentity
 	MetricNames       []string
 	Since             string
 	Limit             int
@@ -33,6 +34,12 @@ type CatalogQueryOptions struct {
 	AfterProject      string
 	AfterRunID        string
 	AfterExperimentID string
+}
+
+type CatalogRunIdentity struct {
+	Project      string
+	ExperimentID string
+	RunID        string
 }
 
 func BuildSeriesCatalogQuery(opts CatalogQueryOptions) (string, error) {
@@ -44,6 +51,7 @@ func BuildSeriesCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	b.WriteString("let scoped_catalog = materialize(\n")
 	b.WriteString(exptelemetry.SeriesCatalogRowsFunction + "()\n")
 	writeCatalogFilters(&b, opts, projects, true)
+	writeCatalogRunIdentityFilter(&b, opts.RunIdentities)
 	b.WriteString(");\n")
 	b.WriteString("let top_experiments = scoped_catalog\n")
 	b.WriteString("| summarize latest_activity_at=max(latest_activity_at) by workspace_id, " + kqlProjectColumn + ", experiment_id\n")
@@ -53,6 +61,25 @@ func BuildSeriesCatalogQuery(opts CatalogQueryOptions) (string, error) {
 	b.WriteString("| project catalog_version, workspace_id, cluster, source_store_id, " + kqlProjectColumn + ", experiment_id, run_group_id, run_id, metric_name, first_activity_at, latest_activity_at, min_step, max_step, latest_step, latest_value, unit, source, split, latest_file_id, latest_file_path, step=tolong(latest_step), wall_time=todatetime(latest_activity_at), value=todouble(latest_value), metric_file_id=latest_file_id, metric_file_path=latest_file_path, tags=''\n")
 	b.WriteString("| order by latest_activity_at desc, " + kqlProjectColumn + " asc, experiment_id asc, run_group_id asc, run_id asc, metric_name asc\n")
 	return b.String(), nil
+}
+
+func writeCatalogRunIdentityFilter(b *strings.Builder, identities []CatalogRunIdentity) {
+	predicates := make([]string, 0, len(identities))
+	for _, identity := range identities {
+		project := strings.TrimSpace(identity.Project)
+		experimentID := strings.TrimSpace(identity.ExperimentID)
+		runID := strings.TrimSpace(identity.RunID)
+		if project == "" || experimentID == "" || runID == "" {
+			continue
+		}
+		predicates = append(predicates, fmt.Sprintf(
+			"(%s == %s and experiment_id == %s and run_id == %s)",
+			kqlProjectColumn, kqlString(project), kqlString(experimentID), kqlString(runID),
+		))
+	}
+	if len(predicates) > 0 {
+		fmt.Fprintf(b, "| where %s\n", strings.Join(predicates, " or "))
+	}
 }
 
 func BuildRunCatalogQuery(opts CatalogQueryOptions) (string, error) {

@@ -948,9 +948,13 @@ func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSea
 
 func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []string, opts expstore.RunSearchOptions, runs []KustoMetricRow) ([]KustoMetricRow, error) {
 	runIDs := make([]string, 0, len(runs))
+	runIdentities := make([]expkusto.CatalogRunIdentity, 0, len(runs))
 	for _, row := range runs {
 		if strings.TrimSpace(row.RunID) != "" {
 			runIDs = append(runIDs, row.RunID)
+			runIdentities = append(runIdentities, expkusto.CatalogRunIdentity{
+				Project: row.Project, ExperimentID: row.ExperimentID, RunID: row.RunID,
+			})
 		}
 	}
 	runIDs = catalogUniqueSortedStrings(runIDs)
@@ -958,11 +962,12 @@ func (s KustoSource) catalogMetricRowsForRuns(ctx context.Context, projects []st
 		return nil, nil
 	}
 	query, err := expkusto.BuildSeriesCatalogQuery(expkusto.CatalogQueryOptions{
-		WorkspaceID: s.WorkspaceID,
-		Projects:    projects,
-		RunIDs:      runIDs,
-		Since:       opts.Since,
-		Limit:       1000,
+		WorkspaceID:   s.WorkspaceID,
+		Projects:      projects,
+		RunIDs:        runIDs,
+		RunIdentities: runIdentities,
+		Since:         opts.Since,
+		Limit:         1000,
 	})
 	if err != nil {
 		return nil, err
@@ -2292,6 +2297,9 @@ func kustoRunSearchRuns(rows []KustoMetricRow, opts expstore.RunSearchOptions, s
 
 func kustoRunSearchMatches(run expstore.RunSearchRun, opts expstore.RunSearchOptions) bool {
 	if opts.ExactRunID != "" && run.RunID != opts.ExactRunID {
+		return false
+	}
+	if opts.ExactExperimentID != "" && run.ExperimentID != opts.ExactExperimentID {
 		return false
 	}
 	if target := strings.TrimSpace(opts.Target); target != "" && run.RunID != target && run.RunGroupID != target && run.ExperimentID != target {

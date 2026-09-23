@@ -43,6 +43,27 @@ func TestBuildSeriesCatalogQueryUsesStableFunctionAndFilters(t *testing.T) {
 	assertCatalogProjectColumnEscaped(t, query)
 }
 
+func TestBuildSeriesCatalogQueryScopesSelectedRunIdentitiesBeforeLimit(t *testing.T) {
+	query, err := BuildSeriesCatalogQuery(CatalogQueryOptions{
+		RunIdentities: []CatalogRunIdentity{
+			{Project: "project-a", ExperimentID: "experiment-old", RunID: "shared"},
+			{Project: "project-b", ExperimentID: "experiment-new", RunID: "shared"},
+		},
+		Limit: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityFilter := strings.Index(query, "| where (['project'] == 'project-a' and experiment_id == 'experiment-old' and run_id == 'shared')")
+	top := strings.Index(query, "| top 1001 by latest_activity_at desc")
+	if identityFilter < 0 || top < 0 || identityFilter > top {
+		t.Fatalf("selected run identities must be filtered before the experiment limit:\n%s", query)
+	}
+	if !strings.Contains(query, "(['project'] == 'project-b' and experiment_id == 'experiment-new' and run_id == 'shared')") {
+		t.Fatalf("query omitted selected identity:\n%s", query)
+	}
+}
+
 func TestBuildCatalogQueryRendersAbsoluteSinceAsDatetime(t *testing.T) {
 	query, err := BuildExperimentCatalogQuery(CatalogQueryOptions{
 		Since: "2026-09-01T00:00:00.1234-07:00",

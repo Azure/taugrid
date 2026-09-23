@@ -328,6 +328,65 @@ func TestKustoCatalogRunIdentityIncludesExperiment(t *testing.T) {
 	}
 }
 
+func TestKustoCatalogMetricEnrichmentScopesExactRunIdentities(t *testing.T) {
+	var metricQuery string
+	source := KustoSource{
+		WorkspaceID: "workspace-a", AllowedProjects: []string{"project-a"},
+		NativeQuery: func(_ context.Context, query string) (string, error) {
+			if strings.Contains(query, exptelemetry.RunCatalogRowsFunction+"()") {
+				return `[{"workspace_id":"workspace-a","project":"project-a","experiment_id":"older-experiment","run_id":"shared-run","created_time":"2026-09-01T00:00:00Z","latest_activity_at":"2026-09-01T00:00:00Z","state":"succeeded","has_metrics":true,"has_lifecycle":true}]`, nil
+			}
+			metricQuery = query
+			return `[{"workspace_id":"workspace-a","project":"project-a","experiment_id":"older-experiment","run_id":"shared-run","metric_name":"loss","latest_step":10,"latest_value":0.25}]`, nil
+		},
+	}
+	result, err := source.SearchCatalogRuns(context.Background(), expstore.RunSearchOptions{
+		Workspace: "workspace-a", Project: "project-a", ExactExperimentID: "older-experiment",
+		ExactRunID: "shared-run", Limit: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identityFilter := "| where (['project'] == 'project-a' and experiment_id == 'older-experiment' and run_id == 'shared-run')"
+	if !strings.Contains(metricQuery, identityFilter) ||
+		strings.Index(metricQuery, identityFilter) > strings.Index(metricQuery, "| top 1001 by latest_activity_at desc") {
+		t.Fatalf("metric enrichment was not identity-scoped before its cutoff:\n%s", metricQuery)
+	}
+	if len(result.Runs) != 1 || len(result.Runs[0].Metrics) != 1 {
+		t.Fatalf("exact older run lost metric enrichment: %+v", result.Runs)
+	}
+}
+
+func TestKustoFileCatalogExactExperimentFiltersBeforeLimit(t *testing.T) {
+	base := time.Date(2026, 9, 18, 18, 0, 0, 0, time.UTC)
+	rows := make([]KustoMetricRow, 0, 1001)
+	for i := range 1000 {
+		rows = append(rows, KustoMetricRow{
+			Project: "project-a", ExperimentID: "other-experiment",
+			RunGroupID: "requested-experiment", RunID: fmt.Sprintf("wrong-%04d", i),
+			MetricName: "loss", Step: int64(i), WallTime: base.Add(-time.Duration(i) * time.Second).Format(time.RFC3339Nano),
+			Value: 1,
+		})
+	}
+	rows = append(rows, KustoMetricRow{
+		Project: "project-a", ExperimentID: "requested-experiment", RunID: "actual-run",
+		MetricName: "loss", Step: 1, WallTime: base.Add(-time.Hour).Format(time.RFC3339Nano), Value: 0.25,
+	})
+	result, err := (KustoSource{MetricsFile: "configured.json", Metrics: rows}).SearchCatalogRuns(
+		context.Background(),
+		expstore.RunSearchOptions{
+			Project: "project-a", Target: "requested-experiment",
+			ExactExperimentID: "requested-experiment", Limit: 1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].RunID != "actual-run" {
+		t.Fatalf("exact experiment run was displaced by run-group collisions: %+v", result.Runs)
+	}
+}
+
 func TestKustoLegacyMetricEvaluatorSupportsAllStatistics(t *testing.T) {
 	step1, step9 := int64(1), int64(9)
 	summary := expstore.MetricSummaryRecord{
