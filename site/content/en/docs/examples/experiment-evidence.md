@@ -24,7 +24,7 @@ Prepare:
 - A Ready TauWorkspace named `taugrid-default`.
 - A writable `blob-training` PVC mounted at `/data`.
 - One schedulable NVIDIA GPU.
-- A digest-pinned `taugrid-metrics-collector` image supplied by the platform
+- A digest-pinned `experiment-metrics-collector` image supplied by the platform
   team.
 - Portal typed ADX assets and required collector ingestion configured for the
   workspace.
@@ -72,7 +72,7 @@ From the repository root:
 
 ```bash
 make install-tau-cli
-export TAU_METRICS_OFFLOAD_IMAGE=<taugrid-metrics-collector-image@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<experiment-metrics-collector-image@sha256:digest>
 export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
 export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
 export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>

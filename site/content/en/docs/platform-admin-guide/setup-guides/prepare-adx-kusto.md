@@ -227,7 +227,7 @@ failures, status latency/timeouts, throttling, and materialized-view health
 for every workload using `adx-required`.
 
 Release owners must publish immutable `tau`, `taugrid-portal`, and
-`taugrid-metrics-collector` images from the same reviewed source stack. The
+`experiment-metrics-collector` images from the same reviewed source stack. The
 coordinated 0.4.3 chart train also references a publishable
 `tau-core-controller:0.4.3` artifact even though this telemetry change does not
 modify the controller binary's source dependencies. Hand consumers the

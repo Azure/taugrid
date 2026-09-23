@@ -18,7 +18,7 @@ const (
 	RuntimeVolumeName = "tau-metrics-runtime"
 	RuntimeMountPath  = "/var/run/tau"
 
-	CollectorSidecarCommand = "/usr/local/bin/taugrid-metrics-collector"
+	CollectorSidecarCommand = "/usr/local/bin/experiment-metrics-collector"
 )
 
 type Mount struct {

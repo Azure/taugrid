@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-BINARY := taugrid-metrics-collector
-IMAGE  := taugrid-metrics-collector
+BINARY := experiment-metrics-collector
+IMAGE  := experiment-metrics-collector
 TAG    ?= latest
 
 VERSION ?= $(TAG)

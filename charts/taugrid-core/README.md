@@ -349,13 +349,14 @@ ADX Functions. Deploy `TauExpMetricEventRows()`,
 traffic. Function or ADX failures surface to clients; the chart has no legacy,
 dual, shadow-read, or read-source switch.
 
-The standalone `taugrid-metrics-collector` is not deployed by this chart. It is
+The existing experiment metrics collector is packaged as the standalone
+`experiment-metrics-collector` image and is not deployed by this chart. It is
 the fixed `collector-v1` sidecar rendered into eligible `tau run` workloads,
-with required `adx-required` delivery through the `adx-queued-v1` sink. Release
-owners provide its immutable image digest and the workspace ADX ingestion
-endpoint, database, and Workload Identity client ID to the Tau CLI/run config.
-Do not add a chart-side collector selector, fallback image, or delivery-mode
-switch.
+with required `adx-required` delivery through the `adx-queued-v1` sink.
+Release owners provide its immutable image digest and the workspace ADX
+ingestion endpoint, database, and Workload Identity client ID to the Tau
+CLI/run config. Do not add a chart-side collector selector, fallback image, or
+delivery-mode switch.
 
 ### Explicit Portal-only configuration
 

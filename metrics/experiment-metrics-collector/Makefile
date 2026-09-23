@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-BINARY := taugrid-metrics-collector
-PKG := ./cmd/taugrid-metrics-collector
+BINARY := experiment-metrics-collector
+PKG := ./cmd/experiment-metrics-collector
 VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)

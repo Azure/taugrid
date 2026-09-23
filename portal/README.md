@@ -51,7 +51,7 @@ CLI.
 
 The legacy `taugrid-portal experiment offload metrics` command remains only as
 an offline/recovery compatibility tool. New workload sidecars use the
-standalone `taugrid-metrics-collector`. The recovery command tails complete
+standalone `experiment-metrics-collector`. The recovery command tails complete
 JSONL rows. Empty iterations and valid rows containing only
 metadata or non-scalar values do not stop the watcher. Their consumed bytes
 are checkpointed so later scalar rows can be imported and exported without

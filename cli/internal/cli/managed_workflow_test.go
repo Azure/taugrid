@@ -669,7 +669,7 @@ storage:
 		"image: \"registry.example.com/taugrid/collector:20260618.1\"",
 		"name: TAU_METRICS_HISTORY",
 		"value: \"/data/checkpoints/finetunes/vision-demo/metrics-history.jsonl\"",
-		`command: ["/usr/local/bin/taugrid-metrics-collector"]`,
+		`command: ["/usr/local/bin/experiment-metrics-collector"]`,
 		`args: ["collect", "--watch", "--done-file", "/data/checkpoints/finetunes/vision-demo/metrics-done.json"]`,
 		"name: TAU_EXP_STORE",
 		"value: \"/data/checkpoints/finetunes/vision-demo/metrics-expstore\"",
@@ -780,7 +780,7 @@ storage:
 		t.Fatalf("managed collector metrics offload dry-run: %v\nstderr:\n%s", err, stderr)
 	}
 	for _, want := range []string{
-		`command: ["/usr/local/bin/taugrid-metrics-collector"]`,
+		`command: ["/usr/local/bin/experiment-metrics-collector"]`,
 		`args: ["collect", "--watch", "--done-file", "/data/checkpoints/finetunes/collector-demo/metrics-done.json"]`,
 		`name: POD_NAMESPACE`,
 		`fieldPath: metadata.namespace`,

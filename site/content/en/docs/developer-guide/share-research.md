@@ -233,7 +233,7 @@ Before starting, ask the cluster owner to confirm that:
 - the workspace is Ready and has a writable `blob-training` PVC;
 - the workspace has GPU quota and allocatable GPU capacity;
 - the Portal has a Kusto query source for the workspace; and
-- you have the platform-supplied `taugrid-metrics-collector` image pinned by
+- you have the platform-supplied `experiment-metrics-collector` image pinned by
   digest, the approved ADX endpoint/database, and the workspace Workload
   Identity client ID.
 
@@ -244,7 +244,7 @@ Set the image and offloader working directory in the terminal that starts the
 runs:
 
 ```bash
-export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-experiment-metrics-collector@sha256:digest>
 export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
 export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
 export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>

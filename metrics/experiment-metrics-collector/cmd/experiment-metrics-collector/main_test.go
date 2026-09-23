@@ -18,7 +18,7 @@ func TestRunGlobalHelp(t *testing.T) {
 	if err := run([]string{"--help"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "taugrid-metrics-collector collect [flags]") {
+	if !strings.Contains(stdout.String(), "experiment-metrics-collector collect [flags]") {
 		t.Fatalf("help output = %q", stdout.String())
 	}
 	if stderr.Len() != 0 {

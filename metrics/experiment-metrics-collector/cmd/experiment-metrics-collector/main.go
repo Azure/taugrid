@@ -22,7 +22,7 @@ import (
 	collector "github.com/Azure/taugrid/metrics/experiment-metrics-collector"
 )
 
-const binaryName = "taugrid-metrics-collector"
+const binaryName = "experiment-metrics-collector"
 
 const (
 	deliveryModeADXRequired = "adx-required"
