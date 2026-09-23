@@ -63,8 +63,10 @@ const (
 	fixtureWorkloads = `{"items":[
       {"metadata":{"name":"wait-1","namespace":"ray","creationTimestamp":"2026-05-03T20:00:00Z",
         "labels":{"` + workloadmeta.LabelTeam + `":"research","` + workloadmeta.LabelLane + `":"training","` + workloadmeta.LabelPreset + `":"azure.research.training.l"}},
-       "spec":{"queueName":"research-training","podSets":[{"count":1,
-         "template":{"spec":{"containers":[{"resources":{"requests":{"gpu.nvidia.com":"1"}}}]}}}]},
+       "spec":{"queueName":"research-training","priority":1200,
+         "priorityClassRef":{"group":"kueue.x-k8s.io","kind":"WorkloadPriorityClass","name":"taugrid-priority"},
+         "podSets":[{"count":1,
+         "template":{"spec":{"priorityClassName":"taugrid-priority","containers":[{"resources":{"requests":{"gpu.nvidia.com":"1"}}}]}}}]},
        "status":{"conditions":[{"type":"Admitted","status":"False","reason":"QuotaNotReserved","message":"insufficient quota"}]}}
     ]}`
 )
@@ -105,6 +107,14 @@ func TestBoardFetchesThreeListsAndAggregates(t *testing.T) {
 	}
 	if len(g.PendingWorkloads) != 1 || g.PendingWorkloads[0].Name != "wait-1" {
 		t.Fatalf("pending workloads = %#v, want [wait-1]", g.PendingWorkloads)
+	}
+	pending := g.PendingWorkloads[0]
+	if pending.AdmissionPriority == nil || *pending.AdmissionPriority != 1200 ||
+		pending.AdmissionPriorityClass != "taugrid-priority" {
+		t.Fatalf("pending priority = %#v", pending)
+	}
+	if len(pending.PodPriorityClasses) != 1 || pending.PodPriorityClasses[0] != "taugrid-priority" {
+		t.Fatalf("pending pod priority classes = %#v", pending.PodPriorityClasses)
 	}
 }
 

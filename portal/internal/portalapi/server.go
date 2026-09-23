@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -464,6 +465,9 @@ type boardLink struct {
 type overviewResponse struct {
 	Boards             []boardLink              `json:"boards"`
 	Cards              overviewCards            `json:"cards"`
+	Pending            []queue.PendingWorkload  `json:"pending"`
+	Active             []runs.Run               `json:"active"`
+	ActiveUnavailable  string                   `json:"activeUnavailable,omitempty"`
 	Running            []runningItem            `json:"running"`
 	RunningUnavailable string                   `json:"runningUnavailable,omitempty"`
 	WorkloadProfiles   jobs.ProfileAvailability `json:"workloadProfiles"`
@@ -557,12 +561,16 @@ type runningItem struct {
 	// label-normalized (see links.Workload) and therefore display-only: they are
 	// deliberately not used to build ExperimentPath, because Stellar matches
 	// ?project= exactly and a folded value would deep-link to nothing.
-	Project            string `json:"project,omitempty"`
-	Experiment         string `json:"experiment,omitempty"`
-	Group              string `json:"group,omitempty"`
-	ExperimentPath     string `json:"experimentPath,omitempty"`
-	ExperimentTracking string `json:"experimentTracking"`
-	ExecutionTarget    string `json:"executionTarget,omitempty"`
+	Project                    string   `json:"project,omitempty"`
+	Experiment                 string   `json:"experiment,omitempty"`
+	Group                      string   `json:"group,omitempty"`
+	ExperimentPath             string   `json:"experimentPath,omitempty"`
+	ExperimentTracking         string   `json:"experimentTracking"`
+	ExecutionTarget            string   `json:"executionTarget,omitempty"`
+	AdmissionPriorityClass     string   `json:"admissionPriorityClass,omitempty"`
+	AdmissionPriorityClassKind string   `json:"admissionPriorityClassKind,omitempty"`
+	AdmissionPriority          *int32   `json:"admissionPriority,omitempty"`
+	PodPriorityClasses         []string `json:"podPriorityClasses,omitempty"`
 }
 
 // portalBoards is the canonical board list surfaced by the shell. Experiments
@@ -618,7 +626,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp := overviewResponse{Boards: s.boardsForScope(scope), Running: []runningItem{}}
+	resp := overviewResponse{
+		Boards: s.boardsForScope(scope), Pending: []queue.PendingWorkload{},
+		Active: []runs.Run{}, Running: []runningItem{},
+	}
 	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
 	if view == "workloads" {
 		s.resolveQueueCard(r.Context(), &resp, scope)
@@ -626,6 +637,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		s.resolveCards(r.Context(), &resp, scope)
 	}
 	s.resolveRunning(r.Context(), &resp, scope)
+	s.resolveActiveRuns(r.Context(), &resp, scope)
 	writeScopedJSON(w, http.StatusOK, resp, scope, "ready")
 }
 
@@ -721,7 +733,25 @@ func (s *Server) resolveQueueCard(ctx context.Context, resp *overviewResponse, s
 			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
 			Queues: queueLanes(snap.Groups),
 		}
+		resp.Pending = overviewPendingWorkloads(snap.Groups)
 	}
+}
+
+func overviewPendingWorkloads(groups []queue.Group) []queue.PendingWorkload {
+	seen := map[string]struct{}{}
+	out := make([]queue.PendingWorkload, 0)
+	for _, group := range groups {
+		for _, workload := range group.PendingWorkloads {
+			key := workload.Namespace + "\x00" + workload.Name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, workload)
+		}
+	}
+	queue.SortPendingWorkloads(out)
+	return out
 }
 
 func queueLanes(groups []queue.Group) []queueLane {
@@ -797,20 +827,84 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 			}
 		}
 		resp.Running = append(resp.Running, runningItem{
-			Job:                wl.Job,
-			Name:               wl.Name,
-			Namespace:          wl.Namespace,
-			RunID:              wl.RunID,
-			Queue:              wl.Queue,
-			ClusterQueue:       wl.ClusterQueue,
-			Project:            wl.Project,
-			Experiment:         wl.Experiment,
-			Group:              wl.Group,
-			ExperimentPath:     experimentPath,
-			ExperimentTracking: experimentTracking,
-			ExecutionTarget:    wl.ExecutionTarget,
+			Job:                        wl.Job,
+			Name:                       wl.Name,
+			Namespace:                  wl.Namespace,
+			RunID:                      wl.RunID,
+			Queue:                      wl.Queue,
+			ClusterQueue:               wl.ClusterQueue,
+			Project:                    wl.Project,
+			Experiment:                 wl.Experiment,
+			Group:                      wl.Group,
+			ExperimentPath:             experimentPath,
+			ExperimentTracking:         experimentTracking,
+			ExecutionTarget:            wl.ExecutionTarget,
+			AdmissionPriorityClass:     wl.AdmissionPriorityClass,
+			AdmissionPriorityClassKind: wl.AdmissionPriorityClassKind,
+			AdmissionPriority:          wl.AdmissionPriority,
+			PodPriorityClasses:         wl.PodPriorityClasses,
 		})
 	}
+}
+
+// resolveActiveRuns lists Tau-managed Job and RayJob resources whose runtime
+// controller reports Running. This is deliberately separate from Kueue
+// admission because an admitted Workload can still be Pending.
+func (s *Server) resolveActiveRuns(ctx context.Context, resp *overviewResponse, scope WorkspaceScope) {
+	if s.runs.Reader == nil {
+		resp.ActiveUnavailable = "portal started without Kubernetes runtime access"
+		return
+	}
+	jobScopes, err := s.resolvedJobScopes(scope)
+	if err != nil {
+		resp.ActiveUnavailable = err.Error()
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, jobScope := range jobScopes {
+		snapshot, boardErr := runs.Board(ctx, s.runs.Reader, runs.Options{
+			Namespace:         jobScope.Namespace,
+			Queue:             jobScope.Queue,
+			ExperimentSurface: s.experimentSurface(scope),
+			HistoryScope: runs.HistoryScope{
+				Cluster: scope.Cluster, Namespace: jobScope.Namespace, LocalQueue: jobScope.Queue,
+			},
+		})
+		if boardErr != nil {
+			resp.ActiveUnavailable = boardErr.Error()
+			resp.Active = []runs.Run{}
+			return
+		}
+		for _, run := range snapshot.Runs {
+			if !strings.EqualFold(run.Status, "running") {
+				continue
+			}
+			key := run.Namespace + "\x00" + run.Kind + "\x00" + run.Name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if !scope.Managed {
+				run.ExperimentPath = links.ExperimentPath(run.RunID)
+				if run.ExperimentPath != "" {
+					run.ExperimentTracking = "legacy"
+				}
+			}
+			resp.Active = append(resp.Active, run)
+		}
+	}
+	sort.Slice(resp.Active, func(i, j int) bool {
+		if !resp.Active[i].Created.Equal(resp.Active[j].Created) {
+			return resp.Active[i].Created.After(resp.Active[j].Created)
+		}
+		if resp.Active[i].Namespace != resp.Active[j].Namespace {
+			return resp.Active[i].Namespace < resp.Active[j].Namespace
+		}
+		if resp.Active[i].Kind != resp.Active[j].Kind {
+			return resp.Active[i].Kind < resp.Active[j].Kind
+		}
+		return resp.Active[i].Name < resp.Active[j].Name
+	})
 }
 
 func (s *Server) profileScopes(scope WorkspaceScope) []jobs.Scope {

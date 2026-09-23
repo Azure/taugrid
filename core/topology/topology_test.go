@@ -170,6 +170,23 @@ func TestBuild_PriorityTierSelectsManagedClasses(t *testing.T) {
 	}
 }
 
+func TestBuild_PriorityTierRejectsExplicitClasses(t *testing.T) {
+	_, err := Build(topologyProfile(), Options{
+		PriorityTier:              "priority",
+		WorkloadPriorityClassName: "custom-workload",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("Build() error = %v, want priority/class conflict", err)
+	}
+	_, err = Build(topologyProfile(), Options{
+		PriorityTier:             "priority",
+		DisableDefaultPriorities: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("Build() error = %v, want priority/disable conflict", err)
+	}
+}
+
 func TestBuild_PriorityTierDefaultsToTrainingWithoutLane(t *testing.T) {
 	plan, err := Build(profile.Profile{Name: "adhoc"}, Options{PriorityTier: "priority"})
 	if err != nil {

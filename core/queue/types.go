@@ -5,6 +5,7 @@
 package queue
 
 import (
+	"sort"
 	"time"
 
 	"github.com/Azure/taugrid/core/kueueapi"
@@ -74,17 +75,48 @@ type Condition struct {
 
 // PendingWorkload is a Kueue Workload that has not been admitted or finished.
 type PendingWorkload struct {
-	Name         string    `json:"name"`
-	Namespace    string    `json:"namespace"`
-	Queue        string    `json:"queue"`
-	ClusterQueue string    `json:"clusterQueue,omitempty"`
-	Team         string    `json:"team,omitempty"`
-	Lane         string    `json:"lane,omitempty"`
-	GPUClass     string    `json:"gpuClass,omitempty"`
-	Shape        string    `json:"shape,omitempty"`
-	Preset       string    `json:"preset,omitempty"`
-	GPURequested int64     `json:"gpuRequested,omitempty"`
-	Reason       string    `json:"reason,omitempty"`
-	Message      string    `json:"message,omitempty"`
-	CreatedAt    time.Time `json:"createdAt,omitempty"`
+	Name                       string    `json:"name"`
+	Namespace                  string    `json:"namespace"`
+	Queue                      string    `json:"queue"`
+	ClusterQueue               string    `json:"clusterQueue,omitempty"`
+	Team                       string    `json:"team,omitempty"`
+	Lane                       string    `json:"lane,omitempty"`
+	GPUClass                   string    `json:"gpuClass,omitempty"`
+	Shape                      string    `json:"shape,omitempty"`
+	Preset                     string    `json:"preset,omitempty"`
+	GPURequested               int64     `json:"gpuRequested,omitempty"`
+	AdmissionPriorityClass     string    `json:"admissionPriorityClass,omitempty"`
+	AdmissionPriorityClassKind string    `json:"admissionPriorityClassKind,omitempty"`
+	AdmissionPriority          *int32    `json:"admissionPriority,omitempty"`
+	PodPriorityClasses         []string  `json:"podPriorityClasses,omitempty"`
+	Reason                     string    `json:"reason,omitempty"`
+	Message                    string    `json:"message,omitempty"`
+	CreatedAt                  time.Time `json:"createdAt,omitempty"`
+}
+
+// SortPendingWorkloads orders the observed queue the same way TauGrid's
+// BestEffortFIFO baseline considers it: higher known priority first, then FIFO.
+// Workloads without an observed numeric priority follow prioritized workloads.
+func SortPendingWorkloads(workloads []PendingWorkload) {
+	sort.Slice(workloads, func(i, j int) bool {
+		a, b := workloads[i], workloads[j]
+		if a.AdmissionPriority != nil || b.AdmissionPriority != nil {
+			if a.AdmissionPriority == nil {
+				return false
+			}
+			if b.AdmissionPriority == nil {
+				return true
+			}
+			if *a.AdmissionPriority != *b.AdmissionPriority {
+				return *a.AdmissionPriority > *b.AdmissionPriority
+			}
+		}
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
 }

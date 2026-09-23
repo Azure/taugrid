@@ -131,7 +131,9 @@ func (runningJobsReader) ListWorkloads(context.Context, string) ([]byte, error) 
 	return []byte(`{"items":[
       {"metadata":{"name":"wl-run","namespace":"ray",
         "labels":{"` + workloadmeta.LabelRunID + `":"train-77","` + workloadmeta.LabelJob + `":"phi-finetune"}},
-       "spec":{"queueName":"jobqueue"},
+       "spec":{"queueName":"jobqueue","priority":1200,
+         "priorityClassRef":{"group":"kueue.x-k8s.io","kind":"WorkloadPriorityClass","name":"taugrid-priority"},
+         "podSets":[{"template":{"spec":{"priorityClassName":"taugrid-priority"}}}]},
        "status":{"admission":{"clusterQueue":"taugrid-cq"},
          "conditions":[{"type":"Admitted","status":"True"}]}},
       {"metadata":{"name":"wl-pending","namespace":"ray"},
@@ -143,10 +145,38 @@ func (runningJobsReader) ListWorkloads(context.Context, string) ([]byte, error) 
     ]}`), nil
 }
 
+type activeRunsReader struct{}
+
+func (activeRunsReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+      {"metadata":{"name":"active-job","namespace":"ray","creationTimestamp":"2026-09-22T20:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"active-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"active":1}},
+      {"metadata":{"name":"pending-job","namespace":"ray","creationTimestamp":"2026-09-22T20:01:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"pending-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{}},
+      {"metadata":{"name":"complete-job","namespace":"ray","creationTimestamp":"2026-09-22T19:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"complete-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"conditions":[{"type":"Complete","status":"True"}]}}
+    ]}`), nil
+}
+
+func (activeRunsReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+      {"metadata":{"name":"active-ray","namespace":"ray","creationTimestamp":"2026-09-22T21:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"active-ray-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"jobDeploymentStatus":"Running"}},
+      {"metadata":{"name":"complete-ray","namespace":"ray","creationTimestamp":"2026-09-22T18:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"complete-ray-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"jobDeploymentStatus":"Complete"}}
+    ]}`), nil
+}
+
 func TestOverviewResolvesRunningCrossLinks(t *testing.T) {
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
 		Jobs:    testOperatorJobs(t, runningJobsReader{}),
+		Runs:    RunsOptions{Reader: activeRunsReader{}},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -176,6 +206,31 @@ func TestOverviewResolvesRunningCrossLinks(t *testing.T) {
 	if run.ClusterQueue != "taugrid-cq" {
 		t.Fatalf("clusterQueue = %q, want taugrid-cq", run.ClusterQueue)
 	}
+	if run.AdmissionPriority == nil || *run.AdmissionPriority != 1200 ||
+		run.AdmissionPriorityClass != "taugrid-priority" {
+		t.Fatalf("running priority = %+v", run)
+	}
+	if len(run.PodPriorityClasses) != 1 || run.PodPriorityClasses[0] != "taugrid-priority" {
+		t.Fatalf("running pod priorities = %v", run.PodPriorityClasses)
+	}
+	if got.ActiveUnavailable != "" {
+		t.Fatalf("ActiveUnavailable = %q, want empty", got.ActiveUnavailable)
+	}
+	if len(got.Active) != 2 {
+		t.Fatalf("active = %+v, want running Job and RayJob only", got.Active)
+	}
+	if got.Active[0].Name != "active-ray" || got.Active[0].Kind != "RayJob" ||
+		got.Active[1].Name != "active-job" || got.Active[1].Kind != "Job" {
+		t.Fatalf("active ordering = %+v, want newest runtime first", got.Active)
+	}
+	for _, active := range got.Active {
+		if active.Status != "Running" {
+			t.Fatalf("active run status = %q, want Running", active.Status)
+		}
+		if active.ExperimentPath == "" {
+			t.Fatalf("active run missing experiment path: %+v", active)
+		}
+	}
 }
 
 func TestOverviewRunningUnavailableWithoutReader(t *testing.T) {
@@ -195,6 +250,12 @@ func TestOverviewRunningUnavailableWithoutReader(t *testing.T) {
 	}
 	if len(got.Running) != 0 {
 		t.Fatalf("running = %+v, want empty", got.Running)
+	}
+	if got.ActiveUnavailable == "" {
+		t.Fatal("ActiveUnavailable should explain the disabled active-jobs section")
+	}
+	if len(got.Active) != 0 {
+		t.Fatalf("active = %+v, want empty", got.Active)
 	}
 	// Boards must still be present so the shell renders every tab.
 	if len(got.Boards) == 0 {
@@ -2533,6 +2594,20 @@ func TestQueueLanesKeepLocalQueuesSeparate(t *testing.T) {
 	}
 	if got[2].Namespace != "aks-ai-runtime-e2e" || got[2].Pending != 1 {
 		t.Fatalf("E2E lane = %#v, want 1 pending", got[2])
+	}
+}
+
+func TestOverviewPendingWorkloadsOrdersPriorityBeforeFIFO(t *testing.T) {
+	high := int32(1200)
+	low := int32(1000)
+	got := overviewPendingWorkloads([]queue.Group{
+		{PendingWorkloads: []queue.PendingWorkload{
+			{Name: "low-older", Namespace: "ray", AdmissionPriority: &low, CreatedAt: time.Date(2026, 5, 3, 19, 0, 0, 0, time.UTC)},
+			{Name: "high-newer", Namespace: "ray", AdmissionPriority: &high, CreatedAt: time.Date(2026, 5, 3, 20, 0, 0, 0, time.UTC)},
+		}},
+	})
+	if len(got) != 2 || got[0].Name != "high-newer" || got[1].Name != "low-older" {
+		t.Fatalf("pending priority order = %#v", got)
 	}
 }
 

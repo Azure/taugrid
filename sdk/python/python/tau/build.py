@@ -49,6 +49,7 @@ class BuildOverrides:
     data_pvc: Optional[str] = None
     queue: Optional[str] = None
     gpu_class: Optional[str] = None
+    priority_tier: Optional[str] = None
     node_selector: Any = None
     disable_default_priorities: bool = False
     cpu_request: Optional[int] = None
@@ -347,6 +348,7 @@ def _write_workload(
             lane=params.lane,
             queue=overrides.queue or params.queue,
             gpu_class=overrides.gpu_class or params.gpu_class,
+            priority_tier=overrides.priority_tier,
             gpu_resource_mode=params.gpu_resource_mode,
             node_selector=(
                 overrides.node_selector
@@ -370,6 +372,7 @@ def _write_workload(
             team=params.team,
             preset=params.preset,
             gpu_class=overrides.gpu_class or params.gpu_class,
+            priority_tier=overrides.priority_tier,
             gpu_resource_mode=params.gpu_resource_mode,
             node_selector=(
                 overrides.node_selector

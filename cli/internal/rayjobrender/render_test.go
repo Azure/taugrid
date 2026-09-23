@@ -91,6 +91,38 @@ func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
 	}
 }
 
+func TestRenderPriorityTierAppliesToRayJobAndEveryPod(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "priority-ray",
+		Namespace:     "tau",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName:    "jobqueue",
+			PriorityTier: "priority",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rayJob := decodeDocs(t, out)[0]
+	labels := rayJob["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels["kueue.x-k8s.io/priority-class"] != "taugrid-priority" {
+		t.Fatalf("workload priority = %v", labels["kueue.x-k8s.io/priority-class"])
+	}
+	cluster := rayJob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	workers := cluster["workerGroupSpecs"].([]any)
+	worker := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	for name, pod := range map[string]map[string]any{"head": head, "worker": worker} {
+		if pod["priorityClassName"] != "taugrid-priority" {
+			t.Fatalf("%s pod priority = %v", name, pod["priorityClassName"])
+		}
+	}
+}
+
 func TestRenderRDMAAppliesToWorkersOnly(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "rdma-ray",

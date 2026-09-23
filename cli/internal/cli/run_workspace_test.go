@@ -40,7 +40,7 @@ func TestApplyWorkspaceDefaultsFillsPolicyFields(t *testing.T) {
 		t.Fatalf("applyWorkspaceDefaults: %v", err)
 	}
 
-	if got.namespace != "sample" || got.queue != "sample" || got.priorityTier != "default" {
+	if got.namespace != "sample" || got.queue != "sample" || got.priorityTier != "" {
 		t.Fatalf("policy defaults = namespace %q queue %q priority %q", got.namespace, got.queue, got.priorityTier)
 	}
 	if got.serviceAccountName != "tau-workload" {

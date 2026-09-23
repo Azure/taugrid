@@ -165,6 +165,69 @@ func TestSnapshotCarriesHintsAndPendingWorkloads(t *testing.T) {
 	}
 }
 
+func TestBuildSnapshotOrdersPendingWorkloadsByPriorityThenFIFO(t *testing.T) {
+	workloads := `{"items":[
+	  {"metadata":{"name":"low-older","namespace":"ray","creationTimestamp":"2026-05-03T19:00:00Z",
+	    "labels":{"` + workloadmeta.LabelTeam + `":"research","` + workloadmeta.LabelLane + `":"training","` + workloadmeta.LabelGPUClass + `":"a100-80gb"}},
+	   "spec":{"queueName":"research-training","priority":1000,
+	     "priorityClassRef":{"group":"kueue.x-k8s.io","kind":"WorkloadPriorityClass","name":"taugrid-default"},
+	     "podSets":[{"count":1,"template":{"spec":{"priorityClassName":"taugrid-default","containers":[{"resources":{"requests":{"gpu.nvidia.com":"1"}}}]}}}]},
+	   "status":{"conditions":[{"type":"Admitted","status":"False","reason":"QuotaNotReserved","message":"insufficient quota"}]}},
+	  {"metadata":{"name":"high-newer","namespace":"ray","creationTimestamp":"2026-05-03T20:00:00Z",
+	    "labels":{"` + workloadmeta.LabelTeam + `":"research","` + workloadmeta.LabelLane + `":"training","` + workloadmeta.LabelGPUClass + `":"a100-80gb"}},
+	   "spec":{"queueName":"research-training","priority":1200,
+	     "priorityClassRef":{"group":"kueue.x-k8s.io","kind":"WorkloadPriorityClass","name":"taugrid-priority"},
+	     "podSets":[{"count":1,"template":{"spec":{"priorityClassName":"taugrid-priority","containers":[{"resources":{"requests":{"gpu.nvidia.com":"1"}}}]}}}]},
+	   "status":{"conditions":[{"type":"Admitted","status":"False","reason":"QuotaNotReserved","message":"insufficient quota"}]}}
+	]}`
+	snap, err := BuildSnapshot("ray", testPolicy(), []byte(localQueuesJSON), []byte(clusterQueuesJSON), []byte(workloads), Options{Team: "research"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := findGroup(t, snap, "a100-80gb")
+	if group.GPUHeadroom != 0 {
+		t.Fatalf("GPUHeadroom = %d, want constrained quota", group.GPUHeadroom)
+	}
+	if len(group.PendingWorkloads) != 2 {
+		t.Fatalf("pending workloads = %#v, want two", group.PendingWorkloads)
+	}
+	high, low := group.PendingWorkloads[0], group.PendingWorkloads[1]
+	if high.Name != "high-newer" || low.Name != "low-older" {
+		t.Fatalf("pending order = [%s %s], want [high-newer low-older]", high.Name, low.Name)
+	}
+	if high.AdmissionPriority == nil || *high.AdmissionPriority != 1200 ||
+		high.AdmissionPriorityClass != "taugrid-priority" ||
+		high.AdmissionPriorityClassKind != "WorkloadPriorityClass" {
+		t.Fatalf("high priority metadata = %#v", high)
+	}
+	if len(high.PodPriorityClasses) != 1 || high.PodPriorityClasses[0] != "taugrid-priority" {
+		t.Fatalf("high pod priority classes = %#v", high.PodPriorityClasses)
+	}
+}
+
+func TestBuildSnapshotKeepsFIFOForEqualOrMissingPriority(t *testing.T) {
+	workloads := `{"items":[
+	  {"metadata":{"name":"newer","namespace":"ray","creationTimestamp":"2026-05-03T20:00:00Z",
+	    "labels":{"` + workloadmeta.LabelTeam + `":"research","` + workloadmeta.LabelLane + `":"training","` + workloadmeta.LabelGPUClass + `":"a100-80gb"}},
+	   "spec":{"queueName":"research-training"},
+	   "status":{"conditions":[{"type":"Admitted","status":"False"}]}},
+	  {"metadata":{"name":"older","namespace":"ray","creationTimestamp":"2026-05-03T19:00:00Z",
+	    "labels":{"` + workloadmeta.LabelTeam + `":"research","` + workloadmeta.LabelLane + `":"training","` + workloadmeta.LabelGPUClass + `":"a100-80gb"}},
+	   "spec":{"queueName":"research-training"},
+	   "status":{"conditions":[{"type":"Admitted","status":"False"}]}}
+	]}`
+	snap, err := BuildSnapshot("ray", testPolicy(), []byte(localQueuesJSON), []byte(clusterQueuesJSON), []byte(workloads), Options{Team: "research"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := findGroup(t, snap, "a100-80gb")
+	if len(group.PendingWorkloads) != 2 ||
+		group.PendingWorkloads[0].Name != "older" ||
+		group.PendingWorkloads[1].Name != "newer" {
+		t.Fatalf("pending FIFO order = %#v", group.PendingWorkloads)
+	}
+}
+
 func TestSnapshotJSONIsMachineReadable(t *testing.T) {
 	snap, err := BuildSnapshot("ray", testPolicy(), []byte(localQueuesJSON), []byte(clusterQueuesJSON), []byte(workloadsJSON), Options{Team: "research"})
 	if err != nil {

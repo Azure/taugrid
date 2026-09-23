@@ -322,6 +322,19 @@
   .overview-queue-lane > span { color: var(--muted); font-size: 9px; white-space: nowrap; }
   .overview-queue-lane > span b { color: var(--text); font-size: 11px; }
   .overview-queue-lane > span.warning, .overview-queue-lane > span.warning b { color: var(--amber); }
+  .overview-pending { margin-top: 14px; }
+  .overview-pending-list { display: flex; flex-direction: column; gap: 7px; }
+  .overview-pending-workload {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 9px;
+    border: 1px solid var(--line); border-radius: 7px; background: #fff;
+  }
+  .overview-pending-workload > div { min-width: 0; }
+  .overview-pending-workload strong, .overview-pending-workload small { display: block; overflow-wrap: anywhere; }
+  .overview-pending-workload strong { font-size: 10px; }
+  .overview-pending-workload small { margin-top: 2px; color: var(--muted); font-size: 8px; line-height: 1.35; }
+  .overview-workload-state.pending { background: #fff5d9; color: var(--amber); }
+  .overview-priority span { display: block; }
+  .overview-pending-reason { color: var(--amber) !important; }
   .overview-workload-groups { display: flex; flex-direction: column; gap: 14px; }
   .overview-workload-group { min-width: 0; }
   .overview-workload-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
@@ -343,6 +356,7 @@
   .overview-workload small { margin-top: 3px; color: var(--muted); font-size: 9px; }
   .overview-workload .back { grid-column: 2; font-size: 9px; }
   .overview-stage-note { margin: 12px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+  .overview-stage-links { display: flex; flex-wrap: wrap; gap: 12px; }
   .overview-stage-link { display: inline-block; margin-top: 14px; color: var(--accent); font-size: 10px; font-weight: 650; text-decoration: none; }
   .overview-stage-link:hover { text-decoration: underline; }
   .overview-unavailable { padding: 11px; border: 1px solid #efcaca; border-radius: 7px; background: var(--warn-bg); color: var(--warn); font-size: 10px; line-height: 1.45; }

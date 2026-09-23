@@ -53,6 +53,23 @@ function gpuCountLabel(count: number) {
   return `${count} GPU${count === 1 ? '' : 's'}`;
 }
 
+function PriorityDetail({ workload }: {
+  workload: {
+    admissionPriorityClass?: string; admissionPriority?: number; podPriorityClasses?: string[];
+  };
+}) {
+  const admission = workload.admissionPriorityClass
+    ? `${workload.admissionPriorityClass}${workload.admissionPriority === undefined ? '' : ` (${workload.admissionPriority})`}`
+    : workload.admissionPriority === undefined ? 'Admission priority unknown' : `Priority ${workload.admissionPriority}`;
+  const pod = workload.podPriorityClasses?.length
+    ? workload.podPriorityClasses.join(', ')
+    : 'Pod priority unknown';
+  return <small className="overview-priority">
+    <span>Admission: {admission}</span>
+    <span>Pod: {pod}</span>
+  </small>;
+}
+
 function CapacityBar({ allocated, available, total }: { allocated: number | null; available: number | null; total: number }) {
   const allocationKnown = allocated !== null && available !== null;
   const allocatedPct = allocationKnown && total > 0 ? Math.max(0, Math.min(100, allocated / total * 100)) : 0;
@@ -155,13 +172,33 @@ function QueueBridge({ data }: { data: OverviewData }) {
           <span className={lane.pending > 0 ? 'warning' : ''}><b>{lane.pending}</b> pending</span>
         </div>)}
       </div>}
+      <section className="overview-pending" aria-label="Pending admission by priority">
+        <div className="overview-workload-group-head">
+          <strong>Pending admission by priority</strong><span>{data.pending?.length ?? 0}</span>
+        </div>
+        {!data.pending?.length ? <p className="overview-workload-empty">No workloads waiting for admission.</p>
+          : <div className="overview-pending-list">{data.pending.slice(0, 5).map(workload =>
+            <div className="overview-pending-workload" key={`${workload.namespace}/${workload.name}`}>
+              <span className="overview-workload-state pending">Waiting</span>
+              <div>
+                <strong>{workload.name}</strong>
+                <small>{workload.namespace} · {workload.queue || 'queue unknown'}
+                  {workload.gpuRequested ? ` · ${gpuCountLabel(workload.gpuRequested)}` : ''}</small>
+                <PriorityDetail workload={workload}/>
+                {!!(workload.reason || workload.message) &&
+                  <small className="overview-pending-reason">{workload.reason || workload.message}</small>}
+              </div>
+            </div>)}</div>}
+      </section>
     </>}
+    <p className="overview-stage-note">Higher Kueue admission priority is considered before FIFO. Quota, flavors, and admission checks still determine eligibility.</p>
     <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queues and quota →</ScopedLink>
   </div>;
 }
 
 function WorkloadFlow({ data }: { data: OverviewData }) {
   const admitted = data.running ?? [];
+  const active = data.active ?? [];
   const cpu = admitted.filter(run => run.queue === 'cpu' || run.clusterQueue === 'tau-cpu-cq');
   const gpu = admitted.filter(run => !cpu.includes(run));
   const group = (label: string, runs: typeof admitted) => <section className="overview-workload-group">
@@ -169,19 +206,42 @@ function WorkloadFlow({ data }: { data: OverviewData }) {
     {!runs.length ? <p className="overview-workload-empty">No admitted workloads.</p>
       : <div className="overview-workload-list">{runs.slice(0, 5).map(run => <div className="overview-workload" key={`${run.namespace}/${run.name}`}>
         <span className="overview-workload-state">Quota admitted</span>
-        <div><strong>{run.job || run.name}</strong><small>{run.namespace} · {run.queue || 'queue unknown'}</small></div>
+        <div>
+          <strong>{run.job || run.name}</strong>
+          <small>{run.namespace} · {run.queue || 'queue unknown'}</small>
+          <PriorityDetail workload={run}/>
+        </div>
         <TrackingLink run={run} label="Experiment ↗"/>
       </div>)}</div>}
   </section>;
   return <div className="overview-workloads">
-    <div className="overview-stage-title"><span>Queue admission</span><strong>Admitted workloads by resource</strong></div>
-    {data.runningUnavailable ? <div className="overview-unavailable">{data.runningUnavailable}</div>
-      : <div className="overview-workload-groups">
+    <div className="overview-stage-title"><span>Execution</span><strong>Runtime and admission state</strong></div>
+    <div className="overview-workload-groups">
+      <section className="overview-workload-group" aria-label="Active jobs">
+        <div className="overview-workload-group-head"><strong>Active jobs</strong><span>{active.length}</span></div>
+        {data.activeUnavailable ? <div className="overview-unavailable">{data.activeUnavailable}</div>
+          : !active.length ? <p className="overview-workload-empty">No Job or RayJob is currently running.</p>
+            : <div className="overview-workload-list">{active.slice(0, 5).map(run =>
+              <div className="overview-workload" key={`${run.namespace}/${run.kind}/${run.name}`}>
+                <span className="overview-workload-state">Running</span>
+                <div>
+                  <strong>{run.name}</strong>
+                  <small>{run.namespace || 'namespace unknown'} · {run.kind} · {run.age}</small>
+                </div>
+                <TrackingLink run={run} label="Experiment ↗"/>
+              </div>)}</div>}
+      </section>
+      {data.runningUnavailable ? <div className="overview-unavailable">{data.runningUnavailable}</div>
+        : <>
         {group('GPU quota admitted', gpu)}
         {group('CPU quota admitted', cpu)}
-      </div>}
-    <p className="overview-stage-note">Admission reserves quota; it does not prove that the workload is running.</p>
-    <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queue admission →</ScopedLink>
+        </>}
+    </div>
+    <p className="overview-stage-note">Active jobs come from Job and RayJob runtime status. Admission reserves quota but does not prove execution. Admission priority controls Kueue ordering and workload preemption; pod priority controls Kubernetes scheduling and pod preemption.</p>
+    <div className="overview-stage-links">
+      <ScopedLink to="/portal/runs" className="overview-stage-link">Inspect active jobs →</ScopedLink>
+      <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queue admission →</ScopedLink>
+    </div>
   </div>;
 }
 
@@ -205,7 +265,7 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
         <Metric label="Observed health" value={observedHealth.length ? unhealthy : '—'} detail={observedHealth.length ? `unhealthy of ${observedHealth.length} observed` : 'no health observations'} tone={unhealthy ? 'danger' : undefined}/>
         <Metric label="Queue pressure" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail={`${queue?.pending ?? '—'} workloads pending`} tone={queue?.pending ? 'warning' : undefined}/>
       </> : <>
-        <Metric label="Admitted workloads" value={data.runningUnavailable ? '—' : data.running.length} detail="quota admitted, completion not observed"/>
+        <Metric label="Active jobs" value={data.activeUnavailable ? '—' : data.active?.length ?? 0} detail="Job or RayJob reporting Running"/>
         <Metric label="Pending admission" value={queue?.pending ?? '—'} detail="waiting for quota" tone={queue?.pending ? 'warning' : undefined}/>
         <Metric label="GPU reservation" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail="reserved / reported quota"/>
         <Metric label="Measured utilization" value={utilization.average === null ? '—' : `${n1(utilization.average)}%`} detail={`${utilization.observed}/${utilization.total} GPUs observed`}/>
@@ -252,7 +312,7 @@ export function Overview({ persona }: { persona: string }) {
         { label: 'GPU telemetry', query: cluster },
       ]}
       autoRefreshMs={overviewRefreshMs}
-      partial={!!overview.data && !!(overview.data.cards.queueUnavailable || overview.data.runningUnavailable)}>
+      partial={!!overview.data && !!(overview.data.cards.queueUnavailable || overview.data.activeUnavailable || overview.data.runningUnavailable)}>
       {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data}
         nodeError={nodes.data ? null : nodes.error}/>}
     </BoardResult>
