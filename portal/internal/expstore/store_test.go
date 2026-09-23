@@ -12,7 +12,164 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestLocalSearchCursorAppliesBeforeThousandRowLimit(t *testing.T) {
+	ctx := context.Background()
+	store, _, err := Init(ctx, filepath.Join(t.TempDir(), "cursor-store"), InitOptions{
+		Name: "initial", Project: "initial", Group: "initial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"runs", "run_groups", "experiments"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	for i := range 1001 {
+		project := fmt.Sprintf("project-%04d", i%2)
+		experimentID := fmt.Sprintf("experiment-%04d", i)
+		runID := fmt.Sprintf("run-%04d", i)
+		at := base.Add(-time.Duration(i) * time.Second).Format(time.RFC3339)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO experiments(
+			experiment_id, project, name, source, created_at, updated_at
+		) VALUES (?, ?, ?, 'explicit', ?, ?)`, experimentID, project, experimentID, at, at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs(
+			run_id, project, experiment_id, run_group_id, state, created_at, index_version
+		) VALUES (?, ?, ?, '', 'succeeded', ?, ?)`, runID, project, experimentID, at, SchemaVersion); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	runPage, err := store.SearchRuns(ctx, RunSearchOptions{Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastRun := runPage.Runs[len(runPage.Runs)-1]
+	nextRuns, err := store.SearchRuns(ctx, RunSearchOptions{
+		Limit: 1000, CursorAt: lastRun.CreatedAt,
+		CursorID: lastRun.Project + "\x00" + lastRun.RunID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nextRuns.Runs) != 1 || nextRuns.Runs[0].RunID != "run-1000" {
+		t.Fatalf("run after 1000-row boundary was unreachable: %+v", nextRuns.Runs)
+	}
+
+	experimentPage, err := store.SearchExperiments(ctx, ExperimentSearchOptions{Limit: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastExperiment := experimentPage.Experiments[len(experimentPage.Experiments)-1]
+	nextExperiments, err := store.SearchExperiments(ctx, ExperimentSearchOptions{
+		Limit: 1000, CursorAt: lastExperiment.LatestRunAt,
+		CursorID: lastExperiment.Project + "\x00" + lastExperiment.ExperimentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nextExperiments.Experiments) != 1 ||
+		nextExperiments.Experiments[0].ExperimentID != "experiment-1000" {
+		t.Fatalf("experiment after 1000-row boundary was unreachable: %+v", nextExperiments.Experiments)
+	}
+}
+
+func TestLocalSearchCursorPreservesSubMillisecondPrecision(t *testing.T) {
+	ctx := context.Background()
+	store, _, err := Init(ctx, filepath.Join(t.TempDir(), "mixed-precision-cursor-store"), InitOptions{
+		Name: "initial", Project: "initial", Group: "initial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"runs", "run_groups", "experiments"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, item := range []struct {
+		experimentID string
+		runID        string
+		at           string
+	}{
+		{experimentID: "a-older", runID: "a-older", at: "2026-09-18T12:00:00.1231Z"},
+		{experimentID: "z-newer", runID: "z-newer", at: "2026-09-18T12:00:00.1232Z"},
+	} {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO experiments(
+			experiment_id, project, name, source, created_at, updated_at
+		) VALUES (?, 'project-a', ?, 'explicit', ?, ?)`,
+			item.experimentID, item.experimentID, item.at, item.at); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs(
+			run_id, project, experiment_id, run_group_id, state, created_at, index_version
+		) VALUES (?, 'project-a', ?, '', 'succeeded', ?, ?)`,
+			item.runID, item.experimentID, item.at, SchemaVersion); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	firstRuns, err := store.SearchRuns(ctx, RunSearchOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstRuns.Runs) != 1 || firstRuns.Runs[0].RunID != "z-newer" {
+		t.Fatalf("first run page=%+v", firstRuns.Runs)
+	}
+	secondRuns, err := store.SearchRuns(ctx, RunSearchOptions{
+		Limit: 1, CursorAt: firstRuns.Runs[0].CreatedAt,
+		CursorID: firstRuns.Runs[0].Project + "\x00" + firstRuns.Runs[0].RunID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondRuns.Runs) != 1 || secondRuns.Runs[0].RunID != "a-older" {
+		t.Fatalf("second run page=%+v", secondRuns.Runs)
+	}
+
+	firstExperiments, err := store.SearchExperiments(ctx, ExperimentSearchOptions{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstExperiments.Experiments) != 1 ||
+		firstExperiments.Experiments[0].ExperimentID != "z-newer" {
+		t.Fatalf("first experiment page=%+v", firstExperiments.Experiments)
+	}
+	secondExperiments, err := store.SearchExperiments(ctx, ExperimentSearchOptions{
+		Limit: 1, CursorAt: firstExperiments.Experiments[0].LatestRunAt,
+		CursorID: firstExperiments.Experiments[0].Project + "\x00" +
+			firstExperiments.Experiments[0].ExperimentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondExperiments.Experiments) != 1 ||
+		secondExperiments.Experiments[0].ExperimentID != "a-older" {
+		t.Fatalf("second experiment page=%+v", secondExperiments.Experiments)
+	}
+}
 
 func TestInitCreatesStoreAndIsIdempotent(t *testing.T) {
 	ctx := context.Background()

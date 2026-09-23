@@ -18,8 +18,9 @@ const (
 )
 
 var (
-	ErrConflict = errors.New("experiment store write conflict")
-	ErrNotFound = errors.New("experiment store record not found")
+	ErrConflict        = errors.New("experiment store write conflict")
+	ErrInvalidArgument = errors.New("invalid experiment query argument")
+	ErrNotFound        = errors.New("experiment store record not found")
 )
 
 type Manifest struct {
@@ -314,19 +315,23 @@ type MetricFilter struct {
 }
 
 type RunSearchOptions struct {
-	Target        string
-	Workspace     string
-	Query         string
-	Project       string
-	RunGroupID    string
-	State         string
-	Lifecycle     string
-	Tags          map[string]string
-	MetricNames   []string
-	MetricFilters []MetricFilter
-	Since         string
-	Limit         int
-	MinStep       *int64
+	Target            string
+	ExactExperimentID string
+	ExactRunID        string
+	Workspace         string
+	Query             string
+	Project           string
+	RunGroupID        string
+	State             string
+	Lifecycle         string
+	Tags              map[string]string
+	MetricNames       []string
+	MetricFilters     []MetricFilter
+	Since             string
+	Limit             int
+	MinStep           *int64
+	CursorAt          string
+	CursorID          string
 }
 
 type RunClassification struct {
@@ -373,6 +378,8 @@ type ExperimentSearchOptions struct {
 	MetricFilters []MetricFilter
 	Since         string
 	Limit         int
+	CursorAt      string
+	CursorID      string
 }
 
 type ExperimentSummary struct {

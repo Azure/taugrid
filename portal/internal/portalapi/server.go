@@ -275,6 +275,17 @@ func kustoStellarAvailable(opts expapi.Options) bool {
 		opts.KustoNativeQuery != nil
 }
 
+func canonicalStellarSource(source string, kustoAvailable bool) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source != "" && source != "auto" {
+		return source
+	}
+	if source == "auto" && kustoAvailable {
+		return "kusto"
+	}
+	return "local"
+}
+
 func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceState {
 	if scope.experimentsBackend != nil {
 		return runs.ExperimentSurfaceAvailable

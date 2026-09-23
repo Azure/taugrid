@@ -138,6 +138,60 @@ func BuildMetricsQuery(opts MetricsQueryOptions) (string, error) {
 	return b.String(), nil
 }
 
+// BuildTypedMetricsQuery builds a bounded point query over the stable typed
+// metric-event Function. It intentionally bypasses legacy projection and
+// remote-write tables.
+func BuildTypedMetricsQuery(opts MetricsQueryOptions) (string, error) {
+	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
+	opts.Project = strings.TrimSpace(opts.Project)
+	projects := normalizedProjects(opts.Project, opts.Projects)
+	opts.Target = strings.TrimSpace(opts.Target)
+	opts.TargetType = strings.ToLower(strings.TrimSpace(opts.TargetType))
+	opts.RunGroupID = strings.TrimSpace(opts.RunGroupID)
+	opts.Since = strings.TrimSpace(opts.Since)
+	if opts.TargetType == "" {
+		opts.TargetType = "auto"
+	}
+	switch opts.TargetType {
+	case "auto", "experiment", "run_group", "run":
+	default:
+		return "", fmt.Errorf("--target-type must be auto, experiment, run_group, or run")
+	}
+	if opts.Since == "" {
+		opts.Since = "7d"
+	}
+	if opts.TargetPoints == 0 {
+		opts.TargetPoints = DefaultTargetPoints
+	}
+	if opts.TargetPoints < MinTargetPoints {
+		return "", fmt.Errorf("--target-points must be at least %d", MinTargetPoints)
+	}
+	if opts.StartStep != nil && opts.EndStep != nil && *opts.StartStep > *opts.EndStep {
+		return "", fmt.Errorf("--start-step must be less than or equal to --end-step")
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "let target_points = %d;\n", opts.TargetPoints)
+	b.WriteString("let scoped = materialize(\n")
+	b.WriteString(exptelemetry.MetricEventRowsFunction + "()\n")
+	if opts.Since != "" {
+		fmt.Fprintf(&b, "| where wall_time > ago(%s)\n", kqlDuration(opts.Since))
+	}
+	writeProjectFilter(&b, "['project']", projects)
+	writeMetricScopeFilters(&b, opts)
+	writeStepRangeFilters(&b, opts)
+	b.WriteString("| where isnotnull(step) and isnotnull(value)\n")
+	b.WriteString("| project exported_at, cluster, source_store_id, metric_file_id, metric_file_path, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags=tostring(tags), workspace_id\n")
+	b.WriteString(");\n")
+	writeRequestedAndMilestones(&b, opts)
+	b.WriteString("let deduped = requested\n")
+	b.WriteString("| summarize arg_max(exported_at, *) by source_store_id, metric_file_id, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, workspace_id;\n")
+	writeMetricsResult(&b, opts)
+	writeDashboardProjection(&b)
+	b.WriteString("| order by run_group_id asc, run_id asc, metric_name asc, step asc\n")
+	return b.String(), nil
+}
+
 func BuildExperimentSearchQuery(opts MetricsQueryOptions) (string, error) {
 	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
 	opts.Project = strings.TrimSpace(opts.Project)
@@ -408,7 +462,7 @@ func buildRemoteWriteMetricsQuery(opts MetricsQueryOptions) string {
 
 func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []string) string {
 	var b strings.Builder
-	b.WriteString("let scoped = materialize(\n")
+	b.WriteString("let latest_metrics = materialize(\n")
 	b.WriteString(DefaultRemoteWriteTable + "\n")
 	if opts.Since != "" {
 		fmt.Fprintf(&b, "| where Timestamp > ago(%s)\n", kqlDuration(opts.Since))
@@ -416,17 +470,16 @@ func buildRemoteWriteExperimentSearchQuery(opts MetricsQueryOptions, projects []
 	b.WriteString("| extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), project_id=tostring(Labels['project']), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)\n")
 	writeProjectFilter(&b, "project_id", projects)
 	writeMetricFilters(&b, opts)
+	b.WriteString("| where isnotempty(project_id) and isnotempty(experiment_id) and isnotempty(run_id) and isnotempty(metric_name)\n")
 	b.WriteString("| where isnotnull(step) and isnotnull(value)\n")
+	b.WriteString("| summarize hint.strategy=shuffle arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id\n")
 	b.WriteString("| project exported_at=Timestamp, cluster, source_store_id, metric_file_id, metric_file_path, project_id, experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags, workspace_id\n")
 	b.WriteString(");\n")
-	b.WriteString("let deduped = materialize(scoped\n")
-	b.WriteString("| summarize arg_max(exported_at, *) by source_store_id, metric_file_id, project_id, experiment_id, run_group_id, run_id, metric_name, step, wall_time, workspace_id);\n")
-	b.WriteString("let top_experiments = deduped\n")
+	b.WriteString("let top_experiments = latest_metrics\n")
 	b.WriteString("| summarize latest_wall_time=max(wall_time) by project_id, experiment_id, workspace_id\n")
 	fmt.Fprintf(&b, "| top %d by latest_wall_time desc;\n", opts.Limit+1)
-	b.WriteString("deduped\n")
+	b.WriteString("latest_metrics\n")
 	b.WriteString("| join kind=inner (top_experiments) on project_id, experiment_id, workspace_id\n")
-	b.WriteString("| summarize arg_max(wall_time, *) by project_id, experiment_id, run_group_id, run_id, metric_name, workspace_id\n")
 	b.WriteString("| order by wall_time desc, project_id asc, run_group_id asc, run_id asc, metric_name asc\n")
 	writeExperimentSearchProjection(&b, "project_id")
 	return b.String()
