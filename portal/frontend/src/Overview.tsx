@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { memo, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { BoardResult, Empty, PageTitle, ScopedLink, TrackingLink, n1, utilizationSummary } from './components';
-import { useBoard, useBoardPrefetch } from './data';
-import type { Cluster, NodeUtil, Nodes, Overview as OverviewData } from './types';
+import { fleetBoardPaths, useBoard, useBoardPrefetch } from './data';
+import type { Cluster, Nodes, Overview as OverviewData } from './types';
 
 const overviewRefreshMs = 15_000;
 
@@ -15,34 +15,75 @@ interface SiteGroup {
   label: string;
   region: string;
   nodes: FleetNode[];
+  pools: PoolGroup[];
   ready: number;
   gpus: number;
   allocated: number | null;
   available: number | null;
 }
 
+interface PoolGroup {
+  name: string;
+  product: string;
+  nodes: FleetNode[];
+  gpus: number;
+}
+
 function groupSites(snapshot: Nodes | undefined): SiteGroup[] {
-  const groups = new Map<string, FleetNode[]>();
-  for (const node of (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0)) {
+  const groups = new Map<string, SiteGroup & { allocationKnown: boolean; poolMap: Map<string, PoolGroup> }>();
+  for (const node of snapshot?.nodes || []) {
+    if (node.gpuCapacity <= 0) continue;
     const label = node.site || node.region || 'Unassigned';
-    const group = groups.get(label);
-    if (group) group.push(node);
-    else groups.set(label, [node]);
+    let group = groups.get(label);
+    if (!group) {
+      group = {
+        id: label,
+        label,
+        region: node.region || 'Region unknown',
+        nodes: [],
+        pools: [],
+        ready: 0,
+        gpus: 0,
+        allocated: 0,
+        available: 0,
+        allocationKnown: true,
+        poolMap: new Map(),
+      };
+      groups.set(label, group);
+    } else if (group.region === 'Region unknown' && node.region) {
+      group.region = node.region;
+    }
+    group.nodes.push(node);
+    group.ready += node.ready ? 1 : 0;
+    group.gpus += node.gpuCapacity;
+    if (node.gpuAllocated === undefined || node.gpuAvailable === undefined) {
+      group.allocationKnown = false;
+      group.allocated = null;
+      group.available = null;
+    } else if (group.allocationKnown) {
+      group.allocated = (group.allocated ?? 0) + node.gpuAllocated;
+      group.available = (group.available ?? 0) + node.gpuAvailable;
+    }
+    const poolName = node.agentPool || node.sku || 'GPU pool';
+    let pool = group.poolMap.get(poolName);
+    if (!pool) {
+      pool = {
+        name: poolName,
+        product: node.gpuProduct || node.sku || 'GPU model unknown',
+        nodes: [],
+        gpus: 0,
+      };
+      group.poolMap.set(poolName, pool);
+      group.pools.push(pool);
+    } else {
+      const product = node.gpuProduct || node.sku;
+      if (pool.product === 'GPU model unknown' && product) pool.product = product;
+    }
+    pool.nodes.push(node);
+    pool.gpus += node.gpuCapacity;
   }
-  return [...groups.entries()].map(([label, nodes]) => ({
-    id: label,
-    label,
-    region: nodes.find(node => node.region)?.region || 'Region unknown',
-    nodes,
-    ready: nodes.filter(node => node.ready).length,
-    gpus: nodes.reduce((sum, node) => sum + node.gpuCapacity, 0),
-    allocated: nodes.every(node => node.gpuAllocated !== undefined)
-      ? nodes.reduce((sum, node) => sum + (node.gpuAllocated ?? 0), 0)
-      : null,
-    available: nodes.every(node => node.gpuAvailable !== undefined)
-      ? nodes.reduce((sum, node) => sum + (node.gpuAvailable ?? 0), 0)
-      : null,
-  })).sort((a, b) => b.gpus - a.gpus || a.label.localeCompare(b.label));
+  return [...groups.values()].map(({ allocationKnown: _allocationKnown, poolMap: _poolMap, ...group }) => group)
+    .sort((a, b) => b.gpus - a.gpus || a.label.localeCompare(b.label));
 }
 
 function Metric({ label, value, detail, tone }: { label: string; value: ReactNode; detail: ReactNode; tone?: string }) {
@@ -90,12 +131,13 @@ function GPUTiles({ node }: { node: FleetNode }) {
   const allocated = node.gpuAllocated;
   const available = node.gpuAvailable;
   const allocationKnown = allocated !== undefined && available !== undefined;
+  const style = allocationKnown && node.gpuCapacity > 0 ? {
+    '--gpu-allocated': `${Math.max(0, Math.min(100, allocated / node.gpuCapacity * 100))}%`,
+    '--gpu-tile-width': `${100 / node.gpuCapacity}%`,
+  } as CSSProperties : undefined;
   return <div className="overview-gpu-tiles" aria-label={allocationKnown
     ? `${node.name}: ${allocated} allocated GPUs and ${available} available GPUs`
-    : `${node.name}: GPU allocation unavailable`}>
-    {Array.from({ length: node.gpuCapacity }, (_, index) =>
-      <span key={index} className={allocationKnown ? index < allocated ? 'allocated' : 'available' : 'unknown'}/>)}
-  </div>;
+    : `${node.name}: GPU allocation unavailable`} data-allocation={allocationKnown ? 'known' : 'unknown'} style={style}/>;
 }
 
 function SiteSelector({ sites, selected, onSelect }: { sites: SiteGroup[]; selected?: string; onSelect: (id: string) => void }) {
@@ -115,24 +157,14 @@ function SiteSelector({ sites, selected, onSelect }: { sites: SiteGroup[]; selec
 
 function PoolDetails({ site, prefetchFleet }: { site?: SiteGroup; prefetchFleet: () => void }) {
   if (!site) return null;
-  const pools = new Map<string, FleetNode[]>();
-  for (const node of site.nodes) {
-    const pool = node.agentPool || node.sku || 'GPU pool';
-    const nodes = pools.get(pool);
-    if (nodes) nodes.push(node);
-    else pools.set(pool, [node]);
-  }
   return <div className="overview-pools" aria-live="polite">
     <div className="overview-stage-title"><span>Selected site</span><strong>{site.label}</strong></div>
-    {[...pools.entries()].map(([name, nodes]) => {
-      const gpus = nodes.reduce((sum, node) => sum + node.gpuCapacity, 0);
-      const product = nodes.find(node => node.gpuProduct)?.gpuProduct || nodes.find(node => node.sku)?.sku || 'GPU model unknown';
-      return <section key={name} className="overview-pool">
+    {site.pools.map(pool => <section key={pool.name} className="overview-pool">
         <div className="overview-pool-head">
-          <span><strong>{name}</strong><small>{product}</small></span>
-          <b>{gpuCountLabel(gpus)}</b>
+          <span><strong>{pool.name}</strong><small>{pool.product}</small></span>
+          <b>{gpuCountLabel(pool.gpus)}</b>
         </div>
-        <div className="overview-node-list">{nodes.map(node =>
+        <div className="overview-node-list">{pool.nodes.map(node =>
           <ScopedLink key={node.name} to={'/portal/fleet?instance=' + encodeURIComponent(node.name)}
             className="overview-node" onIntent={prefetchFleet}>
             <span><strong>{node.name}</strong><small>{node.ready ? 'Ready' : 'Not ready'} · {node.sku || 'SKU unknown'}</small></span>
@@ -142,12 +174,11 @@ function PoolDetails({ site, prefetchFleet }: { site?: SiteGroup; prefetchFleet:
             </span>
           </ScopedLink>)}
         </div>
-      </section>;
-    })}
+      </section>)}
   </div>;
 }
 
-function QueueBridge({ data }: { data: OverviewData }) {
+const QueueBridge = memo(function QueueBridge({ data }: { data: OverviewData }) {
   const queue = data.cards.queue;
   const lanes = queue?.queues?.filter(lane => lane.admitted > 0 || lane.pending > 0) ?? [];
   const unavailable = data.cards.queueUnavailable || (!queue ? 'Queue data unavailable' : '');
@@ -199,14 +230,17 @@ function QueueBridge({ data }: { data: OverviewData }) {
     <p className="overview-stage-note">Higher Kueue admission priority is considered before FIFO. Quota, flavors, and admission checks still determine eligibility.</p>
     <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queues and quota →</ScopedLink>
   </div>;
-}
+});
 
-function WorkloadFlow({ data }: { data: OverviewData }) {
+const WorkloadFlow = memo(function WorkloadFlow({ data }: { data: OverviewData }) {
   const admitted = data.running ?? [];
   const active = data.active ?? [];
   const waiting = data.waiting ?? [];
-  const cpu = admitted.filter(run => run.queue === 'cpu' || run.clusterQueue === 'tau-cpu-cq');
-  const gpu = admitted.filter(run => !cpu.includes(run));
+  const cpu: typeof admitted = [];
+  const gpu: typeof admitted = [];
+  for (const run of admitted) {
+    (run.queue === 'cpu' || run.clusterQueue === 'tau-cpu-cq' ? cpu : gpu).push(run);
+  }
   type WorkloadRow = (typeof admitted)[number] & { pendingReason?: string };
   const group = (label: string, runs: WorkloadRow[], state = 'Quota admitted') => <section className="overview-workload-group">
     <div className="overview-workload-group-head"><strong>{label}</strong><span>{runs.length}</span></div>
@@ -251,14 +285,27 @@ function WorkloadFlow({ data }: { data: OverviewData }) {
       <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queue admission →</ScopedLink>
     </div>
   </div>;
-}
+});
+
+const FleetTopology = memo(function FleetTopology({ sites, nodeError }: {
+  sites: SiteGroup[]; nodeError?: Error | null;
+}) {
+  const [selectedSite, setSelectedSite] = useState<string>();
+  const activeSite = sites.find(site => site.id === selectedSite) || sites[0];
+  const prefetchFleet = useBoardPrefetch(fleetBoardPaths);
+  return <div className="overview-fleet-stage">
+    <div className="overview-stage-title"><span>Capacity</span><strong>GPU sites</strong></div>
+    {nodeError ? <div className="overview-unavailable">{nodeError.message}</div>
+      : <SiteSelector sites={sites} selected={activeSite?.id} onSelect={setSelectedSite}/>}
+    <PoolDetails site={activeSite} prefetchFleet={prefetchFleet}/>
+    <ScopedLink to="/portal/fleet" className="overview-stage-link" onIntent={prefetchFleet}>Open fleet detail →</ScopedLink>
+  </div>;
+});
 
 function Atlas({ platform, data, nodes, cluster, nodeError }: {
   platform: boolean; data: OverviewData; nodes?: Nodes; cluster?: Cluster; nodeError?: Error | null;
 }) {
   const sites = useMemo(() => groupSites(nodes), [nodes]);
-  const [selectedSite, setSelectedSite] = useState<string>();
-  const activeSite = sites.find(site => site.id === selectedSite) || sites[0];
   const fleetSummary = useMemo(() => {
     const gpus = cluster?.gpus || [];
     const observedHealth = gpus.filter(gpu => typeof gpu.healthy === 'boolean');
@@ -268,7 +315,6 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
       unhealthy: observedHealth.filter(gpu => gpu.healthy === false).length,
     };
   }, [cluster]);
-  const prefetchFleet = useBoardPrefetch<NodeUtil>('/api/portal/nodeutil');
   const queue = data.cards.queue;
   const capacity = queue ? queue.gpuUsed + queue.gpuHeadroom : 0;
 
@@ -290,16 +336,10 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
       <section className="overview-map" aria-label="Infrastructure topology">
         <header>
           <h2>Infrastructure topology</h2>
-          <span>{sites.length} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.nodes?.filter(node => node.gpuCapacity > 0).length ?? 0} GPU nodes</span>
+          <span>{sites.length} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.gpuNodes ?? 0} GPU nodes</span>
         </header>
         <div className="overview-flow">
-          <div className="overview-fleet-stage">
-            <div className="overview-stage-title"><span>Capacity</span><strong>GPU sites</strong></div>
-            {nodeError ? <div className="overview-unavailable">{nodeError.message}</div>
-              : <SiteSelector sites={sites} selected={activeSite?.id} onSelect={setSelectedSite}/>}
-            <PoolDetails site={activeSite} prefetchFleet={prefetchFleet}/>
-            <ScopedLink to="/portal/fleet" className="overview-stage-link" onIntent={prefetchFleet}>Open fleet detail →</ScopedLink>
-          </div>
+          <FleetTopology sites={sites} nodeError={nodeError}/>
           <QueueBridge data={data}/>
           <WorkloadFlow data={data}/>
         </div>
