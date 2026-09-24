@@ -6,6 +6,8 @@ package kustoquery
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -69,9 +71,37 @@ func TestSDKClientQueryDefaultsDatabase(t *testing.T) {
 func TestSDKClientQueryNoEndpoint(t *testing.T) {
 	// An unconfigured SDKClient (no endpoint) reports ErrNoQueryCommand so the
 	// portal can treat the board as disabled, mirroring Client.
-	_, err := SDKClient{}.Query(context.Background(), "GpuHealth()")
+	client := &SDKClient{}
+	_, err := client.Query(context.Background(), "GpuHealth()")
 	if !errors.Is(err, ErrNoQueryCommand) {
 		t.Fatalf("err = %v, want ErrNoQueryCommand", err)
+	}
+}
+
+func TestSDKClientInitializesTransportOnce(t *testing.T) {
+	var initialized atomic.Int32
+	client := &SDKClient{
+		Endpoint: "https://example.kusto.windows.net",
+		newQuery: func(string) (func(context.Context, string, string) (string, error), error) {
+			initialized.Add(1)
+			return func(context.Context, string, string) (string, error) {
+				return `{"Columns":["value"],"Rows":[[1]]}`, nil
+			}, nil
+		},
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := client.Query(context.Background(), "print value=1"); err != nil {
+				t.Errorf("Query: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := initialized.Load(); got != 1 {
+		t.Fatalf("transport initialized %d times, want 1", got)
 	}
 }
 
