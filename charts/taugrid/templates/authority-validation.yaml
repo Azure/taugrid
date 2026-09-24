@@ -11,6 +11,8 @@ Licensed under the MIT License.
 {{- if not .Values.kueue.aksExtension.enableKueueObjectsAutomation -}}
 {{- fail "TauGrid requires kueue.aksExtension.enableKueueObjectsAutomation=true; KEC is the sole node and ResourceFlavor authority" -}}
 {{- end -}}
-{{- if (index .Values "taugrid-core").resourceFlavors.enabled -}}
+{{- $taugridCore := default dict (index .Values "taugrid-core") -}}
+{{- $resourceFlavors := default dict (index $taugridCore "resourceFlavors") -}}
+{{- if (default false (index $resourceFlavors "enabled")) -}}
 {{- fail "TauGrid requires taugrid-core.resourceFlavors.enabled=false; KEC is the sole ResourceFlavor authority" -}}
 {{- end -}}

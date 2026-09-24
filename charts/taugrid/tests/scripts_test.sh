@@ -188,6 +188,15 @@ helm template namespace-check "$TEST_CHART_DIR" \
   --include-crds >"$default_manifest"
 assert_namespaces "$default_manifest" kueue-system kube-system
 
+bootstrap_manifest="$TEST_ROOT/bootstrap-disabled-services.yaml"
+helm template namespace-check "$TEST_CHART_DIR" \
+  --namespace kueue-system \
+  --set components.taugridCore.enabled=false \
+  --set baselineQueue.enabled=false >"$bootstrap_manifest"
+if grep -Eq $'^(Deployment|Service)\ttau-portal$' < <(render_objects "$bootstrap_manifest"); then
+  fail "bootstrap render unexpectedly included the disabled taugrid-core services"
+fi
+
 for required in \
   'name: multikueueclusters.kueue.x-k8s.io' \
   'name: multikueueconfigs.kueue.x-k8s.io' \
