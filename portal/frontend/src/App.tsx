@@ -7,7 +7,7 @@ import { Empty } from './components';
 import type { WorkspaceScope } from './types';
 import { CostBoard, ExperimentsBoard, Kueue, Observability, Overview, Services } from './Boards';
 import { Fleet } from './Fleet';
-import { JobDetailBoard, RayBoard, RayHistoryBoard, RunsBoard } from './Workloads';
+import { JobDetailBoard, LegacyJobDetailRedirect, RayBoard, RayHistoryBoard, RunsBoard } from './Workloads';
 
 const tabs = [
   { id: 'platform', label: 'Platform', items: [['Overview', '/portal'], ['Fleet', '/portal/fleet'], ['Kueue', '/portal/jobs'], ['Ray', '/portal/ray'], ['Observability', '/portal/observability'], ['Cost', '/portal/cost']] },
@@ -18,7 +18,7 @@ const fleetPaths = ['/portal/fleet', '/portal/cluster', '/portal/gpu', '/portal/
 export function tabForPath(path: string): string | undefined {
   if (path === '/stellar' || path.startsWith('/stellar/')) return 'experiments';
   if (fleetPaths.includes(path) || path === '/portal/kueueviz' || path.startsWith('/portal/ray/')) return 'platform';
-  if (path.startsWith('/portal/runs/')) return 'workloads';
+  if (path.startsWith('/portal/runs/') || path.startsWith('/portal/workloads/')) return 'workloads';
   return tabs.find(t => t.items.some(([, p]) => p !== '/portal' && p === path))?.id;
 }
 class BoardBoundary extends Component<{ children: ReactNode }, { error?: Error }> {
@@ -103,8 +103,9 @@ export function App() {
               <BoardBoundary key={location.pathname + persona + ':' + new URLSearchParams(location.search).get('target')}>
                 <Routes>
                   <Route path="/portal/runs" element={<RunsBoard/>}/>
-                  <Route path="/portal/runs/:namespace/:name" element={<JobDetailBoard/>}/>
+                  <Route path="/portal/runs/:namespace/:name" element={<LegacyJobDetailRedirect/>}/>
                   <Route path="/portal/runs/*" element={<Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty>}/>
+                  <Route path="/portal/workloads/:resourceUID" element={<JobDetailBoard/>}/>
                   <Route path="/portal/ray" element={<RayBoard/>}/>
                   <Route path="/portal/ray/history/:resourceUID" element={<RayHistoryBoard/>}/>
                   <Route path="/portal/services" element={<Services/>}/>

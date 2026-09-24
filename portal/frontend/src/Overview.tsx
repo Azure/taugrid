@@ -199,16 +199,18 @@ function QueueBridge({ data }: { data: OverviewData }) {
 function WorkloadFlow({ data }: { data: OverviewData }) {
   const admitted = data.running ?? [];
   const active = data.active ?? [];
+  const waiting = data.waiting ?? [];
   const cpu = admitted.filter(run => run.queue === 'cpu' || run.clusterQueue === 'tau-cpu-cq');
   const gpu = admitted.filter(run => !cpu.includes(run));
-  const group = (label: string, runs: typeof admitted) => <section className="overview-workload-group">
+  type WorkloadRow = (typeof admitted)[number] & { pendingReason?: string };
+  const group = (label: string, runs: WorkloadRow[], state = 'Quota admitted') => <section className="overview-workload-group">
     <div className="overview-workload-group-head"><strong>{label}</strong><span>{runs.length}</span></div>
-    {!runs.length ? <p className="overview-workload-empty">No admitted workloads.</p>
+    {!runs.length ? <p className="overview-workload-empty">No {state === 'Waiting for quota' ? 'pending' : 'admitted'} workloads.</p>
       : <div className="overview-workload-list">{runs.slice(0, 5).map(run => <div className="overview-workload" key={`${run.namespace}/${run.name}`}>
-        <span className="overview-workload-state">Quota admitted</span>
+        <span className="overview-workload-state">{state}</span>
         <div>
-          <strong>{run.job || run.name}</strong>
-          <small>{run.namespace} · {run.queue || 'queue unknown'}</small>
+          {run.resourceUid ? <ScopedLink to={'/portal/workloads/' + encodeURIComponent(run.resourceUid)}><strong>{run.job || run.name}</strong></ScopedLink> : <strong>{run.job || run.name}</strong>}
+          <small>{run.namespace} · {run.queue || 'queue unknown'}{run.pendingReason ? ` · ${run.pendingReason}` : ''}</small>
           <PriorityDetail workload={run}/>
         </div>
         <TrackingLink run={run} label="Experiment ↗"/>
@@ -233,6 +235,7 @@ function WorkloadFlow({ data }: { data: OverviewData }) {
       </section>
       {data.runningUnavailable ? <div className="overview-unavailable">{data.runningUnavailable}</div>
         : <>
+        {group('Waiting for quota', waiting, 'Waiting for quota')}
         {group('GPU quota admitted', gpu)}
         {group('CPU quota admitted', cpu)}
         </>}

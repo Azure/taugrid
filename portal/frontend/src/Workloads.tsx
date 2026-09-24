@@ -1,17 +1,27 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import type { ReactNode } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { useBoard } from './data';
 import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Subtabs, Table, TrackingLink, text } from './components';
-import type { JobDetail, Ray, RayHistory, Run, Runs, SourceDiagnostic } from './types';
+import type { JobDetail, Ray, RayHistory, Run, Runs, SourceDiagnostic, WorkloadLogSnapshot } from './types';
 
 const kubeHint = ' — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).';
 function RunName({ run, namespace }: { run: Run; namespace?: string }) {
   const ns = run.namespace || namespace;
-  return ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name)}>{run.name}</ScopedLink> : text(run.name);
+  return run.resourceUid ? <ScopedLink to={'/portal/workloads/' + encodeURIComponent(run.resourceUid)}>{run.name}</ScopedLink>
+    : ns && run.name ? <ScopedLink to={'/portal/runs/' + encodeURIComponent(ns) + '/' + encodeURIComponent(run.name)}>{run.name}</ScopedLink> : text(run.name);
 }
 function Status({ value, tone = '' }: { value?: string; tone?: string }) { return <span className={'badge ' + tone}>{text(value)}</span>; }
+function Gauge({ label, value, max, unit, tone = '' }: { label: string; value?: number; max: number; unit: string; tone?: string }) {
+  if (value == null) return <span>—</span>;
+  const pct = Math.max(0, Math.min(100, value / max * 100));
+  return <div className={`workload-gauge ${tone}`} role="meter" aria-label={`${label}: ${value.toFixed(1)} ${unit}`}
+    aria-valuemin={0} aria-valuemax={max} aria-valuenow={value}>
+    <div><strong>{value.toFixed(1)}</strong><span>{unit}</span></div>
+    <span className="workload-gauge-track" aria-hidden="true"><span style={{ width: `${pct}%` }}/></span>
+  </div>;
+}
 function SourceResult({ diagnostic, label, children }: { diagnostic?: SourceDiagnostic; label: string; children: ReactNode }) {
   if (!diagnostic) return <Note warn>{label}: source status not reported by this portal version.</Note>;
   if (diagnostic.state === 'ready' || diagnostic.state === 'empty') return <>{children}</>;
@@ -64,34 +74,79 @@ export function RunsBoard() {
     }}</BoardResult></>;
 }
 export function JobDetailBoard() {
-  const { namespace = '', name = '' } = useParams();
-  const query = useBoard<JobDetail>('/api/portal/runs/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(name), !!namespace && !!name, retainJobSections);
+  const { resourceUID = '' } = useParams();
+  const workloadPath = '/portal/workloads/' + encodeURIComponent(resourceUID);
+  const query = useBoard<JobDetail>('/api/portal/workloads/' + encodeURIComponent(resourceUID), !!resourceUID, retainJobSections);
   const partial = Object.values(query.data?.diagnostics || {}).some(diagnostic => diagnostic.state === 'unavailable');
   const requested = new URLSearchParams(useLocation().search).get('view') || '';
-  const active = ['overview', 'pods', 'events', 'results'].includes(requested) ? requested : 'overview';
-  return <><div className="page-head"><div><PageTitle title={name || '—'}>namespace: {namespace || '—'}</PageTitle></div><ScopedLink to="/portal/runs" className="back">← Back to Jobs</ScopedLink></div>
-    {!namespace || !name ? <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty> : <BoardResult query={query} label="Job detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
+  const active = ['overview', 'pods', 'events', 'logs', 'results'].includes(requested) ? requested : 'overview';
+  return <><div className="page-head"><div><PageTitle title={query.data?.name || 'Workload'}>namespace: {query.data?.namespace || '—'}</PageTitle></div><ScopedLink to="/portal/runs" className="back">← Back to Jobs</ScopedLink></div>
+    {!resourceUID ? <Empty warn>Invalid workload path: expected /portal/workloads/&lt;resource-uid&gt;.</Empty> : <BoardResult query={query} label="Workload detail" partial={partial} hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap => <>
       <div className="detail-meta"><Status value={snap.kind} tone="kind"/><Status value={snap.status}/>
+        {snap.objectState === 'deleted' && <Status value="Object deleted" tone="fail"/>}
         {snap.resourceRelease && <span className={'badge' + (snap.resourceRelease.computeState === 'reusable' ? '' : ' warn')} title={snap.resourceRelease.message}>quota {snap.resourceRelease.quotaState || 'unknown'} · compute {snap.resourceRelease.computeState || 'unknown'}</span>}
         {snap.object?.age && <span>age {snap.object.age}</span>}{snap.runId && <span className="muted">run-id {snap.runId}</span>}
         {snap.links?.stellarPath && <ScopedLink className="btn-primary" to={snap.links.stellarPath}>Open in Experiments</ScopedLink>}
         {snap.links?.rayDashboardPath && (snap.links.rayDashboardReachable ? <ScopedLink to={snap.links.rayDashboardPath} external className="back">Ray dashboard ↗</ScopedLink> : <span className="back disabled-link" title="Ray dashboard not reachable: the cluster head pod is not Ready">Ray dashboard ↗</span>)}
       </div>
+      <div className="detail-meta" aria-label="Workload lifecycle">
+        <span>Object <Status value={snap.stages?.object}/></span>
+        <span>Admission <Status value={snap.stages?.admission}/></span>
+        <span>Scheduling <Status value={snap.stages?.scheduling}/></span>
+        <span>Application <Status value={snap.stages?.application}/></span>
+        <span>Experiment <Status value={snap.stages?.tracking}/></span>
+      </div>
       <SourceResult diagnostic={snap.diagnostics?.tracking} label="Experiment tracking">
         {snap.diagnostics?.tracking.state === 'empty' && <Note>{snap.diagnostics.tracking.message || 'No indexed metrics were found; metric offload may be disabled or indexing may still be pending.'}</Note>}
       </SourceResult>
-      <Subtabs active={active} items={[['overview', 'Overview'], ['pods', 'Pods'], ['events', 'Events'], ['results', 'Results']]}/>
+      <Subtabs active={active} items={[['overview', 'Overview'], ['pods', 'Pods'], ['events', 'Events'], ['logs', 'Logs'], ['results', 'Results']]}/>
       {active === 'overview' && <JobOverview snap={snap}/>}
       {active === 'pods' && <SourceResult diagnostic={snap.diagnostics?.pods} label="Pods">{!snap.pods?.length ? <Empty>No pods found for this run — it may not be scheduled yet, or the objects were garbage-collected.</Empty>
-        : <Table headers={['Name', 'Phase', 'Node', '#Restarts']} rows={snap.pods.map(p => [text(p.name), <Status value={p.phase}/>, p.nodePath ? <ScopedLink to={p.nodePath}>{text(p.node)}</ScopedLink> : text(p.node), p.restarts ?? 0])}/>}</SourceResult>}
+        : <Table headers={['Name', 'Phase', 'Node', 'Containers', '#Restarts']} rows={snap.pods.map(p => [text(p.name), <Status value={p.phase}/>, p.nodePath ? <ScopedLink to={p.nodePath}>{text(p.node)}</ScopedLink> : text(p.node),
+          p.containers?.map(c => <span key={c.name}><ScopedLink to={`${workloadPath}?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}`}>{c.name}</ScopedLink> <Status value={c.state}/>{' '}</span>) || '—', p.restarts ?? 0])}/>}</SourceResult>}
       {active === 'events' && <SourceResult diagnostic={snap.diagnostics?.events} label="Events">{!snap.events?.length ? <Empty>No recent events for this run.</Empty>
         : <Table headers={['Type', 'Reason', 'Message', '#Count', 'Last']} rows={snap.events.map(e => [<Status value={e.type} tone={e.type === 'Warning' ? 'fail' : 'done'}/>, text(e.reason), text(e.message), e.count ?? 0, text(e.last)])}/>}</SourceResult>}
+      {active === 'logs' && <WorkloadLogs snap={snap}/>}
       {active === 'results' && (snap.diagnostics?.tracking.state === 'ready' || snap.diagnostics?.tracking.state === 'empty' ? <>{snap.lifecycle && <><h2>Run results (durable)</h2><KV rows={[
         ['State', snap.lifecycle.effectiveState || snap.lifecycle.state], ['Reason', snap.lifecycle.reason], ['Message', snap.lifecycle.message],
         ['Completed', snap.lifecycle.completionTime], ['Artifact URI', snap.lifecycle.artifactUri], ['Checkpoint URI', snap.lifecycle.checkpointUri],
       ]}/></>}<Note>{snap.links?.stellarPath ? 'Training metrics live in Experiments (use the Open in Experiments link above).' : 'No experiment link is available for this run. See the tracking status above; Jobs remain visible independently of metrics indexing.'}{snap.runId && !snap.lifecycle && " No durable results row for this run-id yet — it appears once the run's terminal lifecycle lands in Kusto."}</Note></>
         : <Note>Durable results are unavailable; see the experiment tracking status above.</Note>)}
     </>}</BoardResult>}</>;
+}
+function WorkloadLogs({ snap }: { snap: JobDetail }) {
+  const params = new URLSearchParams(useLocation().search);
+  const workloadPath = '/portal/workloads/' + encodeURIComponent(snap.resourceUid || '');
+  const pod = params.get('pod') || '';
+  const container = params.get('container') || '';
+  const previous = params.get('previous') === 'true';
+  const selected = snap.pods?.find(candidate => candidate.name === pod)?.containers?.find(candidate => candidate.name === container);
+  const query = useBoard<WorkloadLogSnapshot>(
+    `/api/portal/workloads/${encodeURIComponent(snap.resourceUid || '')}/logs?pod=${encodeURIComponent(pod)}&container=${encodeURIComponent(container)}&previous=${previous}`,
+    !!snap.resourceUid && !!selected,
+  );
+  if (snap.objectState === 'deleted') return <Empty>Logs are not retained after the Kubernetes workload and pods are deleted.</Empty>;
+  if (!pod || !container) return <><Note>Choose a workload-owned container. Logs are fetched on demand as bounded snapshots and are not streamed or stored by the Portal.</Note>
+    {!snap.pods?.length ? <Empty>No live pods are available.</Empty> : <Table headers={['Pod', 'Container', 'State', 'Snapshots']} rows={snap.pods.flatMap(p => (p.containers || []).map(c => [
+      p.name, c.name, <Status value={c.state}/>, <><ScopedLink to={`${workloadPath}?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}`}>current</ScopedLink>
+        {c.previousAvailable && <> · <ScopedLink to={`${workloadPath}?view=logs&pod=${encodeURIComponent(p.name)}&container=${encodeURIComponent(c.name)}&previous=true`}>previous</ScopedLink></>}</>,
+    ]))}/>}</>;
+  if (!selected) return <Empty warn>The selected pod or container no longer belongs to this workload.</Empty>;
+  return <><div className="detail-meta"><strong>{pod}</strong><Status value={container} tone="kind"/><Status value={previous ? 'previous' : 'current'}/>
+    <ScopedLink to={`${workloadPath}?view=logs`} className="back">Choose another container</ScopedLink></div>
+    <BoardResult query={query} label="Container logs">{log => <><Note>{log.tailLines} line tail · {log.limitBytes} byte limit
+      {log.truncated ? ' · truncated' : ''}{log.redactionApplied ? ' · sensitive-looking values redacted' : ''}</Note>
+      <pre className="log-snapshot">{log.content || 'No log output was returned.'}</pre></>}</BoardResult></>;
+}
+export function LegacyJobDetailRedirect() {
+  const { namespace = '', name = '' } = useParams();
+  const location = useLocation();
+  const query = useBoard<JobDetail>('/api/portal/runs/' + encodeURIComponent(namespace) + '/' + encodeURIComponent(name), !!namespace && !!name);
+  if (!namespace || !name) return <Empty warn>Invalid job path: expected /portal/runs/&lt;namespace&gt;/&lt;name&gt;.</Empty>;
+  return <BoardResult query={query} label="Job detail" hint=" — the workload may have been garbage-collected, or the portal lacks Kubernetes access.">{snap =>
+    snap.resourceUid ? <Navigate replace to={'/portal/workloads/' + encodeURIComponent(snap.resourceUid) + location.search}/>
+      : <Empty warn>This legacy workload has no immutable resource UID.</Empty>
+  }</BoardResult>;
 }
 function JobOverview({ snap }: { snap: JobDetail }) {
   const o = snap.object;
@@ -102,8 +157,27 @@ function JobOverview({ snap }: { snap: JobDetail }) {
   ]}/>{release && <><h2>Resource release</h2><KV rows={[
     ['Quota', release.quotaState], ['Physical compute', release.computeState], ['Active Ray pods', release.activePods], ['Nodes still held', release.nodes?.join(', ')], ['Diagnostic', release.message],
   ]}/></>}<h2>Kueue admission</h2>
-    <SourceResult diagnostic={snap.diagnostics?.workloads} label="Kueue admission">{!snap.workloads?.length ? <Empty>No Kueue Workload is associated with this run.</Empty> : <Table headers={['Workload', 'Queue', 'ClusterQueue', 'Admitted', 'Finished']}
-      rows={snap.workloads.map(w => [text(w.name), text(w.queue), text(w.clusterQueue), w.admitted ? 'yes' : 'no', w.finished ? 'yes' : 'no'])}/>}</SourceResult></>;
+    <SourceResult diagnostic={snap.diagnostics?.workloads} label="Kueue admission">{!snap.workloads?.length ? <Empty>No Kueue Workload is associated with this run.</Empty> : <Table headers={['Workload', 'Queue', 'ClusterQueue', 'State', 'Kueue reported']}
+      rows={snap.workloads.map(w => [text(w.name), text(w.queue), text(w.clusterQueue), w.finished ? 'finished' : w.admitted ? 'admitted' : 'pending',
+        w.pendingReason || w.pendingMessage ? <span><strong>{text(w.pendingReason)}</strong>{w.pendingMessage ? ` — ${w.pendingMessage}` : ''}</span> : '—'])}/>}</SourceResult>
+    <Note>Queue usage and headroom are current context, not a prediction of admission order or wait time.</Note>
+    <h2>GPU health and efficiency</h2><SourceResult diagnostic={snap.diagnostics?.telemetry} label="GPU telemetry">{!snap.telemetry?.gpus?.length ? <Empty>{snap.diagnostics?.telemetry?.message || 'No GPU telemetry matched this workload.'}</Empty>
+      : <><KV rows={[
+        ['Observed GPUs', snap.telemetry.gpuCount], ['Coverage', snap.telemetry.coverage],
+        ['Average utilization', snap.telemetry.averageUtilizationPct == null ? undefined : `${snap.telemetry.averageUtilizationPct.toFixed(1)}%`],
+        ['Window', `${snap.telemetry.start} — ${snap.telemetry.end}`],
+      ]}/><Table headers={['Pod / GPU', 'Average util.', 'Peak util.', 'Max temp.', 'Max power', 'Max memory', 'Health']}
+        rows={snap.telemetry.gpus.map(gpu => [
+          `${gpu.pod} · ${gpu.instance} / ${gpu.gpu}`,
+          gpu.averageUtilizationPct == null ? '—' : `${gpu.averageUtilizationPct.toFixed(1)}%`,
+          gpu.peakUtilizationPct == null ? '—' : `${gpu.peakUtilizationPct.toFixed(1)}%`,
+          <Gauge label="Peak GPU temperature" value={gpu.maxTemperatureCelsius} max={100} unit="°C"
+            tone={gpu.maxTemperatureCelsius != null && gpu.maxTemperatureCelsius >= 90 ? 'critical' : gpu.maxTemperatureCelsius != null && gpu.maxTemperatureCelsius >= 80 ? 'warm' : ''}/>,
+          <Gauge label="Peak GPU power consumption" value={gpu.maxPowerWatts} max={1000} unit="W"
+            tone={gpu.maxPowerWatts != null && gpu.maxPowerWatts >= 800 ? 'warm' : ''}/>,
+          gpu.maxMemoryUsedMB == null ? '—' : `${gpu.maxMemoryUsedMB.toFixed(0)} MB`,
+          (gpu.maxRowRemapFailure || gpu.maxUncorrectableRemappedRows) ? <Status value="attention" tone="fail"/> : <Status value="no reported remap errors" tone="done"/>,
+        ])}/></>}</SourceResult></>;
 }
 export function RayBoard() {
   const query = useBoard<Ray>('/api/portal/ray');
