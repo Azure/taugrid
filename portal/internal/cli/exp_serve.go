@@ -161,9 +161,7 @@ func (opts expServeOptions) nativeKustoQuery() func(ctx context.Context, query s
 		return nil
 	}
 	database := strings.TrimSpace(opts.kustoDatabase)
-	return func(ctx context.Context, query string) (string, error) {
-		return kustoquery.RunADXQuery(ctx, endpoint, database, query)
-	}
+	return kustoquery.NewRawSDKQuery(endpoint, database)
 }
 
 func newExpServerFromOptions(storePath *string, opts expServeOptions) (*expapi.Server, error) {

@@ -12,6 +12,7 @@ package portalapi
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -312,8 +313,54 @@ func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceS
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
+		if compressKustoJSON(r) {
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Add("Vary", "Accept-Encoding")
+			compressed := gzip.NewWriter(w)
+			defer compressed.Close()
+			s.mux.ServeHTTP(gzipResponseWriter{ResponseWriter: w, writer: compressed}, r)
+			return
+		}
 		s.mux.ServeHTTP(w, r)
 	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	writer *gzip.Writer
+}
+
+func (w gzipResponseWriter) Write(payload []byte) (int, error) {
+	w.Header().Del("Content-Length")
+	return w.writer.Write(payload)
+}
+
+func compressKustoJSON(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	switch r.URL.Path {
+	case "/api/portal/cluster", "/api/portal/nodeutil":
+	default:
+		return false
+	}
+	for _, value := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		parts := strings.Split(strings.TrimSpace(value), ";")
+		if !strings.EqualFold(parts[0], "gzip") {
+			continue
+		}
+		quality := 1.0
+		for _, parameter := range parts[1:] {
+			name, raw, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+			if ok && strings.EqualFold(name, "q") {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					quality = parsed
+				}
+			}
+		}
+		return quality > 0
+	}
+	return false
 }
 
 // Serve runs the portal HTTP server on the listener until ctx is cancelled.
