@@ -8,6 +8,7 @@ on:
       - charts/**
       - scripts/ci/publish-helm-charts.sh
       - scripts/ci/tests/publish-helm-charts_test.sh
+      - scripts/ci/tests/helm-chart-validation-contract_test.sh
       - scripts/ci/vendor-taugrid-dependencies.sh
       - scripts/ci/tests/vendor-taugrid-dependencies_test.sh
       - .github/workflows/ci-helm-charts.yml
@@ -29,7 +30,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Run chart publisher tests
-        run: bash scripts/ci/tests/publish-helm-charts_test.sh
+        run: |
+          bash scripts/ci/tests/publish-helm-charts_test.sh
+          bash scripts/ci/tests/helm-chart-validation-contract_test.sh
 
   detect:
     name: Detect changed charts
@@ -122,7 +125,12 @@ jobs:
           fi
 
       - name: Lint chart
-        run: helm lint "${{ matrix.chart }}"
+        run: |
+          namespace_args=()
+          if [[ "${{ matrix.chart }}" == "charts/taugrid" ]]; then
+            namespace_args=(--namespace kueue-system)
+          fi
+          helm lint "${{ matrix.chart }}" "${namespace_args[@]}"
 
       - name: Install helm-unittest
         run: |
@@ -150,13 +158,18 @@ jobs:
 
       - name: Validate template rendering
         run: |
+          namespace_args=()
+          if [[ "${{ matrix.chart }}" == "charts/taugrid" ]]; then
+            namespace_args=(--namespace kueue-system)
+          fi
+
           # Render with default values.
-          helm template test "${{ matrix.chart }}" > /dev/null
+          helm template test "${{ matrix.chart }}" "${namespace_args[@]}" > /dev/null
 
           # Render with any bundled example/test values files, if present.
           if ls "${{ matrix.chart }}"/examples/*.yaml >/dev/null 2>&1; then
             for values in "${{ matrix.chart }}"/examples/*.yaml; do
               echo "Testing with $(basename "$values")"
-              helm template test "${{ matrix.chart }}" -f "$values" > /dev/null
+              helm template test "${{ matrix.chart }}" "${namespace_args[@]}" -f "$values" > /dev/null
             done
           fi

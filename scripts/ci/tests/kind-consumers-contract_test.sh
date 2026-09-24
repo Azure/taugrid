@@ -21,6 +21,13 @@ if grep -En 'kind (create|delete) cluster' "${REPO_ROOT}/cli/scripts/kind-smoke-
   exit 1
 fi
 
+grep -Fq 'TAUGRID_NAMESPACE="${TAU_KIND_TAUGRID_NAMESPACE:-kueue-system}"' \
+  "${REPO_ROOT}/cli/scripts/kind-smoke-e2e.sh" ||
+  {
+    echo "CLI Kind smoke must default the TauGrid release to kueue-system for KEC" >&2
+    exit 1
+  }
+
 if grep -q 'ctr .* images remove' "${REPO_ROOT}/scripts/dev/kind-local.sh"; then
   echo "Kind development preemptively removes cached Podman images" >&2
   exit 1
