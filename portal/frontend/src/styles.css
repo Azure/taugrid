@@ -187,12 +187,21 @@
   .fabric-site > header > div { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .fabric-site > header strong { font-size: 15px; }
   .fabric-site > header span { overflow-wrap: anywhere; font-size: 11px; font-weight: 650; }
+  .fabric-site-toggle {
+    width: calc(100% - 28px); margin: 12px 14px 0; padding: 7px 10px;
+    border: 1px solid color-mix(in srgb, var(--site-color) 24%, white);
+    background: #fff; color: var(--accent); font: inherit; font-size: 11px; font-weight: 700;
+    text-align: left; cursor: pointer;
+  }
   .fabric-pools { padding: 12px 14px 14px; }
   .fabric-pool + .fabric-pool { margin-top: 14px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, var(--site-color) 24%, white); }
   .fabric-pool h4 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; color: var(--text); font-size: 12px; }
   .fabric-pool h4 span { color: var(--muted); font-size: 10px; font-weight: 550; }
   .fabric-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 10px; }
-  .fabric-node { min-width: 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--site-color) 22%, #d8dee8); background: #fff; }
+  .fabric-node {
+    min-width: 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--site-color) 22%, #d8dee8); background: #fff;
+    contain: layout paint style; content-visibility: auto; contain-intrinsic-block-size: auto 190px;
+  }
   .fabric-node-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
   .fabric-node-head strong { overflow-wrap: anywhere; font-size: 12px; }
   .fabric-node-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
@@ -218,6 +227,7 @@
   .fabric-signals span.fault { border-color: var(--warn); color: var(--warn); }
   .fabric-signals b { display: block; margin-top: 2px; font-size: 10px; }
   .fabric-node > a { display: inline-block; margin-top: 9px; color: var(--accent); font-size: 10px; text-decoration: none; }
+  .disclosure-button { margin-top: 10px; }
   .focused-gpus { margin: 18px 0; }
   .focused-gpus > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   .focused-gpus h3 { margin: 0; }
@@ -312,11 +322,13 @@
   .overview-node strong { font-size: 10px; }
   .overview-node small { margin-top: 2px; color: var(--muted); font-size: 8px; }
   .overview-node-capacity > small { text-align: right; }
-  .overview-gpu-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(8px, 1fr)); gap: 3px; }
-  .overview-gpu-tiles span { height: 9px; border: 1px solid #cbd5e1; border-radius: 2px; background: #eef2f6; }
-  .overview-gpu-tiles span.allocated { border-color: var(--accent); background: var(--accent); }
-  .overview-gpu-tiles span.available { border-color: #9fc3a8; background: #dbe8df; }
-  .overview-gpu-tiles span.unknown { border-style: dashed; }
+  .overview-gpu-tiles {
+    height: 9px; border: 1px solid #9fc3a8; border-radius: 2px;
+    background:
+      repeating-linear-gradient(to right, transparent 0, transparent calc(var(--gpu-tile-width) - 3px), #fff calc(var(--gpu-tile-width) - 3px), #fff var(--gpu-tile-width)),
+      linear-gradient(to right, var(--accent) 0 var(--gpu-allocated), #dbe8df var(--gpu-allocated) 100%);
+  }
+  .overview-gpu-tiles[data-allocation="unknown"] { border-color: #cbd5e1; border-style: dashed; background: #eef2f6; }
   .overview-queue { display: flex; flex-direction: column; justify-content: center; background: rgba(255,255,255,.72); }
   .overview-queue-dial { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .overview-queue-dial > span { color: var(--muted); font-size: 10px; }

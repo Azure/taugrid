@@ -1,10 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, type ReactNode } from 'react';
 import { QueryCache, QueryClient, useQuery, useQueryClient, type Query, type UseQueryResult } from '@tanstack/react-query';
 import type { Directory, WorkspaceScope } from './types';
 
 export const boardStaleTimeMs = 15_000;
+export const fleetBoardPaths = [
+  '/api/portal/nodes',
+  '/api/portal/cluster',
+  '/api/portal/nodeutil',
+] as const;
 
 export class APIError extends Error {
   constructor(public status: number, public state: string, detail: string) { super(`${status} ${detail}`); }
@@ -160,17 +165,30 @@ export function useBoard<T>(
     refetchInterval,
   });
 }
-export function useBoardPrefetch<T>(path: string) {
+export function prefetchBoardPaths(
+  client: QueryClient,
+  scope: WorkspaceScope,
+  managed: boolean,
+  paths: readonly string[],
+) {
+  return Promise.all(paths.map(path => {
+    const url = scopedURL(path, scope.workspace, managed, scope.source);
+    return client.prefetchQuery({
+      queryKey: [...boardScopeKey(scope, managed), url],
+      queryFn: ({ signal }) => fetchJSON<unknown>(url, signal),
+    });
+  }));
+}
+export function useBoardPrefetch(paths: readonly string[]) {
   const { scope, managed } = useWorkspace();
   const client = useQueryClient();
-  const url = scopedURL(path, scope.workspace, managed, scope.source);
-  const queryKey = [...boardScopeKey(scope, managed), url];
-  return () => {
-    void client.prefetchQuery({
-      queryKey,
-      queryFn: ({ signal }) => fetchJSON<T>(url, signal),
-    });
-  };
+  return useCallback(() => {
+    void prefetchBoardPaths(client, scope, managed, paths);
+  }, [
+    client, managed, paths, scope.workspace, scope.cluster, scope.namespace, scope.localQueue,
+    scope.source, scope.resultScope, scope.authorizationMode, scope.experimentsUrl,
+    scope.experimentsNative?.state, scope.experimentsNative?.apiBasePath,
+  ]);
 }
 export function boardScopeKey(scope: WorkspaceScope, managed: boolean) {
   return ['board', scope.workspace, scope.cluster, scope.namespace, scope.localQueue,

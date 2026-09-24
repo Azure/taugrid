@@ -119,6 +119,8 @@ describe('Platform overview', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/nodeutil'))).toHaveLength(1);
     });
+    screen.getByRole('link', { name: 'Open fleet detail →' }).focus();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/nodeutil'))).toHaveLength(1);
 
     await userEvent.click(screen.getByRole('button', { name: 'Refresh Infrastructure overview' }));
     await waitFor(() => {
