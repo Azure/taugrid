@@ -390,6 +390,12 @@ fi
 configure_kind_node_task_budget
 DIAGNOSTICS_READY=1
 
+# KEC classifies AKS user nodes from these platform-owned inputs. Kind does not
+# provide them, so emulate a CPU AKS node before installing the controller.
+kubectl --context "$KUBE_CONTEXT" label node --all --overwrite \
+  kubernetes.azure.com/mode=user \
+  node.kubernetes.io/instance-type=Standard_D4s_v5
+
 if [[ "${TAU_KIND_SKIP_BUILD:-0}" != "1" ]]; then
   make -C "$TAU_DIR" build
 fi

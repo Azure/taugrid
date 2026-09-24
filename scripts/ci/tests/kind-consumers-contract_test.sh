@@ -28,6 +28,16 @@ grep -Fq 'TAUGRID_NAMESPACE="${TAU_KIND_TAUGRID_NAMESPACE:-kueue-system}"' \
     exit 1
   }
 
+for kec_input in \
+  'kubernetes.azure.com/mode=user' \
+  'node.kubernetes.io/instance-type=Standard_D4s_v5'; do
+  grep -Fq "$kec_input" "${REPO_ROOT}/cli/scripts/kind-smoke-e2e.sh" ||
+    {
+      echo "CLI Kind smoke must emulate KEC input label ${kec_input}" >&2
+      exit 1
+    }
+done
+
 if grep -q 'ctr .* images remove' "${REPO_ROOT}/scripts/dev/kind-local.sh"; then
   echo "Kind development preemptively removes cached Podman images" >&2
   exit 1
