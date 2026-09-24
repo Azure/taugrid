@@ -55,7 +55,7 @@ func TestClusterInstallUpgradesCRDsBeforeExistingRelease(t *testing.T) {
 				case "get":
 					_, _ = io.WriteString(out, "{}")
 				case "template":
-					if !containsArgPair(args, "--version", "0.4.2") ||
+					if !containsArgPair(args, "--version", "0.4.3") ||
 						!containsArgPair(args, "--values", "cluster.yaml") ||
 						!containsArg(args, "--include-crds") {
 						t.Fatalf("CRD render must use the install's chart version and values: %v", args)

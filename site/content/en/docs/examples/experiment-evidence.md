@@ -24,11 +24,13 @@ Prepare:
 - A Ready TauWorkspace named `taugrid-default`.
 - A writable `blob-training` PVC mounted at `/data`.
 - One schedulable NVIDIA GPU.
-- A digest-pinned `taugrid-portal` image supplied by the platform team.
-- Portal and the optional metrics ingestion path configured for the workspace.
+- A digest-pinned `taugrid-metrics-collector` image supplied by the platform
+  team.
+- Portal typed ADX assets and required collector ingestion configured for the
+  workspace.
 
-The sidecar runs `taugrid-portal experiment offload metrics`, so use the Portal
-image rather than the Tau CLI image.
+The sidecar runs the standalone collector with the fixed `collector-v1`
+runtime, `adx-required` delivery mode, and `adx-queued-v1` sink.
 
 ## Inspect the evidence contract
 
@@ -60,8 +62,9 @@ flushed and atomically renamed, so readers only see complete rows:
 {"_step":2,"_timestamp":1760000002.125,"loss":0.3333333333,"accuracy":0.6666666667}
 ```
 
-`_timestamp` is a positive Unix-seconds number. The offloader uses `_step` and
-the timestamp to normalize each scalar into the metrics store.
+`_timestamp` is a positive Unix-seconds number. The collector uses `_step` and
+the timestamp to normalize each scalar into a canonical
+`tau.experiment.metric.v1` event.
 
 ## Render and submit
 
@@ -69,7 +72,10 @@ From the repository root:
 
 ```bash
 make install-tau-cli
-export TAU_METRICS_OFFLOAD_IMAGE=<taugrid-portal-image@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<taugrid-metrics-collector-image@sha256:digest>
+export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
 
 tau run --workspace taugrid-default \
@@ -83,6 +89,13 @@ Confirm that the rendered RayJob includes:
 - `tau.azure.com/stellar-group-value: default`
 - The `blob-training` PVC
 - A `metrics-offload` sidecar watching the immutable history glob
+- `TAU_METRICS_OFFLOAD_DELIVERY_MODE=adx-required`
+- `TAU_METRICS_OFFLOAD_ADX_TABLE=TauExpMetricEventsV1`
+- `TAU_METRICS_OFFLOAD_ADX_MAPPING=TauExpMetricEventsV1Json`
+
+The client ID must match the federated identity on the workspace ServiceAccount
+and needs only ADX ingestion permission. The collector withholds terminal
+completion until queued ingestion reports a durable successful receipt.
 
 Submit and follow the run:
 

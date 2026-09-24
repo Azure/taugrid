@@ -15,6 +15,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
 | **C/C++ toolchain** | gcc, g++, ninja-build, python3-devel — needed by flashinfer JIT and vLLM extensions at runtime |
 | **GNU Wget 1.x** | Built from source to replace Azure Linux 3's wget2, which breaks KubeRay exec-based health probes on dual-stack pods |
+| **CA certificate bundle** | `SSL_CERT_FILE` / `CURL_CA_BUNDLE` pinned to Azure Linux's cert bundle so native (non-Python/Rust) TLS clients, e.g. pyarrow's C++ `AzureFileSystem`, resolve certs correctly |
 
 The image runs as the `nonroot` user and exposes Ray's default ports:
 
@@ -159,6 +160,7 @@ against its digest before the runtime incident can be considered resolved.
 7. GNU Wget 1.x is installed (not wget2)
 8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
 9. NCCL (`libnccl`) is loadable
+10. `SSL_CERT_FILE`/`CURL_CA_BUNDLE` are set and resolve to a valid, loadable CA bundle
 
 These smoke tests do not exercise Serve deployment or request handling.
 Release validation must separately cover Serve startup and RayService rollout;

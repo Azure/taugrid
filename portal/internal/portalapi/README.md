@@ -39,8 +39,12 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   Kusto workspace boundary. Local scopes use local readers; remote scopes
   redirect only to a registered per-cluster Portal or return an explicit
   unavailable state.
-- **Native experiments** — experiments, charts, launch metadata, and media use
-  the same React application; there is no experiment iframe or persona sidebar.
+- **Native experiments** — experiments and bounded charts use the same React
+  application; there is no experiment iframe or persona sidebar. The fixed
+  workflow calls only canonical narrow v2 reads for experiment search,
+  cursor-paginated runs, exact run detail, exact metric catalog, and one exact
+  bounded series. Query identity includes the complete authorized workspace and
+  backend scope.
   Managed workspaces may use a local `/stellar` path or an explicit HTTPS
   experiment endpoint, but `experimentsUrl` requires a Kusto-backed source.
   Portal permits only canonical workspace-aware read routes (experiment/run
@@ -64,6 +68,13 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
   Stellar's handler hard-codes `X-Frame-Options:
   DENY`; the mount relaxes that blanket `DENY` to `SAMEORIGIN` while leaving
   stricter per-route headers untouched.
+
+  Canonical v2 discovery uses `TauExpSeriesCatalogRows()` and
+  `TauExpRunCatalogRows()`, while bounded series use
+  `TauExpMetricEventRows()`. Function and ADX failures surface to clients; no
+  raw `ExperimentMetrics` fallback or migration switch exists. Dashboard-shaped
+  snapshot routes and API aliases remain compatibility surfaces, return
+  deprecation headers, and are not used by the native React workflow.
 
 ## Workspace directory contract
 

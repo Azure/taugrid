@@ -5,7 +5,7 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 ## Install
 
 ```bash
-tau cluster install --version 0.4.2 --values taugrid-values.yaml
+tau cluster install --version 0.4.3 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -13,7 +13,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.2 \
+  --version 0.4.3 \
   --namespace kueue-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -65,6 +65,14 @@ Azure/ADX permissions; it cannot verify the supplied identity's role assignments
 Existing experiment ingestion and tables are also prerequisites. The Cost board
 still uses `taugrid-core.portal.kusto.costDatabase` (`CostTracking` by default)
 and needs Viewer permission there if used.
+
+Typed experiment telemetry additionally requires a release-matched `tau` client
+and immutable `taugrid-metrics-collector` image. The collector is rendered as a
+workload sidecar by `tau run`; the umbrella chart does not deploy it as a
+cluster service or store its ingestion identity. Configure the workload with
+the collector digest, ADX endpoint/database, and the TauWorkspace ServiceAccount
+Workload Identity client ID. Canonical Portal reads require the typed adx-mon
+table, catalogs, and stable Functions before traffic is enabled.
 
 Nonempty `taugrid-core.portal.kusto.endpoint` and `.database` override the shared
 values independently. An explicit

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/kueueapi"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -43,17 +44,25 @@ type WorkloadReader interface {
 // so the overview can list what is running now and link each row to its
 // experiment.
 type Workload struct {
-	Name         string    `json:"name"`
-	Namespace    string    `json:"namespace"`
-	Job          string    `json:"job,omitempty"`
-	RunID        string    `json:"runId,omitempty"`
-	Owners       []string  `json:"owners,omitempty"`
-	OwnerUIDs    []string  `json:"-"`
-	Queue        string    `json:"queue,omitempty"`
-	ClusterQueue string    `json:"clusterQueue,omitempty"`
-	Admitted     bool      `json:"admitted"`
-	Finished     bool      `json:"finished"`
-	CreatedAt    time.Time `json:"createdAt,omitempty"`
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace"`
+	Job       string   `json:"job,omitempty"`
+	RunID     string   `json:"runId,omitempty"`
+	Owners    []string `json:"owners,omitempty"`
+	OwnerUIDs []string `json:"-"`
+	// Resource* is the canonical detail-route owner. Keep it empty for owner
+	// kinds the detail resolver does not support; emitting an arbitrary
+	// controller UID here creates a guaranteed /portal/workloads/{uid} 404.
+	ResourceUID    string    `json:"resourceUid,omitempty"`
+	ResourceKind   string    `json:"resourceKind,omitempty"`
+	ResourceName   string    `json:"resourceName,omitempty"`
+	Queue          string    `json:"queue,omitempty"`
+	ClusterQueue   string    `json:"clusterQueue,omitempty"`
+	Admitted       bool      `json:"admitted"`
+	Finished       bool      `json:"finished"`
+	PendingReason  string    `json:"pendingReason,omitempty"`
+	PendingMessage string    `json:"pendingMessage,omitempty"`
+	CreatedAt      time.Time `json:"createdAt,omitempty"`
 	// Admission priority controls Kueue queue ordering and workload
 	// preemption. Pod priority controls Kubernetes scheduling and pod
 	// preemption after admission.
@@ -115,17 +124,22 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 	out := make([]Workload, 0, len(list.Items))
 	for _, it := range list.Items {
 		admitted, finished := admissionState(it.Status.Conditions)
+		pendingReason, pendingMessage := kueueapi.PendingCause(it.Status.Conditions)
 		labels := it.Metadata.Labels
 		executionTarget := workloadExecutionTarget(it)
 		priorityClass, priorityClassKind := workloadPriorityClass(it.Spec)
 		var owners []string
 		var ownerUIDs []string
+		resourceUID, resourceKind, resourceName := "", "", ""
 		for _, ref := range it.Metadata.OwnerReferences {
 			if ref.Name != "" {
 				owners = append(owners, ref.Name)
 			}
 			if ref.UID != "" && ref.Controller != nil && *ref.Controller {
 				ownerUIDs = append(ownerUIDs, ref.UID)
+				if resourceUID == "" && ref.Name != "" && supportedWorkloadOwnerKind(ref.Kind) {
+					resourceUID, resourceKind, resourceName = ref.UID, ref.Kind, ref.Name
+				}
 			}
 		}
 		out = append(out, Workload{
@@ -135,10 +149,15 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 			RunID:                      labels[experiment.LabelRunID],
 			Owners:                     owners,
 			OwnerUIDs:                  ownerUIDs,
+			ResourceUID:                resourceUID,
+			ResourceKind:               resourceKind,
+			ResourceName:               resourceName,
 			Queue:                      it.Spec.QueueName,
 			ClusterQueue:               it.Status.Admission.ClusterQueue,
 			Admitted:                   admitted,
 			Finished:                   finished,
+			PendingReason:              pendingReason,
+			PendingMessage:             pendingMessage,
 			CreatedAt:                  it.Metadata.CreationTimestamp,
 			AdmissionPriorityClass:     priorityClass,
 			AdmissionPriorityClassKind: priorityClassKind,
@@ -161,6 +180,15 @@ func parseWorkloads(raw []byte) ([]Workload, error) {
 		return ja < jb
 	})
 	return out, nil
+}
+
+func supportedWorkloadOwnerKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "job", "rayjob", "pod", "rayservice":
+		return true
+	default:
+		return false
+	}
 }
 
 func workloadPriorityClass(spec workloadSpec) (string, string) {
@@ -204,7 +232,7 @@ func (w Workload) sortKey() string {
 
 // admissionState mirrors queue.workloadConditions: admitted when the Admitted
 // condition is True, finished when the Finished condition is True.
-func admissionState(conditions []conditionJSON) (admitted, finished bool) {
+func admissionState(conditions []kueueapi.Condition) (admitted, finished bool) {
 	for _, c := range conditions {
 		if c.Type == "Admitted" && c.Status == "True" {
 			admitted = true
@@ -312,6 +340,7 @@ type workloadItem struct {
 		CreationTimestamp time.Time         `json:"creationTimestamp"`
 		Labels            map[string]string `json:"labels"`
 		OwnerReferences   []struct {
+			Kind       string `json:"kind"`
 			Name       string `json:"name"`
 			UID        string `json:"uid"`
 			Controller *bool  `json:"controller"`
@@ -322,12 +351,11 @@ type workloadItem struct {
 		Admission struct {
 			ClusterQueue string `json:"clusterQueue"`
 		} `json:"admission"`
-		Conditions            []conditionJSON `json:"conditions"`
-		ClusterName           string          `json:"clusterName"`
-		NominatedClusterNames []string        `json:"nominatedClusterNames"`
+		Conditions            []kueueapi.Condition `json:"conditions"`
+		ClusterName           string               `json:"clusterName"`
+		NominatedClusterNames []string             `json:"nominatedClusterNames"`
 	} `json:"status"`
 }
-
 type workloadSpec struct {
 	QueueName           string `json:"queueName"`
 	Priority            *int32 `json:"priority"`
@@ -347,9 +375,4 @@ type workloadPodSet struct {
 			PriorityClassName string `json:"priorityClassName"`
 		} `json:"spec"`
 	} `json:"template"`
-}
-
-type conditionJSON struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
 }

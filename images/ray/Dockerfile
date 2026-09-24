@@ -36,6 +36,10 @@ RUN tdnf install -y ca-certificates which gcc gcc-c++ binutils glibc-devel kerne
         ninja-build python3-devel \
         rdma-core libibverbs librdmacm && tdnf clean all
 
+# Pin Azure Linux's CA bundle for native TLS clients.
+ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
+ENV CURL_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
+
 # --- CUDA compiler toolkit from NVIDIA's RHEL9 RPM repository ---
 # vLLM >=0.14 depends on flashinfer which JIT-compiles CUDA kernels at runtime.
 # Install only the compiler toolchain needed for JIT (nvcc, ptxas, headers,

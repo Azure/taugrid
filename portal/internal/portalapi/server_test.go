@@ -1282,7 +1282,183 @@ func (s *stubRunsReader) ListRayJobs(_ context.Context, _ string) ([]byte, error
     ]}`), nil
 }
 
-type jobDetailAPIReader struct{ stubRunsReader }
+type jobDetailAPIReader struct {
+	lastLogPod       string
+	lastLogContainer string
+	lastLogPrevious  bool
+	lastLogTail      int64
+	lastLogLimit     int64
+}
+
+type ownerKindDetailReader struct {
+	jobDetailAPIReader
+}
+
+func (*ownerKindDetailReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":"jobqueue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}}]}`, namespace)), nil
+}
+
+func (*ownerKindDetailReader) ListClusterQueues(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"pod-owner","namespace":"ray","ownerReferences":[{"apiVersion":"v1","kind":"Pod","name":"standalone-train","uid":"pod-owner","controller":true}]},
+		 "spec":{"queueName":"jobqueue"},"status":{"admission":{"clusterQueue":"taugrid-cq"},"conditions":[{"type":"Admitted","status":"True"}]}},
+		{"metadata":{"name":"rayservice-owner","namespace":"ray","ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayService","name":"serve-model","uid":"rayservice-owner","controller":true}]},
+		 "spec":{"queueName":"jobqueue"},"status":{"admission":{"clusterQueue":"taugrid-cq"},"conditions":[{"type":"Admitted","status":"True"}]}}
+	]}`), nil
+}
+
+func (*ownerKindDetailReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"standalone-train","namespace":"ray","uid":"pod-owner","creationTimestamp":"2026-09-23T01:00:00Z",
+		 "labels":{"` + workloadmeta.LabelRunID + `":"pod-run"},"annotations":{}},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","startTime":"2026-09-23T01:00:30Z","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{"startedAt":"2026-09-23T01:00:30Z"}}}]}},
+		{"metadata":{"name":"serve-head","namespace":"ray","uid":"serve-head","labels":{"ray.io/cluster":"serve-cluster"},"ownerReferences":[{"kind":"RayCluster","uid":"serve-cluster-uid","controller":true}]},
+		 "spec":{"nodeName":"gpu-b","containers":[{"name":"ray-head"}]},
+		 "status":{"phase":"Running","startTime":"2026-09-23T01:01:00Z","containerStatuses":[{"name":"ray-head","ready":true,"state":{"running":{"startedAt":"2026-09-23T01:01:00Z"}}}]}}
+	]}`), nil
+}
+
+func (*ownerKindDetailReader) GetRayService(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"serve-model","namespace":"ray","uid":"rayservice-owner","creationTimestamp":"2026-09-23T01:00:00Z",
+		"labels":{"` + workloadmeta.LabelRunID + `":"serve-run"},"annotations":{}},
+		"status":{"serviceStatus":"Running","activeServiceStatus":{"rayClusterName":"serve-cluster"}}}`), nil
+}
+
+func (*ownerKindDetailReader) GetRayCluster(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"serve-cluster","uid":"serve-cluster-uid",
+		"ownerReferences":[{"kind":"RayService","uid":"rayservice-owner","controller":true}]}}`), nil
+}
+
+func (*ownerKindDetailReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestOverviewOwnerKindLinksResolveWorkloadDetail(t *testing.T) {
+	reader := &ownerKindDetailReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Jobs:    testOperatorJobs(t, reader),
+		Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	overview := httptest.NewRecorder()
+	server.Handler().ServeHTTP(overview, httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil))
+	if overview.Code != http.StatusOK {
+		t.Fatalf("overview status = %d, body = %s", overview.Code, overview.Body.String())
+	}
+	var got overviewResponse
+	if err := json.Unmarshal(overview.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if len(got.Running) != 2 {
+		t.Fatalf("running = %+v, want admitted Pod and RayService", got.Running)
+	}
+	linked := map[string]bool{}
+	for _, item := range got.Running {
+		linked[item.ResourceUID] = true
+	}
+	if !linked["pod-owner"] || !linked["rayservice-owner"] {
+		t.Fatalf("overview resource UIDs = %+v, want Pod and RayService canonical links", linked)
+	}
+
+	for _, tc := range []struct {
+		uid  string
+		kind string
+	}{
+		{uid: "pod-owner", kind: "Pod"},
+		{uid: "rayservice-owner", kind: "RayService"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/"+tc.uid, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), `"resourceUid":"`+tc.uid+`"`) ||
+				!strings.Contains(rec.Body.String(), `"kind":"`+tc.kind+`"`) {
+				t.Fatalf("detail = %s", rec.Body.String())
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/workloads/pod-owner/logs?pod=serve-head&container=ray-head", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-workload pod status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/not-an-owner", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown UID status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestManagedOperatorModeWorkloadFallbackStaysWithinWorkspace(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{ID: "alpha", Team: "alpha", Cluster: "cluster-a", Namespace: "team-alpha", LocalQueue: "alpha-queue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+			{ID: "operator", Team: "operator", Cluster: "cluster-a", Namespace: "ray", LocalQueue: "jobqueue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"operators"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &ownerKindDetailReader{}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Jobs:               testOperatorJobs(t, reader),
+		Runs:               RunsOptions{Reader: reader},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := managedRequest(t, server, "/api/portal/workloads/pod-owner?workspace=alpha"); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign operator detail = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server,
+		"/api/portal/workloads/pod-owner/logs?workspace=alpha&pod=standalone-train&container=trainer"); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign operator logs = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogPod != "" {
+		t.Fatalf("foreign operator log request reached Kubernetes for pod %q", reader.lastLogPod)
+	}
+}
+
+func (*jobDetailAPIReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"ray","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
+		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil
+}
+
+func (*jobDetailAPIReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
 
 func (*jobDetailAPIReader) GetJob(context.Context, string, string) ([]byte, error) {
 	return []byte(`{"metadata":{"name":"train","namespace":"ray","uid":"job-current",
@@ -1299,7 +1475,9 @@ func (*jobDetailAPIReader) GetRayCluster(context.Context, string, string) ([]byt
 
 func (*jobDetailAPIReader) ListPods(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[
-		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},"status":{"phase":"Running"}},
+		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","startTime":"2026-07-02T10:01:00Z","containerStatuses":[{"name":"trainer","ready":true,"restartCount":1,"state":{"running":{"startedAt":"2026-07-02T10:01:00Z"}},"lastState":{"terminated":{"reason":"Error","exitCode":1}}}]}},
 		{"metadata":{"name":"train-stale","uid":"pod-stale","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-stale","controller":true}]},"status":{"phase":"Failed"}}
 	]}`), nil
 }
@@ -1323,6 +1501,218 @@ func (*jobDetailAPIReader) ListServices(context.Context, string) ([]byte, error)
 	return []byte(`{"items":[]}`), nil
 }
 
+func (r *jobDetailAPIReader) GetPodLogs(_ context.Context, _, pod, container string, previous bool, tailLines, limitBytes int64) ([]byte, error) {
+	r.lastLogPod = pod
+	r.lastLogContainer = container
+	r.lastLogPrevious = previous
+	r.lastLogTail = tailLines
+	r.lastLogLimit = limitBytes
+	return []byte("step=1 Authorization: Bearer top-secret\nloss=0.2\n"), nil
+}
+
+type clusterWideDetailReader struct {
+	jobDetailAPIReader
+	lastDetailNamespace string
+	lastLogNamespace    string
+}
+
+func (*clusterWideDetailReader) ListJobs(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "" {
+		return nil, fmt.Errorf("list jobs namespace = %q, want cluster-wide", namespace)
+	}
+	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"team-a","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
+		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil
+}
+
+func (*clusterWideDetailReader) ListRayJobs(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "" {
+		return nil, fmt.Errorf("list RayJobs namespace = %q, want cluster-wide", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *clusterWideDetailReader) GetJob(_ context.Context, namespace, _ string) ([]byte, error) {
+	r.lastDetailNamespace = namespace
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("get job namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"metadata":{"name":"train","namespace":"team-a","uid":"job-current",
+		"labels":{"batch.kubernetes.io/job-name":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}`), nil
+}
+
+func (*clusterWideDetailReader) ListPods(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list pods namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[
+		{"metadata":{"name":"train-current","namespace":"team-a","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}}
+	]}`), nil
+}
+
+func (*clusterWideDetailReader) ListEvents(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list events namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*clusterWideDetailReader) ListWorkloads(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list workloads namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*clusterWideDetailReader) ListServices(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list services namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *clusterWideDetailReader) GetPodLogs(_ context.Context, namespace, _, _ string, _ bool, _, _ int64) ([]byte, error) {
+	r.lastLogNamespace = namespace
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("get pod logs namespace = %q, want team-a", namespace)
+	}
+	return []byte("training"), nil
+}
+
+func TestSingleWorkspaceClusterWideWorkloadDetailUsesRunNamespace(t *testing.T) {
+	reader := &clusterWideDetailReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Runs:    RunsOptions{Reader: reader},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/job-current", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail = %d %s", rec.Code, rec.Body.String())
+	}
+	if reader.lastDetailNamespace != "team-a" {
+		t.Fatalf("detail namespace = %q, want team-a", reader.lastDetailNamespace)
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/workloads/job-current/logs?pod=train-current&container=trainer", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logs = %d %s", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogNamespace != "team-a" {
+		t.Fatalf("log namespace = %q, want team-a", reader.lastLogNamespace)
+	}
+}
+
+type queueScopedDetailReader struct {
+	jobDetailAPIReader
+}
+
+func (*queueScopedDetailReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[
+		{"metadata":{"name":"alpha-queue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}},
+		{"metadata":{"name":"beta-queue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}}
+	]}`, namespace, namespace)), nil
+}
+
+func (*queueScopedDetailReader) ListClusterQueues(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"alpha-train","namespace":"shared","uid":"alpha-uid","creationTimestamp":"2026-07-02T10:00:00Z",
+		 "labels":{"tau.azure.com/job":"alpha-train","tau.azure.com/run-id":"alpha-run","kueue.x-k8s.io/queue-name":"alpha-queue"}},"status":{"active":1}},
+		{"metadata":{"name":"beta-train","namespace":"shared","uid":"beta-uid","creationTimestamp":"2026-07-02T10:00:00Z",
+		 "labels":{"tau.azure.com/job":"beta-train","tau.azure.com/run-id":"beta-run","kueue.x-k8s.io/queue-name":"beta-queue"}},"status":{"active":1}}
+	]}`), nil
+}
+
+func (*queueScopedDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) GetJob(_ context.Context, _, name string) ([]byte, error) {
+	switch name {
+	case "alpha-train":
+		return []byte(`{"metadata":{"name":"alpha-train","namespace":"shared","uid":"alpha-uid",
+			"labels":{"batch.kubernetes.io/job-name":"alpha-train","tau.azure.com/run-id":"alpha-run"}},"status":{"active":1}}`), nil
+	case "beta-train":
+		return []byte(`{"metadata":{"name":"beta-train","namespace":"shared","uid":"beta-uid",
+			"labels":{"batch.kubernetes.io/job-name":"beta-train","tau.azure.com/run-id":"beta-run"}},"status":{"active":1}}`), nil
+	default:
+		return nil, errors.New("job not found")
+	}
+}
+
+func (*queueScopedDetailReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"alpha-pod","uid":"alpha-pod-uid","labels":{"batch.kubernetes.io/job-name":"alpha-train"},"ownerReferences":[{"uid":"alpha-uid","controller":true}]},
+		 "spec":{"containers":[{"name":"trainer"}]},"status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}},
+		{"metadata":{"name":"beta-pod","uid":"beta-pod-uid","labels":{"batch.kubernetes.io/job-name":"beta-train"},"ownerReferences":[{"uid":"beta-uid","controller":true}]},
+		 "spec":{"containers":[{"name":"trainer"}]},"status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}}
+	]}`), nil
+}
+
+func (*queueScopedDetailReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestManagedWorkloadDetailAndLogsStayWithinLocalQueue(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{ID: "alpha", Team: "alpha", Cluster: "cluster-a", Namespace: "shared", LocalQueue: "alpha-queue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+			{ID: "beta", Team: "beta", Cluster: "cluster-a", Namespace: "shared", LocalQueue: "beta-queue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &queueScopedDetailReader{}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace},
+		Runs:               RunsOptions{Reader: reader},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := managedRequest(t, server, "/api/portal/workloads/alpha-uid?workspace=alpha"); rec.Code != http.StatusOK {
+		t.Fatalf("alpha detail = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid?workspace=alpha"); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-queue detail = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid/logs?workspace=alpha&pod=beta-pod&container=trainer"); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-queue logs = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogPod != "" {
+		t.Fatalf("cross-queue log request reached Kubernetes for pod %q", reader.lastLogPod)
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid?workspace=beta"); rec.Code != http.StatusOK {
+		t.Fatalf("beta detail in beta workspace = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	reader := &jobDetailAPIReader{}
 	server, err := NewServer(Options{
@@ -1332,6 +1722,99 @@ func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+
+	t.Run("workload detail resolves immutable UID", func(t *testing.T) {
+		reader := &jobDetailAPIReader{}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"},
+			Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/job-current", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"resourceUid":"job-current"`) ||
+			!strings.Contains(rec.Body.String(), `"objectState":"live"`) ||
+			!strings.Contains(rec.Body.String(), `"scheduling":"scheduled"`) {
+			t.Fatalf("workload detail missing UID lifecycle evidence: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("workload logs are UID fenced bounded and redacted", func(t *testing.T) {
+		reader := &jobDetailAPIReader{}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"},
+			Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		path := "/api/portal/workloads/job-current/logs?pod=train-current&container=trainer&previous=true&tailLines=25&limitBytes=128"
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("Cache-Control = %q, want no-store", rec.Header().Get("Cache-Control"))
+		}
+		if strings.Contains(rec.Body.String(), "top-secret") || !strings.Contains(rec.Body.String(), "[REDACTED]") {
+			t.Fatalf("log response was not redacted: %s", rec.Body.String())
+		}
+		if reader.lastLogPod != "train-current" || reader.lastLogContainer != "trainer" || !reader.lastLogPrevious ||
+			reader.lastLogTail != 25 || reader.lastLogLimit != 129 {
+			t.Fatalf("log request = pod %q container %q previous %v tail %d limit %d", reader.lastLogPod, reader.lastLogContainer, reader.lastLogPrevious, reader.lastLogTail, reader.lastLogLimit)
+		}
+
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/portal/workloads/job-current/logs?pod=train-stale&container=trainer", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("stale pod status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/portal/workloads/job-current/logs?pod=train-current&container=trainer&limitBytes=1048577", nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("oversized limit status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("workload detail falls back to deleted history", func(t *testing.T) {
+		history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+			ObservedAt: "2026-07-02T10:00:00Z", SubmitTime: "2026-07-02T09:59:00Z",
+			State: "failed", Reason: "TrainingError", ResourceUID: "deleted-uid",
+			Name: "deleted-run", Namespace: "ray", Cluster: "cluster-a", Kind: "RayJob", RunID: "run-deleted",
+		}}}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto", Workspace: "taugrid-default"},
+			Cluster: ClusterOptions{Cluster: "cluster-a"},
+			Runs: RunsOptions{
+				Reader: &stubRunsReader{}, Namespace: "ray", History: history,
+				HistoryTable: "TauExpRunLifecycle", HistoryLimit: 25,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		server.singleWorkspaceScope.Cluster = "cluster-a"
+		server.singleWorkspaceScope.Namespace = "ray"
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/deleted-uid", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"objectState":"deleted"`) ||
+			!strings.Contains(rec.Body.String(), `"resourceUid":"deleted-uid"`) ||
+			!strings.Contains(rec.Body.String(), `"application":"failed"`) {
+			t.Fatalf("deleted workload response = %s", rec.Body.String())
+		}
+	})
 
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs/ray/train", nil))

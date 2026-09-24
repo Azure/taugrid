@@ -126,7 +126,7 @@ func TestListWorkloadsParsesOwnerReferences(t *testing.T) {
 	const raw = `{"items":[
       {"metadata":{"name":"rayjob-portal-e2e-abcde","namespace":"ray",
         "ownerReferences":[
-          {"name":"portal-e2e","uid":"rayjob-uid","controller":true},
+          {"kind":"RayJob","name":"portal-e2e","uid":"rayjob-uid","controller":true},
           {"name":"observer","uid":"observer-uid","controller":false},
           {"name":""}
         ]},
@@ -145,6 +145,26 @@ func TestListWorkloadsParsesOwnerReferences(t *testing.T) {
 	}
 	if len(got[0].OwnerUIDs) != 1 || got[0].OwnerUIDs[0] != "rayjob-uid" {
 		t.Fatalf("owner UIDs = %v, want [rayjob-uid]", got[0].OwnerUIDs)
+	}
+	if got[0].ResourceUID != "rayjob-uid" || got[0].ResourceKind != "RayJob" || got[0].ResourceName != "portal-e2e" {
+		t.Fatalf("canonical owner = %q/%q/%q, want RayJob portal-e2e rayjob-uid",
+			got[0].ResourceKind, got[0].ResourceName, got[0].ResourceUID)
+	}
+}
+
+func TestListWorkloadsDoesNotLinkUnsupportedOwnerKind(t *testing.T) {
+	const raw = `{"items":[{"metadata":{"name":"deployment-owner","namespace":"ray",
+		"ownerReferences":[{"kind":"Deployment","name":"serve","uid":"deployment-uid","controller":true}]},
+		"spec":{"queueName":"team-a"},"status":{"conditions":[{"type":"Admitted","status":"True"}]}}]}`
+	got, err := ListWorkloads(context.Background(), &stubReader{json: raw}, "ray")
+	if err != nil {
+		t.Fatalf("ListWorkloads: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d workloads, want 1", len(got))
+	}
+	if got[0].ResourceUID != "" || got[0].ResourceKind != "" || got[0].ResourceName != "" {
+		t.Fatalf("unsupported canonical owner = %#v, want no detail link", got[0])
 	}
 }
 

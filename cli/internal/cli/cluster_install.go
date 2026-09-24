@@ -22,7 +22,7 @@ import (
 const (
 	defaultTauGridRelease      = "taugrid"
 	defaultTauGridNamespace    = "kueue-system"
-	defaultTauGridChartVersion = "0.4.2"
+	defaultTauGridChartVersion = "0.4.3"
 	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
 )
 

@@ -221,6 +221,20 @@
   .focused-gpus > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
   .focused-gpus h3 { margin: 0; }
   .code-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .log-snapshot {
+    max-height: 32rem; margin: 12px 0; padding: 14px; overflow: auto;
+    border: 1px solid var(--line); background: #0f172a; color: #e2e8f0;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .workload-gauge { min-width: 108px; }
+  .workload-gauge > div { display: flex; align-items: baseline; gap: 3px; margin-bottom: 5px; }
+  .workload-gauge strong { color: var(--text); font-size: 12px; }
+  .workload-gauge > div span { color: var(--muted); font-size: 10px; }
+  .workload-gauge-track { display: block; width: 100%; height: 7px; overflow: hidden; background: #e2e8f0; }
+  .workload-gauge-track > span { display: block; height: 100%; background: var(--ok); }
+  .workload-gauge.warm .workload-gauge-track > span { background: #d97706; }
+  .workload-gauge.critical .workload-gauge-track > span { background: var(--warn); }
   .disabled-link { color: var(--accent); font-size: 13px; opacity: .5; cursor: not-allowed; }
   .overview-dashboard { margin-top: 6px; }
   .overview-metrics {

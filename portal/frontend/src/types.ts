@@ -26,9 +26,14 @@ export interface Overview extends Scoped {
   }[];
   active: Run[];
   running: (Tracking & {
-    name: string; job?: string; namespace: string; queue?: string; clusterQueue?: string;
+    name: string; job?: string; namespace: string; resourceUid?: string; queue?: string; clusterQueue?: string;
     admissionPriorityClass?: string; admissionPriorityClassKind?: string;
     admissionPriority?: number; podPriorityClasses?: string[];
+  })[];
+  waiting?: (Tracking & {
+    name: string; job?: string; namespace: string; resourceUid?: string; queue?: string; clusterQueue?: string;
+    pendingReason?: string; pendingMessage?: string; admissionPriorityClass?: string;
+    admissionPriorityClassKind?: string; admissionPriority?: number; podPriorityClasses?: string[];
   })[];
   cards: {
     fleet?: {
@@ -123,13 +128,30 @@ export interface SourceDiagnostic {
   stale?: boolean; lastSuccessAt?: number;
 }
 export interface JobDetail extends Scoped {
-  name: string; namespace: string; kind: string; resourceUid?: string; status: string; runId?: string;
+  name: string; namespace: string; kind: string; resourceUid?: string; objectState: 'live' | 'deleted'; status: string; runId?: string;
+  stages: { object: string; admission: string; scheduling: string; application: string; tracking: string };
   object: { age: string; created?: string; jobDeploymentStatus?: string; rayClusterName?: string; jobId?: string; executionTarget?: string; reason?: string; message?: string };
   resourceRelease?: { computeState: string; quotaState: string; message: string; activePods: number; nodes?: string[] };
   links: { stellarPath?: string; rayDashboardPath?: string; rayDashboardReachable: boolean };
-  workloads?: { name: string; queue?: string; clusterQueue?: string; admitted: boolean; finished: boolean }[];
-  pods?: { name: string; phase: string; node?: string; nodePath?: string; restarts: number }[];
+  workloads?: { name: string; queue?: string; clusterQueue?: string; admitted: boolean; finished: boolean; pendingReason?: string; pendingMessage?: string }[];
+  pods?: { name: string; phase: string; node?: string; nodePath?: string; restarts: number; startedAt?: string; containers?: {
+    name: string; ready: boolean; restarts: number; state?: string; reason?: string; message?: string; previousAvailable?: boolean;
+  }[] }[];
   events?: { type: string; reason: string; message: string; count: number; last?: string }[];
   lifecycle?: Lifecycle;
-  diagnostics: { workloads: SourceDiagnostic; pods: SourceDiagnostic; events: SourceDiagnostic; tracking: SourceDiagnostic };
+  history?: HistoryEvent[];
+  telemetry?: {
+    start: string; end: string; gpuCount: number; sampleCount: number; utilizationSampleCount: number;
+    averageUtilizationPct?: number; coverage: string; gpus: {
+      instance: string; pod: string; gpu: string; modelName?: string; samples: number; utilizationSamples: number;
+      firstSample?: string; lastSample?: string; averageUtilizationPct?: number; peakUtilizationPct?: number;
+      maxTemperatureCelsius?: number; maxPowerWatts?: number; maxMemoryUsedMB?: number;
+      maxCorrectableRemappedRows?: number; maxUncorrectableRemappedRows?: number; maxRowRemapFailure?: number;
+    }[];
+  };
+  diagnostics: { workloads: SourceDiagnostic; pods: SourceDiagnostic; events: SourceDiagnostic; tracking: SourceDiagnostic; telemetry: SourceDiagnostic };
+}
+export interface WorkloadLogSnapshot extends Scoped {
+  pod: string; container: string; previous: boolean; content: string;
+  tailLines: number; limitBytes: number; truncated: boolean; redactionApplied: boolean;
 }
