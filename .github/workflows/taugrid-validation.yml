@@ -48,6 +48,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Validate release workflow contract
+        run: bash scripts/ci/tests/release-workflow-contract_test.sh
+
       - name: Detect release-preflight scope
         id: scope
         env:
@@ -63,7 +66,7 @@ jobs:
               ;;
             pull_request | push)
               changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-              if grep -Eq '^cli/releases/v[^/]+\.md$|^\.github/workflows/(release-tau|taugrid-validation)\.ya?ml$' \
+              if grep -Eq '^cli/releases/v[^/]+\.md$|^\.github/workflows/(release-tau|taugrid-validation)\.ya?ml$|^scripts/ci/tests/release-workflow-contract_test\.sh$' \
                 <<<"$changed_files"; then
                 enabled=true
               fi

@@ -1,8 +1,9 @@
 # Releasing Tau
 
-Tau releases use canonical SemVer tags (`vX.Y.Z`). Pushing a tag automatically
-starts the GitHub Actions release workflow; maintainers can also dispatch the
-workflow manually with an existing tag.
+Tau releases use canonical SemVer tags (`vX.Y.Z`). Pushing a tag does not
+publish a GitHub Release. Maintainers publish and verify the coordinated Azure
+DevOps images and charts first, then manually dispatch the GitHub Actions
+release workflow from the existing tag ref.
 
 ## Distribution contract
 
@@ -72,9 +73,19 @@ wheel with the CLI assets.
 
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
-   release tags; the workflow revalidates the remote tag before publication.
-2. The tag push starts **Release TauGrid** automatically. To retry an existing
-   tag, dispatch the workflow from that same tag ref and supply the tag:
+   release tags. Pushing the tag does not start **Release TauGrid**.
+2. Run the public Azure DevOps image publication pipelines for every coordinated
+   first-party image using the tag's full source commit SHA and release tag
+   without the `v` prefix. For TauGrid 0.4.3, the required images are `tau`,
+   `taugrid-portal`, `tau-core-controller`, and
+   `taugrid-metrics-collector`.
+3. Verify the expected immutable image tags and coordinated chart versions are
+   available from MCR. Do not dispatch the GitHub Release while any ADO artifact
+   is missing or still publishing. This ordering is an operator gate: the
+   GitHub workflow has no credentials for, and does not infer readiness from,
+   the external ADO pipelines.
+4. Dispatch **Release TauGrid** from the same tag ref and supply the matching
+   tag. Use the same command to retry a matching draft:
 
    ```bash
    gh workflow run release-tau.yaml \
@@ -82,36 +93,24 @@ wheel with the CLI assets.
      --ref vX.Y.Z \
      -f tag=vX.Y.Z
    ```
-3. The read-only validation job verifies that the tag is annotated, follows
+5. The read-only validation job verifies that the tag is annotated, follows
    SemVer, points to `main`, has checked-in release notes, and has no published
    GitHub Release.
-4. The workflow reruns all release gates, compares two independent builds, and
+6. The workflow reruns all release gates, compares two independent builds, and
    transfers the validated assets to a separate write-authorized publish job.
-5. The publish job creates a draft release, uploads the assets once, verifies
+7. The publish job creates a draft release, uploads the assets once, verifies
    every GitHub asset digest, and only then publishes the draft. A retry resumes
    a draft only when its metadata, release notes, and assets exactly match the
    rebuilt release. It never overwrites an existing release or asset.
-6. Before publication, a clean GitHub-hosted Windows runner verifies the two
+8. Before publication, a clean GitHub-hosted Windows runner verifies the two
    Windows executables and the `tau` release version. After publication,
    Ubuntu and macOS runners install the Python SDK wheel and exercise native
    CLI commands, while a Windows runner installs `tau` through `install.ps1`
    and exercises both Windows executables. A failure leaves the immutable
    published release unchanged when it occurs before publication.
 
-`v0.3.0` predates both this dispatch flow and its checked-in release notes. Its
-one-time recovery is restricted to the reviewed tag commit while taking the
-release notes from `main`:
-
-```bash
-gh workflow run release-tau.yaml \
-  --repo Azure/taugrid \
-  --ref main \
-  -f tag=v0.3.0 \
-  -f allow_main_release_notes=true
-```
-
-No other tag may use this recovery path. New tags must contain their own release
-notes and manual runs must use the matching tag ref.
+Every tag must contain its own release notes, complete the external ADO artifact
+gate, and use a manual run from the matching tag ref.
 
 ## Verify
 
