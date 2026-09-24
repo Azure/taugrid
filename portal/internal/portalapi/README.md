@@ -181,6 +181,12 @@ Portal uses a 15-minute freshness window and tolerates at most one minute of
 future clock skew. Evaluation is keyed by condition type, so condition ordering
 does not affect the result.
 
+The fault-event prototype normalizes this same allowlisted evidence into stable,
+node-scoped records for later correlation. These records remain snapshots of
+current Node condition state: unlike NVSentinel's durable GPU-scoped event
+history, they cannot identify an individual GPU or recover transitions that
+Kubernetes no longer retains.
+
 Per-GPU ADX telemetry reports whether every expected inventory GPU has a
 complete row-remap verdict; it is not presented as comprehensive GPU health.
 Each node links to the inline Fleet GPU detail table for the underlying metrics.
