@@ -1415,6 +1415,42 @@ func TestOverviewOwnerKindLinksResolveWorkloadDetail(t *testing.T) {
 	}
 }
 
+func TestManagedOperatorModeWorkloadFallbackStaysWithinWorkspace(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{ID: "alpha", Team: "alpha", Cluster: "cluster-a", Namespace: "team-alpha", LocalQueue: "alpha-queue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+			{ID: "operator", Team: "operator", Cluster: "cluster-a", Namespace: "ray", LocalQueue: "jobqueue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"operators"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &ownerKindDetailReader{}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Jobs:               testOperatorJobs(t, reader),
+		Runs:               RunsOptions{Reader: reader},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := managedRequest(t, server, "/api/portal/workloads/pod-owner?workspace=alpha"); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign operator detail = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server,
+		"/api/portal/workloads/pod-owner/logs?workspace=alpha&pod=standalone-train&container=trainer"); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign operator logs = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogPod != "" {
+		t.Fatalf("foreign operator log request reached Kubernetes for pod %q", reader.lastLogPod)
+	}
+}
+
 func (*jobDetailAPIReader) ListJobs(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"ray","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
 		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil

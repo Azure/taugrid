@@ -953,6 +953,17 @@ func (s *Server) resolvedJobScopes(scope WorkspaceScope) ([]jobs.Scope, error) {
 	}
 }
 
+func (s *Server) workloadDetailScopes(scope WorkspaceScope) ([]jobs.Scope, error) {
+	if !scope.Managed {
+		return s.resolvedJobScopes(scope)
+	}
+	jobScopes := []jobs.Scope{{Team: scope.Team, Namespace: scope.Namespace, Queue: scope.LocalQueue}}
+	if err := jobs.ValidateScopes(jobScopes); err != nil {
+		return nil, fmt.Errorf("workspace %q has an invalid workload detail scope: %w", scope.WorkspaceID, err)
+	}
+	return jobScopes, nil
+}
+
 // handleJobs serves the Jobs/Queue board: the same queue.Snapshot schema as
 // `tau queue status --output json`, fetched via client-go and aggregated by
 // queue.BuildSnapshot(). Optional ?team=&lane=&gpu-class= filters mirror the
@@ -1538,7 +1549,7 @@ func (s *Server) resolveLiveWorkload(ctx context.Context, scope WorkspaceScope, 
 	if !ok || s.jobs.Reader == nil {
 		return jobdetail.Snapshot{}, false, nil
 	}
-	jobScopes, err := s.resolvedJobScopes(scope)
+	jobScopes, err := s.workloadDetailScopes(scope)
 	if err != nil {
 		return jobdetail.Snapshot{}, false, err
 	}
