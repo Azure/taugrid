@@ -202,6 +202,11 @@ experiment`; only the binary name differs.
 
 `taugrid-portal portal serve` serves the unified observability portal
 (Experiments, Jobs/Queue, Cluster Health) from the same binary.
+The native `/portal/experiments` workflow is the supported browser UI.
+`experiment stellar -o html`, `experiment open`, the `dashboard` alias, and the
+snapshot-shaped APIs remain compatibility surfaces while CLI/TUI/report
+consumers migrate; new browser integrations should use the canonical narrow
+`/api/v2/stellar` reads.
 
 `taugrid-portal experiment` and the hidden compatibility alias `exp` share the
 same command tree, so `--help` also surfaces `offload`, `kusto`, `autocapture`,

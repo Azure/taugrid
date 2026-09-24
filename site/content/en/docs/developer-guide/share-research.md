@@ -119,11 +119,11 @@ The addresses look the same, but each one uses the port-forward running on that
 researcher's machine. Both port-forwards connect to the same Portal Service in
 the cluster.
 
-Researcher 1 opens a run and sends its full Stellar link to Researcher 2. A
-shared link has this form:
+Researcher 1 opens the native Experiments view and sends its full canonical link
+to Researcher 2. Use the experiment and run IDs returned by the v2 API:
 
 ```text
-http://127.0.0.1:8080/stellar?target=<run-name>&project=<project>&workspace=<workspace>
+http://127.0.0.1:8080/portal/experiments?workspace=<workspace>&project=<project>&experiment=<experiment-id>&run=<run-id>
 ```
 
 Researcher 2 opens the link while their own port-forward is running. The Portal
@@ -139,6 +139,49 @@ Both researchers should check:
 - the run group.
 
 If these match, both researchers are reading the same shared result.
+
+Verify the same canonical records directly before sharing the link:
+
+```bash
+BASE=http://127.0.0.1:8080
+WORKSPACE=<workspace>
+PROJECT=<project>
+
+curl --fail --silent --show-error --get \
+  "$BASE/api/v2/stellar/experiments/search" \
+  --data-urlencode "workspace=$WORKSPACE" \
+  --data-urlencode "project=$PROJECT" \
+  --data-urlencode "q=<experiment-name>"
+
+EXPERIMENT=<experiment-id-from-search>
+curl --fail --silent --show-error --get \
+  "$BASE/api/v2/stellar/experiments/$EXPERIMENT/runs" \
+  --data-urlencode "workspace=$WORKSPACE" \
+  --data-urlencode "project=$PROJECT"
+
+RUN=<run-id-from-runs>
+curl --fail --silent --show-error --get \
+  "$BASE/api/v2/stellar/runs/$RUN" \
+  --data-urlencode "workspace=$WORKSPACE" \
+  --data-urlencode "project=$PROJECT" \
+  --data-urlencode "target=$EXPERIMENT"
+curl --fail --silent --show-error --get \
+  "$BASE/api/v2/stellar/runs/$RUN/metrics" \
+  --data-urlencode "workspace=$WORKSPACE" \
+  --data-urlencode "project=$PROJECT" \
+  --data-urlencode "target=$EXPERIMENT"
+curl --fail --silent --show-error --get \
+  "$BASE/api/v2/stellar/runs/$RUN/series" \
+  --data-urlencode "workspace=$WORKSPACE" \
+  --data-urlencode "project=$PROJECT" \
+  --data-urlencode "target=$EXPERIMENT" \
+  --data-urlencode "metric=<metric-name>" \
+  --data-urlencode "max_points=500"
+```
+
+These canonical reads surface typed ADX or Function errors. Do not verify a
+typed collector run through `/stellar` or the snapshot-shaped compatibility
+APIs.
 
 ## Example: share the published Ray Tune run
 
@@ -190,7 +233,9 @@ Before starting, ask the cluster owner to confirm that:
 - the workspace is Ready and has a writable `blob-training` PVC;
 - the workspace has GPU quota and allocatable GPU capacity;
 - the Portal has a Kusto query source for the workspace; and
-- you have the platform-supplied `taugrid-portal` image pinned by digest.
+- you have the platform-supplied `taugrid-metrics-collector` image pinned by
+  digest, the approved ADX endpoint/database, and the workspace Workload
+  Identity client ID.
 
 Each run uses one GPU. One available GPU can run them one at a time; three
 available GPUs can run all three at the same time.
@@ -199,9 +244,16 @@ Set the image and offloader working directory in the terminal that starts the
 runs:
 
 ```bash
-export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
+export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
 ```
+
+The collector uses the fixed `collector-v1` runtime and required queued ADX
+delivery. The identity must be federated to the workspace ServiceAccount and
+need only the ADX ingestion role; do not put a client secret in the workload.
 
 Copy the example so `train.py` stays beside the Tau config files:
 
@@ -270,11 +322,11 @@ Researcher 1 sends Researcher 2 the shared experiment name:
 ray-metric-study
 ```
 
-Researcher 1 opens the experiment through their port-forward and sends its full
-link to Researcher 2:
+Researcher 1 searches for `ray-metric-study` in `/portal/experiments`, selects
+the experiment and one run, and sends the resulting full link to Researcher 2:
 
 ```text
-http://127.0.0.1:8080/stellar?target=ray-metric-study&project=ray-tune-demo&workspace=shared-research
+http://127.0.0.1:8080/portal/experiments?workspace=shared-research&project=ray-tune-demo&experiment=<experiment-id>&run=<run-id>
 ```
 
 Researcher 2 opens the link while their own port-forward is running. The

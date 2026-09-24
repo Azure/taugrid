@@ -37,18 +37,24 @@ make install-tau-cli
 tau run --config examples/market-policy/tau.yaml --dry-run=client
 ```
 
-The checked-in `metrics.offload` block pins the published TauGrid Portal
-`0.4.2` image, which contains `taugrid-portal experiment offload metrics`, and
-keeps the sidecar's checkpoint spool on the shared `/var/run/tau` emptyDir.
-That avoids atomic-write incompatibilities on Azure File RWX volumes; an
-abrupt pod loss can therefore lose rows that have not yet been remote-written.
+Set `TAU_METRICS_OFFLOAD_IMAGE` to an immutable
+`taugrid-metrics-collector` image and provide the approved ADX cluster,
+database, and Workload Identity client ID environment values. The standalone
+collector writes canonical `tau.experiment.metric.v1` NDJSON plus immutable
+manifests, checkpoints, and required ADX delivery receipts to its typed spool.
+
+Keeping the spool on `/var/run/tau` avoids atomic-write incompatibilities on
+Azure File RWX volumes; an abrupt pod loss can therefore lose rows that have
+not yet been delivered to ADX.
 Tau packages `train.py` into the submitted workload, so enabling Stellar does
 not require a new training image build. The sidecar watches the JSONL chunks,
-remote-writes the three scalar series (`train/loss`,
+delivers the three scalar series (`train/loss`,
 `validation/policy_accuracy`, and `validation/value_rmse`), and publishes a
 terminal `tau/run_status` marker. Platform operators can still override the
 checked-in image or spool directory with `TAU_METRICS_OFFLOAD_IMAGE` and
-`TAU_METRICS_OFFLOAD_OUT`.
+`TAU_METRICS_OFFLOAD_OUT`. The runtime is always `collector-v1`, delivery is
+always `adx-required`, and the Helm charts do not expose a collector-sidecar
+selector.
 
 Run the exact trainer on an H200-capable TauGrid workspace:
 

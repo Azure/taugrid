@@ -71,7 +71,7 @@ offline or CI test suite.
 
 The script resolves `tau` for the active OS and, before it accesses Azure,
 requires `tau version --short` to be exactly `v<TauGridVersion>` (by default
-`v0.4.2`). It rejects development builds and stale CLIs because the CLI and
+`v0.4.3`). It rejects development builds and stale CLIs because the CLI and
 chart readiness contracts must match. Pass `-TauCommand` with an absolute path
 to a matching released binary when it is not on PATH; paths containing spaces
 are supported.
@@ -133,7 +133,11 @@ adx_cluster_name          = ""
 The variable defaults remain opt-in so an invocation without a reviewed
 variable file cannot create billable ADX resources or remote telemetry. The
 tracked `terraform.tfvars.example` deliberately enables ADX and lifecycle
-recording for the complete observability path. Function definitions use Kusto
+recording for the complete observability path. When Terraform installs TauGrid
+with ADX enabled, lifecycle recording is required because its schema must
+exist before Terraform enables the typed experiment catalogs and stable Portal
+Functions. ADX-only deployments can keep `install_taugrid=false` and leave the
+recorder disabled. Function definitions use Kusto
 `skipvalidation` so a first install can create them while adx-mon creates their
 dependent tables asynchronously. This avoids treating a transient schema-order
 race as a failed chart installation.

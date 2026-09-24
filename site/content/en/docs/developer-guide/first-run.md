@@ -111,10 +111,13 @@ taugrid-portal experiment stellar <run-name>
 
 `taugrid-portal experiment search` (alias `runs`) lists indexed runs so you can
 find the one you just submitted if you did not keep the name.
-`taugrid-portal experiment stellar` renders the local Stellar dashboard for that
-run as static HTML by default; add `-o tui` for a terminal summary, or use
-`taugrid-portal experiment open <run-name>` to serve it and open your browser in
-one step.
+`taugrid-portal experiment stellar` preserves the local HTML/JSON/TUI
+compatibility views; add `-o tui` for a terminal summary. The supported native
+dashboard is the Portal **Experiments** tab at `/portal/experiments`, where you
+search for the experiment, choose a run, and request bounded metric charts.
+`taugrid-portal experiment open <run-name>` remains available while HTML/browser
+consumers migrate, but new integrations should use the native Portal and its
+canonical `/api/v2/stellar` reads.
 
 To compare the same run from two machines, continue with
 [Share research with a teammate](../share-research/).
