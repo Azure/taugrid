@@ -49,10 +49,20 @@ type nodeReconcileState struct {
 	reconciliationFailed bool
 }
 
+type topologyReconcileState struct {
+	status               tauv1alpha1.TauClusterSectionStatus
+	queuesCondition      metav1.Condition
+	driftCondition       metav1.Condition
+	ownershipCondition   metav1.Condition
+	managedResources     []tauv1alpha1.TauManagedResourceStatus
+	reconciliationFailed bool
+}
+
 // +kubebuilder:rbac:groups=tau.azure.com,resources=clusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=tau.azure.com,resources=clusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues;clusterqueues;resourceflavors;topologies;workloadpriorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues;clusterqueues;resourceflavors;workloadpriorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=topologies,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=get;list;watch
 
 func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -66,6 +76,8 @@ func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	var (
 		nodeState           nodeReconcileState
 		nodeErr             error
+		topologyState       topologyReconcileState
+		topologyErr         error
 		profileState        profileObservationState
 		profileErr          error
 		multiKueueCondition metav1.Condition
@@ -73,6 +85,11 @@ func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	)
 	if cluster.Name == tauv1alpha1.TauClusterSingletonName {
 		nodeState, nodeErr = r.reconcileNodeLabels(ctx, &cluster, mode == tauv1alpha1.ClusterManagementModeReconcile)
+		topologyState, topologyErr = r.reconcileSiteTopology(
+			ctx,
+			&cluster,
+			mode == tauv1alpha1.ClusterManagementModeReconcile && !nodeState.reconciliationFailed,
+		)
 		multiKueueCondition, multiKueueErr = r.multiKueueReadinessCondition(ctx, cluster.Generation)
 		profileCluster := cluster.DeepCopy()
 		profileCluster.Status.Conditions = mergeConditions(
@@ -82,17 +99,17 @@ func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		profileState, profileErr = r.observeWorkloadProfiles(ctx, profileCluster)
 	}
 
-	desired := tauClusterStatus(&cluster, mode, nodeState, profileState, multiKueueCondition)
+	desired := tauClusterStatus(&cluster, mode, nodeState, topologyState, profileState, multiKueueCondition)
 	result := ctrl.Result{RequeueAfter: nodeResyncPeriod}
 	if equalTauClusterStatus(cluster.Status, desired) {
-		return result, errors.Join(nodeErr, profileErr, multiKueueErr)
+		return result, errors.Join(nodeErr, topologyErr, profileErr, multiKueueErr)
 	}
 
 	cluster.Status = desired
 	if err := r.Status().Update(ctx, &cluster); err != nil {
-		return ctrl.Result{}, errors.Join(nodeErr, profileErr, multiKueueErr, err)
+		return ctrl.Result{}, errors.Join(nodeErr, topologyErr, profileErr, multiKueueErr, err)
 	}
-	return result, errors.Join(nodeErr, profileErr, multiKueueErr)
+	return result, errors.Join(nodeErr, topologyErr, profileErr, multiKueueErr)
 }
 
 func (r *TauClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -353,6 +370,7 @@ func tauClusterStatus(
 	cluster *tauv1alpha1.TauCluster,
 	mode string,
 	nodes nodeReconcileState,
+	topology topologyReconcileState,
 	profiles profileObservationState,
 	multiKueueCondition metav1.Condition,
 ) tauv1alpha1.TauClusterStatus {
@@ -384,36 +402,49 @@ func tauClusterStatus(
 		nodes.nodesCondition,
 		profiles.condition,
 		multiKueueCondition,
-		condition(tauv1alpha1.ConditionQueuesReady, metav1.ConditionUnknown, "ObservationPending", "queue observation is not enabled", generation),
+		topology.queuesCondition,
 		condition(tauv1alpha1.ConditionWorkspacesReady, metav1.ConditionUnknown, "ObservationPending", "workspace aggregation is not enabled", generation),
-		nodes.driftCondition,
-		nodes.ownershipCondition,
+		mergeClusterCondition(
+			tauv1alpha1.ConditionDriftDetected,
+			generation,
+			nodes.driftCondition,
+			topology.driftCondition,
+		),
+		mergeClusterCondition(
+			tauv1alpha1.ConditionOwnershipConflict,
+			generation,
+			nodes.ownershipCondition,
+			topology.ownershipCondition,
+		),
 		condition(tauv1alpha1.ConditionDeletionBlocked, metav1.ConditionFalse, "NoDeletionBlock", "node labels are retained when TauCluster is deleted", generation),
 	}
 	phase := tauv1alpha1.ClusterPhasePending
-	if nodes.reconciliationFailed {
+	if nodes.reconciliationFailed || topology.reconciliationFailed {
 		phase = tauv1alpha1.ClusterPhaseDegraded
 	}
 
 	if mode == tauv1alpha1.ClusterManagementModeReconcile {
 		// Queue and workspace aggregation are deliberately out of scope, so an
-		// otherwise healthy singleton must still be able to report Ready. Node
-		// reconciliation is the only thing this object owns today.
+		// otherwise healthy singleton must still be able to report Ready.
 		nodesReady := nodes.nodesCondition.Status == metav1.ConditionTrue
-		if !nodes.reconciliationFailed && nodesReady {
+		queuesReady := topology.queuesCondition.Status == metav1.ConditionTrue
+		if !nodes.reconciliationFailed && !topology.reconciliationFailed && nodesReady && queuesReady {
 			phase = tauv1alpha1.ClusterPhaseReady
 		}
 		readyStatus := metav1.ConditionFalse
 		readyReason := "PartialReconciliation"
-		readyMessage := "node topology labels are not fully reconciled; queue ownership remains external"
+		readyMessage := "node topology labels and Kueue topology are not fully reconciled"
+		reconcilePausedReason := "TopologyReconciliationActive"
+		reconcilePausedMessage := "node and Kueue topology reconciliation is active"
+		observeMessage := "topology reconciliation is active"
 		if phase == tauv1alpha1.ClusterPhaseReady {
 			readyStatus = metav1.ConditionTrue
-			readyReason = "NodeReconciliationReady"
-			readyMessage = "node topology labels are reconciled; queue ownership remains external"
+			readyReason = "TopologyReconciliationReady"
+			readyMessage = "node topology labels and Kueue topology are reconciled"
 		}
 		conditions = append(conditions,
-			condition(tauv1alpha1.ConditionObserveOnly, metav1.ConditionFalse, "ReconcileMode", "node topology labels are reconciled", generation),
-			condition(tauv1alpha1.ConditionReconcilePaused, metav1.ConditionFalse, "NodeReconciliationActive", "node topology label reconciliation is active; queue ownership remains external", generation),
+			condition(tauv1alpha1.ConditionObserveOnly, metav1.ConditionFalse, "ReconcileMode", observeMessage, generation),
+			condition(tauv1alpha1.ConditionReconcilePaused, metav1.ConditionFalse, reconcilePausedReason, reconcilePausedMessage, generation),
 			condition(tauv1alpha1.ConditionReady, readyStatus, readyReason, readyMessage, generation),
 		)
 	} else {
@@ -429,10 +460,25 @@ func tauClusterStatus(
 		ObservedGeneration: generation,
 		DesiredStateHash:   clusterSpecHash(cluster.Spec),
 		Nodes:              nodes.status,
+		Queues:             topology.status,
 		WorkloadProfiles:   profiles.status,
-		ManagedResources:   []tauv1alpha1.TauManagedResourceStatus{},
+		ManagedResources:   topology.managedResources,
 		Conditions:         mergeConditions(cluster.Status.Conditions, conditions),
 	}
+}
+
+func mergeClusterCondition(conditionType string, generation int64, conditions ...metav1.Condition) metav1.Condition {
+	for _, candidate := range conditions {
+		if candidate.Status == metav1.ConditionTrue {
+			return condition(conditionType, metav1.ConditionTrue, candidate.Reason, candidate.Message, generation)
+		}
+	}
+	for _, candidate := range conditions {
+		if candidate.Status == metav1.ConditionUnknown {
+			return condition(conditionType, metav1.ConditionUnknown, candidate.Reason, candidate.Message, generation)
+		}
+	}
+	return condition(conditionType, metav1.ConditionFalse, "NoConflictObserved", "no topology drift or ownership conflict was found", generation)
 }
 
 func clusterSpecHash(spec tauv1alpha1.TauClusterSpec) string {

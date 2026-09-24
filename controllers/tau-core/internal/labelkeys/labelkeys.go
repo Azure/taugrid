@@ -14,9 +14,11 @@ const Domain = "tau.azure.com/"
 
 // Controller-owned namespace, helper-object, and quota keys.
 const (
-	LabelWorkspace  = "tau.azure.com/workspace"
-	LabelLocalQueue = "tau.azure.com/local-queue"
-	LabelGPUClass   = "tau.azure.com/gpu-class"
+	LabelWorkspace     = "tau.azure.com/workspace"
+	LabelLocalQueue    = "tau.azure.com/local-queue"
+	LabelGPUClass      = "tau.azure.com/gpu-class"
+	LabelNetworkDomain = "tau.azure.com/network-domain"
+	LabelInfiniband    = "tau.azure.com/infiniband"
 
 	AnnotationApproved    = "tau.azure.com/approved"
 	AnnotationRejected    = "tau.azure.com/rejected"

@@ -15,6 +15,11 @@ const (
 	labelPSAAudit               = "pod-security.kubernetes.io/audit"
 	labelPSAWarn                = "pod-security.kubernetes.io/warn"
 	labelAzureWIUse             = "azure.workload.identity/use"
+	labelFlexSite               = "net.unbounded-cloud.io/site"
+	labelRegion                 = "topology.kubernetes.io/region"
+	labelHostname               = "kubernetes.io/hostname"
+
+	tauGPUNodeTopologyName = "taugrid-gpu-topology"
 
 	annotationApproved        = labelkeys.AnnotationApproved
 	annotationRejected        = labelkeys.AnnotationRejected

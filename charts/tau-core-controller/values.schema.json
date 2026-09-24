@@ -44,6 +44,12 @@
             "$ref": "#/definitions/nodeLabelRule"
           }
         },
+        "sites": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/site"
+          }
+        },
         "queues": {
           "$ref": "#/definitions/ownership"
         },
@@ -147,6 +153,41 @@
         "labels": {
           "type": "object",
           "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "site": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "provider",
+        "region"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "Microsoft",
+            "Flex"
+          ]
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1
+        },
+        "infiniband": {
+          "type": "boolean"
+        },
+        "nodeSelector": {
+          "type": "object",
           "additionalProperties": {
             "type": "string"
           }

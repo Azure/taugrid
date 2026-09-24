@@ -122,6 +122,10 @@ tauCluster:
   # Helm replaces lists, so setting nodeLabelRules discards anything a parent
   # chart declared. Use extraNodeLabelRules to append instead.
   extraNodeLabelRules: []
+  # GPU topology locations. Microsoft capacity is grouped by region under the
+  # launch InfiniBand assumption. Flex sites must explicitly declare whether
+  # their nodes share an InfiniBand network domain.
+  sites: []
   queues:
     ownership: External
   # Namespace authorized by the built-in workload profile catalog. Set this

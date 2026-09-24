@@ -32,7 +32,7 @@ func TestWorkloadProfilesResolveInObserveAndReconcileModesWithoutKueueMutations(
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			cluster := testProfileCluster(mode, []profile.WorkloadProfile{testWorkloadProfile("research", []string{"team-b", "team-a"})})
-			objects := append([]client.Object{cluster}, validProfileDependencies("research", "team-a", "team-b")...)
+			objects := append([]client.Object{cluster, desiredTauGPUTopology()}, validProfileDependencies("research", "team-a", "team-b")...)
 			baseClient := fake.NewClientBuilder().
 				WithScheme(testScheme(t)).
 				WithObjects(objects...).
@@ -461,7 +461,7 @@ func TestValidMultiKueueProfileObservationDoesNotMutateResources(t *testing.T) {
 		ObservedGeneration: cluster.Generation,
 		Reason:             "Ready",
 	}}
-	objects := append([]client.Object{cluster}, profileDependenciesWithAdmissionChecks(
+	objects := append([]client.Object{cluster, desiredTauGPUTopology()}, profileDependenciesWithAdmissionChecks(
 		"research",
 		"team-a",
 		map[string]string{"multikueue": multiKueueAdmissionCheckController},

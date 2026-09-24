@@ -72,6 +72,12 @@ func TestTauClusterRoundTrip(t *testing.T) {
 					Labels: map[string]string{"example.com/gpu-class": "h200"},
 				}},
 			},
+			Sites: []TauSiteSpec{{
+				Name:       "research-flex",
+				Provider:   SiteProviderFlex,
+				Region:     "eastus2",
+				Infiniband: ptrTo(true),
+			}},
 			Queues: TauClusterQueuesSpec{
 				Ownership:         ClusterOwnershipExternal,
 				Topology:          &TauClusterObjectReference{Name: "default-node-topology"},
@@ -148,6 +154,9 @@ func TestTauClusterRoundTrip(t *testing.T) {
 	if len(got.Spec.Queues.SharedLocalQueues) != 1 || got.Spec.Queues.SharedLocalQueues[0].Namespace != "ray" {
 		t.Fatalf("TauCluster queue references = %#v", got.Spec.Queues.SharedLocalQueues)
 	}
+	if len(got.Spec.Sites) != 1 || got.Spec.Sites[0].Infiniband == nil || !*got.Spec.Sites[0].Infiniband {
+		t.Fatalf("TauCluster sites = %#v", got.Spec.Sites)
+	}
 	if got.Status.DesiredStateHash != "abc123" {
 		t.Fatalf("TauCluster desired state hash = %q", got.Status.DesiredStateHash)
 	}
@@ -159,6 +168,10 @@ func TestTauClusterRoundTrip(t *testing.T) {
 		got.Status.WorkloadProfiles.Profiles[0].LocalQueues[0].ClusterQueue != "tau-cq" {
 		t.Fatalf("TauCluster workload profile status = %#v", got.Status.WorkloadProfiles)
 	}
+}
+
+func ptrTo[T any](value T) *T {
+	return &value
 }
 
 func TestClusterWideWorkspaceJSONOmitsSubjectIdentity(t *testing.T) {

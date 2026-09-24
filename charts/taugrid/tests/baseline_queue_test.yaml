@@ -5,88 +5,84 @@ tests:
   - it: renders the portable queue contract by default
     asserts:
       - hasDocuments:
-          count: 8
-      - equal:
-          path: kind
-          value: Topology
-        documentIndex: 0
+          count: 7
       - equal:
           path: kind
           value: ResourceFlavor
-        documentIndex: 1
+        documentIndex: 0
       - equal:
           path: spec.nodeLabels["kubernetes.io/os"]
           value: linux
-        documentIndex: 1
+        documentIndex: 0
       - notExists:
           path: spec.topologyName
-        documentIndex: 1
+        documentIndex: 0
       - equal:
           path: metadata.name
-          value: taugrid-default-gpu
-        documentIndex: 2
+          value: taugrid-default-gpu-topology
+        documentIndex: 1
       - notExists:
           path: spec.nodeLabels["tau.azure.com/gpu-class"]
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.nodeTaints[0]
           value:
             key: sku
             value: gpu
             effect: NoSchedule
-        documentIndex: 2
+        documentIndex: 1
       - notExists:
           path: spec.tolerations
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: default-node-topology
-        documentIndex: 2
+          value: taugrid-gpu-topology
+        documentIndex: 1
       - equal:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
-          value: kubernetes.io/hostname
-        documentIndex: 2
+          value: tau.azure.com/network-domain
+        documentIndex: 1
       - equal:
           path: kind
           value: ClusterQueue
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: metadata.name
           value: jobqueue
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.queueingStrategy
           value: BestEffortFIFO
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.preemption.withinClusterQueue
           value: LowerPriority
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.namespaceSelector.matchExpressions[0].key
           value: tau.azure.com/workspace
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].coveredResources
           value:
             - cpu
             - memory
             - nvidia.com/gpu
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[0].name
           value: taugrid-default-cpu
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[0].resources[2]
           value:
             name: nvidia.com/gpu
             nominalQuota: "0"
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].name
-          value: taugrid-default-gpu
-        documentIndex: 3
+          value: taugrid-default-gpu-topology
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].resources
           value:
@@ -96,55 +92,55 @@ tests:
               nominalQuota: 100Ti
             - name: nvidia.com/gpu
               nominalQuota: "1000"
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: kind
           value: PriorityClass
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: metadata.name
           value: taugrid-default
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: value
           value: 1000
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: preemptionPolicy
           value: PreemptLowerPriority
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: metadata.name
           value: taugrid-priority
-        documentIndex: 5
+        documentIndex: 4
       - equal:
           path: value
           value: 1200
-        documentIndex: 5
+        documentIndex: 4
       - equal:
           path: preemptionPolicy
           value: PreemptLowerPriority
-        documentIndex: 5
+        documentIndex: 4
       - equal:
           path: kind
           value: WorkloadPriorityClass
-        documentIndex: 6
+        documentIndex: 5
       - equal:
           path: metadata.name
           value: taugrid-default
-        documentIndex: 6
+        documentIndex: 5
       - equal:
           path: value
           value: 1000
-        documentIndex: 6
+        documentIndex: 5
       - equal:
           path: metadata.name
           value: taugrid-priority
-        documentIndex: 7
+        documentIndex: 6
       - equal:
           path: value
           value: 1200
-        documentIndex: 7
+        documentIndex: 6
 
   - it: disables every baseline queue object together
     set:
@@ -160,25 +156,59 @@ tests:
       - equal:
           path: metadata.name
           value: research
-        documentIndex: 3
+        documentIndex: 2
 
-  - it: preserves hostname as the leaf when the managed level is customized
+  - it: rejects a topology level outside the controller-owned hierarchy
     set:
       baselineQueue.topology.requiredLevel: topology.example.com/rack
     asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.topology.requiredLevel is fixed at tau.azure.com/network-domain for connected multi-node placement
+
+  - it: rejects a topology name the controller does not own
+    set:
+      baselineQueue.topology.name: custom-topology
+    asserts:
+      - failedTemplate:
+          errorMessage: baselineQueue.topology.name is fixed at taugrid-gpu-topology because tau-core-controller owns the Topology
+
+  - it: leaves GPU flavors non-TAS when topology is disabled
+    set:
+      baselineQueue.topology.enabled: false
+    asserts:
+      - notExists:
+          path: spec.topologyName
+        documentIndex: 1
+      - notExists:
+          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
+        documentIndex: 1
+
+  - it: enables network-domain topology when a GPU Site is configured
+    set:
+      tau-core-controller:
+        tauCluster:
+          sites:
+            - name: microsoft-eastus2
+              provider: Microsoft
+              region: eastus2
+    asserts:
       - equal:
-          path: spec.levels
-          value:
-            - nodeLabel: topology.example.com/rack
-            - nodeLabel: kubernetes.io/hostname
-        documentIndex: 0
+          path: spec.topologyName
+          value: taugrid-gpu-topology
+        documentIndex: 1
       - equal:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
-          value: topology.example.com/rack
-        documentIndex: 2
+          value: tau.azure.com/network-domain
+        documentIndex: 1
 
   - it: renders a class-labeled GPU flavor without constraining the CPU flavor
     set:
+      tau-core-controller:
+        tauCluster:
+          sites:
+            - name: microsoft-eastus2
+              provider: Microsoft
+              region: eastus2
       baselineQueue.gpu.flavors:
         - name: a100-pool
           nodeLabels:
@@ -195,32 +225,32 @@ tests:
     asserts:
       - notExists:
           path: spec.nodeLabels["tau.azure.com/gpu-class"]
-        documentIndex: 1
+        documentIndex: 0
       - equal:
           path: spec.nodeLabels["tau.azure.com/gpu-class"]
           value: a100-80gb
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: default-node-topology
-        documentIndex: 2
+          value: taugrid-gpu-topology
+        documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].coveredResources
           value:
             - cpu
             - memory
             - nvidia.com/gpu
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].name
           value: a100-pool
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].resources[2]
           value:
             name: nvidia.com/gpu
             nominalQuota: "1"
-        documentIndex: 3
+        documentIndex: 2
 
   - it: renders a CPU-only resource group when GPU admission is disabled
     set:
@@ -229,11 +259,11 @@ tests:
       baselineQueue.gpu.flavors: []
     asserts:
       - hasDocuments:
-          count: 7
+          count: 6
       - equal:
           path: kind
           value: ClusterQueue
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.resourceGroups
           value:
@@ -247,7 +277,7 @@ tests:
                       nominalQuota: "100000"
                     - name: memory
                       nominalQuota: 100Ti
-        documentIndex: 2
+        documentIndex: 1
 
   - it: rejects legacy mixed CPU and GPU resource values during upgrade
     set:
@@ -331,6 +361,12 @@ tests:
 
   - it: accepts topology-capable GPU flavors without optional labels or tolerations
     set:
+      tau-core-controller:
+        tauCluster:
+          sites:
+            - name: microsoft-eastus2
+              provider: Microsoft
+              region: eastus2
       baselineQueue.gpu.flavors:
         - name: resource-only-gpu
           nodeTaints:
@@ -343,14 +379,14 @@ tests:
     asserts:
       - notExists:
           path: spec.nodeLabels
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: default-node-topology
-        documentIndex: 2
+          value: taugrid-gpu-topology
+        documentIndex: 1
       - notExists:
           path: spec.tolerations
-        documentIndex: 2
+        documentIndex: 1
 
   - it: accepts GPU flavor resources in a different order
     set:
@@ -374,7 +410,7 @@ tests:
       - equal:
           path: spec.resourceGroups[0].flavors[1].name
           value: dual-mode-gpu
-        documentIndex: 3
+        documentIndex: 2
 
   - it: rejects a flavor toleration that bypasses its GPU admission taint
     set:

@@ -188,7 +188,7 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 		t.Fatalf("Get TauCluster: %v", err)
 	}
 	paused := findCondition(cluster.Status.Conditions, tauv1alpha1.ConditionReconcilePaused)
-	if paused == nil || paused.Status != metav1.ConditionFalse || paused.Reason != "NodeReconciliationActive" {
+	if paused == nil || paused.Status != metav1.ConditionFalse || paused.Reason != "TopologyReconciliationActive" {
 		t.Fatalf("ReconcilePaused = %#v", paused)
 	}
 	assertCondition(t, cluster.Status.Conditions, tauv1alpha1.ConditionNodesReady, metav1.ConditionTrue)
@@ -200,7 +200,7 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 	if cluster.Status.Nodes != (tauv1alpha1.TauClusterSectionStatus{Observed: 2, Ready: 2}) {
 		t.Fatalf("node status = %#v", cluster.Status.Nodes)
 	}
-	if got, want := recordingClient.mutations, []string{"patch flex-h200", "patch native-a100"}; !reflect.DeepEqual(got, want) {
+	if got, want := recordingClient.mutations, []string{"patch flex-h200", "patch native-a100", "create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("mutations = %v, want %v", got, want)
 	}
 
@@ -292,8 +292,8 @@ func TestTauClusterNoMatchingNodesIsReady(t *testing.T) {
 	if cluster.Status.Nodes != (tauv1alpha1.TauClusterSectionStatus{}) {
 		t.Fatalf("node status = %#v", cluster.Status.Nodes)
 	}
-	if len(recordingClient.mutations) != 0 {
-		t.Fatalf("CPU-only reconcile mutated cluster resources: %v", recordingClient.mutations)
+	if got, want := recordingClient.mutations, []string{"create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("CPU-only reconcile mutations = %v, want %v", got, want)
 	}
 }
 
