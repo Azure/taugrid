@@ -115,6 +115,11 @@ describe('Platform overview', () => {
     expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('Fleet capacity');
     expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('GPU telemetry');
 
+    await userEvent.hover(screen.getByRole('link', { name: 'Open fleet detail →' }));
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/nodeutil'))).toHaveLength(1);
+    });
+
     await userEvent.click(screen.getByRole('button', { name: 'Refresh Infrastructure overview' }));
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/portal/overview'))).toHaveLength(2);

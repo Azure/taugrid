@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { boardStaleTimeMs, useBoard } from './data';
 import { Empty, Note, ScopedLink, Table, measured, n1, utilizationSummary } from './components';
@@ -167,8 +167,7 @@ function hasFreshNodeMetrics(node: FleetNode, now = Date.now()) {
     now - observedAt <= nodeMetricsFreshnessMs;
 }
 
-function telemetrySummary(node: FleetNode, samples: GPU[]): EvidenceSummary {
-  const nodeSamples = samples.filter(sample => sample.instance === node.name);
+function telemetrySummary(node: FleetNode, nodeSamples: GPU[]): EvidenceSummary {
   const byGPU = new Map(nodeSamples.map(sample => [sample.gpu, sample]));
   const values = [...byGPU.values()];
   const faults = values.filter(sample => sample.healthy === false);
@@ -226,14 +225,14 @@ function IndependentSourceEvidence({ gpuSamples, nodeUtil }: { gpuSamples: GPU[]
 }
 
 function FleetFabricMap({
-  nodes, gpuConditions, ibConditions, gpuTelemetry, gpuSamples, nodeUtil,
+  nodes, gpuConditions, ibConditions, gpuTelemetry, gpuSamplesByNode, nodeUtilByNode,
 }: {
   nodes: FleetNode[];
   gpuConditions: EvidenceSummary[];
   ibConditions: EvidenceSummary[];
   gpuTelemetry: EvidenceSummary[];
-  gpuSamples: GPU[];
-  nodeUtil: NodeUtil['nodes'];
+  gpuSamplesByNode: Map<string, GPU[]>;
+  nodeUtilByNode: Map<string, NodeUtil['nodes'][number]>;
 }) {
   const labeledSiteNodes = nodes.filter(node => node.site).length;
   const conflictingSiteNodes = nodes.filter(node => node.siteLabelConflict).length;
@@ -290,14 +289,14 @@ function FleetFabricMap({
                 <h4>{models.join(' / ')}<span>Pool {pool} · {poolNodes.length} node{poolNodes.length === 1 ? '' : 's'}</span></h4>
                 <div className="fabric-nodes">{poolNodes.sort((left, right) => left.node.name.localeCompare(right.node.name)).map(({ node, index }) => {
                   const rdmaAdvertised = Boolean(node.rdmaResources?.length);
-                  const samples = gpuSamples.filter(sample => sample.instance === node.name);
+                  const samples = gpuSamplesByNode.get(node.name) || [];
                   const gpuUtilization = average(samples.map(sample => sample.utilizationPct));
                   const gpuTemperature = samples.map(sample => sample.temperatureCelsius).filter(measured);
                   const gpuMemoryUsed = samples.map(sample => sample.memoryUsedMB).filter(measured);
                   const gpuMemoryTotal = samples.flatMap(sample =>
                     measured(sample.memoryUsedMB) && measured(sample.memoryFreeMB)
                       ? [sample.memoryUsedMB + sample.memoryFreeMB] : []);
-                  const usage = nodeUtil.find(sample => sample.instance === node.name);
+                  const usage = nodeUtilByNode.get(node.name);
                   const currentNodeMetrics = hasFreshNodeMetrics(node);
                   const cpuUtilization = currentNodeMetrics && measured(node.cpuUtilPct) ? node.cpuUtilPct : usage?.cpuUtilPct;
                   const memoryUtilization = currentNodeMetrics && measured(node.memUsedPct) ? node.memUsedPct : usage?.memUsedPct;
@@ -357,39 +356,66 @@ function FleetInfiniBandEvidence() {
   const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery];
   const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
   const snapshot = inventoryQuery.data;
-  const nodes = (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0);
+  const nodes = useMemo(() => (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0), [snapshot]);
   const gpuSchedulable = snapshot?.gpuSchedulable ?? snapshot?.gpuAllocatable ?? snapshot?.totalGPUs ?? 0;
   const gpuAllocationKnown = snapshot?.gpuAllocationKnown === true &&
     isCount(snapshot.gpuAllocated) && isCount(snapshot.gpuAvailable) && isCount(gpuSchedulable);
   const telemetry = telemetryQuery.data?.gpus || [];
   const nodeUtil = nodeUtilQuery.data?.nodes || [];
-  const nodeNames = new Set(nodes.map(node => node.name));
+  const nodeNames = useMemo(() => new Set(nodes.map(node => node.name)), [nodes]);
   const inventoryCluster = snapshot?.scope?.cluster?.trim() || '';
   const canCorrelateInventory = Boolean(snapshot && inventoryCluster);
-  const attributedTelemetry = canCorrelateInventory
-    ? telemetry.filter(sample => sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : [];
-  const independentTelemetry = canCorrelateInventory
-    ? telemetry.filter(sample => !sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : telemetry;
-  const attributedNodeUtil = canCorrelateInventory
-    ? nodeUtil.filter(sample => sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : [];
-  const independentNodeUtil = canCorrelateInventory
-    ? nodeUtil.filter(sample => !sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : nodeUtil;
+  const {
+    attributedTelemetry, independentTelemetry, independentNodeUtil,
+    gpuSamplesByNode, nodeUtilByNode,
+  } = useMemo(() => {
+    const matchedTelemetry: GPU[] = [];
+    const unmatchedTelemetry: GPU[] = [];
+    const matchedNodeUtil: NodeUtil['nodes'] = [];
+    const unmatchedNodeUtil: NodeUtil['nodes'] = [];
+    for (const sample of telemetry) {
+      (canCorrelateInventory && sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames)
+        ? matchedTelemetry : unmatchedTelemetry).push(sample);
+    }
+    for (const sample of nodeUtil) {
+      (canCorrelateInventory && sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames)
+        ? matchedNodeUtil : unmatchedNodeUtil).push(sample);
+    }
+    const samplesByNode = new Map<string, GPU[]>();
+    for (const sample of matchedTelemetry) {
+      const samples = samplesByNode.get(sample.instance);
+      if (samples) samples.push(sample);
+      else samplesByNode.set(sample.instance, [sample]);
+    }
+    return {
+      attributedTelemetry: matchedTelemetry,
+      independentTelemetry: canCorrelateInventory ? unmatchedTelemetry : telemetry,
+      independentNodeUtil: canCorrelateInventory ? unmatchedNodeUtil : nodeUtil,
+      gpuSamplesByNode: samplesByNode,
+      nodeUtilByNode: new Map(matchedNodeUtil.map(sample => [sample.instance, sample])),
+    };
+  }, [telemetry, nodeUtil, canCorrelateInventory, inventoryCluster, nodeNames]);
   const summaryTelemetry = canCorrelateInventory ? attributedTelemetry : telemetry;
-  const utilization = utilizationSummary(summaryTelemetry);
-  const knownHealth = summaryTelemetry.filter(sample => sample.healthy === true || sample.healthy === false);
-  const healthFaults = summaryTelemetry.filter(sample => sample.healthy === false);
-  const focusedGPUs = canCorrelateInventory && focusedInstance
-    ? attributedTelemetry.filter(sample => sample.instance === focusedInstance)
-    : [];
-  const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, 'gpu'));
-  const ibConditions = nodes.map(node => conditionSummary(
-    node.operationalConditions, 'infiniband', Boolean(node.rdmaResources?.length),
-  ));
-  const gpuTelemetry = nodes.map(node => telemetrySummary(node, attributedTelemetry));
+  const { utilization, knownHealth, healthFaults } = useMemo(() => ({
+    utilization: utilizationSummary(summaryTelemetry),
+    knownHealth: summaryTelemetry.filter(sample => sample.healthy === true || sample.healthy === false),
+    healthFaults: summaryTelemetry.filter(sample => sample.healthy === false),
+  }), [summaryTelemetry]);
+  const focusedGPUs = canCorrelateInventory && focusedInstance ? gpuSamplesByNode.get(focusedInstance) || [] : [];
+  const gpuConditions = useMemo(
+    () => nodes.map(node => conditionSummary(node.operationalConditions, 'gpu')),
+    [nodes],
+  );
+  const ibConditions = useMemo(
+    () => nodes.map(node => conditionSummary(
+      node.operationalConditions, 'infiniband', Boolean(node.rdmaResources?.length),
+    )),
+    [nodes],
+  );
+  const gpuTelemetry = useMemo(
+    () => nodes.map(node => telemetrySummary(node, gpuSamplesByNode.get(node.name) || [])),
+    [nodes, gpuSamplesByNode],
+  );
   const gpuConditionCoveredGPUs = nodes.reduce((total, node, index) =>
     total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
   const ibConditionCoveredGPUs = nodes.reduce((total, node, index) =>
@@ -454,11 +480,7 @@ function FleetInfiniBandEvidence() {
           <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery, freshnessNow)}</span>
         </div>
         {!snapshot ? <Empty warn>GPU inventory is unavailable. Telemetry remains visible; fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown.</Empty>
-          : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
-          : <><FleetFabricMap nodes={nodes} gpuConditions={gpuConditions} ibConditions={ibConditions}
-            gpuTelemetry={gpuTelemetry} gpuSamples={attributedTelemetry} nodeUtil={attributedNodeUtil}/>
-            </>}
-        <IndependentSourceEvidence gpuSamples={independentTelemetry} nodeUtil={independentNodeUtil}/>
+          : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty> : null}
         {focusedInstance && <section className="focused-gpus" aria-label={`GPU details for ${focusedInstance}`}>
           <div><h3>GPU details · {focusedInstance}</h3><ScopedLink to="/portal/fleet">Clear focus</ScopedLink></div>
           {!focusedGPUs.length ? <Empty>No per-GPU telemetry is available for this node in the current window.</Empty>
@@ -470,6 +492,9 @@ function FleetInfiniBandEvidence() {
                 <span className={gpu.healthy === false ? 'warn' : gpu.healthy === true ? '' : 'muted'}>{gpu.healthy === true ? 'Observed OK' : gpu.healthy === false ? 'Fault' : 'Unknown'}</span>,
               ])}/>}
         </section>}
+        {snapshot && nodes.length > 0 && <FleetFabricMap nodes={nodes} gpuConditions={gpuConditions} ibConditions={ibConditions}
+          gpuTelemetry={gpuTelemetry} gpuSamplesByNode={gpuSamplesByNode} nodeUtilByNode={nodeUtilByNode}/>}
+        <IndependentSourceEvidence gpuSamples={independentTelemetry} nodeUtil={independentNodeUtil}/>
       </>}
     </div>
   </section>;

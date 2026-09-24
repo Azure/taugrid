@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { BoardResult, Empty, PageTitle, ScopedLink, TrackingLink, n1, utilizationSummary } from './components';
-import { useBoard } from './data';
-import type { Cluster, Nodes, Overview as OverviewData } from './types';
+import { useBoard, useBoardPrefetch } from './data';
+import type { Cluster, NodeUtil, Nodes, Overview as OverviewData } from './types';
 
 const overviewRefreshMs = 15_000;
 
@@ -25,7 +25,9 @@ function groupSites(snapshot: Nodes | undefined): SiteGroup[] {
   const groups = new Map<string, FleetNode[]>();
   for (const node of (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0)) {
     const label = node.site || node.region || 'Unassigned';
-    groups.set(label, [...(groups.get(label) || []), node]);
+    const group = groups.get(label);
+    if (group) group.push(node);
+    else groups.set(label, [node]);
   }
   return [...groups.entries()].map(([label, nodes]) => ({
     id: label,
@@ -111,12 +113,14 @@ function SiteSelector({ sites, selected, onSelect }: { sites: SiteGroup[]; selec
   </div>;
 }
 
-function PoolDetails({ site }: { site?: SiteGroup }) {
+function PoolDetails({ site, prefetchFleet }: { site?: SiteGroup; prefetchFleet: () => void }) {
   if (!site) return null;
   const pools = new Map<string, FleetNode[]>();
   for (const node of site.nodes) {
     const pool = node.agentPool || node.sku || 'GPU pool';
-    pools.set(pool, [...(pools.get(pool) || []), node]);
+    const nodes = pools.get(pool);
+    if (nodes) nodes.push(node);
+    else pools.set(pool, [node]);
   }
   return <div className="overview-pools" aria-live="polite">
     <div className="overview-stage-title"><span>Selected site</span><strong>{site.label}</strong></div>
@@ -129,7 +133,8 @@ function PoolDetails({ site }: { site?: SiteGroup }) {
           <b>{gpuCountLabel(gpus)}</b>
         </div>
         <div className="overview-node-list">{nodes.map(node =>
-          <ScopedLink key={node.name} to={'/portal/fleet?instance=' + encodeURIComponent(node.name)} className="overview-node">
+          <ScopedLink key={node.name} to={'/portal/fleet?instance=' + encodeURIComponent(node.name)}
+            className="overview-node" onIntent={prefetchFleet}>
             <span><strong>{node.name}</strong><small>{node.ready ? 'Ready' : 'Not ready'} · {node.sku || 'SKU unknown'}</small></span>
             <span className="overview-node-capacity">
               <GPUTiles node={node}/>
@@ -251,12 +256,19 @@ function WorkloadFlow({ data }: { data: OverviewData }) {
 function Atlas({ platform, data, nodes, cluster, nodeError }: {
   platform: boolean; data: OverviewData; nodes?: Nodes; cluster?: Cluster; nodeError?: Error | null;
 }) {
-  const sites = groupSites(nodes);
+  const sites = useMemo(() => groupSites(nodes), [nodes]);
   const [selectedSite, setSelectedSite] = useState<string>();
   const activeSite = sites.find(site => site.id === selectedSite) || sites[0];
-  const utilization = utilizationSummary(cluster?.gpus || []);
-  const observedHealth = (cluster?.gpus || []).filter(gpu => typeof gpu.healthy === 'boolean');
-  const unhealthy = observedHealth.filter(gpu => gpu.healthy === false).length;
+  const fleetSummary = useMemo(() => {
+    const gpus = cluster?.gpus || [];
+    const observedHealth = gpus.filter(gpu => typeof gpu.healthy === 'boolean');
+    return {
+      utilization: utilizationSummary(gpus),
+      observedHealth: observedHealth.length,
+      unhealthy: observedHealth.filter(gpu => gpu.healthy === false).length,
+    };
+  }, [cluster]);
+  const prefetchFleet = useBoardPrefetch<NodeUtil>('/api/portal/nodeutil');
   const queue = data.cards.queue;
   const capacity = queue ? queue.gpuUsed + queue.gpuHeadroom : 0;
 
@@ -265,13 +277,13 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
       {platform ? <>
         <Metric label="Fleet readiness" value={nodes ? `${nodes.readyNodes}/${nodes.totalNodes}` : '—'} detail="nodes ready" tone={nodes && nodes.readyNodes < nodes.totalNodes ? 'warning' : undefined}/>
         <Metric label="Schedulable GPUs" value={nodes?.gpuSchedulable ?? '—'} detail={`${nodes?.gpuAllocationKnown ? nodes.gpuAvailable : '—'} currently available`}/>
-        <Metric label="Observed health" value={observedHealth.length ? unhealthy : '—'} detail={observedHealth.length ? `unhealthy of ${observedHealth.length} observed` : 'no health observations'} tone={unhealthy ? 'danger' : undefined}/>
+        <Metric label="Observed health" value={fleetSummary.observedHealth ? fleetSummary.unhealthy : '—'} detail={fleetSummary.observedHealth ? `unhealthy of ${fleetSummary.observedHealth} observed` : 'no health observations'} tone={fleetSummary.unhealthy ? 'danger' : undefined}/>
         <Metric label="Queue pressure" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail={`${queue?.pending ?? '—'} workloads pending`} tone={queue?.pending ? 'warning' : undefined}/>
       </> : <>
         <Metric label="Active jobs" value={data.activeUnavailable ? '—' : data.active?.length ?? 0} detail="Job or RayJob reporting Running"/>
         <Metric label="Pending admission" value={queue?.pending ?? '—'} detail="waiting for quota" tone={queue?.pending ? 'warning' : undefined}/>
         <Metric label="GPU reservation" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail="reserved / reported quota"/>
-        <Metric label="Measured utilization" value={utilization.average === null ? '—' : `${n1(utilization.average)}%`} detail={`${utilization.observed}/${utilization.total} GPUs observed`}/>
+        <Metric label="Measured utilization" value={fleetSummary.utilization.average === null ? '—' : `${n1(fleetSummary.utilization.average)}%`} detail={`${fleetSummary.utilization.observed}/${fleetSummary.utilization.total} GPUs observed`}/>
       </>}
     </div>
     <div className="overview-atlas">
@@ -285,8 +297,8 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
             <div className="overview-stage-title"><span>Capacity</span><strong>GPU sites</strong></div>
             {nodeError ? <div className="overview-unavailable">{nodeError.message}</div>
               : <SiteSelector sites={sites} selected={activeSite?.id} onSelect={setSelectedSite}/>}
-            <PoolDetails site={activeSite}/>
-            <ScopedLink to="/portal/fleet" className="overview-stage-link">Open fleet detail →</ScopedLink>
+            <PoolDetails site={activeSite} prefetchFleet={prefetchFleet}/>
+            <ScopedLink to="/portal/fleet" className="overview-stage-link" onIntent={prefetchFleet}>Open fleet detail →</ScopedLink>
           </div>
           <QueueBridge data={data}/>
           <WorkloadFlow data={data}/>

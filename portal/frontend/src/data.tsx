@@ -160,6 +160,18 @@ export function useBoard<T>(
     refetchInterval,
   });
 }
+export function useBoardPrefetch<T>(path: string) {
+  const { scope, managed } = useWorkspace();
+  const client = useQueryClient();
+  const url = scopedURL(path, scope.workspace, managed, scope.source);
+  const queryKey = [...boardScopeKey(scope, managed), url];
+  return () => {
+    void client.prefetchQuery({
+      queryKey,
+      queryFn: ({ signal }) => fetchJSON<T>(url, signal),
+    });
+  };
+}
 export function boardScopeKey(scope: WorkspaceScope, managed: boolean) {
   return ['board', scope.workspace, scope.cluster, scope.namespace, scope.localQueue,
     scope.source, scope.resultScope, scope.authorizationMode, scope.experimentsUrl,
