@@ -38,6 +38,17 @@ for kec_input in \
     }
 done
 
+grep -Fq 'workers: 1' "${REPO_ROOT}/examples/kind-smoke/tau-ray.yaml" ||
+  {
+    echo "single-node Kind Ray smoke must request one worker" >&2
+    exit 1
+  }
+grep -Fq 'placement: independent' "${REPO_ROOT}/examples/kind-smoke/taucluster-profiles.yaml" ||
+  {
+    echo "single-node Kind Ray profile must use independent placement" >&2
+    exit 1
+  }
+
 if grep -q 'ctr .* images remove' "${REPO_ROOT}/scripts/dev/kind-local.sh"; then
   echo "Kind development preemptively removes cached Podman images" >&2
   exit 1

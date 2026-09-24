@@ -8,7 +8,7 @@ runtime:
     # gRPC's c-ares resolver cannot reach headless-service DNS through Podman Kind.
     GRPC_DNS_RESOLVER: native
 compute:
-  workers: 2
+  workers: 1
   gpus_per_worker: 0
   head_cpu_request: 5m
   head_memory_request: 512Mi

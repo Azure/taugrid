@@ -27,9 +27,9 @@ spec:
         namespaces:
           - ray
       gpusPerWorker: 0
-      workerCount: 2
+      workerCount: 1
       mode: fixed
-      placement: multi-node-nccl
+      placement: independent
       defaultLocalQueue: kind-cpu
       executionTarget: singleCluster
       priorities:
