@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -304,43 +305,23 @@ func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
 
 func TestTauClusterReconcilesSampleAzureFlexCluster(t *testing.T) {
 	cluster := topologyTestCluster()
-	common := map[string]string{
-		labelAKSCloud:                           "azure",
-		labelAKSRegion:                          "eastus2",
-		labelAzureManaged:                       "false",
-		labelStretchManaged:                     "true",
-		"kubernetes.azure.com/cluster":          "flex-research",
-		"node.kubernetes.io/instance-type":      "Standard_ND96isr_H200_v5",
-		"aks.azure.com/instance-type":           "Standard_ND96isr_H200_v5",
-		labelFlexSite:                           "research-flex-eastus2",
-		labelAKSInfiniband:                      "true",
-		"kubernetes.azure.com/agentpool":        "research-gpu",
-		"kubernetes.azure.com/nodepool-type":    "FlexNodes",
-		"kubernetes.azure.com/mode":             "user",
-		"kubernetes.azure.com/os-sku":           "Ubuntu",
-		"kubernetes.azure.com/os-sku-effective": "Ubuntu2404",
+	ibNodes := []*corev1.Node{
+		sampleFlexNode("flex-a100-a", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", true),
+		sampleFlexNode("flex-a100-b", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", true),
+		sampleFlexNode("flex-h100-a", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", true),
+		sampleFlexNode("flex-h100-b", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", true),
+		sampleFlexNode("flex-h200-a", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", true),
+		sampleFlexNode("flex-h200-b", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", true),
 	}
-	firstLabels := make(map[string]string, len(common))
-	secondLabels := make(map[string]string, len(common))
-	for key, value := range common {
-		firstLabels[key] = value
-		secondLabels[key] = value
-	}
-	first := topologyTestNode("flex-h200-a", firstLabels, "")
-	second := topologyTestNode("flex-h200-b", secondLabels, "")
-	nonIB := topologyTestNode("flex-a10", map[string]string{
-		labelAKSCloud:                      "azure",
-		labelAKSRegion:                     "eastus2",
-		labelAzureManaged:                  "false",
-		labelStretchManaged:                "true",
-		labelFlexSite:                      "batch-flex-eastus2",
-		labelAKSInfiniband:                 "false",
-		"node.kubernetes.io/instance-type": "Standard_NV36ads_A10_v5",
-	}, "")
+	nonIB := sampleFlexNode("flex-a10", "Standard_NV36ads_A10_v5", "a10-24gb", "batch-flex-eastus2", false)
 
+	objects := []client.Object{cluster, nonIB}
+	for _, node := range ibNodes {
+		objects = append(objects, node)
+	}
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(cluster, first, second, nonIB).
+		WithObjects(objects...).
 		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
 		Build()
 	recording := &resourceMutationRecordingClient{Client: c}
@@ -356,13 +337,16 @@ func TestTauClusterReconcilesSampleAzureFlexCluster(t *testing.T) {
 		labelkeys.LabelNetworkDomain: "azure-site-ib-research-flex-eastus2",
 		labelkeys.LabelInfiniband:    "true",
 	}
-	for _, name := range []string{first.Name, second.Name} {
+	for _, node := range ibNodes {
 		var got corev1.Node
-		if err := c.Get(context.Background(), client.ObjectKey{Name: name}, &got); err != nil {
-			t.Fatalf("Get Node %q: %v", name, err)
+		if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
+			t.Fatalf("Get Node %q: %v", node.Name, err)
 		}
 		if !nodeHasLabels(&got, wantShared) {
-			t.Fatalf("Node %q labels = %#v, want %#v", name, got.Labels, wantShared)
+			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, wantShared)
+		}
+		if got.Labels[labelkeys.LabelGPUClass] != node.Labels[labelkeys.LabelGPUClass] {
+			t.Fatalf("Node %q GPU class = %q, want %q", node.Name, got.Labels[labelkeys.LabelGPUClass], node.Labels[labelkeys.LabelGPUClass])
 		}
 	}
 	var gotNonIB corev1.Node
@@ -398,6 +382,27 @@ func TestTauClusterReconcilesSampleAzureFlexCluster(t *testing.T) {
 	if len(recording.mutations) != 0 {
 		t.Fatalf("idempotent Flex cluster reconcile mutations = %v", recording.mutations)
 	}
+}
+
+func sampleFlexNode(name, sku, gpuClass, site string, infiniband bool) *corev1.Node {
+	node := topologyTestNode(name, map[string]string{
+		labelAKSCloud:                           "azure",
+		labelAKSRegion:                          "eastus2",
+		labelAzureManaged:                       "false",
+		labelStretchManaged:                     "true",
+		"kubernetes.azure.com/cluster":          "flex-research",
+		"node.kubernetes.io/instance-type":      sku,
+		"aks.azure.com/instance-type":           sku,
+		labelFlexSite:                           site,
+		labelAKSInfiniband:                      fmt.Sprintf("%t", infiniband),
+		"kubernetes.azure.com/agentpool":        "research-gpu",
+		"kubernetes.azure.com/nodepool-type":    "FlexNodes",
+		"kubernetes.azure.com/mode":             "user",
+		"kubernetes.azure.com/os-sku":           "Ubuntu",
+		"kubernetes.azure.com/os-sku-effective": "Ubuntu2404",
+	}, "")
+	node.Labels[labelkeys.LabelGPUClass] = gpuClass
+	return node
 }
 
 func TestTauClusterDowngradesManagedAzureNodeWhenGPUClassIsRemoved(t *testing.T) {
