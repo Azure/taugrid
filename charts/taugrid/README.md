@@ -187,12 +187,14 @@ Externally joined Azure Flex nodes are detected from
 `kubernetes.azure.com/managed=false` or `aks.azure.com/stretch-managed=true`.
 Their provisioning template must stamp both
 `net.unbounded-cloud.io/site=<globally-unique-site>` and
-`aks.azure.com/infiniband=true|false`. Nodes in one Flex site share the
+`net.unbounded-cloud.io/infiniband=true|false`. Nodes in one Flex site share the
 top-level site label. IB-enabled nodes also share its network domain; non-IB
 nodes receive singleton domains within that site. Flex supports these
 declarations through its existing `kubeadm.nodeLabels` map, so no region or
 provider list is duplicated in TauCluster configuration. Zone is omitted
-because it is not consistently available across providers.
+because it is not consistently available across providers. Azure Flex Nodes
+also accept the older `aks.azure.com/infiniband` label as a compatibility
+fallback.
 
 The topology name and required network-domain level are fixed because the
 controller owns this object and Kueue makes `ResourceFlavor.spec.topologyName`
@@ -203,8 +205,8 @@ release must rename those flavors when enabling this topology contract.
 ```yaml
 kubeadm:
   nodeLabels:
-    aks.azure.com/infiniband: "true"
     net.unbounded-cloud.io/site: research-flex
+    net.unbounded-cloud.io/infiniband: "true"
 ```
 
 ```yaml

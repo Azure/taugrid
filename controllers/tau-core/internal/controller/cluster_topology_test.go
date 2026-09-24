@@ -303,7 +303,7 @@ func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
 	}
 }
 
-func TestTauClusterReconcilesSampleAzureFlexCluster(t *testing.T) {
+func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 	cluster := topologyTestCluster()
 	ibNodes := []*corev1.Node{
 		sampleFlexNode("flex-a100-a", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", true),
@@ -313,10 +313,17 @@ func TestTauClusterReconcilesSampleAzureFlexCluster(t *testing.T) {
 		sampleFlexNode("flex-h200-a", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", true),
 		sampleFlexNode("flex-h200-b", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", true),
 	}
+	secondSiteH200s := []*corev1.Node{
+		sampleNebiusFlexNode("flex-h200-nebius-a", "gpu-h200-sxm", "partner-flex-finland"),
+		sampleNebiusFlexNode("flex-h200-nebius-b", "gpu-h200-sxm", "partner-flex-finland"),
+	}
 	nonIB := sampleFlexNode("flex-a10", "Standard_NV36ads_A10_v5", "a10-24gb", "batch-flex-eastus2", false)
 
 	objects := []client.Object{cluster, nonIB}
 	for _, node := range ibNodes {
+		objects = append(objects, node)
+	}
+	for _, node := range secondSiteH200s {
 		objects = append(objects, node)
 	}
 	c := fake.NewClientBuilder().
@@ -348,6 +355,24 @@ func TestTauClusterReconcilesSampleAzureFlexCluster(t *testing.T) {
 		if got.Labels[labelkeys.LabelGPUClass] != node.Labels[labelkeys.LabelGPUClass] {
 			t.Fatalf("Node %q GPU class = %q, want %q", node.Name, got.Labels[labelkeys.LabelGPUClass], node.Labels[labelkeys.LabelGPUClass])
 		}
+	}
+	wantSecondSite := map[string]string{
+		labelkeys.LabelSite:          "nebius-site-partner-flex-finland",
+		labelkeys.LabelRegion:        "eu-north1",
+		labelkeys.LabelNetworkDomain: "nebius-site-ib-partner-flex-finland",
+		labelkeys.LabelInfiniband:    "true",
+	}
+	for _, node := range secondSiteH200s {
+		var got corev1.Node
+		if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
+			t.Fatalf("Get Node %q: %v", node.Name, err)
+		}
+		if !nodeHasLabels(&got, wantSecondSite) {
+			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, wantSecondSite)
+		}
+	}
+	if wantShared[labelkeys.LabelNetworkDomain] == wantSecondSite[labelkeys.LabelNetworkDomain] {
+		t.Fatal("H200 Nodes in different sites received the same network domain")
 	}
 	var gotNonIB corev1.Node
 	if err := c.Get(context.Background(), client.ObjectKey{Name: nonIB.Name}, &gotNonIB); err != nil {
@@ -394,7 +419,7 @@ func sampleFlexNode(name, sku, gpuClass, site string, infiniband bool) *corev1.N
 		"node.kubernetes.io/instance-type":      sku,
 		"aks.azure.com/instance-type":           sku,
 		labelFlexSite:                           site,
-		labelAKSInfiniband:                      fmt.Sprintf("%t", infiniband),
+		labelFlexInfiniband:                     fmt.Sprintf("%t", infiniband),
 		"kubernetes.azure.com/agentpool":        "research-gpu",
 		"kubernetes.azure.com/nodepool-type":    "FlexNodes",
 		"kubernetes.azure.com/mode":             "user",
@@ -402,6 +427,23 @@ func sampleFlexNode(name, sku, gpuClass, site string, infiniband bool) *corev1.N
 		"kubernetes.azure.com/os-sku-effective": "Ubuntu2404",
 	}, "")
 	node.Labels[labelkeys.LabelGPUClass] = gpuClass
+	return node
+}
+
+func sampleNebiusFlexNode(name, instanceType, site string) *corev1.Node {
+	node := topologyTestNode(name, map[string]string{
+		labelAKSCloud:                        "nebius",
+		labelAKSRegion:                       "eu-north1",
+		labelAzureManaged:                    "false",
+		labelStretchManaged:                  "true",
+		"kubernetes.azure.com/cluster":       "flex-research",
+		"node.kubernetes.io/instance-type":   instanceType,
+		"aks.azure.com/instance-type":        instanceType,
+		labelFlexSite:                        site,
+		labelFlexInfiniband:                  "true",
+		"kubernetes.azure.com/nodepool-type": "FlexNodes",
+	}, "")
+	node.Labels[labelkeys.LabelGPUClass] = "h200-141gb"
 	return node
 }
 

@@ -16,6 +16,7 @@ const (
 	labelPSAWarn                = "pod-security.kubernetes.io/warn"
 	labelAzureWIUse             = "azure.workload.identity/use"
 	labelFlexSite               = "net.unbounded-cloud.io/site"
+	labelFlexInfiniband         = "net.unbounded-cloud.io/infiniband"
 	labelRegion                 = "topology.kubernetes.io/region"
 	labelHostname               = "kubernetes.io/hostname"
 	labelAKSCloud               = "aks.azure.com/cloud"

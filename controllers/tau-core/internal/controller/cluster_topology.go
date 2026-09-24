@@ -180,17 +180,34 @@ func desiredNodeTopologyLabels(node *corev1.Node) (map[string]string, error) {
 	infiniband := false
 
 	if !isAzureNode(node) {
-		if sourceSite := node.Labels[labelFlexSite]; sourceSite != "" {
-			if problems := validation.IsDNS1123Label(sourceSite); len(problems) > 0 {
-				return baseline, fmt.Errorf("node %q has invalid %s label", node.Name, labelFlexSite)
-			}
-			site = networkDomainLabel("site", sourceSite)
+		sourceSite := node.Labels[labelFlexSite]
+		if sourceSite == "" {
+			return baseline, nil
+		}
+		if problems := validation.IsDNS1123Label(sourceSite); len(problems) > 0 {
+			return baseline, fmt.Errorf("node %q has invalid %s label", node.Name, labelFlexSite)
+		}
+		provider := strings.ToLower(node.Labels[labelAKSCloud])
+		if provider == "" {
+			provider = "external"
+		}
+		if problems := validation.IsDNS1123Label(provider); len(problems) > 0 {
+			return baseline, fmt.Errorf("node %q has invalid %s label", node.Name, labelAKSCloud)
+		}
+		site = networkDomainLabel(provider+"-site", sourceSite)
+		switch strings.ToLower(node.Labels[labelFlexInfiniband]) {
+		case "true":
+			infiniband = true
+			domain = networkDomainLabel(provider+"-site-ib", sourceSite)
+		case "false":
+		default:
+			return baseline, fmt.Errorf("node %q with an explicit site must set %s to true or false", node.Name, labelFlexInfiniband)
 		}
 		return map[string]string{
 			labelkeys.LabelSite:          site,
 			labelkeys.LabelRegion:        region,
 			labelkeys.LabelNetworkDomain: domain,
-			labelkeys.LabelInfiniband:    "false",
+			labelkeys.LabelInfiniband:    fmt.Sprintf("%t", infiniband),
 		}, nil
 	}
 
@@ -200,13 +217,21 @@ func desiredNodeTopologyLabels(node *corev1.Node) (map[string]string, error) {
 			return baseline, fmt.Errorf("Azure Flex node %q has no valid %s label", node.Name, labelFlexSite)
 		}
 		site = networkDomainLabel("azure-site", sourceSite)
-		switch strings.ToLower(node.Labels[labelAKSInfiniband]) {
+		capability := node.Labels[labelFlexInfiniband]
+		if capability == "" {
+			capability = node.Labels[labelAKSInfiniband]
+		}
+		switch strings.ToLower(capability) {
 		case "true":
 			infiniband = true
 			domain = networkDomainLabel("azure-site-ib", sourceSite)
 		case "false":
 		default:
-			return baseline, fmt.Errorf("Azure Flex node %q must set %s to true or false", node.Name, labelAKSInfiniband)
+			return baseline, fmt.Errorf(
+				"Azure Flex node %q must set %s to true or false",
+				node.Name,
+				labelFlexInfiniband,
+			)
 		}
 	} else {
 		site = networkDomainLabel("azure", region)
