@@ -75,14 +75,17 @@ export function BoardResult<T>({
     </div>
   </section>;
 }
-export function ScopedLink({ to, children, className, title, external = false }: { to: string; children: ReactNode; className?: string; title?: string; external?: boolean }) {
+export function ScopedLink({ to, children, className, title, external = false, onIntent }: {
+  to: string; children: ReactNode; className?: string; title?: string; external?: boolean; onIntent?: () => void;
+}) {
   const scoped = useScopedURL();
   const { scope } = useWorkspace();
   const href = scoped(nativeExperimentURL(to, scope.experimentsUrl));
   if (external || !href.startsWith('/portal') || (href.length > 7 && !['/', '?', '#'].includes(href[7]))) {
-    return <a href={href} className={className} title={title} target={external ? '_blank' : undefined} rel={external ? 'noopener noreferrer' : undefined}>{children}</a>;
+    return <a href={href} className={className} title={title} target={external ? '_blank' : undefined}
+      rel={external ? 'noopener noreferrer' : undefined} onMouseEnter={onIntent} onFocus={onIntent}>{children}</a>;
   }
-  return <Link to={href} className={className} title={title}>{children}</Link>;
+  return <Link to={href} className={className} title={title} onMouseEnter={onIntent} onFocus={onIntent}>{children}</Link>;
 }
 export function Table({ headers, rows }: { headers: string[]; rows: ReactNode[][] }) {
   return <div className="table-scroll"><table className="jobs"><thead><tr>{headers.map((h) => <th key={h} className={h.startsWith('#') ? 'num' : undefined}>{h.replace(/^#/, '')}</th>)}</tr></thead>

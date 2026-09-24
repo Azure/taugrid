@@ -481,7 +481,10 @@ describe('Fleet dashboard', () => {
     }));
     renderPortal('/portal/fleet?instance=h200-node-a');
 
-    expect(await screen.findByRole('region', { name: 'GPU details for h200-node-a' })).toBeVisible();
+    const details = await screen.findByRole('region', { name: 'GPU details for h200-node-a' });
+    expect(details).toBeVisible();
+    expect(details.compareDocumentPosition(screen.getByRole('heading', { name: 'GPU Dashboard' })) &
+      Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'GPU details · h200-node-a' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Clear focus' })).toHaveAttribute('href', '/portal/fleet');
     expect(screen.getByRole('cell', { name: '41' })).toBeVisible();

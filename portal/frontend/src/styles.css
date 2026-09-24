@@ -175,6 +175,7 @@
   .fabric-site {
     --site-color: #2563eb; --site-bg: #eff6ff;
     border: 1px solid var(--site-color); border-top-width: 4px; background: var(--site-bg);
+    content-visibility: auto; contain-intrinsic-block-size: auto 420px;
   }
   .fabric-site.site-tone-1 { --site-color: #7c3aed; --site-bg: #f5f3ff; }
   .fabric-site.site-tone-2 { --site-color: #0f766e; --site-bg: #f0fdfa; }
