@@ -4,9 +4,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { boardScopeKey, experimentsAPI, useWorkspace } from '../data';
 import { Empty, PageTitle } from '../components';
-import type { MetricCatalogEntry, ResponseMeta, RunSummary, SeriesPoint } from './contracts';
+import type { ExperimentFaultEvent, ExperimentFaultEvents, MetricCatalogEntry, ResponseMeta, RunSummary, SeriesPoint } from './contracts';
 import {
-  useExperimentsQuery, useLegacyExperimentResolverQuery, useMetricCatalogQuery, useMetricSeriesQuery,
+  useExperimentFaultEventsQuery, useExperimentsQuery, useLegacyExperimentResolverQuery, useMetricCatalogQuery, useMetricSeriesQuery,
   useRunDetailQuery, useRunResolverQuery, useRunsQuery,
 } from './queries';
 import { useExperimentURLState } from './url-state';
@@ -77,7 +77,8 @@ function RefreshExperimentData() {
         queryKey: prefix,
         predicate: query => {
           const path = query.queryKey.at(-1);
-          return typeof path === 'string' && path.startsWith('/api/v2/stellar/');
+          return typeof path === 'string' &&
+            (path.startsWith('/api/v2/stellar/') || path.startsWith('/api/portal/experiments/'));
         },
         refetchType: 'active',
       });
@@ -228,6 +229,7 @@ function RunDetailPanel({ experiment, runID }: { experiment: string; runID: stri
   const { state } = useExperimentURLState();
   const query = useRunDetailQuery(experiment, runID, state.project);
   const catalogQuery = useMetricCatalogQuery(experiment, runID, state.project);
+  const faultsQuery = useExperimentFaultEventsQuery(experiment);
   return <section className="thin-panel" aria-labelledby="run-detail-title">
     <h2 id="run-detail-title">3. Run detail</h2>
     <QueryState name="Run detail" query={query}>{() => {
@@ -237,12 +239,75 @@ function RunDetailPanel({ experiment, runID }: { experiment: string; runID: stri
           <div><dt>Lifecycle</dt><dd>{detail.run.lifecycle_state}</dd></div><div><dt>Project</dt><dd>{detail.run.project || state.project || '—'}</dd></div>
           <div><dt>Owner</dt><dd>{detail.run.owner || '—'}</dd></div><div><dt>Started</dt><dd>{detail.run.started_at || '—'}</dd></div>
           <div><dt>Completed</dt><dd>{detail.run.completed_at || '—'}</dd></div></dl>
+        <QueryState name="GPU and infrastructure health" query={faultsQuery}>{() =>
+          <ExperimentFaultPanel data={faultsQuery.data!}/>
+        }</QueryState>
         <QueryState name="Metric catalog" query={catalogQuery}>{() =>
           <><DataState meta={catalogQuery.data!}/><MetricPanel experiment={experiment} runID={runID} catalog={catalogQuery.data!.metrics}/></>
         }</QueryState>
       </>;
     }}</QueryState>
   </section>;
+}
+
+function displayTime(value?: string) {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function faultDetail(event: ExperimentFaultEvent) {
+  return [event.reason, event.message].filter(Boolean).join(' · ') || 'No reason reported';
+}
+
+function ExperimentFaultPanel({ data }: { data: ExperimentFaultEvents }) {
+  const counts = data.events.reduce((result, event) => {
+    result[event.healthState]++;
+    return result;
+  }, { unhealthy: 0, unknown: 0, healthy: 0 });
+  const unavailable = data.coverage.correlation === 'unavailable' || data.coverage.evidence === 'unavailable';
+  const completed = !data.timeBounds.active && !!data.timeBounds.completedAt;
+  const historicalLimit = completed &&
+    ['current-only', 'partial', 'unknown', 'unavailable'].includes(data.coverage.correlation);
+  return <div className="experiment-health">
+    <div className="experiment-health-heading">
+      <div><h2>GPU / infrastructure health</h2><p>Node-scoped conditions correlated to this experiment's recorded allocation.</p></div>
+      <span className={`evidence-badge ${data.coverage.correlation}`}>Evidence: {data.coverage.correlation}</span>
+    </div>
+    <div className="health-summary" aria-label="Correlated health summary">
+      <span className="unhealthy"><strong>{counts.unhealthy}</strong> unhealthy</span>
+      <span className="unknown"><strong>{counts.unknown}</strong> unknown</span>
+      <span className="recovered"><strong>{counts.healthy}</strong> recovered / healthy</span>
+    </div>
+    <dl className="health-coverage">
+      <div><dt>Allocation</dt><dd>{data.coverage.allocation}</dd></div>
+      <div><dt>Time bounds</dt><dd>{data.coverage.timeBounds}</dd></div>
+      <div><dt>Node evidence</dt><dd>{data.coverage.evidence}</dd></div>
+      <div><dt>Nodes</dt><dd>{data.allocatedNodes.length} recorded{data.missingNodes.length ? ` · ${data.missingNodes.length} missing now` : ''}</dd></div>
+    </dl>
+    {historicalLimit && <div className="historical-limit" role="status"><strong>Current snapshot only—not an experiment timeline.</strong>
+      {' '}This completed experiment has no historical Node-condition log.</div>}
+    {!historicalLimit && data.coverage.evidence === 'current-only' &&
+      <div className="historical-limit" role="status">Live Node conditions show current state only; they do not establish when a fault affected the experiment.</div>}
+    {(data.coverage.reasons.length > 0 || data.missingNodes.length > 0) && <div className="evidence-gaps">
+      <strong>Evidence gaps</strong>
+      <ul>
+        {data.coverage.reasons.map(reason => <li key={reason}>{reason}</li>)}
+        {data.missingNodes.length > 0 && <li>Missing from the current cluster snapshot: {data.missingNodes.join(', ')}</li>}
+      </ul>
+    </div>}
+    <p className="health-provenance"><strong>Provenance:</strong> allocation from {data.provenance.allocation}; evidence from {data.provenance.evidence}. {data.provenance.limitation}.</p>
+    {unavailable ? <Empty warn>Correlated health evidence is unavailable for this experiment.</Empty>
+      : !data.events.length ? <Empty>No current allowlisted GPU or infrastructure conditions were returned. This is an evidence gap, not a verified clean history.</Empty>
+        : <div className="health-table-scroll"><table className="thin-table health-table">
+          <thead><tr><th>Node</th><th>Category / check</th><th>Current state</th><th>Reason / message</th><th>Observed / transitioned</th></tr></thead>
+          <tbody>{data.events.map(event => <tr key={event.dedupKey}>
+            <td>{event.node}</td><td>{event.category}<br/><span>{event.checkType}</span></td>
+            <td><strong className={`health-state ${event.healthState}`}>{event.healthState}</strong><br/><span>condition {event.status} · {event.evidenceStatus} evidence</span></td>
+            <td>{faultDetail(event)}</td><td>{displayTime(event.observedAt)}<br/><span>{displayTime(event.transitionAt)}</span></td>
+          </tr>)}</tbody>
+        </table></div>}
+  </div>;
 }
 
 function MetricPanel({ experiment, runID, catalog }: { experiment: string; runID: string; catalog: MetricCatalogEntry[] }) {
