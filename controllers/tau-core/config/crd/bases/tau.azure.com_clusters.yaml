@@ -175,59 +175,6 @@ spec:
                     - name
                     type: object
                 type: object
-              sites:
-                description: |-
-                  Sites declares GPU capacity locations used to derive topology-aware
-                  scheduling labels and the TauGrid-owned Kueue Topology.
-                items:
-                  properties:
-                    infiniband:
-                      description: |-
-                        Infiniband declares whether a Flex site shares one connected network
-                        domain. It is required for Flex sites. Microsoft sites always use the
-                        launch assumption that GPU capacity in one region is InfiniBand-connected.
-                      type: boolean
-                    name:
-                      description: |-
-                        Name is the stable site identity. Flex sites match Nodes carrying
-                        net.unbounded-cloud.io/site=<name>.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                      type: string
-                    nodeSelector:
-                      additionalProperties:
-                        type: string
-                      description: NodeSelector further restricts the Nodes belonging
-                        to this site.
-                      type: object
-                    provider:
-                      description: Provider selects the launch topology policy for
-                        this site.
-                      enum:
-                      - Microsoft
-                      - Flex
-                      type: string
-                    region:
-                      description: Region is the topology.kubernetes.io/region value
-                        for the site's Nodes.
-                      maxLength: 63
-                      minLength: 1
-                      type: string
-                  required:
-                  - name
-                  - provider
-                  - region
-                  type: object
-                  x-kubernetes-validations:
-                  - message: Flex sites must set infiniband; Microsoft sites cannot
-                      disable it
-                    rule: 'self.provider == ''Flex'' ? has(self.infiniband) : (!has(self.infiniband)
-                      || self.infiniband)'
-                type: array
-                x-kubernetes-list-map-keys:
-                - name
-                x-kubernetes-list-type: map
               workloadProfiles:
                 description: |-
                   WorkloadProfiles declares stable workload intent. Live quota, capacity,

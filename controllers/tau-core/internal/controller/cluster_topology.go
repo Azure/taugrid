@@ -23,22 +23,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func (r *TauClusterReconciler) reconcileSiteTopology(
+func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 	ctx context.Context,
 	cluster *tauv1alpha1.TauCluster,
 	mutate bool,
 ) (topologyReconcileState, error) {
 	generation := cluster.Generation
-	if err := validateSites(cluster.Spec.Sites); err != nil {
-		message := err.Error()
-		return topologyReconcileState{
-			queuesCondition:      condition(tauv1alpha1.ConditionQueuesReady, metav1.ConditionFalse, "InvalidSites", message, generation),
-			driftCondition:       condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionUnknown, "InvalidSites", message, generation),
-			ownershipCondition:   condition(tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflictObserved", "no topology ownership conflict was evaluated", generation),
-			reconciliationFailed: true,
-		}, nil
-	}
-
 	topology := newQueueObject(topologyGVK)
 	err := r.Get(ctx, client.ObjectKey{Name: tauGPUNodeTopologyName}, topology)
 	topologyMissing := apierrors.IsNotFound(err)
@@ -73,7 +63,7 @@ func (r *TauClusterReconciler) reconcileSiteTopology(
 		}
 	}
 
-	nodeStatus, nodeDrift, err := r.reconcileSiteNodeLabels(ctx, cluster.Spec.Sites, mutate)
+	nodeStatus, nodeDrift, err := r.reconcileAzureNodeTopologyLabels(ctx, mutate)
 	if err != nil {
 		message := err.Error()
 		return topologyReconcileState{
@@ -109,168 +99,130 @@ func (r *TauClusterReconciler) reconcileSiteTopology(
 	return readyTopologyState(generation, nodeStatus, nodeDrift, topology), nil
 }
 
-func validateSites(sites []tauv1alpha1.TauSiteSpec) error {
-	seen := map[string]struct{}{}
-	for i, site := range sites {
-		if problems := validation.IsDNS1123Label(site.Name); len(problems) > 0 {
-			return fmt.Errorf("sites[%d].name %q: %s", i, site.Name, problems[0])
-		}
-		if _, ok := seen[site.Name]; ok {
-			return fmt.Errorf("sites[%d].name %q is duplicated", i, site.Name)
-		}
-		seen[site.Name] = struct{}{}
-		if problems := validation.IsValidLabelValue(site.Region); len(problems) > 0 || strings.TrimSpace(site.Region) == "" {
-			return fmt.Errorf("sites[%d].region %q is not a valid topology label value", i, site.Region)
-		}
-		for key, value := range site.NodeSelector {
-			if problems := validation.IsQualifiedName(key); len(problems) > 0 {
-				return fmt.Errorf("sites[%d].nodeSelector[%q]: %s", i, key, problems[0])
-			}
-			if problems := validation.IsValidLabelValue(value); len(problems) > 0 {
-				return fmt.Errorf("sites[%d].nodeSelector[%q]: %s", i, key, problems[0])
-			}
-		}
-		switch site.Provider {
-		case tauv1alpha1.SiteProviderMicrosoft:
-			if site.Infiniband != nil && !*site.Infiniband {
-				return fmt.Errorf("sites[%d] %q cannot disable InfiniBand for Microsoft capacity under the launch topology contract", i, site.Name)
-			}
-		case tauv1alpha1.SiteProviderFlex:
-			if site.Infiniband == nil {
-				return fmt.Errorf("sites[%d] %q must explicitly set infiniband for Flex capacity", i, site.Name)
-			}
-		default:
-			return fmt.Errorf("sites[%d].provider %q is unsupported", i, site.Provider)
-		}
-	}
-	return nil
+type nodeTopologyPlan struct {
+	node    *corev1.Node
+	desired map[string]string
 }
 
-func (r *TauClusterReconciler) reconcileSiteNodeLabels(
+func (r *TauClusterReconciler) reconcileAzureNodeTopologyLabels(
 	ctx context.Context,
-	sites []tauv1alpha1.TauSiteSpec,
 	mutate bool,
 ) (tauv1alpha1.TauClusterSectionStatus, bool, error) {
 	var nodes corev1.NodeList
 	if err := r.List(ctx, &nodes); err != nil {
-		return tauv1alpha1.TauClusterSectionStatus{}, false, fmt.Errorf("list nodes for site topology: %w", err)
+		return tauv1alpha1.TauClusterSectionStatus{}, false, fmt.Errorf("list nodes for Azure GPU topology: %w", err)
 	}
 
 	status := tauv1alpha1.TauClusterSectionStatus{}
-	drift := false
-	var reconcileErr error
+	plans := make([]nodeTopologyPlan, 0)
 	sort.Slice(nodes.Items, func(i, j int) bool { return nodes.Items[i].Name < nodes.Items[j].Name })
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		hasManagedLabels := node.Labels[labelkeys.LabelNetworkDomain] != "" || node.Labels[labelkeys.LabelInfiniband] != ""
+		hasManagedLabels := hasManagedTopologyLabels(node)
 		if node.Labels[labelkeys.LabelGPUClass] == "" && !hasManagedLabels {
 			continue
 		}
-		site, matched, err := matchingSite(node, sites)
+		desired, eligible, err := desiredAzureNodeTopologyLabels(node)
 		if err != nil {
 			return status, true, err
 		}
-		if !matched {
+		if !eligible {
 			if !hasManagedLabels {
 				continue
 			}
-			status.Observed++
-			status.Drifted++
-			drift = true
-			if !mutate {
-				continue
-			}
-			before := node.DeepCopy()
-			delete(node.Labels, labelkeys.LabelNetworkDomain)
-			delete(node.Labels, labelkeys.LabelInfiniband)
-			if err := r.Patch(ctx, node, client.MergeFrom(before)); err != nil {
-				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("remove node %q stale site topology labels: %w", node.Name, err))
-				continue
-			}
-			status.Drifted--
-			status.Ready++
-			continue
+			desired = nil
 		}
 		status.Observed++
-		desired := siteNodeLabels(node, site)
-		if nodeHasLabels(node, desired) {
+		if desired != nil && nodeHasLabels(node, desired) {
 			status.Ready++
 			continue
 		}
 		status.Drifted++
-		drift = true
-		if !mutate {
-			continue
+		plans = append(plans, nodeTopologyPlan{node: node, desired: desired})
+	}
+	if !mutate {
+		return status, status.Drifted > 0, nil
+	}
+
+	var reconcileErr error
+	for _, plan := range plans {
+		before := plan.node.DeepCopy()
+		if plan.desired == nil {
+			delete(plan.node.Labels, labelkeys.LabelRegion)
+			delete(plan.node.Labels, labelkeys.LabelNetworkDomain)
+			delete(plan.node.Labels, labelkeys.LabelInfiniband)
+		} else {
+			if plan.node.Labels == nil {
+				plan.node.Labels = map[string]string{}
+			}
+			for key, value := range plan.desired {
+				plan.node.Labels[key] = value
+			}
 		}
-		before := node.DeepCopy()
-		if node.Labels == nil {
-			node.Labels = map[string]string{}
-		}
-		for key, value := range desired {
-			node.Labels[key] = value
-		}
-		if err := r.Patch(ctx, node, client.MergeFrom(before)); err != nil {
-			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("patch node %q site topology labels: %w", node.Name, err))
+		if err := r.Patch(ctx, plan.node, client.MergeFrom(before)); err != nil {
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("patch node %q GPU topology labels: %w", plan.node.Name, err))
 			continue
 		}
 		status.Drifted--
 		status.Ready++
 	}
-	return status, drift && status.Drifted > 0, reconcileErr
+	return status, status.Drifted > 0, reconcileErr
 }
 
-func matchingSite(node *corev1.Node, sites []tauv1alpha1.TauSiteSpec) (tauv1alpha1.TauSiteSpec, bool, error) {
-	var matched *tauv1alpha1.TauSiteSpec
-	for i := range sites {
-		site := &sites[i]
-		if node.Labels[labelRegion] != site.Region || !matchesLabels(node.Labels, site.NodeSelector) {
-			continue
-		}
-		switch site.Provider {
-		case tauv1alpha1.SiteProviderFlex:
-			if node.Labels[labelFlexSite] != site.Name {
-				continue
+func desiredAzureNodeTopologyLabels(node *corev1.Node) (map[string]string, bool, error) {
+	if !isAzureNode(node) {
+		return nil, false, nil
+	}
+	region := node.Labels[labelRegion]
+	if region == "" {
+		region = node.Labels[labelAKSRegion]
+	}
+	if problems := validation.IsValidLabelValue(region); len(problems) > 0 || strings.TrimSpace(region) == "" {
+		return nil, true, fmt.Errorf("Azure GPU node %q has no valid region label", node.Name)
+	}
+
+	infiniband := true
+	domain := networkDomainLabel("azure", region)
+	if isExternalAzureNode(node) {
+		switch strings.ToLower(node.Labels[labelAKSInfiniband]) {
+		case "true":
+			site := node.Labels[labelFlexSite]
+			if problems := validation.IsDNS1123Label(site); len(problems) > 0 {
+				return nil, true, fmt.Errorf("Azure Flex GPU node %q with InfiniBand enabled has no valid %s label", node.Name, labelFlexSite)
 			}
-		case tauv1alpha1.SiteProviderMicrosoft:
-			if node.Labels[labelFlexSite] != "" {
-				continue
-			}
-		}
-		if matched != nil {
-			return tauv1alpha1.TauSiteSpec{}, false, fmt.Errorf("node %q matches multiple TauGrid sites %q and %q", node.Name, matched.Name, site.Name)
-		}
-		copy := *site
-		matched = &copy
-	}
-	if matched == nil {
-		return tauv1alpha1.TauSiteSpec{}, false, nil
-	}
-	return *matched, true, nil
-}
-
-func matchesLabels(labels, selector map[string]string) bool {
-	for key, value := range selector {
-		if labels[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func siteNodeLabels(node *corev1.Node, site tauv1alpha1.TauSiteSpec) map[string]string {
-	infiniband := site.Provider == tauv1alpha1.SiteProviderMicrosoft || (site.Infiniband != nil && *site.Infiniband)
-	domain := networkDomainLabel("microsoft", site.Region)
-	if site.Provider == tauv1alpha1.SiteProviderFlex {
-		domain = networkDomainLabel("flex", site.Name)
-		if !infiniband {
+			domain = networkDomainLabel("azure-site", site)
+		case "false":
+			infiniband = false
 			sum := sha256.Sum256([]byte(node.Name))
 			domain = "isolated-" + hex.EncodeToString(sum[:8])
+		default:
+			return nil, true, fmt.Errorf("Azure Flex GPU node %q must set %s to true or false", node.Name, labelAKSInfiniband)
 		}
 	}
 	return map[string]string{
+		labelkeys.LabelRegion:        region,
 		labelkeys.LabelNetworkDomain: domain,
 		labelkeys.LabelInfiniband:    fmt.Sprintf("%t", infiniband),
+	}, true, nil
+}
+
+func isAzureNode(node *corev1.Node) bool {
+	if cloud := node.Labels[labelAKSCloud]; cloud != "" {
+		return strings.EqualFold(cloud, "azure")
 	}
+	return strings.HasPrefix(strings.ToLower(node.Spec.ProviderID), "azure://") ||
+		node.Labels[labelAzureManagedCluster] != ""
+}
+
+func isExternalAzureNode(node *corev1.Node) bool {
+	return strings.EqualFold(node.Labels[labelAzureManaged], "false") ||
+		strings.EqualFold(node.Labels[labelStretchManaged], "true")
+}
+
+func hasManagedTopologyLabels(node *corev1.Node) bool {
+	return node.Labels[labelkeys.LabelRegion] != "" ||
+		node.Labels[labelkeys.LabelNetworkDomain] != "" ||
+		node.Labels[labelkeys.LabelInfiniband] != ""
 }
 
 func networkDomainLabel(prefix, identity string) string {
@@ -293,7 +245,7 @@ func desiredTauGPUTopology() *unstructured.Unstructured {
 	})
 	topology.Object["spec"] = map[string]any{
 		"levels": []any{
-			map[string]any{"nodeLabel": labelRegion},
+			map[string]any{"nodeLabel": labelkeys.LabelRegion},
 			map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
 			map[string]any{"nodeLabel": labelHostname},
 		},
@@ -313,11 +265,11 @@ func readyTopologyState(
 	status.Drifted += nodeStatus.Drifted
 	driftStatus := metav1.ConditionFalse
 	driftReason := "NoTopologyDrift"
-	driftMessage := "TauGrid site labels and Kueue topology are reconciled"
+	driftMessage := "Azure GPU node labels and Kueue topology are reconciled"
 	if nodeDrift {
 		driftStatus = metav1.ConditionTrue
 		driftReason = "TopologyNodeLabelDrift"
-		driftMessage = "TauGrid site node labels need reconciliation"
+		driftMessage = "Azure GPU node labels need reconciliation"
 	}
 	return topologyReconcileState{
 		status:             status,

@@ -97,16 +97,6 @@ spec:
         labels:
           kueue.azure.com/gpu-series: nd-gb300-v6
           tau.azure.com/gpu-class: gb300-288gb
-  # Microsoft GPU capacity in one region shares a launch-time InfiniBand
-  # network domain. Flex sites must declare their capability explicitly.
-  sites:
-    - name: microsoft-eastus2
-      provider: Microsoft
-      region: eastus2
-    - name: research-flex
-      provider: Flex
-      region: eastus2
-      infiniband: true
   queues:
     ownership: External
   # BEGIN GENERATED WORKLOAD PROFILES

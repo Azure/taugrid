@@ -40,7 +40,7 @@ baselineQueue:
         operator: Exists
   topology:
     enabled: true
-    # Owned and reconciled by tau-core-controller. Sites supply node domains.
+    # Owned and reconciled by tau-core-controller.
     name: taugrid-gpu-topology
     # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
     # templates after queue resolution.
@@ -177,17 +177,6 @@ tau-core-controller:
     # reconciles gpu-class and gpu-series labels from instance-type. Append
     # cluster-specific hardware without replacing that catalog.
     extraNodeLabelRules: []
-    # Example:
-    # sites:
-    #   - name: microsoft-eastus2
-    #     provider: Microsoft
-    #     region: eastus2
-    #   - name: research-flex
-    #     provider: Flex
-    #     region: eastus2
-    #     infiniband: true
-    sites: []
-
 # Portal is part of the default operator experience. The remaining first-party
 # services stay opt-in and all enabled services use release-versioned MCR tags.
 taugrid-core:

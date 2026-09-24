@@ -18,6 +18,12 @@ const (
 	labelFlexSite               = "net.unbounded-cloud.io/site"
 	labelRegion                 = "topology.kubernetes.io/region"
 	labelHostname               = "kubernetes.io/hostname"
+	labelAKSCloud               = "aks.azure.com/cloud"
+	labelAKSRegion              = "aks.azure.com/region"
+	labelAKSInfiniband          = "aks.azure.com/infiniband"
+	labelAzureManaged           = "kubernetes.azure.com/managed"
+	labelAzureManagedCluster    = "kubernetes.azure.com/managed-cluster"
+	labelStretchManaged         = "aks.azure.com/stretch-managed"
 
 	tauGPUNodeTopologyName = "taugrid-gpu-topology"
 

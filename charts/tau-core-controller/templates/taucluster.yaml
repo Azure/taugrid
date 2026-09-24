@@ -15,8 +15,6 @@ spec:
   deletionPolicy: {{ .Values.tauCluster.deletionPolicy }}
   nodes:
     labelRules: {{- if $rules }}{{ toYaml $rules | nindent 6 }}{{- else }} []{{- end }}
-  sites:
-{{- toYaml (.Values.tauCluster.sites | default list) | nindent 4 }}
   queues:
 {{- toYaml .Values.tauCluster.queues | nindent 4 }}
   workloadProfiles:

@@ -17,6 +17,7 @@ const (
 	LabelWorkspace     = "tau.azure.com/workspace"
 	LabelLocalQueue    = "tau.azure.com/local-queue"
 	LabelGPUClass      = "tau.azure.com/gpu-class"
+	LabelRegion        = "tau.azure.com/region"
 	LabelNetworkDomain = "tau.azure.com/network-domain"
 	LabelInfiniband    = "tau.azure.com/infiniband"
 

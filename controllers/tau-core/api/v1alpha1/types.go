@@ -29,9 +29,6 @@ const (
 	ClusterOwnershipAdopt    = "Adopt"
 	ClusterOwnershipManage   = "Manage"
 
-	SiteProviderMicrosoft = "Microsoft"
-	SiteProviderFlex      = "Flex"
-
 	ClusterPhasePending  = "Pending"
 	ClusterPhaseReady    = "Ready"
 	ClusterPhaseDegraded = "Degraded"
@@ -119,29 +116,6 @@ type TauClusterNodesSpec struct {
 	LabelRules []TauNodeLabelRule `json:"labelRules,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="self.provider == 'Flex' ? has(self.infiniband) : (!has(self.infiniband) || self.infiniband)",message="Flex sites must set infiniband; Microsoft sites cannot disable it"
-type TauSiteSpec struct {
-	// Name is the stable site identity. Flex sites match Nodes carrying
-	// net.unbounded-cloud.io/site=<name>.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	Name string `json:"name"`
-	// Provider selects the launch topology policy for this site.
-	// +kubebuilder:validation:Enum=Microsoft;Flex
-	Provider string `json:"provider"`
-	// Region is the topology.kubernetes.io/region value for the site's Nodes.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	Region string `json:"region"`
-	// Infiniband declares whether a Flex site shares one connected network
-	// domain. It is required for Flex sites. Microsoft sites always use the
-	// launch assumption that GPU capacity in one region is InfiniBand-connected.
-	Infiniband *bool `json:"infiniband,omitempty"`
-	// NodeSelector further restricts the Nodes belonging to this site.
-	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
-}
-
 type TauClusterQueuesSpec struct {
 	// Ownership controls whether queue objects are observed, explicitly
 	// adopted, or managed. External is the safe default for GitOps objects.
@@ -177,11 +151,6 @@ type TauClusterSpec struct {
 	// +kubebuilder:validation:Enum=Retain;DeleteManaged
 	DeletionPolicy string              `json:"deletionPolicy,omitempty"`
 	Nodes          TauClusterNodesSpec `json:"nodes,omitempty"`
-	// Sites declares GPU capacity locations used to derive topology-aware
-	// scheduling labels and the TauGrid-owned Kueue Topology.
-	// +listType=map
-	// +listMapKey=name
-	Sites []TauSiteSpec `json:"sites,omitempty"`
 	// +kubebuilder:default={}
 	Queues TauClusterQueuesSpec `json:"queues,omitempty"`
 	// +kubebuilder:default={}

@@ -183,14 +183,7 @@ tests:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
         documentIndex: 1
 
-  - it: enables network-domain topology when a GPU Site is configured
-    set:
-      tau-core-controller:
-        tauCluster:
-          sites:
-            - name: microsoft-eastus2
-              provider: Microsoft
-              region: eastus2
+  - it: enables the normalized network-domain topology by default
     asserts:
       - equal:
           path: spec.topologyName
@@ -203,12 +196,6 @@ tests:
 
   - it: renders a class-labeled GPU flavor without constraining the CPU flavor
     set:
-      tau-core-controller:
-        tauCluster:
-          sites:
-            - name: microsoft-eastus2
-              provider: Microsoft
-              region: eastus2
       baselineQueue.gpu.flavors:
         - name: a100-pool
           nodeLabels:
@@ -361,12 +348,6 @@ tests:
 
   - it: accepts topology-capable GPU flavors without optional labels or tolerations
     set:
-      tau-core-controller:
-        tauCluster:
-          sites:
-            - name: microsoft-eastus2
-              provider: Microsoft
-              region: eastus2
       baselineQueue.gpu.flavors:
         - name: resource-only-gpu
           nodeTaints:

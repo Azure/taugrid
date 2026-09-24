@@ -157,6 +157,7 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 			"kubernetes.azure.com/agentpool":       "gpu",
 			"kubernetes.azure.com/mode":            "user",
 			"kubernetes.azure.com/managed-cluster": "test",
+			labelRegion:                            "eastus2",
 		},
 	}}
 	flexNode := &corev1.Node{ObjectMeta: metav1.ObjectMeta{
@@ -200,7 +201,7 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 	if cluster.Status.Nodes != (tauv1alpha1.TauClusterSectionStatus{Observed: 2, Ready: 2}) {
 		t.Fatalf("node status = %#v", cluster.Status.Nodes)
 	}
-	if got, want := recordingClient.mutations, []string{"patch flex-h200", "patch native-a100", "create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
+	if got, want := recordingClient.mutations, []string{"patch flex-h200", "patch native-a100", "patch native-a100", "create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("mutations = %v, want %v", got, want)
 	}
 

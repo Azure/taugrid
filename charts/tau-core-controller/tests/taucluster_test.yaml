@@ -49,9 +49,8 @@ tests:
       - equal:
           path: spec.queues.ownership
           value: External
-      - lengthEqual:
+      - notExists:
           path: spec.sites
-          count: 0
       - lengthEqual:
           path: spec.workloadProfiles
           count: 15
@@ -75,32 +74,6 @@ tests:
       - equal:
           path: spec.workloadProfiles[14].applicability.namespaces[0]
           value: team-alpha
-
-  - it: renders Microsoft and Flex topology sites
-    set:
-      tauCluster.sites:
-        - name: microsoft-eastus2
-          provider: Microsoft
-          region: eastus2
-        - name: research-flex
-          provider: Flex
-          region: westus3
-          infiniband: true
-          nodeSelector:
-            team: research
-    asserts:
-      - equal:
-          path: spec.sites[0]
-          value:
-            name: microsoft-eastus2
-            provider: Microsoft
-            region: eastus2
-      - equal:
-          path: spec.sites[1].infiniband
-          value: true
-      - equal:
-          path: spec.sites[1].nodeSelector.team
-          value: research
 
   - it: replaces the catalog and appends a platform supplied mapping
     set:

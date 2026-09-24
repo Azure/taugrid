@@ -85,7 +85,7 @@ func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	)
 	if cluster.Name == tauv1alpha1.TauClusterSingletonName {
 		nodeState, nodeErr = r.reconcileNodeLabels(ctx, &cluster, mode == tauv1alpha1.ClusterManagementModeReconcile)
-		topologyState, topologyErr = r.reconcileSiteTopology(
+		topologyState, topologyErr = r.reconcileGPUNodeTopology(
 			ctx,
 			&cluster,
 			mode == tauv1alpha1.ClusterManagementModeReconcile && !nodeState.reconciliationFailed,
