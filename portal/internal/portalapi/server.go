@@ -12,11 +12,13 @@ package portalapi
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -311,40 +313,161 @@ func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceS
 
 // Handler returns the portal's root http.Handler with security headers applied.
 func (s *Server) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
-		if compressKustoJSON(r) {
-			w.Header().Set("Content-Encoding", "gzip")
-			w.Header().Add("Vary", "Accept-Encoding")
-			compressed := gzip.NewWriter(w)
-			defer compressed.Close()
-			s.mux.ServeHTTP(gzipResponseWriter{ResponseWriter: w, writer: compressed}, r)
+		s.mux.ServeHTTP(w, r)
+	}))
+}
+
+const minCompressedJSONBytes = 1024
+
+type compressJSONResponseWriter struct {
+	http.ResponseWriter
+	header      http.Header
+	body        bytes.Buffer
+	status      int
+	acceptsGzip bool
+	committed   bool
+	writer      io.Writer
+	compressed  *gzip.Writer
+}
+
+func newCompressJSONResponseWriter(w http.ResponseWriter, acceptsGzip bool) *compressJSONResponseWriter {
+	return &compressJSONResponseWriter{
+		ResponseWriter: w,
+		header:         make(http.Header),
+		acceptsGzip:    acceptsGzip,
+	}
+}
+
+func (w *compressJSONResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *compressJSONResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *compressJSONResponseWriter) Write(payload []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if w.committed {
+		return w.writer.Write(payload)
+	}
+	contentType := strings.ToLower(w.header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "application/json") ||
+		w.header.Get("Content-Encoding") != "" ||
+		w.status == http.StatusNoContent ||
+		w.status == http.StatusNotModified {
+		if err := w.commit(false); err != nil {
+			return 0, err
+		}
+		return w.writer.Write(payload)
+	}
+	if _, err := w.body.Write(payload); err != nil {
+		return 0, err
+	}
+	if w.body.Len() < minCompressedJSONBytes {
+		return len(payload), nil
+	}
+	if err := w.commit(w.acceptsGzip); err != nil {
+		return 0, err
+	}
+	return len(payload), nil
+}
+
+func (w *compressJSONResponseWriter) finish() {
+	if !w.committed {
+		_ = w.commit(false)
+	}
+	if w.compressed != nil {
+		_ = w.compressed.Close()
+	}
+}
+
+func (w *compressJSONResponseWriter) Flush() {
+	if !w.committed {
+		_ = w.commit(false)
+	}
+	if w.compressed != nil {
+		_ = w.compressed.Flush()
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *compressJSONResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *compressJSONResponseWriter) commit(compress bool) error {
+	if w.committed {
+		return nil
+	}
+	status := w.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	headers := w.ResponseWriter.Header()
+	for name, values := range w.header {
+		headers[name] = append([]string(nil), values...)
+	}
+	if w.body.Len() >= minCompressedJSONBytes {
+		addVary(headers, "Accept-Encoding")
+	}
+	if compress {
+		headers.Set("Content-Encoding", "gzip")
+		headers.Del("Content-Length")
+		w.compressed = gzip.NewWriter(w.ResponseWriter)
+		w.writer = w.compressed
+	} else {
+		w.writer = w.ResponseWriter
+	}
+	w.ResponseWriter.WriteHeader(status)
+	w.committed = true
+	if w.body.Len() == 0 {
+		return nil
+	}
+	_, err := w.writer.Write(w.body.Bytes())
+	w.body.Reset()
+	return err
+}
+
+func compressJSONHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !localJSONAPIPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
 			return
 		}
-		s.mux.ServeHTTP(w, r)
+		compressed := newCompressJSONResponseWriter(w, acceptsGzip(r.Header.Get("Accept-Encoding")))
+		next.ServeHTTP(compressed, r)
+		compressed.finish()
 	})
 }
 
-type gzipResponseWriter struct {
-	http.ResponseWriter
-	writer *gzip.Writer
+func localJSONAPIPath(path string) bool {
+	if strings.HasPrefix(path, "/api/portal/") {
+		return !strings.HasPrefix(path, rayProxyPrefix) &&
+			!strings.HasPrefix(path, rayWorkspaceProxyPrefix) &&
+			!strings.HasPrefix(path, kueueVizProxyPrefix)
+	}
+	for _, base := range []string{"/api/stellar", "/api/v1/stellar", "/api/v2/stellar"} {
+		if path == base+"/artifact" || strings.HasPrefix(path, base+"/artifact/") {
+			return false
+		}
+		if strings.HasPrefix(path, base+"/") {
+			return true
+		}
+	}
+	return false
 }
 
-func (w gzipResponseWriter) Write(payload []byte) (int, error) {
-	w.Header().Del("Content-Length")
-	return w.writer.Write(payload)
-}
-
-func compressKustoJSON(r *http.Request) bool {
-	if r.Method != http.MethodGet {
-		return false
-	}
-	switch r.URL.Path {
-	case "/api/portal/cluster", "/api/portal/nodeutil":
-	default:
-		return false
-	}
-	for _, value := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+func acceptsGzip(header string) bool {
+	for _, value := range strings.Split(header, ",") {
 		parts := strings.Split(strings.TrimSpace(value), ";")
 		if !strings.EqualFold(parts[0], "gzip") {
 			continue
@@ -361,6 +484,17 @@ func compressKustoJSON(r *http.Request) bool {
 		return quality > 0
 	}
 	return false
+}
+
+func addVary(header http.Header, value string) {
+	for _, current := range header.Values("Vary") {
+		for _, item := range strings.Split(current, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), value) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", value)
 }
 
 // Serve runs the portal HTTP server on the listener until ctx is cancelled.

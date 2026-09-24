@@ -37,6 +37,14 @@ type SDKClient struct {
 	initErr   error
 }
 
+type sharedADXQuery struct {
+	once sync.Once
+	run  func(context.Context, string, string) (string, error)
+	err  error
+}
+
+var sharedADXQueries sync.Map
+
 // Query runs kql against ADX and parses the JSON response into generic Rows.
 func (c *SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
 	raw, err := c.RawQuery(ctx, query)
@@ -85,20 +93,33 @@ func NewRawSDKQuery(endpoint, database string) func(context.Context, string) (st
 	return client.RawQuery
 }
 
-// newADXQuery initializes the production transport once. The returned function
-// reuses the credential, HTTP connections, and SDK client for concurrent queries.
+// newADXQuery returns the endpoint-wide production transport. Every native
+// caller for the same endpoint shares credentials, HTTP connections, and SDK
+// client state while still choosing its database per query.
 func newADXQuery(endpoint string) (func(context.Context, string, string) (string, error), error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return nil, fmt.Errorf("create Azure credential: %w", err)
-	}
-	client, err := azkustodata.New(
-		azkustodata.NewConnectionStringBuilder(endpoint).WithTokenCredential(cred),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create ADX client: %w", err)
-	}
+	value, _ := sharedADXQueries.LoadOrStore(endpoint, &sharedADXQuery{})
+	shared := value.(*sharedADXQuery)
 	return func(ctx context.Context, database, query string) (string, error) {
-		return client.QueryToJson(ctx, database, kql.New("").AddUnsafe(query))
+		shared.once.Do(func() {
+			cred, err := azidentity.NewDefaultAzureCredential(nil)
+			if err != nil {
+				shared.err = fmt.Errorf("create Azure credential: %w", err)
+				return
+			}
+			client, err := azkustodata.New(
+				azkustodata.NewConnectionStringBuilder(endpoint).WithTokenCredential(cred),
+			)
+			if err != nil {
+				shared.err = fmt.Errorf("create ADX client: %w", err)
+				return
+			}
+			shared.run = func(ctx context.Context, database, query string) (string, error) {
+				return client.QueryToJson(ctx, database, kql.New("").AddUnsafe(query))
+			}
+		})
+		if shared.err != nil {
+			return "", shared.err
+		}
+		return shared.run(ctx, database, query)
 	}, nil
 }
