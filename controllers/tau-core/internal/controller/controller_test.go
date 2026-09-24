@@ -201,7 +201,14 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 	if cluster.Status.Nodes != (tauv1alpha1.TauClusterSectionStatus{Observed: 2, Ready: 2}) {
 		t.Fatalf("node status = %#v", cluster.Status.Nodes)
 	}
-	if got, want := recordingClient.mutations, []string{"patch flex-h200", "patch native-a100", "patch native-a100", "create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
+	if got, want := recordingClient.mutations, []string{
+		"patch flex-h200",
+		"patch native-a100",
+		"patch flex-h200",
+		"patch native-a100",
+		"patch system-cpu",
+		"create " + tauGPUNodeTopologyName,
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("mutations = %v, want %v", got, want)
 	}
 
@@ -238,6 +245,10 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 	}
 	if _, ok := unchangedCPU.Labels[labelkeys.LabelGPUClass]; ok {
 		t.Fatal("unmatched CPU Node received a GPU-class label")
+	}
+	if unchangedCPU.Labels[labelkeys.LabelSite] == "" ||
+		unchangedCPU.Labels[labelkeys.LabelNetworkDomain] == "" {
+		t.Fatalf("unmatched CPU Node has incomplete topology labels: %#v", unchangedCPU.Labels)
 	}
 
 	recordingClient.mutations = nil
@@ -293,8 +304,17 @@ func TestTauClusterNoMatchingNodesIsReady(t *testing.T) {
 	if cluster.Status.Nodes != (tauv1alpha1.TauClusterSectionStatus{}) {
 		t.Fatalf("node status = %#v", cluster.Status.Nodes)
 	}
-	if got, want := recordingClient.mutations, []string{"create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
+	if got, want := recordingClient.mutations, []string{"patch system-cpu", "create " + tauGPUNodeTopologyName}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("CPU-only reconcile mutations = %v, want %v", got, want)
+	}
+	var gotCPU corev1.Node
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: cpuNode.Name}, &gotCPU); err != nil {
+		t.Fatalf("Get CPU Node: %v", err)
+	}
+	if gotCPU.Labels[labelkeys.LabelSite] == "" ||
+		gotCPU.Labels[labelkeys.LabelNetworkDomain] == "" ||
+		gotCPU.Labels[labelkeys.LabelInfiniband] != "false" {
+		t.Fatalf("CPU Node topology labels = %#v", gotCPU.Labels)
 	}
 }
 
@@ -381,6 +401,11 @@ func TestNodeWatchIgnoresStatusOnlyUpdates(t *testing.T) {
 	labelUpdate.Labels["kueue.azure.com/gpu-series"] = "drifted"
 	if !watch.Update(event.UpdateEvent{ObjectOld: statusUpdate, ObjectNew: labelUpdate}) {
 		t.Fatal("Node label update must enqueue topology reconciliation")
+	}
+	providerUpdate := statusUpdate.DeepCopy()
+	providerUpdate.Spec.ProviderID = "azure:///subscriptions/test"
+	if !watch.Update(event.UpdateEvent{ObjectOld: statusUpdate, ObjectNew: providerUpdate}) {
+		t.Fatal("Node provider ID update must enqueue topology reconciliation")
 	}
 	if !watch.Create(event.CreateEvent{Object: original}) {
 		t.Fatal("Node creation must enqueue topology reconciliation")

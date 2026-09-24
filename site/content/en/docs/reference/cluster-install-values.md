@@ -62,20 +62,28 @@ A portable Kueue queue bootstrapped on first install. These quotas bound concurr
 
 CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all of its requested resources. `taugrid-default-cpu` has zero GPU quota, while the generic `taugrid-default-gpu-topology` has CPU/memory plus GPU quota and supports `gpu_class: any` on a fresh install. When hardware is known, replace the GPU flavor list with class-specific flavors and label matching nodes with the canonical A10, A100, H100, H200, GB200, or GB300 class from `policy.gpu_class`. Only GPU flavors carry `topologyName` and the managed `kueue.x-k8s.io/podset-required-topology` metadata annotation. Connected TauGrid submission copies that requirement onto generated GPU pod templates when no explicit placement policy is present. Raw Kubernetes manifests remain expert-controlled. The CPU/memory flavor remains non-TAS. For upgrades with saved legacy values, remove GPU resources from `baselineQueue.resources` and move all GPU class/series labels and GPU-node tolerations out of `baselineQueue.flavor` before adding their replacements under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's `nodeTaints`. TauGrid fails template rendering if the old mixed values would duplicate GPU coverage or constrain CPU-only admission. Replace the generic GPU flavor with class-specific flavors rather than keeping both: exact class quota must not fall back to an unlabeled ResourceFlavor.
 
-`tau-core-controller` automatically discovers Azure GPU nodes and reconciles
-`taugrid-gpu-topology` with the hierarchy `tau.azure.com/region` →
-`tau.azure.com/network-domain` → `kubernetes.io/hostname`. It recognizes Azure from
-`aks.azure.com/cloud=azure`, the Azure provider ID, or managed AKS labels, and
-derives the normalized region from `topology.kubernetes.io/region` or
-`aks.azure.com/region`. Under the launch contract, managed Azure GPU capacity
-in one region is treated as one InfiniBand-connected domain.
+`tau-core-controller` assigns every Node a conservative topology identity and
+reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
+`tau.azure.com/network-domain` → `kubernetes.io/hostname`. Nodes without
+authoritative shared-site or fabric metadata receive deterministic singleton
+site/domain labels. `tau.azure.com/region` remains normalized metadata but is
+not a Kueue topology level.
+
+The controller recognizes Azure from `aks.azure.com/cloud=azure`, the Azure
+provider ID, or managed AKS labels, and derives region from
+`topology.kubernetes.io/region` or `aks.azure.com/region`. Managed Azure Nodes
+share a regional site. Under the launch contract, managed Azure GPU capacity in
+that site shares one InfiniBand-connected domain; CPU or unclassified capacity
+uses singleton non-IB domains.
 
 Externally joined Azure Flex nodes are detected from
 `kubernetes.azure.com/managed=false` or `aks.azure.com/stretch-managed=true`.
-Their provisioning template must stamp `aks.azure.com/infiniband=true|false`.
-IB-enabled nodes must also carry `net.unbounded-cloud.io/site=<site>` and share
-that site-scoped domain; non-IB nodes receive singleton per-Node domains. Zone
-is omitted because it is not consistently available across Azure capacity.
+Their provisioning template must stamp both
+`net.unbounded-cloud.io/site=<globally-unique-site>` and
+`aks.azure.com/infiniband=true|false`. Nodes share the top-level Flex site;
+IB-enabled nodes also share its network domain, while non-IB nodes receive
+singleton per-Node domains within the site. Zone is omitted because it is not
+consistently available across providers.
 
 The topology name and required network-domain level are fixed because the
 controller owns this object and Kueue makes `ResourceFlavor.spec.topologyName`

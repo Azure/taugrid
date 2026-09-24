@@ -168,22 +168,31 @@ workload has no explicit placement request. Explicit placement remains
 authoritative, and raw Kubernetes manifests are never rewritten. The CPU/memory
 flavor remains non-TAS so CPU-only workloads can be admitted.
 
-The controller automatically discovers Azure GPU nodes and reconciles
-`taugrid-gpu-topology` with the hierarchy `tau.azure.com/region` →
-`tau.azure.com/network-domain` → `kubernetes.io/hostname`. It recognizes Azure
-from `aks.azure.com/cloud=azure`, the Azure provider ID, or managed AKS labels,
-and derives the normalized region from `topology.kubernetes.io/region` or
-`aks.azure.com/region`. Managed Azure GPU capacity in one region shares one
-network domain under the launch assumption that it is InfiniBand-connected.
+The controller assigns every Node a conservative topology identity and
+reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
+`tau.azure.com/network-domain` → `kubernetes.io/hostname`. Nodes without
+authoritative shared-site or fabric metadata receive deterministic singleton
+site/domain labels, so they remain topology-complete without being treated as
+connected. `tau.azure.com/region` is normalized metadata rather than a Kueue
+topology level.
+
+Azure is recognized from `aks.azure.com/cloud=azure`, the Azure provider ID, or
+managed AKS labels. Region comes from `topology.kubernetes.io/region` or
+`aks.azure.com/region`. Managed Azure Nodes share a regional site; managed GPU
+capacity in that site shares one network domain under the launch assumption
+that it is InfiniBand-connected. Managed CPU or unclassified capacity remains
+in the regional site but uses singleton non-IB domains.
 
 Externally joined Azure Flex nodes are detected from
 `kubernetes.azure.com/managed=false` or `aks.azure.com/stretch-managed=true`.
-Their provisioning template must stamp `aks.azure.com/infiniband=true|false`.
-IB-enabled nodes must also carry `net.unbounded-cloud.io/site=<site>` and share
-that site-scoped domain; non-IB nodes receive singleton domains. Flex supports
-these declarations through its existing `kubeadm.nodeLabels` map, so no region
-or provider list is duplicated in TauCluster configuration. Zone is omitted
-because it is not consistently available across Azure capacity.
+Their provisioning template must stamp both
+`net.unbounded-cloud.io/site=<globally-unique-site>` and
+`aks.azure.com/infiniband=true|false`. Nodes in one Flex site share the
+top-level site label. IB-enabled nodes also share its network domain; non-IB
+nodes receive singleton domains within that site. Flex supports these
+declarations through its existing `kubeadm.nodeLabels` map, so no region or
+provider list is duplicated in TauCluster configuration. Zone is omitted
+because it is not consistently available across providers.
 
 The topology name and required network-domain level are fixed because the
 controller owns this object and Kueue makes `ResourceFlavor.spec.topologyName`

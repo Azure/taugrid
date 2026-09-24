@@ -152,7 +152,12 @@ func nodeLabelChangePredicate() predicate.Predicate {
 			return true
 		},
 		UpdateFunc: func(update event.UpdateEvent) bool {
-			return !maps.Equal(update.ObjectOld.GetLabels(), update.ObjectNew.GetLabels())
+			if !maps.Equal(update.ObjectOld.GetLabels(), update.ObjectNew.GetLabels()) {
+				return true
+			}
+			oldNode, oldOK := update.ObjectOld.(*corev1.Node)
+			newNode, newOK := update.ObjectNew.(*corev1.Node)
+			return oldOK && newOK && oldNode.Spec.ProviderID != newNode.Spec.ProviderID
 		},
 		GenericFunc: func(event.GenericEvent) bool {
 			return false
