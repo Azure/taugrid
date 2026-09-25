@@ -57,12 +57,17 @@ grep -Fq -- '- role: worker' "${REPO_ROOT}/examples/kind-smoke/kind-cluster.yaml
 
 grep -Fq 'workers: 1' "${REPO_ROOT}/examples/kind-smoke/tau-ray.yaml" ||
   {
-    echo "single-node Kind Ray smoke must request one worker" >&2
+    echo "Kind Ray smoke must request one worker" >&2
+    exit 1
+  }
+grep -Fq 'wait_for_ray_cpus(1)' "${REPO_ROOT}/examples/kind-smoke/ray_train.py" ||
+  {
+    echo "Kind Ray smoke must expect the capacity of its one-worker fixture" >&2
     exit 1
   }
 grep -Fq 'placement: independent' "${REPO_ROOT}/examples/kind-smoke/taucluster-profiles.yaml" ||
   {
-    echo "single-node Kind Ray profile must use independent placement" >&2
+    echo "one-worker Kind Ray profile must use independent placement" >&2
     exit 1
   }
 
