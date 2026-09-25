@@ -37,6 +37,17 @@ for kec_input in \
       exit 1
     }
 done
+grep -Fq -- "--selector='!node-role.kubernetes.io/control-plane'" \
+  "${REPO_ROOT}/cli/scripts/kind-smoke-e2e.sh" ||
+  {
+    echo "CLI Kind smoke must preserve the system control-plane node for Ray heads" >&2
+    exit 1
+  }
+grep -Fq -- '- role: worker' "${REPO_ROOT}/examples/kind-smoke/kind-cluster.yaml" ||
+  {
+    echo "CLI Kind smoke must include a user worker node for KEC workloads" >&2
+    exit 1
+  }
 
 grep -Fq 'workers: 1' "${REPO_ROOT}/examples/kind-smoke/tau-ray.yaml" ||
   {

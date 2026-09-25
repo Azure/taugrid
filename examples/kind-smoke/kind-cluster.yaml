@@ -6,3 +6,8 @@ nodes:
       - |
         kind: KubeletConfiguration
         podPidsLimit: 1024
+  - role: worker
+    kubeadmConfigPatches:
+      - |
+        kind: KubeletConfiguration
+        podPidsLimit: 1024

@@ -391,8 +391,11 @@ configure_kind_node_task_budget
 DIAGNOSTICS_READY=1
 
 # KEC classifies AKS user nodes from these platform-owned inputs. Kind does not
-# provide them, so emulate a CPU AKS node before installing the controller.
-kubectl --context "$KUBE_CONTEXT" label node --all --overwrite \
+# provide them, so emulate a CPU AKS user pool while leaving the control-plane
+# node available for Tau's portable Ray head system-node affinity.
+kubectl --context "$KUBE_CONTEXT" label node \
+  --selector='!node-role.kubernetes.io/control-plane' \
+  --overwrite \
   kubernetes.azure.com/mode=user \
   node.kubernetes.io/instance-type=Standard_D4s_v5
 
