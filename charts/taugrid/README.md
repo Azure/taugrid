@@ -162,18 +162,26 @@ flavors; do not retain the generic GPU flavor alongside them.
 
 When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
 workload explicitly selects `unconstrained`, `same-host`,
-`same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability
+`same-accelerator-domain`, `same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability
 but never choose workload locality. Raw Kubernetes manifests remain
 expert-controlled. The CPU/memory flavor remains non-TAS so CPU-only workloads
 can be admitted.
 
 The controller assigns every Node a conservative topology identity and
 reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
-`tau.azure.com/network-domain` → `kubernetes.io/hostname`. Nodes without
-authoritative shared-site or fabric metadata receive deterministic singleton
-site/domain labels, so they remain topology-complete without being treated as
-connected. `tau.azure.com/region` is normalized metadata rather than a Kueue
-topology level.
+`tau.azure.com/network-domain` → `tau.azure.com/accelerator-domain` →
+`kubernetes.io/hostname`. Nodes without authoritative shared-site, fabric, or
+accelerator-island metadata receive deterministic singleton labels, so they
+remain topology-complete without being treated as connected.
+`tau.azure.com/region` is normalized metadata rather than a Kueue topology
+level.
+
+Providers can declare a shared NVL72/GB200/GB300 island with
+`net.unbounded-cloud.io/accelerator-domain`. TauGrid namespaces and copies that
+identity to `tau.azure.com/accelerator-domain`; it never infers sharing from
+GPU model or SKU alone. `same-accelerator-domain` may span hosts inside that
+island, does not guarantee distinct hosts, and remains pending when the island
+cannot fit the workload.
 
 Selecting `same-network-domain` does not independently require
 `tau.azure.com/infiniband=true` or one worker per host. Nodes without
@@ -232,7 +240,7 @@ baselineQueue:
 
 Canonical classes cover the supported A10, A100, H100, H200, GB200, and GB300
 memory variants. Placement and interconnect requirements remain separate
-(`unconstrained`, `same-host`, `same-network-domain`, or `same-site`).
+(`unconstrained`, `same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`).
 
 Default queue values:
 

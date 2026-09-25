@@ -22,6 +22,7 @@ const (
 	preferredTopologyAnnotation = "kueue.x-k8s.io/podset-preferred-topology"
 	unconstrainedTopologyAnnot  = "kueue.x-k8s.io/podset-unconstrained-topology"
 	hostnameTopology            = "kubernetes.io/hostname"
+	acceleratorDomainTopology   = "tau.azure.com/accelerator-domain"
 	networkDomainTopology       = "tau.azure.com/network-domain"
 	siteTopology                = "tau.azure.com/site"
 	defaultElasticPodPriority   = "taugrid-default"
@@ -290,6 +291,8 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 		switch spec.placement {
 		case profile.PlacementSameHost:
 			plan.Annotations[requiredTopologyAnnotation] = hostnameTopology
+		case profile.PlacementSameAcceleratorDomain:
+			plan.Annotations[requiredTopologyAnnotation] = acceleratorDomainTopology
 		case profile.PlacementSameNetworkDomain:
 			plan.Annotations[requiredTopologyAnnotation] = networkDomainTopology
 		case profile.PlacementSameSite:
@@ -475,6 +478,7 @@ func (c contract) validate(profileName string) error {
 			c.placement,
 			profile.PlacementUnconstrained,
 			profile.PlacementSameHost,
+			profile.PlacementSameAcceleratorDomain,
 			profile.PlacementSameNetworkDomain,
 			profile.PlacementSameSite,
 		); err != nil {

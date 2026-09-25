@@ -197,6 +197,7 @@
             "enum": [
               "unconstrained",
               "same-host",
+              "same-accelerator-domain",
               "same-network-domain",
               "same-site"
             ]

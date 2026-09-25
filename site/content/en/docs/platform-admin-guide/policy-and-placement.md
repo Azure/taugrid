@@ -72,9 +72,17 @@ matching solely on that label: `ndm-a100-v4`, `nd-h200-v5`, and
 values.
 
 Placement stays in `policy.topology`: `unconstrained`, `same-host`,
-`same-network-domain`, or `same-site`. GPU class values encode hardware
-only; NVLink, InfiniBand, NCCL, and same-host placement are expressed
-separately through `policy.topology`.
+`same-accelerator-domain`, `same-network-domain`, or `same-site`. GPU class
+values encode hardware only; NVLink, InfiniBand, NCCL, and same-host placement
+are expressed separately through `policy.topology`.
+
+`same-accelerator-domain` requires one `tau.azure.com/accelerator-domain`
+subtree. TauGrid assigns deterministic singleton domains unless the provider
+publishes an authoritative `net.unbounded-cloud.io/accelerator-domain` value,
+so matching GPU models alone never imply that Nodes share an NVL72 island.
+Provider-declared domains may span hosts. The placement does not add
+anti-affinity or guarantee distinct hosts, and insufficient capacity remains
+pending rather than falling back to a network domain or site.
 
 `same-network-domain` requires one shared fabric but does not require one worker
 per host. Full-node GPU requests naturally separate workers when a Node cannot
@@ -170,9 +178,10 @@ single-flavor installs by draining admission and splitting the flavor:
    admission taints. Create separate GPU ResourceFlavors with exact
    `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, and `topologyName`.
    Workloads explicitly select `unconstrained`, `same-host`,
-   `same-network-domain`, or `same-site`; ResourceFlavors do not impose one
-   locality policy on every workload. CPU-only jobs remain admissible through
-   the non-TAS CPU flavor and cannot consume GPU quota.
+   `same-accelerator-domain`, `same-network-domain`, or `same-site`;
+   ResourceFlavors do not impose one locality policy on every workload.
+   CPU-only jobs remain admissible through the non-TAS CPU flavor and cannot
+   consume GPU quota.
 3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
    Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor
    CPU, memory, and GPU quota. Kueue then assigns one node flavor across every
