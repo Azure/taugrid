@@ -35,6 +35,7 @@ func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 	if err != nil && !topologyMissing {
 		return topologyReconcileState{}, fmt.Errorf("get Topology %q: %w", tauGPUNodeTopologyName, err)
 	}
+	immutableDriftMessage := ""
 	if !topologyMissing {
 		if topology.GetLabels()[labelManagedBy] != labelManagedByValue {
 			message := fmt.Sprintf("Topology %s exists but is not owned by %s", tauGPUNodeTopologyName, labelManagedByValue)
@@ -51,15 +52,10 @@ func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 		currentSpec, _, _ := unstructured.NestedMap(topology.Object, "spec")
 		desiredSpec, _, _ := unstructured.NestedMap(desired.Object, "spec")
 		if !reflect.DeepEqual(currentSpec, desiredSpec) {
-			message := fmt.Sprintf("Topology %s has drifted from the TauGrid topology contract", tauGPUNodeTopologyName)
-			return topologyReconcileState{
-				status:               tauv1alpha1.TauClusterSectionStatus{Observed: 1, Drifted: 1},
-				queuesCondition:      condition(tauv1alpha1.ConditionQueuesReady, metav1.ConditionFalse, "ImmutableTopologyDrift", message, generation),
-				driftCondition:       condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "ImmutableTopologyDrift", message, generation),
-				ownershipCondition:   condition(tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflictObserved", "the TauGrid-owned topology has immutable spec drift", generation),
-				reconciliationFailed: true,
-				managedResources:     managedTopologyStatus(topology),
-			}, nil
+			immutableDriftMessage = fmt.Sprintf(
+				"Topology %s has immutable spec drift; drain admission and delete it so TauGrid can recreate the current hierarchy",
+				tauGPUNodeTopologyName,
+			)
 		}
 	}
 
@@ -95,6 +91,20 @@ func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 			reconciliationFailed: true,
 			managedResources:     managedTopologyStatus(topology),
 		}, nodeErr
+	}
+	if immutableDriftMessage != "" {
+		status := tauv1alpha1.TauClusterSectionStatus{Observed: 1, Drifted: 1}
+		status.Observed += nodeStatus.Observed
+		status.Ready += nodeStatus.Ready
+		status.Drifted += nodeStatus.Drifted
+		return topologyReconcileState{
+			status:               status,
+			queuesCondition:      condition(tauv1alpha1.ConditionQueuesReady, metav1.ConditionFalse, "ImmutableTopologyDrift", immutableDriftMessage, generation),
+			driftCondition:       condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "ImmutableTopologyDrift", immutableDriftMessage, generation),
+			ownershipCondition:   condition(tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflictObserved", "the TauGrid-owned topology has immutable spec drift", generation),
+			reconciliationFailed: true,
+			managedResources:     managedTopologyStatus(topology),
+		}, nil
 	}
 	return readyTopologyState(generation, nodeStatus, nodeDrift, topology), nil
 }

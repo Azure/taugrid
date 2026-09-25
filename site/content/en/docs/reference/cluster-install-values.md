@@ -95,6 +95,13 @@ identity avoids mutating flavors created by older releases. Operators carrying
 custom GPU flavor names from an older release must rename those flavors when
 enabling this topology contract.
 
+Upgrading an existing three-level `taugrid-gpu-topology` requires a drained
+delete/recreate because Kueue also makes `Topology.spec.levels` immutable. The
+controller continues adding the new Node labels while reporting
+`ImmutableTopologyDrift`; follow the maintenance procedure in
+[Policy and placement](../platform-admin-guide/policy-and-placement/#upgrade-the-three-level-topology)
+before restoring ClusterQueue admission.
+
 ```yaml
 kubeadm:
   nodeLabels:
