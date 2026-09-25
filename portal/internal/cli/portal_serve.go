@@ -131,7 +131,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 					Database: opts.kustoDatabase,
 				}
 			} else if strings.TrimSpace(opts.kustoEndpoint) != "" {
-				querier = kustoquery.SDKClient{
+				querier = &kustoquery.SDKClient{
 					Endpoint: opts.kustoEndpoint,
 					Database: opts.kustoDatabase,
 				}

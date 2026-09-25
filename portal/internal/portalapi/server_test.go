@@ -4,10 +4,13 @@
 package portalapi
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -760,6 +763,164 @@ func TestClusterBoardServesSnapshot(t *testing.T) {
 	if !strings.Contains(q.lastKQL, "instance == @'node-0'") {
 		t.Fatalf("instance filter not applied to KQL:\n%s", q.lastKQL)
 	}
+}
+
+func TestClusterBoardSkipsCompressionForSmallJSON(t *testing.T) {
+	q := &stubClusterQuerier{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Querier: q},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil)
+	req.Header.Set("Accept-Encoding", "br, gzip")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want identity below threshold", got)
+	}
+	var got struct {
+		TotalGPUs int `json:"totalGPUs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if got.TotalGPUs != 1 {
+		t.Fatalf("TotalGPUs = %d, want 1", got.TotalGPUs)
+	}
+}
+
+func TestJSONCompressionAppliesAcrossLocalAPIs(t *testing.T) {
+	payload := strings.Repeat("x", minCompressedJSONBytes*2)
+	handler := compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"payload":%q}`, payload)
+	}))
+	for _, path := range []string{
+		"/api/portal/overview",
+		"/api/stellar/snapshot",
+		"/api/v1/stellar/snapshot",
+		"/api/v2/stellar/experiments",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Accept-Encoding", "gzip")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+				t.Fatalf("Content-Encoding = %q, want gzip", got)
+			}
+			reader, err := gzip.NewReader(rec.Body)
+			if err != nil {
+				t.Fatalf("gzip.NewReader: %v", err)
+			}
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("read gzip response: %v", err)
+			}
+			if !bytes.Contains(body, []byte(payload[:128])) {
+				t.Fatal("decompressed response lost payload")
+			}
+		})
+	}
+}
+
+func TestJSONCompressionBypassesProxyAndNonAPIPaths(t *testing.T) {
+	handler := compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), minCompressedJSONBytes*2))
+	}))
+	for _, path := range []string{
+		"/api/portal/ray/proxy/session",
+		"/api/portal/ray/workspaces/workspace/session",
+		"/api/portal/kueueviz/ws",
+		"/api/stellar/artifact",
+		"/api/v1/stellar/artifact/bundle/run/artifact/image.png",
+		"/api/v2/stellar/artifact",
+		"/portal/",
+		"/healthz",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if got := rec.Header().Get("Content-Encoding"); got != "" {
+			t.Fatalf("%s Content-Encoding = %q, want identity", path, got)
+		}
+	}
+}
+
+func TestJSONCompressionHonorsDisabledGzip(t *testing.T) {
+	handler := compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), minCompressedJSONBytes*2))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil)
+	req.Header.Set("Accept-Encoding", "gzip;q=0")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want identity", got)
+	}
+	if got := rec.Header().Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+		t.Fatalf("Vary = %q, want Accept-Encoding", got)
+	}
+}
+
+func TestClusterBoardGzipShrinksLargeSnapshot(t *testing.T) {
+	rows := make([]kustoquery.Row, 0, 2048)
+	for index := range 2048 {
+		rows = append(rows, kustoquery.Row{
+			"Cluster": "cluster-a", "instance": fmt.Sprintf("gpu-node-%04d", index/8),
+			"gpu": fmt.Sprint(index % 8), "modelName": "NVIDIA H200",
+			"namespace": "tau-default", "pod": fmt.Sprintf("training-%04d", index/8),
+			"gpu_utilization": 73.5, "gpu_temperature_celsius": 61.0, "gpu_power_watts": 480.0,
+			"fb_memory_used_mb": 72000.0, "fb_memory_free_mb": 7000.0,
+			"uncorrectable_remapped_rows": 0.0, "row_remap_failure": 0.0,
+		})
+	}
+	q := &stubRowsQuerier{rows: rows}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Querier: q},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	request := func(encoding string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil)
+		if encoding != "" {
+			req.Header.Set("Accept-Encoding", encoding)
+		}
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	plain := request("")
+	compressed := request("gzip")
+	if plain.Code != http.StatusOK || compressed.Code != http.StatusOK {
+		t.Fatalf("statuses = %d/%d", plain.Code, compressed.Code)
+	}
+	if compressed.Body.Len()*4 >= plain.Body.Len() {
+		t.Fatalf("gzip payload = %d bytes, plain = %d; want >75%% reduction",
+			compressed.Body.Len(), plain.Body.Len())
+	}
+	t.Logf("cluster JSON payload: %d -> %d bytes (%.2f%% reduction)",
+		plain.Body.Len(), compressed.Body.Len(),
+		100*(1-float64(compressed.Body.Len())/float64(plain.Body.Len())))
+}
+
+type stubRowsQuerier struct {
+	rows []kustoquery.Row
+}
+
+func (s *stubRowsQuerier) Query(context.Context, string) ([]kustoquery.Row, error) {
+	return s.rows, nil
 }
 
 func TestClusterBoardUnavailableWithoutQuerier(t *testing.T) {

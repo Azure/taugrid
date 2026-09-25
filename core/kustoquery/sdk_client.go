@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Azure/azure-kusto-go/azkustodata"
 	"github.com/Azure/azure-kusto-go/azkustodata/kql"
@@ -30,24 +31,25 @@ type SDKClient struct {
 	Endpoint  string
 	Database  string
 	queryJSON func(ctx context.Context, database, kql string) (string, error)
+	newQuery  func(endpoint string) (func(context.Context, string, string) (string, error), error)
+	initOnce  sync.Once
+	run       func(context.Context, string, string) (string, error)
+	initErr   error
 }
 
+type sharedADXQuery struct {
+	once sync.Once
+	run  func(context.Context, string, string) (string, error)
+	err  error
+}
+
+var sharedADXQueries sync.Map
+
 // Query runs kql against ADX and parses the JSON response into generic Rows.
-func (c SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
-	endpoint := strings.TrimSpace(c.Endpoint)
-	if endpoint == "" {
-		return nil, ErrNoQueryCommand
-	}
-	database := firstNonEmpty(c.Database, expkusto.DefaultDatabase)
-	run := c.queryJSON
-	if run == nil {
-		run = func(ctx context.Context, database, query string) (string, error) {
-			return runADXQuery(ctx, endpoint, database, query)
-		}
-	}
-	raw, err := run(ctx, database, query)
+func (c *SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
+	raw, err := c.RawQuery(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("execute kusto query (endpoint=%s database=%s): %w", endpoint, database, err)
+		return nil, err
 	}
 	rows, err := ParseRows([]byte(raw))
 	if err != nil {
@@ -56,33 +58,68 @@ func (c SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
 	return rows, nil
 }
 
-// RunADXQuery exposes the native transport to callers that parse the ADX JSON
-// response themselves. Stellar's Kusto source decodes metric rows with its own
-// parser, so it needs the raw QueryToJson payload rather than generic Rows;
-// going through this wrapper keeps azure-kusto-go out of the portal packages.
-func RunADXQuery(ctx context.Context, endpoint, database, query string) (string, error) {
-	endpoint = strings.TrimSpace(endpoint)
+// RawQuery runs kql through a lazily initialized, reusable SDK transport.
+func (c *SDKClient) RawQuery(ctx context.Context, query string) (string, error) {
+	endpoint := strings.TrimSpace(c.Endpoint)
 	if endpoint == "" {
 		return "", ErrNoQueryCommand
 	}
-	return runADXQuery(ctx, endpoint, firstNonEmpty(database, expkusto.DefaultDatabase), query)
+	database := firstNonEmpty(c.Database, expkusto.DefaultDatabase)
+	run := c.queryJSON
+	if run == nil {
+		c.initOnce.Do(func() {
+			factory := c.newQuery
+			if factory == nil {
+				factory = newADXQuery
+			}
+			c.run, c.initErr = factory(endpoint)
+		})
+		if c.initErr != nil {
+			return "", c.initErr
+		}
+		run = c.run
+	}
+	raw, err := run(ctx, database, query)
+	if err != nil {
+		return "", fmt.Errorf("execute kusto query (endpoint=%s database=%s): %w", endpoint, database, err)
+	}
+	return raw, nil
 }
 
-// runADXQuery is the production transport: DefaultAzureCredential →
-// azkustodata client → QueryToJson. AddUnsafe passes the generated KQL through
-// verbatim (the portal builds its own KQL and escapes filter values via
-// QuoteString), avoiding the multi-line JSON-escaping hacks of the shell adapter.
-func runADXQuery(ctx context.Context, endpoint, database, query string) (string, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return "", fmt.Errorf("create Azure credential: %w", err)
-	}
-	client, err := azkustodata.New(
-		azkustodata.NewConnectionStringBuilder(endpoint).WithTokenCredential(cred),
-	)
-	if err != nil {
-		return "", fmt.Errorf("create ADX client: %w", err)
-	}
-	defer client.Close()
-	return client.QueryToJson(ctx, database, kql.New("").AddUnsafe(query))
+// NewRawSDKQuery returns a raw ADX query function backed by one reusable SDK
+// client. Stellar parses its own result schema, so it uses this instead of Query.
+func NewRawSDKQuery(endpoint, database string) func(context.Context, string) (string, error) {
+	client := &SDKClient{Endpoint: endpoint, Database: database}
+	return client.RawQuery
+}
+
+// newADXQuery returns the endpoint-wide production transport. Every native
+// caller for the same endpoint shares credentials, HTTP connections, and SDK
+// client state while still choosing its database per query.
+func newADXQuery(endpoint string) (func(context.Context, string, string) (string, error), error) {
+	value, _ := sharedADXQueries.LoadOrStore(endpoint, &sharedADXQuery{})
+	shared := value.(*sharedADXQuery)
+	return func(ctx context.Context, database, query string) (string, error) {
+		shared.once.Do(func() {
+			cred, err := azidentity.NewDefaultAzureCredential(nil)
+			if err != nil {
+				shared.err = fmt.Errorf("create Azure credential: %w", err)
+				return
+			}
+			client, err := azkustodata.New(
+				azkustodata.NewConnectionStringBuilder(endpoint).WithTokenCredential(cred),
+			)
+			if err != nil {
+				shared.err = fmt.Errorf("create ADX client: %w", err)
+				return
+			}
+			shared.run = func(ctx context.Context, database, query string) (string, error) {
+				return client.QueryToJson(ctx, database, kql.New("").AddUnsafe(query))
+			}
+		})
+		if shared.err != nil {
+			return "", shared.err
+		}
+		return shared.run(ctx, database, query)
+	}, nil
 }
