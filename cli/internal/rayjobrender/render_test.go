@@ -198,7 +198,7 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 			Team:      "research",
 			Lane:      "training",
 			QueueName: "team-a",
-			Placement: "independent",
+			Placement: "unconstrained",
 			GPUClass:  "any",
 		},
 
@@ -513,7 +513,7 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 			topology.ManagedGPUSeriesLabel: "nd-h200-v5",
 		},
 		TopologyOptions: topology.Options{
-			Placement: "single-node-nvlink",
+			Placement: "same-host",
 			GPUClass:  "h200-nvlink-141gb",
 			QueueName: "jobqueue",
 		},
@@ -566,7 +566,7 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 
 }
 
-func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
+func TestRenderSameNetworkDomainTopologyOnlyOnGPUWorkers(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "managed-tas",
 		Namespace:     "taugrid-default",
@@ -575,8 +575,8 @@ func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
 		Workers:       1,
 		GPUsPerWorker: 1,
 		TopologyOptions: topology.Options{
-			QueueName:        "jobqueue",
-			RequiredTopology: "kubernetes.io/hostname",
+			QueueName: "jobqueue",
+			Placement: "same-network-domain",
 		},
 	})
 	if err != nil {
@@ -588,8 +588,8 @@ func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
 		t.Fatalf("control head retained GPU topology requirement: %v", headAnnotations)
 	}
 	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
-		t.Fatalf("worker required topology=%v, want kubernetes.io/hostname", got)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Fatalf("worker required topology=%v, want tau.azure.com/network-domain", got)
 	}
 }
 
@@ -603,7 +603,7 @@ func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 		GPUsPerWorker: 0,
 		NodeSelector:  map[string]string{"workload": "cpu"},
 		TopologyOptions: topology.Options{
-			Placement: "independent",
+			Placement: "unconstrained",
 			QueueName: "cpu-queue",
 		},
 	})
@@ -2268,7 +2268,7 @@ func TestRenderRejectsCheckpointArtifactWithoutDurablePVC(t *testing.T) {
 				Team:      "research",
 				Lane:      "training",
 				QueueName: "team-a",
-				Placement: "independent",
+				Placement: "unconstrained",
 				GPUClass:  "any",
 			},
 		}

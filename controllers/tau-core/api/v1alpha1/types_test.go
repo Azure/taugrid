@@ -84,7 +84,7 @@ func TestTauClusterRoundTrip(t *testing.T) {
 				GPUsPerWorker:     1,
 				WorkerCount:       1,
 				Mode:              profile.ModeFixed,
-				Placement:         profile.PlacementIndependent,
+				Placement:         profile.PlacementUnconstrained,
 				DefaultLocalQueue: "jobqueue",
 				ExecutionTarget:   profile.ExecutionTargetMultiKueue,
 				Applicability: profile.ProfileApplicability{
@@ -111,7 +111,7 @@ func TestTauClusterRoundTrip(t *testing.T) {
 						GPUsPerWorker:     1,
 						WorkerCount:       1,
 						Mode:              profile.ModeFixed,
-						Placement:         profile.PlacementIndependent,
+						Placement:         profile.PlacementUnconstrained,
 						DefaultLocalQueue: "jobqueue",
 						Priorities:        profile.ProfilePriorities{DisableDefaultPriorities: true},
 					},
@@ -277,7 +277,7 @@ func TestTauClusterCRDContract(t *testing.T) {
 			t.Fatalf("TauCluster workload profile spec must not expose %q", field)
 		}
 	}
-	if len(profileProps["mode"].Enum) != 2 || len(profileProps["placement"].Enum) != 3 {
+	if len(profileProps["mode"].Enum) != 2 || len(profileProps["placement"].Enum) != 4 {
 		t.Fatalf("workload profile enums = mode %v placement %v", profileProps["mode"].Enum, profileProps["placement"].Enum)
 	}
 	if got := string(profileProps["executionTarget"].Default.Raw); got != `"singleCluster"` ||

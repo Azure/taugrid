@@ -29,7 +29,7 @@ func attachAuthoritativeProfileForTest(o *runDispatchOptions) {
 	}
 	team, lane := "research", "training"
 	gpus, workers := 1, 1
-	placement := profile.PlacementIndependent
+	placement := profile.PlacementUnconstrained
 	switch {
 	case strings.Contains(name, ".eval."):
 		lane = "eval"
@@ -37,7 +37,7 @@ func attachAuthoritativeProfileForTest(o *runDispatchOptions) {
 		lane = "elastic"
 	case strings.Contains(name, ".large-memory."):
 		lane = "large-memory"
-		placement = profile.PlacementSingleNodeNVLink
+		placement = profile.PlacementSameHost
 	}
 	switch {
 	case strings.HasSuffix(name, ".2x"):
@@ -48,7 +48,7 @@ func attachAuthoritativeProfileForTest(o *runDispatchOptions) {
 		gpus = 8
 	case strings.HasSuffix(name, ".2node"):
 		gpus, workers = 8, 2
-		placement = profile.PlacementMultiNodeNCCL
+		placement = profile.PlacementSameNetworkDomain
 	}
 	if strings.Contains(name, ".experimental.") {
 		team = "experimental"
@@ -303,9 +303,9 @@ func resolvedWorkloadProfileForTest(
 	gpus, workers int,
 	namespaces ...string,
 ) profile.ResolvedWorkloadProfile {
-	placement := profile.PlacementIndependent
+	placement := profile.PlacementUnconstrained
 	if workers > 1 {
-		placement = profile.PlacementMultiNodeNCCL
+		placement = profile.PlacementSameNetworkDomain
 	}
 	if len(namespaces) == 0 {
 		namespaces = []string{"default", "taugrid-default", "test-workspace"}

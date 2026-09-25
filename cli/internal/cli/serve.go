@@ -470,10 +470,10 @@ func selectServeWorkloadProfile(
 	if kind == "rayservice" && selection.Profile.WorkerCount > 1 &&
 		(selection.Profile.GPUsPerWorker < 1 ||
 			selection.Profile.Mode != profile.ModeFixed ||
-			selection.Profile.Placement != profile.PlacementMultiNodeNCCL ||
+			selection.Profile.Placement != profile.PlacementSameNetworkDomain ||
 			selection.Profile.ExecutionTarget != profile.ExecutionTargetSingleCluster) {
 		return profile.Profile{}, nil, fmt.Errorf(
-			"workload profile %q is incompatible with multi-node RayService: requires gpusPerWorker >= 1, mode=fixed, placement=multi-node-nccl, executionTarget=singleCluster",
+			"workload profile %q is incompatible with multi-node RayService: requires gpusPerWorker >= 1, mode=fixed, placement=same-network-domain, executionTarget=singleCluster",
 			selection.Profile.Name,
 		)
 	}
