@@ -29,7 +29,7 @@ spec:
       gpusPerWorker: 0
       workerCount: 2
       mode: fixed
-      placement: same-network-domain
+      placement: unconstrained
       defaultLocalQueue: kind-cpu
       executionTarget: singleCluster
       priorities:

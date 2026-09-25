@@ -555,7 +555,7 @@ spec:
       gpusPerWorker: 0
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: ${WORKSPACE_NAME}
       executionTarget: singleCluster
       priorities:
