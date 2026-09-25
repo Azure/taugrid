@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -302,12 +303,27 @@ func validateNodeLabelRules(rules []tauv1alpha1.TauNodeLabelRule) error {
 			if strings.HasPrefix(key, "kubernetes.io/") || strings.HasPrefix(key, "node.kubernetes.io/") {
 				return fmt.Errorf("nodes.labelRules[%d].labels[%q]: reserved Kubernetes label prefixes cannot be managed by TauCluster", i, key)
 			}
+			if isDerivedTopologyLabel(key) {
+				return fmt.Errorf("nodes.labelRules[%d].labels[%q]: topology label is derived by the TauCluster controller and cannot be managed by nodes.labelRules", i, key)
+			}
 			if problems := k8svalidation.IsValidLabelValue(rule.Labels[key]); len(problems) > 0 {
 				return fmt.Errorf("nodes.labelRules[%d].labels[%q]: %s", i, key, problems[0])
 			}
 		}
 	}
 	return nil
+}
+
+func isDerivedTopologyLabel(key string) bool {
+	switch key {
+	case labelkeys.LabelSite,
+		labelkeys.LabelRegion,
+		labelkeys.LabelNetworkDomain,
+		labelkeys.LabelInfiniband:
+		return true
+	default:
+		return false
+	}
 }
 
 func validateNodeLabelRuleConflicts(rules []tauv1alpha1.TauNodeLabelRule) error {

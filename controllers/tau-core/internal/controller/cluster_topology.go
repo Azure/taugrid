@@ -175,7 +175,6 @@ func desiredNodeTopologyLabels(node *corev1.Node) (map[string]string, error) {
 	}
 
 	baseline := isolatedNodeTopologyLabels(node, region)
-	site := baseline[labelkeys.LabelSite]
 	domain := baseline[labelkeys.LabelNetworkDomain]
 	infiniband := false
 
@@ -191,7 +190,7 @@ func desiredNodeTopologyLabels(node *corev1.Node) (map[string]string, error) {
 		if problems := validation.IsDNS1123Label(provider); len(problems) > 0 {
 			return baseline, fmt.Errorf("node %q has invalid %s label", node.Name, labelAKSCloud)
 		}
-		site = networkDomainLabel(provider+"-site", sourceSite)
+		site := networkDomainLabel(provider+"-site", sourceSite)
 		sourceDomain := node.Labels[labelFlexNetworkDomain]
 		if sourceDomain != "" {
 			if problems := validation.IsValidLabelValue(sourceDomain); len(problems) > 0 {
@@ -215,7 +214,7 @@ func desiredNodeTopologyLabels(node *corev1.Node) (map[string]string, error) {
 		return baseline, nil
 	}
 
-	site = networkDomainLabel("azure", region)
+	site := networkDomainLabel("azure", region)
 	sku := strings.ToLower(node.Labels[azureVMSizeLabel])
 	agentPool := strings.ToLower(node.Labels[labelAKSAgentPool])
 	if strings.HasPrefix(sku, "standard_nd") && agentPool != "" {

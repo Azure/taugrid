@@ -123,6 +123,74 @@ func TestTauClusterObserveModeUpdatesStatusWithoutMutatingResources(t *testing.T
 	}
 }
 
+func TestValidateNodeLabelRulesRejectsDerivedTopologyLabels(t *testing.T) {
+	for _, key := range []string{
+		labelkeys.LabelSite,
+		labelkeys.LabelRegion,
+		labelkeys.LabelNetworkDomain,
+		labelkeys.LabelInfiniband,
+	} {
+		t.Run(key, func(t *testing.T) {
+			err := validateNodeLabelRules([]tauv1alpha1.TauNodeLabelRule{{
+				Labels: map[string]string{key: "custom"},
+			}})
+			if err == nil ||
+				!strings.Contains(err.Error(), "topology label is derived") ||
+				!strings.Contains(err.Error(), key) {
+				t.Fatalf("validateNodeLabelRules() error = %v, want derived-label rejection", err)
+			}
+		})
+	}
+}
+
+func TestTauClusterRejectsDerivedTopologyRuleWithoutNodeOscillation(t *testing.T) {
+	ctx := context.Background()
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			ManagementMode: tauv1alpha1.ClusterManagementModeReconcile,
+			Nodes: tauv1alpha1.TauClusterNodesSpec{LabelRules: []tauv1alpha1.TauNodeLabelRule{{
+				Labels: map[string]string{labelkeys.LabelSite: "custom"},
+			}}},
+		},
+	}
+	node := topologyTestNode("managed-h200", map[string]string{
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
+	}, "azure:///managed-h200")
+	baseClient := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	recording := &resourceMutationRecordingClient{Client: baseClient}
+	reconciler := &TauClusterReconciler{Client: recording}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	for i := 0; i < 2; i++ {
+		if _, err := reconciler.Reconcile(ctx, request); err != nil {
+			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
+		}
+	}
+	if len(recording.mutations) != 0 {
+		t.Fatalf("invalid derived-label rule mutated resources across reconciles: %v", recording.mutations)
+	}
+
+	var gotNode corev1.Node
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: node.Name}, &gotNode); err != nil {
+		t.Fatal(err)
+	}
+	if hasManagedTopologyLabels(&gotNode) {
+		t.Fatalf("invalid rule allowed topology reconciliation: %#v", gotNode.Labels)
+	}
+	var gotCluster tauv1alpha1.TauCluster
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: cluster.Name}, &gotCluster); err != nil {
+		t.Fatal(err)
+	}
+	assertCondition(t, gotCluster.Status.Conditions, tauv1alpha1.ConditionNodesReady, metav1.ConditionFalse)
+}
+
 func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
