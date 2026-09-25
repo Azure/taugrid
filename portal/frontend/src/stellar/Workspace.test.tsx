@@ -45,6 +45,27 @@ function run(runID: string, project: string, lifecycleState = 'succeeded', metri
   };
 }
 
+function faultEvents(overrides: Record<string, unknown> = {}) {
+  return {
+    experimentId: 'e1',
+    generatedAt: '2026-09-23T20:00:00Z',
+    allocatedNodes: ['gpu-node-1'],
+    missingNodes: [],
+    timeBounds: { startedAt: '2026-09-23T18:00:00Z', active: true },
+    coverage: {
+      correlation: 'current-only', allocation: 'exact', timeBounds: 'exact',
+      evidence: 'current-only', reasons: [],
+    },
+    provenance: {
+      allocation: 'expstore run_context.node_names',
+      evidence: 'current Kubernetes Node status.conditions',
+      limitation: 'Node conditions are a current-state snapshot, not an event log',
+    },
+    events: [],
+    ...overrides,
+  };
+}
+
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
@@ -77,6 +98,7 @@ describe('typed experiment dashboard', () => {
         max_points: 500, source_points: 2, returned_points: 2,
         points: [{ step: 0, value: 2 }, { step: 1, value: 1 }],
       }));
+      if (url.includes('/fault-events')) return Promise.resolve(json(faultEvents({ experimentId: 'exp-one' })));
       if (url.includes('/runs/run-1/metrics')) return Promise.resolve(json({
         metadata: metadata(), run_id: 'run-1', metrics: [{ name: 'train/loss', latest_step: 1, latest_value: 1 }],
       }));
@@ -95,18 +117,19 @@ describe('typed experiment dashboard', () => {
     await user.click(await screen.findByRole('button', { name: 'run-1' }));
     expect((await screen.findAllByText('ada')).length).toBeGreaterThan(0);
     await screen.findByLabelText('Metric');
-    expect(requests).toHaveLength(4);
+    expect(requests).toHaveLength(5);
     expect(requests[0]).toContain('/experiments/search');
     expect(requests[1]).toContain('/experiments/exp-one/runs');
     expect(requests[2]).toContain('/runs/run-1');
-    expect(requests[3]).toContain('/runs/run-1/metrics');
+    expect(requests).toContainEqual(expect.stringContaining('/runs/run-1/metrics'));
+    expect(requests).toContainEqual(expect.stringContaining('/experiments/exp-one/fault-events'));
 
     await user.selectOptions(screen.getByLabelText('Metric'), 'train/loss');
     expect(await screen.findByRole('img', { name: 'train/loss series chart' })).toBeVisible();
-    expect(requests).toHaveLength(5);
-    expect(requests[4]).toContain('/runs/run-1/series');
-    expect(requests[4]).toContain('metric=train%2Floss');
-    expect(requests[4]).toContain('max_points=500');
+    expect(requests).toHaveLength(6);
+    const seriesRequest = requests.find(url => url.includes('/series?'))!;
+    expect(seriesRequest).toContain('metric=train%2Floss');
+    expect(seriesRequest).toContain('max_points=500');
     expect(screen.getByLabelText('location')).toHaveTextContent('experiment=exp-one');
     expect(screen.getByLabelText('location')).toHaveTextContent('run=run-1');
     expect(screen.getByLabelText('location')).toHaveTextContent('metric=train%2Floss');
@@ -387,6 +410,7 @@ describe('typed experiment dashboard', () => {
           max_points: 500, source_points: points.length, returned_points: points.length, points,
         }));
       }
+      if (url.includes('/fault-events')) return Promise.resolve(json(faultEvents()));
       if (url.includes('/runs/r1/metrics')) {
         reads.catalog++;
         return Promise.resolve(json({ metadata: metadata(), run_id: 'r1', metrics: [{ name: 'loss' }] }));
@@ -513,5 +537,84 @@ describe('typed experiment dashboard', () => {
     rendered.rerender(renderTree({ ...baseScope, workspace: 'beta', name: 'Beta', cluster: 'cluster-b', managed: true }));
     expect(await screen.findByText('Beta owner')).toBeVisible();
     expect(screen.queryByText('Alpha owner')).not.toBeInTheDocument();
+  });
+
+  it('shows a correlated unhealthy condition with node-scoped evidence details', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/fault-events')) return Promise.resolve(json(faultEvents({
+        events: [{
+          dedupKey: 'gpu-node-1/gpu/XIDError79', node: 'gpu-node-1', scope: 'node',
+          category: 'gpu', checkType: 'XIDError79', healthState: 'unhealthy',
+          status: 'True', evidenceStatus: 'fresh', reason: 'XIDDetected',
+          message: 'GPU reported XID 79', observedAt: '2026-09-23T19:59:00Z',
+          transitionAt: '2026-09-23T19:58:00Z',
+        }],
+      })));
+      if (url.includes('/runs/r1/metrics')) return Promise.resolve(json({ metadata: metadata(), run_id: 'r1', metrics: [] }));
+      if (url.includes('/runs/r1')) return Promise.resolve(json({ metadata: metadata(), run: run('r1', 'p', 'running', [], 'e1') }));
+      if (url.includes('/experiments/e1/runs')) return Promise.resolve(json({ metadata: metadata(), target: 'e1', runs: [run('r1', 'p', 'running', [], 'e1')] }));
+      return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('e1', 'p', 'Faulted')] }));
+    }));
+
+    renderWorkspace('/portal/experiments?project=p&experiment=e1&run=r1');
+
+    expect(await screen.findByText('XIDError79')).toBeVisible();
+    expect(screen.getByText(/GPU reported XID 79/)).toBeVisible();
+    expect(screen.getByLabelText('Correlated health summary')).toHaveTextContent('1 unhealthy');
+    expect(screen.getByText('Evidence: current-only')).toBeVisible();
+    expect(screen.getByText(/Node-scoped conditions correlated/)).toBeVisible();
+  });
+
+  it('treats an empty current snapshot as an evidence gap rather than clean history', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/fault-events')) return Promise.resolve(json(faultEvents({
+        coverage: {
+          correlation: 'unknown', allocation: 'exact', timeBounds: 'exact',
+          evidence: 'unknown', reasons: ['allocated nodes have no allowlisted conditions'],
+        },
+      })));
+      if (url.includes('/runs/r1/metrics')) return Promise.resolve(json({ metadata: metadata(), run_id: 'r1', metrics: [] }));
+      if (url.includes('/runs/r1')) return Promise.resolve(json({ metadata: metadata(), run: run('r1', 'p', 'running', [], 'e1') }));
+      if (url.includes('/experiments/e1/runs')) return Promise.resolve(json({ metadata: metadata(), target: 'e1', runs: [run('r1', 'p', 'running', [], 'e1')] }));
+      return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('e1', 'p', 'Empty evidence')] }));
+    }));
+
+    renderWorkspace('/portal/experiments?project=p&experiment=e1&run=r1');
+
+    expect(await screen.findByText(/evidence gap, not a verified clean history/)).toBeVisible();
+    expect(screen.getByText('allocated nodes have no allowlisted conditions')).toBeVisible();
+    expect(screen.getByLabelText('Correlated health summary')).toHaveTextContent('0 unhealthy');
+  });
+
+  it.each([
+    ['current-only', faultEvents({
+      timeBounds: { startedAt: '2026-09-22T18:00:00Z', completedAt: '2026-09-22T19:00:00Z', active: false },
+      coverage: {
+        correlation: 'current-only', allocation: 'exact', timeBounds: 'exact',
+        evidence: 'current-only', reasons: ['completed experiments have no historical Node-condition log'],
+      },
+    }), /Current snapshot only—not an experiment timeline/],
+    ['unavailable', faultEvents({
+      allocatedNodes: [], timeBounds: { active: false },
+      coverage: {
+        correlation: 'unavailable', allocation: 'unavailable', timeBounds: 'unknown',
+        evidence: 'unavailable', reasons: ['experiment run allocation is unavailable'],
+      },
+    }), /Correlated health evidence is unavailable/],
+  ])('makes %s historical evidence limitations explicit', async (_state, faults, expected) => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/fault-events')) return Promise.resolve(json(faults));
+      if (url.includes('/runs/r1/metrics')) return Promise.resolve(json({ metadata: metadata(), run_id: 'r1', metrics: [] }));
+      if (url.includes('/runs/r1')) return Promise.resolve(json({ metadata: metadata(), run: run('r1', 'p', 'succeeded', [], 'e1') }));
+      if (url.includes('/experiments/e1/runs')) return Promise.resolve(json({ metadata: metadata(), target: 'e1', runs: [run('r1', 'p', 'succeeded', [], 'e1')] }));
+      return Promise.resolve(json({ metadata: metadata(), experiments: [experiment('e1', 'p', 'Completed')] }));
+    }));
+
+    renderWorkspace('/portal/experiments?project=p&experiment=e1&run=r1');
+
+    expect(await screen.findByText(expected)).toBeVisible();
   });
 });

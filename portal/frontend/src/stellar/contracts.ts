@@ -91,6 +91,48 @@ export interface MetricSeries extends ResponseMeta {
   returned_points: number;
 }
 
+export type FaultCoverageState = 'exact' | 'partial' | 'current-only' | 'unknown' | 'stale' | 'unavailable';
+
+export interface ExperimentFaultEvent {
+  dedupKey: string;
+  node: string;
+  scope: 'node';
+  category: string;
+  checkType: string;
+  healthState: 'healthy' | 'unhealthy' | 'unknown';
+  status: string;
+  evidenceStatus: 'fresh' | 'stale' | 'future' | 'malformed' | 'duplicate';
+  reason?: string;
+  message?: string;
+  observedAt?: string;
+  transitionAt?: string;
+}
+
+export interface ExperimentFaultEvents {
+  experimentId: string;
+  generatedAt: string;
+  allocatedNodes: string[];
+  missingNodes: string[];
+  timeBounds: {
+    startedAt?: string;
+    completedAt?: string;
+    active: boolean;
+  };
+  coverage: {
+    correlation: FaultCoverageState;
+    allocation: FaultCoverageState;
+    timeBounds: FaultCoverageState;
+    evidence: FaultCoverageState;
+    reasons: string[];
+  };
+  provenance: {
+    allocation: string;
+    evidence: string;
+    limitation: string;
+  };
+  events: ExperimentFaultEvent[];
+}
+
 type JSONObject = Record<string, unknown>;
 
 function object(value: unknown, name: string): JSONObject {
@@ -127,6 +169,12 @@ function optionalNumber(body: JSONObject, name: string): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${name} must be a finite number.`);
   return value;
+}
+
+function faultCoverage(body: JSONObject, name: string): FaultCoverageState {
+  const value = requiredString(body, name);
+  return ['exact', 'partial', 'current-only', 'unknown', 'stale', 'unavailable'].includes(value)
+    ? value as FaultCoverageState : 'unknown';
 }
 
 function requiredBoolean(body: JSONObject, name: string): boolean {
@@ -235,6 +283,32 @@ function decodePoint(value: unknown): SeriesPoint {
   return { step: requiredNumber(body, 'step'), value: requiredNumber(body, 'value') };
 }
 
+function decodeFaultEvent(value: unknown): ExperimentFaultEvent {
+  const body = object(value, 'fault event');
+  const scope = requiredString(body, 'scope');
+  const healthState = requiredString(body, 'healthState');
+  const evidenceStatus = requiredString(body, 'evidenceStatus');
+  if (scope !== 'node') throw new Error('fault event scope must be node.');
+  if (!['healthy', 'unhealthy', 'unknown'].includes(healthState)) throw new Error('fault event healthState is invalid.');
+  if (!['fresh', 'stale', 'future', 'malformed', 'duplicate'].includes(evidenceStatus)) {
+    throw new Error('fault event evidenceStatus is invalid.');
+  }
+  return {
+    dedupKey: requiredString(body, 'dedupKey'),
+    node: requiredString(body, 'node'),
+    scope,
+    category: requiredString(body, 'category'),
+    checkType: requiredString(body, 'checkType'),
+    healthState: healthState as ExperimentFaultEvent['healthState'],
+    status: requiredString(body, 'status'),
+    evidenceStatus: evidenceStatus as ExperimentFaultEvent['evidenceStatus'],
+    reason: optionalString(body, 'reason'),
+    message: optionalString(body, 'message'),
+    observedAt: optionalString(body, 'observedAt'),
+    transitionAt: optionalString(body, 'transitionAt'),
+  };
+}
+
 export function decodeExperimentPage(value: unknown): ExperimentPage {
   const body = object(value, 'experiment search response');
   return { ...decodeMeta(body), experiments: array(body.experiments, 'experiments').map(decodeExperiment) };
@@ -277,5 +351,36 @@ export function decodeMetricSeries(value: unknown): MetricSeries {
     max_points: requiredNumber(body, 'max_points'),
     source_points: requiredNumber(body, 'source_points'),
     returned_points: requiredNumber(body, 'returned_points'),
+  };
+}
+
+export function decodeExperimentFaultEvents(value: unknown): ExperimentFaultEvents {
+  const body = object(value, 'experiment fault response');
+  const timeBounds = object(body.timeBounds, 'timeBounds');
+  const coverage = object(body.coverage, 'coverage');
+  const provenance = object(body.provenance, 'provenance');
+  return {
+    experimentId: requiredString(body, 'experimentId'),
+    generatedAt: requiredString(body, 'generatedAt'),
+    allocatedNodes: stringArray(body.allocatedNodes, 'allocatedNodes'),
+    missingNodes: body.missingNodes === undefined ? [] : stringArray(body.missingNodes, 'missingNodes'),
+    timeBounds: {
+      startedAt: optionalString(timeBounds, 'startedAt'),
+      completedAt: optionalString(timeBounds, 'completedAt'),
+      active: requiredBoolean(timeBounds, 'active'),
+    },
+    coverage: {
+      correlation: faultCoverage(coverage, 'correlation'),
+      allocation: faultCoverage(coverage, 'allocation'),
+      timeBounds: faultCoverage(coverage, 'timeBounds'),
+      evidence: faultCoverage(coverage, 'evidence'),
+      reasons: coverage.reasons === undefined ? [] : stringArray(coverage.reasons, 'coverage.reasons'),
+    },
+    provenance: {
+      allocation: requiredString(provenance, 'allocation'),
+      evidence: requiredString(provenance, 'evidence'),
+      limitation: requiredString(provenance, 'limitation'),
+    },
+    events: array(body.events, 'events').map(decodeFaultEvent),
   };
 }
