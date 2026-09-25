@@ -281,6 +281,80 @@ func TestTauClusterReportsForeignTopologyOwnership(t *testing.T) {
 	}
 }
 
+func TestTauClusterUpgradeLabelsNodesBeforeTopologyRecreation(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	node := topologyTestNode("upgrade-gb200", map[string]string{
+		labelRegion:                "eastus2",
+		labelAKSCloud:              "azure",
+		labelFlexSite:              "research",
+		labelFlexNetworkDomain:     "fabric-a",
+		labelFlexAcceleratorDomain: "nvl72-01",
+	}, "azure:///upgrade-gb200")
+	legacyTopology := desiredTauGPUTopology()
+	legacyTopology.Object["spec"] = map[string]any{
+		"levels": []any{
+			map[string]any{"nodeLabel": labelkeys.LabelSite},
+			map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
+			map[string]any{"nodeLabel": labelHostname},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, legacyTopology).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() legacy topology error = %v", err)
+	}
+	var gotNode corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: node.Name}, &gotNode); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	if got := gotNode.Labels[labelkeys.LabelAcceleratorDomain]; got != "azure-accelerator-nvl72-01" {
+		t.Fatalf("accelerator domain = %q, want provider domain", got)
+	}
+	var gotCluster tauv1alpha1.TauCluster
+	if err := c.Get(ctx, client.ObjectKey{Name: cluster.Name}, &gotCluster); err != nil {
+		t.Fatalf("Get TauCluster: %v", err)
+	}
+	assertCondition(t, gotCluster.Status.Conditions, tauv1alpha1.ConditionQueuesReady, metav1.ConditionFalse)
+	queuesReady := findCondition(gotCluster.Status.Conditions, tauv1alpha1.ConditionQueuesReady)
+	if queuesReady == nil || queuesReady.Reason != "ImmutableTopologyDrift" {
+		t.Fatalf("QueuesReady = %#v, want reason ImmutableTopologyDrift", queuesReady)
+	}
+	if gotCluster.Status.Phase != tauv1alpha1.ClusterPhaseDegraded {
+		t.Fatalf("phase = %q, want %q", gotCluster.Status.Phase, tauv1alpha1.ClusterPhaseDegraded)
+	}
+
+	if err := c.Delete(ctx, legacyTopology); err != nil {
+		t.Fatalf("Delete legacy Topology: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after topology deletion error = %v", err)
+	}
+	topology := newQueueObject(topologyGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: tauGPUNodeTopologyName}, topology); err != nil {
+		t.Fatalf("Get recreated Topology: %v", err)
+	}
+	levels, found, err := unstructured.NestedSlice(topology.Object, "spec", "levels")
+	if err != nil || !found {
+		t.Fatalf("Topology levels: found=%v err=%v", found, err)
+	}
+	wantLevels := []any{
+		map[string]any{"nodeLabel": labelkeys.LabelSite},
+		map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
+		map[string]any{"nodeLabel": labelkeys.LabelAcceleratorDomain},
+		map[string]any{"nodeLabel": labelHostname},
+	}
+	if !reflect.DeepEqual(levels, wantLevels) {
+		t.Fatalf("Topology levels = %#v, want %#v", levels, wantLevels)
+	}
+}
+
 func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
 	site := strings.Repeat("a", validation.DNS1123LabelMaxLength)
 	node := topologyTestNode("flex-h200", map[string]string{
