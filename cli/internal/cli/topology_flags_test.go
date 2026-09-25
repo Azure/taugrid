@@ -526,6 +526,22 @@ func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
 	}
 }
 
+func TestTopologyFlagsWarnsAboutSameNetworkDomainLimits(t *testing.T) {
+	flags := topologyFlags{topology: "same-network-domain"}
+	var opts jobrender.Options
+
+	warnings, err := flags.applyWithChanged(&opts, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 ||
+		!strings.Contains(warnings[0], "does not by itself require InfiniBand or distinct hosts") ||
+		!strings.Contains(warnings[0], "singleton domains") ||
+		!strings.Contains(warnings[0], "may remain pending") {
+		t.Fatalf("warnings=%#v", warnings)
+	}
+}
+
 func TestResolveAutoQueueRequiresLiveDiscoveryForExplicitAuto(t *testing.T) {
 	opts := jobrender.Options{QueueName: "auto"}
 	_, err := (topologyFlags{}).resolveAutoQueueFromManifest(context.Background(), nil, "ray", &opts, nil, "client", true, false)

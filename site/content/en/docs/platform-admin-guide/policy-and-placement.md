@@ -80,6 +80,14 @@ separately through `policy.topology`.
 per host. Full-node GPU requests naturally separate workers when a Node cannot
 fit two of them; smaller workers may co-locate.
 
+Tau emits a warning when this placement is selected. The request does not
+independently require `tau.azure.com/infiniband=true`: Nodes without
+authoritative shared-fabric metadata receive singleton network domains. A
+multi-host workload remains pending when no one domain has sufficient eligible
+capacity, while workers that all fit on one Node may still run in that Node's
+singleton domain. TauGrid never falls back automatically to `same-site` or
+`unconstrained`.
+
 The legacy inputs `a100-nvlink-80gb`, `h100-standalone-95gb`, and
 `h200-nvlink-141gb` are accepted for one compatibility window, normalized
 before validation/rendering, and produce a CLI deprecation warning. New

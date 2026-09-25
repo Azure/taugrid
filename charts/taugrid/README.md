@@ -175,6 +175,13 @@ site/domain labels, so they remain topology-complete without being treated as
 connected. `tau.azure.com/region` is normalized metadata rather than a Kueue
 topology level.
 
+Selecting `same-network-domain` does not independently require
+`tau.azure.com/infiniband=true` or one worker per host. Nodes without
+authoritative shared-fabric metadata have singleton domains. Multi-host work
+therefore remains pending when no domain has enough eligible capacity, while
+workers that fit on one Node may still run there. Tau warns about this contract
+and does not fall back to `same-site` or `unconstrained`.
+
 Azure is recognized from `aks.azure.com/cloud=azure`, the Azure provider ID, or
 managed AKS labels. Region comes from `topology.kubernetes.io/region` or
 `aks.azure.com/region`. Managed Azure Nodes share a regional site. Only Azure

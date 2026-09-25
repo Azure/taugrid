@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/queueresolve"
 	"github.com/Azure/taugrid/core/kueueapi"
 	runqueue "github.com/Azure/taugrid/core/queue"
+	"github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -88,6 +89,10 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, c
 			"warning: gpu_class %q is deprecated; use %q instead (placement and interconnect belong in policy.topology)",
 			o.GPUClass, canonical))
 		o.GPUClass = canonical
+	}
+	if o.Topology == profile.PlacementSameNetworkDomain {
+		warnings = append(warnings,
+			"warning: policy.topology \"same-network-domain\" requires one topology domain but does not by itself require InfiniBand or distinct hosts; nodes without an authoritative shared fabric use singleton domains, so a multi-host workload may remain pending while workers that fit on one node may still run")
 	}
 	return warnings, nil
 }
