@@ -128,6 +128,7 @@ func TestValidateNodeLabelRulesRejectsDerivedTopologyLabels(t *testing.T) {
 		labelkeys.LabelSite,
 		labelkeys.LabelRegion,
 		labelkeys.LabelNetworkDomain,
+		labelkeys.LabelAcceleratorDomain,
 		labelkeys.LabelInfiniband,
 	} {
 		t.Run(key, func(t *testing.T) {
@@ -315,7 +316,8 @@ func TestTauClusterReconcileModeLabelsNativeAndFlexNodes(t *testing.T) {
 		t.Fatal("unmatched CPU Node received a GPU-class label")
 	}
 	if unchangedCPU.Labels[labelkeys.LabelSite] == "" ||
-		unchangedCPU.Labels[labelkeys.LabelNetworkDomain] == "" {
+		unchangedCPU.Labels[labelkeys.LabelNetworkDomain] == "" ||
+		unchangedCPU.Labels[labelkeys.LabelAcceleratorDomain] == "" {
 		t.Fatalf("unmatched CPU Node has incomplete topology labels: %#v", unchangedCPU.Labels)
 	}
 
@@ -381,6 +383,7 @@ func TestTauClusterNoMatchingNodesIsReady(t *testing.T) {
 	}
 	if gotCPU.Labels[labelkeys.LabelSite] == "" ||
 		gotCPU.Labels[labelkeys.LabelNetworkDomain] == "" ||
+		gotCPU.Labels[labelkeys.LabelAcceleratorDomain] == "" ||
 		gotCPU.Labels[labelkeys.LabelInfiniband] != "false" {
 		t.Fatalf("CPU Node topology labels = %#v", gotCPU.Labels)
 	}

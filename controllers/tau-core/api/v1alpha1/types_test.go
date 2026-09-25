@@ -277,7 +277,7 @@ func TestTauClusterCRDContract(t *testing.T) {
 			t.Fatalf("TauCluster workload profile spec must not expose %q", field)
 		}
 	}
-	if len(profileProps["mode"].Enum) != 2 || len(profileProps["placement"].Enum) != 4 {
+	if len(profileProps["mode"].Enum) != 2 || len(profileProps["placement"].Enum) != 5 {
 		t.Fatalf("workload profile enums = mode %v placement %v", profileProps["mode"].Enum, profileProps["placement"].Enum)
 	}
 	if got := string(profileProps["executionTarget"].Default.Raw); got != `"singleCluster"` ||

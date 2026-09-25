@@ -94,6 +94,10 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, c
 		warnings = append(warnings,
 			"warning: policy.topology \"same-network-domain\" requires one topology domain but does not by itself require InfiniBand or distinct hosts; nodes without an authoritative shared fabric use singleton domains, so a multi-host workload may remain pending while workers that fit on one node may still run")
 	}
+	if o.Topology == profile.PlacementSameAcceleratorDomain {
+		warnings = append(warnings,
+			"warning: policy.topology \"same-accelerator-domain\" requires one provider-declared accelerator island but does not guarantee distinct hosts; nodes without an authoritative shared accelerator domain use singleton domains, so the workload remains pending when it cannot fit")
+	}
 	return warnings, nil
 }
 

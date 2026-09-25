@@ -49,7 +49,7 @@ resourceFlavors:
 ```
 
 Keep placement/interconnect in workload topology (`unconstrained`,
-`same-host`, `same-network-domain`, or `same-site`), not in the
+`same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`), not in the
 class label. The sibling `tau-core-controller` chart continuously derives class
 and series labels for its reviewed AKS GPU VM-size catalog. Install an
 equivalent node-label reconciler when deploying this services chart alone.

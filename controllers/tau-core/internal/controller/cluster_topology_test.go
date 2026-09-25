@@ -66,6 +66,7 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 	wantLevels := []any{
 		map[string]any{"nodeLabel": labelkeys.LabelSite},
 		map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
+		map[string]any{"nodeLabel": labelkeys.LabelAcceleratorDomain},
 		map[string]any{"nodeLabel": labelHostname},
 	}
 	if !reflect.DeepEqual(levels, wantLevels) {
@@ -398,6 +399,7 @@ func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 	wantLevels := []any{
 		map[string]any{"nodeLabel": labelkeys.LabelSite},
 		map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
+		map[string]any{"nodeLabel": labelkeys.LabelAcceleratorDomain},
 		map[string]any{"nodeLabel": labelHostname},
 	}
 	if !reflect.DeepEqual(levels, wantLevels) {
@@ -468,10 +470,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelAKSAgentPool: "research",
 			}, "azure:///azure-nd-a"),
 			want: map[string]string{
-				labelkeys.LabelSite:          "azure-eastus2",
-				labelkeys.LabelRegion:        "eastus2",
-				labelkeys.LabelNetworkDomain: "azure-ib-eastus2-research-standard_nd96isr_h200_v5",
-				labelkeys.LabelInfiniband:    "true",
+				labelkeys.LabelSite:              "azure-eastus2",
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     "azure-ib-eastus2-research-standard_nd96isr_h200_v5",
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-nd-a"),
+				labelkeys.LabelInfiniband:        "true",
 			},
 		},
 		{
@@ -481,10 +484,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				azureVMSizeLabel: "Standard_ND96isr_H200_v5",
 			}, "azure:///azure-nd-no-pool"),
 			want: map[string]string{
-				labelkeys.LabelSite:          "azure-eastus2",
-				labelkeys.LabelRegion:        "eastus2",
-				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "azure-nd-no-pool"),
-				labelkeys.LabelInfiniband:    "false",
+				labelkeys.LabelSite:              "azure-eastus2",
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "azure-nd-no-pool"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-nd-no-pool"),
+				labelkeys.LabelInfiniband:        "false",
 			},
 		},
 		{
@@ -495,10 +499,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelAKSAgentPool: "batch",
 			}, "azure:///azure-a10"),
 			want: map[string]string{
-				labelkeys.LabelSite:          "azure-eastus2",
-				labelkeys.LabelRegion:        "eastus2",
-				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "azure-a10"),
-				labelkeys.LabelInfiniband:    "false",
+				labelkeys.LabelSite:              "azure-eastus2",
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "azure-a10"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-a10"),
+				labelkeys.LabelInfiniband:        "false",
 			},
 		},
 		{
@@ -510,10 +515,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelFlexNetworkDomain: "h200-fabric",
 			}, ""),
 			want: map[string]string{
-				labelkeys.LabelSite:          "nebius-site-research",
-				labelkeys.LabelRegion:        "eu-north1",
-				labelkeys.LabelNetworkDomain: "nebius-fabric-h200-fabric",
-				labelkeys.LabelInfiniband:    "true",
+				labelkeys.LabelSite:              "nebius-site-research",
+				labelkeys.LabelRegion:            "eu-north1",
+				labelkeys.LabelNetworkDomain:     "nebius-fabric-h200-fabric",
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "nebius-h200"),
+				labelkeys.LabelInfiniband:        "true",
 			},
 		},
 		{
@@ -525,10 +531,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelFlexNetworkDomain: "h200-fabric",
 			}, ""),
 			want: map[string]string{
-				labelkeys.LabelSite:          "aws-site-research",
-				labelkeys.LabelRegion:        "us-east-1",
-				labelkeys.LabelNetworkDomain: "aws-fabric-h200-fabric",
-				labelkeys.LabelInfiniband:    "true",
+				labelkeys.LabelSite:              "aws-site-research",
+				labelkeys.LabelRegion:            "us-east-1",
+				labelkeys.LabelNetworkDomain:     "aws-fabric-h200-fabric",
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "aws-h200"),
+				labelkeys.LabelInfiniband:        "true",
 			},
 		},
 		{
@@ -539,10 +546,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelAzureManaged: "false",
 			}, ""),
 			want: map[string]string{
-				labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", "azure-flex-missing-site"),
-				labelkeys.LabelRegion:        "eastus2",
-				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "azure-flex-missing-site"),
-				labelkeys.LabelInfiniband:    "false",
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "azure-flex-missing-site"),
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "azure-flex-missing-site"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-flex-missing-site"),
+				labelkeys.LabelInfiniband:        "false",
 			},
 			wantError: true,
 		},
@@ -555,10 +563,28 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelFlexNetworkDomain: strings.Repeat("x", validation.LabelValueMaxLength+1),
 			}, ""),
 			want: map[string]string{
-				labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", "invalid-fabric"),
-				labelkeys.LabelRegion:        "eu-north1",
-				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "invalid-fabric"),
-				labelkeys.LabelInfiniband:    "false",
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "invalid-fabric"),
+				labelkeys.LabelRegion:            "eu-north1",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "invalid-fabric"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "invalid-fabric"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid explicit accelerator domain fails closed",
+			node: topologyTestNode("invalid-accelerator", map[string]string{
+				labelAKSCloud:              "azure",
+				labelAKSRegion:             "eastus2",
+				labelFlexSite:              "research",
+				labelFlexAcceleratorDomain: strings.Repeat("x", validation.LabelValueMaxLength+1),
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "invalid-accelerator"),
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "invalid-accelerator"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "invalid-accelerator"),
+				labelkeys.LabelInfiniband:        "false",
 			},
 			wantError: true,
 		},
@@ -568,10 +594,11 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				labelRegion: "moon-1",
 			}, "custom:///unknown-provider"),
 			want: map[string]string{
-				labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", "unknown-provider"),
-				labelkeys.LabelRegion:        "moon-1",
-				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "unknown-provider"),
-				labelkeys.LabelInfiniband:    "false",
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "unknown-provider"),
+				labelkeys.LabelRegion:            "moon-1",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "unknown-provider"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "unknown-provider"),
+				labelkeys.LabelInfiniband:        "false",
 			},
 		},
 	}
@@ -586,6 +613,64 @@ func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
 				t.Fatalf("desiredNodeTopologyLabels() = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAcceleratorDomainsRequireProviderAuthority(t *testing.T) {
+	managedA := topologyTestNode("managed-gb200-a", map[string]string{
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_GB200_v6",
+		labelAKSAgentPool: "nvl72",
+	}, "azure:///managed-gb200-a")
+	managedB := topologyTestNode("managed-gb200-b", map[string]string{
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_GB200_v6",
+		labelAKSAgentPool: "nvl72",
+	}, "azure:///managed-gb200-b")
+
+	labelsA, err := desiredNodeTopologyLabels(managedA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelsB, err := desiredNodeTopologyLabels(managedB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if labelsA[labelkeys.LabelAcceleratorDomain] == labelsB[labelkeys.LabelAcceleratorDomain] {
+		t.Fatalf("matching GPU models must not imply a shared accelerator domain: %#v %#v", labelsA, labelsB)
+	}
+
+	providerA := topologyTestNode("provider-gb200", map[string]string{
+		labelAKSCloud:              "azure",
+		labelAKSRegion:             "eastus2",
+		labelAzureManaged:          "false",
+		labelFlexSite:              "research",
+		labelFlexNetworkDomain:     "fabric-a",
+		labelFlexAcceleratorDomain: "nvl72-01",
+		azureVMSizeLabel:           "Standard_ND96isr_GB200_v6",
+	}, "")
+	providerB := topologyTestNode("provider-gb300", map[string]string{
+		labelAKSCloud:              "azure",
+		labelAKSRegion:             "eastus2",
+		labelAzureManaged:          "false",
+		labelFlexSite:              "research",
+		labelFlexNetworkDomain:     "fabric-a",
+		labelFlexAcceleratorDomain: "nvl72-01",
+		azureVMSizeLabel:           "Standard_ND96isr_GB300_v6",
+	}, "")
+
+	providerLabelsA, err := desiredNodeTopologyLabels(providerA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerLabelsB, err := desiredNodeTopologyLabels(providerB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "azure-accelerator-nvl72-01"
+	if providerLabelsA[labelkeys.LabelAcceleratorDomain] != want ||
+		providerLabelsB[labelkeys.LabelAcceleratorDomain] != want {
+		t.Fatalf("provider accelerator labels = %q, %q, want %q", providerLabelsA[labelkeys.LabelAcceleratorDomain], providerLabelsB[labelkeys.LabelAcceleratorDomain], want)
 	}
 }
 
