@@ -453,6 +453,184 @@ func sampleNebiusFlexNode(name, instanceType, site string) *corev1.Node {
 	return node
 }
 
+func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		node      *corev1.Node
+		want      map[string]string
+		wantError bool
+	}{
+		{
+			name: "managed Azure ND pool derives shared fabric",
+			node: topologyTestNode("azure-nd-a", map[string]string{
+				labelRegion:       "eastus2",
+				azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+				labelAKSAgentPool: "research",
+			}, "azure:///azure-nd-a"),
+			want: map[string]string{
+				labelkeys.LabelSite:          "azure-eastus2",
+				labelkeys.LabelRegion:        "eastus2",
+				labelkeys.LabelNetworkDomain: "azure-ib-eastus2-research-standard_nd96isr_h200_v5",
+				labelkeys.LabelInfiniband:    "true",
+			},
+		},
+		{
+			name: "managed Azure ND without agent pool is isolated",
+			node: topologyTestNode("azure-nd-no-pool", map[string]string{
+				labelRegion:      "eastus2",
+				azureVMSizeLabel: "Standard_ND96isr_H200_v5",
+			}, "azure:///azure-nd-no-pool"),
+			want: map[string]string{
+				labelkeys.LabelSite:          "azure-eastus2",
+				labelkeys.LabelRegion:        "eastus2",
+				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "azure-nd-no-pool"),
+				labelkeys.LabelInfiniband:    "false",
+			},
+		},
+		{
+			name: "managed Azure non-ND GPU is isolated",
+			node: topologyTestNode("azure-a10", map[string]string{
+				labelRegion:       "eastus2",
+				azureVMSizeLabel:  "Standard_NV36ads_A10_v5",
+				labelAKSAgentPool: "batch",
+			}, "azure:///azure-a10"),
+			want: map[string]string{
+				labelkeys.LabelSite:          "azure-eastus2",
+				labelkeys.LabelRegion:        "eastus2",
+				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "azure-a10"),
+				labelkeys.LabelInfiniband:    "false",
+			},
+		},
+		{
+			name: "provider namespaces explicit site and fabric",
+			node: topologyTestNode("nebius-h200", map[string]string{
+				labelAKSCloud:          "nebius",
+				labelAKSRegion:         "eu-north1",
+				labelFlexSite:          "research",
+				labelFlexNetworkDomain: "h200-fabric",
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:          "nebius-site-research",
+				labelkeys.LabelRegion:        "eu-north1",
+				labelkeys.LabelNetworkDomain: "nebius-fabric-h200-fabric",
+				labelkeys.LabelInfiniband:    "true",
+			},
+		},
+		{
+			name: "same explicit names remain provider isolated",
+			node: topologyTestNode("aws-h200", map[string]string{
+				labelAKSCloud:          "aws",
+				labelAKSRegion:         "us-east-1",
+				labelFlexSite:          "research",
+				labelFlexNetworkDomain: "h200-fabric",
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:          "aws-site-research",
+				labelkeys.LabelRegion:        "us-east-1",
+				labelkeys.LabelNetworkDomain: "aws-fabric-h200-fabric",
+				labelkeys.LabelInfiniband:    "true",
+			},
+		},
+		{
+			name: "external Azure without site fails closed",
+			node: topologyTestNode("azure-flex-missing-site", map[string]string{
+				labelAKSCloud:     "azure",
+				labelAKSRegion:    "eastus2",
+				labelAzureManaged: "false",
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", "azure-flex-missing-site"),
+				labelkeys.LabelRegion:        "eastus2",
+				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "azure-flex-missing-site"),
+				labelkeys.LabelInfiniband:    "false",
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid explicit fabric fails closed",
+			node: topologyTestNode("invalid-fabric", map[string]string{
+				labelAKSCloud:          "nebius",
+				labelAKSRegion:         "eu-north1",
+				labelFlexSite:          "research",
+				labelFlexNetworkDomain: strings.Repeat("x", validation.LabelValueMaxLength+1),
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", "invalid-fabric"),
+				labelkeys.LabelRegion:        "eu-north1",
+				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "invalid-fabric"),
+				labelkeys.LabelInfiniband:    "false",
+			},
+			wantError: true,
+		},
+		{
+			name: "unknown provider without topology is isolated",
+			node: topologyTestNode("unknown-provider", map[string]string{
+				labelRegion: "moon-1",
+			}, "custom:///unknown-provider"),
+			want: map[string]string{
+				labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", "unknown-provider"),
+				labelkeys.LabelRegion:        "moon-1",
+				labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", "unknown-provider"),
+				labelkeys.LabelInfiniband:    "false",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := desiredNodeTopologyLabels(tt.node)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("desiredNodeTopologyLabels() error = %v, wantError %v", err, tt.wantError)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("desiredNodeTopologyLabels() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestManagedAzureFabricIdentityBoundaries(t *testing.T) {
+	node := func(name, region, pool, sku string) *corev1.Node {
+		return topologyTestNode(name, map[string]string{
+			labelRegion:       region,
+			labelAKSAgentPool: pool,
+			azureVMSizeLabel:  sku,
+		}, "azure:///"+name)
+	}
+	domain := func(t *testing.T, node *corev1.Node) string {
+		t.Helper()
+		labels, err := desiredNodeTopologyLabels(node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if labels[labelkeys.LabelInfiniband] != "true" {
+			t.Fatalf("Node %q was not classified as InfiniBand: %#v", node.Name, labels)
+		}
+		return labels[labelkeys.LabelNetworkDomain]
+	}
+
+	base := domain(t, node("base", "eastus2", "research", "Standard_ND96isr_H200_v5"))
+	if got := domain(t, node("peer", "eastus2", "research", "Standard_ND96isr_H200_v5")); got != base {
+		t.Fatalf("identical region/pool/SKU domains differ: %q != %q", got, base)
+	}
+	for _, tt := range []struct {
+		name   string
+		region string
+		pool   string
+		sku    string
+	}{
+		{name: "different region", region: "centralus", pool: "research", sku: "Standard_ND96isr_H200_v5"},
+		{name: "different pool", region: "eastus2", pool: "training", sku: "Standard_ND96isr_H200_v5"},
+		{name: "different SKU", region: "eastus2", pool: "research", sku: "Standard_ND96isr_H100_v5"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := domain(t, node(tt.name, tt.region, tt.pool, tt.sku)); got == base {
+				t.Fatalf("changed fabric identity reused domain %q", got)
+			}
+		})
+	}
+}
+
 func TestTauClusterDowngradesManagedAzureNodeWhenSKUIsNotNDCapable(t *testing.T) {
 	ctx := context.Background()
 	cluster := topologyTestCluster()
