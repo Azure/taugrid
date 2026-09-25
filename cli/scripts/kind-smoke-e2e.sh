@@ -390,6 +390,12 @@ fi
 configure_kind_node_task_budget
 DIAGNOSTICS_READY=1
 
+# Tau places Ray heads on schedulable AKS system nodes. Kind taints its
+# control-plane by default, so remove that test-only scheduling difference.
+kubectl --context "$KUBE_CONTEXT" taint node \
+  --selector='node-role.kubernetes.io/control-plane' \
+  node-role.kubernetes.io/control-plane:NoSchedule-
+
 # KEC classifies AKS user nodes from these platform-owned inputs. Kind does not
 # provide them, so emulate a CPU AKS user pool while leaving the control-plane
 # node available for Tau's portable Ray head system-node affinity.
