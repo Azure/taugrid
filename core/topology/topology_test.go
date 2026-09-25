@@ -14,12 +14,12 @@ import (
 
 func topologyProfile() profile.Profile {
 	return profile.Profile{
-		Name: "ai-train-a100-nvlink",
+		Name: "ai-train-a100-host",
 		Lane: "training",
 		Topology: profile.Topology{
 			Team:                      "research",
 			Mode:                      "fixed",
-			Placement:                 "single-node-nvlink",
+			Placement:                 "same-host",
 			GPUClass:                  GPUClassA10080GB,
 			Shape:                     "8xa100-80gb",
 			WorkloadPriorityClassName: "taugrid-batch",
@@ -58,7 +58,7 @@ func TestWithoutKueueTopologyAnnotations(t *testing.T) {
 	}
 }
 
-func TestBuild_ProtectedNVLinkPlan(t *testing.T) {
+func TestBuild_SameHostPlan(t *testing.T) {
 	plan, err := Build(topologyProfile(), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -85,7 +85,7 @@ func TestBuild_ProtectedNVLinkPlan(t *testing.T) {
 
 func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 	plan, err := Build(topologyProfile(), Options{
-		Placement:                       "single-node-nvlink",
+		Placement:                       "same-host",
 		DisableKueueTopologyAnnotations: true,
 	})
 	if err != nil {
@@ -111,33 +111,35 @@ func TestBuild_DRAPlanCanDisableKueueTASAnnotations(t *testing.T) {
 	}
 }
 
-func TestBuild_ResourceFlavorRequiredTopology(t *testing.T) {
+func TestBuild_SameNetworkDomainPlacement(t *testing.T) {
 	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
-		QueueName:        SharedGPUQueueName,
-		RequiredTopology: hostnameTopology,
+		QueueName: SharedGPUQueueName,
+		Placement: profile.PlacementSameNetworkDomain,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := plan.Annotations[RequiredTopologyAnnotation]; got != hostnameTopology {
-		t.Fatalf("required topology annotation=%q, want %q", got, hostnameTopology)
+	if got := plan.Annotations[RequiredTopologyAnnotation]; got != networkDomainTopology {
+		t.Fatalf("required topology annotation=%q, want %q", got, networkDomainTopology)
 	}
 }
 
-func TestBuild_ResourceFlavorRequiredTopologyRejectsConflictingPlacement(t *testing.T) {
-	_, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
-		QueueName:        SharedGPUQueueName,
-		Placement:        "independent",
-		RequiredTopology: hostnameTopology,
+func TestBuild_SameSitePlacement(t *testing.T) {
+	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
+		QueueName: SharedGPUQueueName,
+		Placement: profile.PlacementSameSite,
 	})
-	if err == nil || !strings.Contains(err.Error(), "conflicts with placement=independent") {
-		t.Fatalf("expected managed topology conflict, got %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Annotations[RequiredTopologyAnnotation]; got != siteTopology {
+		t.Fatalf("required topology annotation=%q, want %q", got, siteTopology)
 	}
 }
 
 func TestBuild_AnyGPUClassDoesNotPinNodeSelector(t *testing.T) {
 	plan, err := Build(topologyProfile(), Options{
-		Placement: "independent",
+		Placement: "unconstrained",
 		GPUClass:  GPUClassAny,
 		Shape:     "1xgpu",
 		QueueName: SharedGPUQueueName,
@@ -207,7 +209,7 @@ func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 		Team:            "Experimental",
 		Lane:            "elastic",
 		Mode:            "elastic",
-		Placement:       "independent",
+		Placement:       "unconstrained",
 		GPUClass:        GPUClassH10095GB,
 		Shape:           "1xh100-95gb",
 		CheckpointEvery: "15m",
@@ -225,7 +227,7 @@ func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 		t.Fatalf("elastic pod priority=%q", plan.PodPriorityClassName)
 	}
 	if plan.Annotations[unconstrainedTopologyAnnot] != "true" {
-		t.Fatalf("elastic independent job should be unconstrained: %v", plan.Annotations)
+		t.Fatalf("elastic unconstrained job should be unconstrained: %v", plan.Annotations)
 	}
 }
 
@@ -234,7 +236,7 @@ func TestBuild_DeniesH200Elastic(t *testing.T) {
 		Team:            "research",
 		Lane:            "elastic",
 		Mode:            "elastic",
-		Placement:       "independent",
+		Placement:       "unconstrained",
 		GPUClass:        GPUClassH200141GB,
 		CheckpointEvery: "15m",
 	})
@@ -248,7 +250,7 @@ func TestBuild_DeniesH200OutsideLargeMemory(t *testing.T) {
 		Team:      "research",
 		Lane:      "training",
 		Mode:      "fixed",
-		Placement: "single-node-nvlink",
+		Placement: "same-host",
 		GPUClass:  GPUClassH200141GB,
 		Shape:     "8xh200-141gb",
 	})
@@ -258,7 +260,7 @@ func TestBuild_DeniesH200OutsideLargeMemory(t *testing.T) {
 }
 
 func TestBuild_H100ClassDoesNotConstrainPlacement(t *testing.T) {
-	for _, placement := range []string{"single-node-nvlink", "multi-node-nccl"} {
+	for _, placement := range []string{"same-host", "same-network-domain"} {
 		t.Run(placement, func(t *testing.T) {
 			if _, err := Build(topologyProfile(), Options{
 				Team:      "research",

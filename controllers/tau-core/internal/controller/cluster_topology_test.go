@@ -5,7 +5,6 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,7 +25,9 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 	ctx := context.Background()
 	cluster := topologyTestCluster()
 	node := topologyTestNode("managed-h200", map[string]string{
-		labelRegion: "centralus",
+		labelRegion:       "centralus",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
 	}, "azure:///subscriptions/test/resourceGroups/nodes/providers/Microsoft.Compute/virtualMachines/managed-h200")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
@@ -47,7 +48,7 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 	wantLabels := map[string]string{
 		labelkeys.LabelSite:          "azure-centralus",
 		labelkeys.LabelRegion:        "centralus",
-		labelkeys.LabelNetworkDomain: "azure-ib-centralus",
+		labelkeys.LabelNetworkDomain: "azure-ib-centralus-research-standard_nd96isr_h200_v5",
 		labelkeys.LabelInfiniband:    "true",
 	}
 	if !nodeHasLabels(&gotNode, wantLabels) {
@@ -94,11 +95,11 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 func TestTauClusterDiscoversAzureFlexInfiniBandDomain(t *testing.T) {
 	cluster := topologyTestCluster()
 	node := topologyTestNode("flex-h200", map[string]string{
-		labelAKSCloud:      "azure",
-		labelAKSRegion:     "eastus2",
-		labelAzureManaged:  "false",
-		labelFlexSite:      "research-site",
-		labelAKSInfiniband: "true",
+		labelAKSCloud:          "azure",
+		labelAKSRegion:         "eastus2",
+		labelAzureManaged:      "false",
+		labelFlexSite:          "research-site",
+		labelFlexNetworkDomain: "research-fabric",
 	}, "")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
@@ -117,7 +118,7 @@ func TestTauClusterDiscoversAzureFlexInfiniBandDomain(t *testing.T) {
 	wantLabels := map[string]string{
 		labelkeys.LabelSite:          "azure-site-research-site",
 		labelkeys.LabelRegion:        "eastus2",
-		labelkeys.LabelNetworkDomain: "azure-site-ib-research-site",
+		labelkeys.LabelNetworkDomain: "azure-fabric-research-fabric",
 		labelkeys.LabelInfiniband:    "true",
 	}
 	if !nodeHasLabels(&got, wantLabels) {
@@ -128,18 +129,16 @@ func TestTauClusterDiscoversAzureFlexInfiniBandDomain(t *testing.T) {
 func TestTauClusterIsolatesAzureFlexNodesWithoutInfiniBand(t *testing.T) {
 	cluster := topologyTestCluster()
 	first := topologyTestNode("flex-a", map[string]string{
-		labelAKSCloud:      "azure",
-		labelAKSRegion:     "westus3",
-		labelAzureManaged:  "false",
-		labelFlexSite:      "batch-site",
-		labelAKSInfiniband: "false",
+		labelAKSCloud:     "azure",
+		labelAKSRegion:    "westus3",
+		labelAzureManaged: "false",
+		labelFlexSite:     "batch-site",
 	}, "")
 	second := topologyTestNode("flex-b", map[string]string{
-		labelAKSCloud:      "azure",
-		labelAKSRegion:     "westus3",
-		labelAzureManaged:  "false",
-		labelFlexSite:      "batch-site",
-		labelAKSInfiniband: "false",
+		labelAKSCloud:     "azure",
+		labelAKSRegion:    "westus3",
+		labelAzureManaged: "false",
+		labelFlexSite:     "batch-site",
 	}, "")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
@@ -170,9 +169,9 @@ func TestTauClusterIsolatesAzureFlexNodesWithoutInfiniBand(t *testing.T) {
 	}
 }
 
-func TestTauClusterRequiresAzureFlexInfiniBandDeclaration(t *testing.T) {
+func TestTauClusterAllowsAzureFlexSiteWithoutFabric(t *testing.T) {
 	cluster := topologyTestCluster()
-	invalid := topologyTestNode("flex-h200", map[string]string{
+	flex := topologyTestNode("flex-h200", map[string]string{
 		labelAKSCloud:     "azure",
 		labelAKSRegion:    "eastus2",
 		labelAzureManaged: "false",
@@ -186,13 +185,13 @@ func TestTauClusterRequiresAzureFlexInfiniBandDeclaration(t *testing.T) {
 	topology := desiredTauGPUTopology()
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(cluster, invalid, valid, topology).
+		WithObjects(cluster, flex, valid, topology).
 		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
 		Build()
 	reconciler := &TauClusterReconciler{Client: c}
 
-	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err == nil {
-		t.Fatal("Reconcile() accepted an Azure Flex node without an InfiniBand declaration")
+	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
 	}
 	var gotValid corev1.Node
 	if err := c.Get(context.Background(), client.ObjectKey{Name: valid.Name}, &gotValid); err != nil {
@@ -200,16 +199,16 @@ func TestTauClusterRequiresAzureFlexInfiniBandDeclaration(t *testing.T) {
 	}
 	if gotValid.Labels[labelkeys.LabelSite] == "" ||
 		gotValid.Labels[labelkeys.LabelNetworkDomain] == "" {
-		t.Fatalf("invalid Flex capability blocked valid Node reconciliation: %#v", gotValid.Labels)
+		t.Fatalf("Flex site reconciliation blocked valid Node reconciliation: %#v", gotValid.Labels)
 	}
-	var gotInvalid corev1.Node
-	if err := c.Get(context.Background(), client.ObjectKey{Name: invalid.Name}, &gotInvalid); err != nil {
-		t.Fatalf("Get invalid Node: %v", err)
+	var gotFlex corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: flex.Name}, &gotFlex); err != nil {
+		t.Fatalf("Get Flex Node: %v", err)
 	}
-	if gotInvalid.Labels[labelkeys.LabelSite] != isolatedTopologyLabel("isolated-site", invalid.Name) ||
-		gotInvalid.Labels[labelkeys.LabelNetworkDomain] != isolatedTopologyLabel("isolated-domain", invalid.Name) ||
-		gotInvalid.Labels[labelkeys.LabelInfiniband] != "false" {
-		t.Fatalf("invalid Flex Node was not safely isolated: %#v", gotInvalid.Labels)
+	if gotFlex.Labels[labelkeys.LabelSite] != "azure-site-research-site" ||
+		gotFlex.Labels[labelkeys.LabelNetworkDomain] != isolatedTopologyLabel("isolated-domain", flex.Name) ||
+		gotFlex.Labels[labelkeys.LabelInfiniband] != "false" {
+		t.Fatalf("Flex Node without a fabric was not isolated within its site: %#v", gotFlex.Labels)
 	}
 }
 
@@ -284,11 +283,11 @@ func TestTauClusterReportsForeignTopologyOwnership(t *testing.T) {
 func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
 	site := strings.Repeat("a", validation.DNS1123LabelMaxLength)
 	node := topologyTestNode("flex-h200", map[string]string{
-		labelAKSCloud:      "azure",
-		labelAKSRegion:     "eastus2",
-		labelAzureManaged:  "false",
-		labelFlexSite:      site,
-		labelAKSInfiniband: "true",
+		labelAKSCloud:          "azure",
+		labelAKSRegion:         "eastus2",
+		labelAzureManaged:      "false",
+		labelFlexSite:          site,
+		labelFlexNetworkDomain: site,
 	}, "")
 	labels, err := desiredNodeTopologyLabels(node)
 	if err != nil {
@@ -298,7 +297,7 @@ func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
 	if problems := validation.IsValidLabelValue(domain); len(problems) > 0 {
 		t.Fatalf("network domain %q is invalid: %v", domain, problems)
 	}
-	if domain != networkDomainLabel("azure-site-ib", site) {
+	if domain != networkDomainLabel("azure-fabric", site) {
 		t.Fatalf("network domain = %q, want deterministic helper result", domain)
 	}
 }
@@ -306,18 +305,18 @@ func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
 func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 	cluster := topologyTestCluster()
 	ibNodes := []*corev1.Node{
-		sampleFlexNode("flex-a100-a", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", true),
-		sampleFlexNode("flex-a100-b", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", true),
-		sampleFlexNode("flex-h100-a", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", true),
-		sampleFlexNode("flex-h100-b", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", true),
-		sampleFlexNode("flex-h200-a", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", true),
-		sampleFlexNode("flex-h200-b", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", true),
+		sampleFlexNode("flex-a100-a", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", "azure-a100"),
+		sampleFlexNode("flex-a100-b", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", "azure-a100"),
+		sampleFlexNode("flex-h100-a", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", "azure-h100"),
+		sampleFlexNode("flex-h100-b", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", "azure-h100"),
+		sampleFlexNode("flex-h200-a", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", "azure-h200"),
+		sampleFlexNode("flex-h200-b", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", "azure-h200"),
 	}
 	secondSiteH200s := []*corev1.Node{
 		sampleNebiusFlexNode("flex-h200-nebius-a", "gpu-h200-sxm", "partner-flex-finland"),
 		sampleNebiusFlexNode("flex-h200-nebius-b", "gpu-h200-sxm", "partner-flex-finland"),
 	}
-	nonIB := sampleFlexNode("flex-a10", "Standard_NV36ads_A10_v5", "a10-24gb", "batch-flex-eastus2", false)
+	nonIB := sampleFlexNode("flex-a10", "Standard_NV36ads_A10_v5", "a10-24gb", "batch-flex-eastus2", "")
 
 	objects := []client.Object{cluster, nonIB}
 	for _, node := range ibNodes {
@@ -338,19 +337,24 @@ func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
-	wantShared := map[string]string{
-		labelkeys.LabelSite:          "azure-site-research-flex-eastus2",
-		labelkeys.LabelRegion:        "eastus2",
-		labelkeys.LabelNetworkDomain: "azure-site-ib-research-flex-eastus2",
-		labelkeys.LabelInfiniband:    "true",
+	wantDomains := map[string]string{
+		"a100-80gb":  "azure-fabric-azure-a100",
+		"h100-80gb":  "azure-fabric-azure-h100",
+		"h200-141gb": "azure-fabric-azure-h200",
 	}
 	for _, node := range ibNodes {
 		var got corev1.Node
 		if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
 			t.Fatalf("Get Node %q: %v", node.Name, err)
 		}
-		if !nodeHasLabels(&got, wantShared) {
-			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, wantShared)
+		want := map[string]string{
+			labelkeys.LabelSite:          "azure-site-research-flex-eastus2",
+			labelkeys.LabelRegion:        "eastus2",
+			labelkeys.LabelNetworkDomain: wantDomains[node.Labels[labelkeys.LabelGPUClass]],
+			labelkeys.LabelInfiniband:    "true",
+		}
+		if !nodeHasLabels(&got, want) {
+			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, want)
 		}
 		if got.Labels[labelkeys.LabelGPUClass] != node.Labels[labelkeys.LabelGPUClass] {
 			t.Fatalf("Node %q GPU class = %q, want %q", node.Name, got.Labels[labelkeys.LabelGPUClass], node.Labels[labelkeys.LabelGPUClass])
@@ -359,7 +363,7 @@ func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 	wantSecondSite := map[string]string{
 		labelkeys.LabelSite:          "nebius-site-partner-flex-finland",
 		labelkeys.LabelRegion:        "eu-north1",
-		labelkeys.LabelNetworkDomain: "nebius-site-ib-partner-flex-finland",
+		labelkeys.LabelNetworkDomain: "nebius-fabric-nebius-h200",
 		labelkeys.LabelInfiniband:    "true",
 	}
 	for _, node := range secondSiteH200s {
@@ -371,7 +375,7 @@ func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, wantSecondSite)
 		}
 	}
-	if wantShared[labelkeys.LabelNetworkDomain] == wantSecondSite[labelkeys.LabelNetworkDomain] {
+	if wantDomains["h200-141gb"] == wantSecondSite[labelkeys.LabelNetworkDomain] {
 		t.Fatal("H200 Nodes in different sites received the same network domain")
 	}
 	var gotNonIB corev1.Node
@@ -409,7 +413,7 @@ func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
 	}
 }
 
-func sampleFlexNode(name, sku, gpuClass, site string, infiniband bool) *corev1.Node {
+func sampleFlexNode(name, sku, gpuClass, site, networkDomain string) *corev1.Node {
 	node := topologyTestNode(name, map[string]string{
 		labelAKSCloud:                           "azure",
 		labelAKSRegion:                          "eastus2",
@@ -419,13 +423,15 @@ func sampleFlexNode(name, sku, gpuClass, site string, infiniband bool) *corev1.N
 		"node.kubernetes.io/instance-type":      sku,
 		"aks.azure.com/instance-type":           sku,
 		labelFlexSite:                           site,
-		labelFlexInfiniband:                     fmt.Sprintf("%t", infiniband),
 		"kubernetes.azure.com/agentpool":        "research-gpu",
 		"kubernetes.azure.com/nodepool-type":    "FlexNodes",
 		"kubernetes.azure.com/mode":             "user",
 		"kubernetes.azure.com/os-sku":           "Ubuntu",
 		"kubernetes.azure.com/os-sku-effective": "Ubuntu2404",
 	}, "")
+	if networkDomain != "" {
+		node.Labels[labelFlexNetworkDomain] = networkDomain
+	}
 	node.Labels[labelkeys.LabelGPUClass] = gpuClass
 	return node
 }
@@ -440,18 +446,20 @@ func sampleNebiusFlexNode(name, instanceType, site string) *corev1.Node {
 		"node.kubernetes.io/instance-type":   instanceType,
 		"aks.azure.com/instance-type":        instanceType,
 		labelFlexSite:                        site,
-		labelFlexInfiniband:                  "true",
+		labelFlexNetworkDomain:               "nebius-h200",
 		"kubernetes.azure.com/nodepool-type": "FlexNodes",
 	}, "")
 	node.Labels[labelkeys.LabelGPUClass] = "h200-141gb"
 	return node
 }
 
-func TestTauClusterDowngradesManagedAzureNodeWhenGPUClassIsRemoved(t *testing.T) {
+func TestTauClusterDowngradesManagedAzureNodeWhenSKUIsNotNDCapable(t *testing.T) {
 	ctx := context.Background()
 	cluster := topologyTestCluster()
 	node := topologyTestNode("managed-gpu", map[string]string{
-		labelRegion: "eastus2",
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
 	}, "azure:///managed-gpu")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
@@ -468,9 +476,9 @@ func TestTauClusterDowngradesManagedAzureNodeWhenGPUClassIsRemoved(t *testing.T)
 	if err := c.Get(ctx, client.ObjectKey{Name: node.Name}, &changed); err != nil {
 		t.Fatalf("Get Node: %v", err)
 	}
-	delete(changed.Labels, labelkeys.LabelGPUClass)
+	changed.Labels[azureVMSizeLabel] = "Standard_NV36ads_A10_v5"
 	if err := c.Update(ctx, &changed); err != nil {
-		t.Fatalf("remove GPU class: %v", err)
+		t.Fatalf("change GPU SKU: %v", err)
 	}
 
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {

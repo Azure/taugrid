@@ -111,7 +111,7 @@ tests:
           gpusPerWorker: 2
           workerCount: 1
           mode: fixed
-          placement: independent
+          placement: unconstrained
           defaultLocalQueue: site-queue
           executionTarget: singleCluster
           priorities:

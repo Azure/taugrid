@@ -197,7 +197,6 @@ func (f topologyFlags) resolveAutoQueueFromManifest(
 		return nil, fmt.Errorf("%s: %w%s", prefix, err, formatQueueCandidates(candidates))
 	}
 	o.QueueName = selected.QueueName
-	o.RequiredTopology = selected.RequiredTopology
 	return []string{fmt.Sprintf("selected queue %s -> %s/%s for %d GPU(s)", selected.QueueName, selected.ClusterQueue, selected.ResourceFlavor, contract.GPUCount)}, nil
 }
 
@@ -333,16 +332,8 @@ func inspectRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string
 }
 
 func validateRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string, manifest []byte, opts jobrender.Options, policy queueValidationPolicy) error {
-	report, err := inspectRenderedQueue(ctx, r, namespace, manifest, opts, policy)
-	if err != nil {
-		return err
-	}
-	if report.RequiredTopology != "" {
-		return fmt.Errorf(
-			"generated GPU workload is missing ResourceFlavor-required annotation %s=%q; Tau-managed submission paths must inject it before apply",
-			runtopology.RequiredTopologyAnnotation, report.RequiredTopology)
-	}
-	return nil
+	_, err := inspectRenderedQueue(ctx, r, namespace, manifest, opts, policy)
+	return err
 }
 
 func prepareGeneratedQueueTopology(
@@ -352,21 +343,8 @@ func prepareGeneratedQueueTopology(
 	rendered []byte,
 	opts *jobrender.Options,
 	policy queueValidationPolicy,
-	rerender func() ([]byte, error),
+	_ func() ([]byte, error),
 ) ([]byte, error) {
-	report, err := inspectRenderedQueue(ctx, r, namespace, rendered, *opts, policy)
-	if err != nil {
-		return nil, err
-	}
-	if report.RequiredTopology == "" {
-		return rendered, nil
-	}
-	opts.RequiredTopology = report.RequiredTopology
-	opts.DisableKueueTopologyAnnotations = false
-	rendered, err = rerender()
-	if err != nil {
-		return nil, fmt.Errorf("render ResourceFlavor-required topology: %w", err)
-	}
 	if err := validateRenderedQueue(ctx, r, namespace, rendered, *opts, policy); err != nil {
 		return nil, err
 	}

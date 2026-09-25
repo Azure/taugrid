@@ -42,9 +42,6 @@ baselineQueue:
     enabled: true
     # Owned and reconciled by tau-core-controller.
     name: taugrid-gpu-topology
-    # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
-    # templates after queue resolution.
-    requiredLevel: tau.azure.com/network-domain
   flavor:
     # New identity avoids mutating the topologyName of the chart 0.2.0
     # taugrid-default ResourceFlavor, which Kueue treats as immutable.

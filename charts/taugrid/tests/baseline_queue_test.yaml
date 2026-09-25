@@ -38,9 +38,8 @@ tests:
           path: spec.topologyName
           value: taugrid-gpu-topology
         documentIndex: 1
-      - equal:
+      - notExists:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
-          value: tau.azure.com/network-domain
         documentIndex: 1
       - equal:
           path: kind
@@ -158,13 +157,6 @@ tests:
           value: research
         documentIndex: 2
 
-  - it: rejects a topology level outside the controller-owned hierarchy
-    set:
-      baselineQueue.topology.requiredLevel: topology.example.com/rack
-    asserts:
-      - failedTemplate:
-          errorMessage: baselineQueue.topology.requiredLevel is fixed at tau.azure.com/network-domain for connected multi-node placement
-
   - it: rejects a topology name the controller does not own
     set:
       baselineQueue.topology.name: custom-topology
@@ -183,15 +175,14 @@ tests:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
         documentIndex: 1
 
-  - it: enables the normalized network-domain topology by default
+  - it: enables the controller-owned topology by default
     asserts:
       - equal:
           path: spec.topologyName
           value: taugrid-gpu-topology
         documentIndex: 1
-      - equal:
+      - notExists:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
-          value: tau.azure.com/network-domain
         documentIndex: 1
 
   - it: renders a class-labeled GPU flavor without constraining the CPU flavor

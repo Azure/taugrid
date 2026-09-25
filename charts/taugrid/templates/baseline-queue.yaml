@@ -1,11 +1,7 @@
 {{- if .Values.baselineQueue.enabled }}
-{{- $requiredTopology := default "tau.azure.com/network-domain" .Values.baselineQueue.topology.requiredLevel }}
 {{- $topologyEnabled := and .Values.baselineQueue.topology.enabled .Values.components.tauCoreController.enabled }}
 {{- if and .Values.baselineQueue.topology.enabled (ne .Values.baselineQueue.topology.name "taugrid-gpu-topology") }}
 {{- fail "baselineQueue.topology.name is fixed at taugrid-gpu-topology because tau-core-controller owns the Topology" }}
-{{- end }}
-{{- if and .Values.baselineQueue.topology.enabled (ne $requiredTopology "tau.azure.com/network-domain") }}
-{{- fail "baselineQueue.topology.requiredLevel is fixed at tau.azure.com/network-domain for connected multi-node placement" }}
 {{- end }}
 {{- if and .Values.baselineQueue.gpu.enabled (empty .Values.baselineQueue.gpu.flavors) }}
 {{- fail "baselineQueue.gpu.flavors must contain at least one flavor when baselineQueue.gpu.enabled is true" }}
@@ -87,10 +83,6 @@ metadata:
   name: {{ $gpuFlavor.name }}
   labels:
     {{- include "taugrid.labels" $ | nindent 4 }}
-  {{- if $topologyEnabled }}
-  annotations:
-    kueue.x-k8s.io/podset-required-topology: {{ $requiredTopology | quote }}
-  {{- end }}
 spec:
   {{- with $gpuFlavor.nodeLabels }}
   nodeLabels:

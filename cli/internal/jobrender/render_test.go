@@ -753,7 +753,7 @@ func TestNormalizeRDMA(t *testing.T) {
 }
 
 // podTolerations returns the rendered pod tolerations as key|operator|value|effect
-// strings, which keeps the assertions below readable and order-independent.
+// strings, which keeps the assertions below readable and order-unconstrained.
 func podTolerations(t *testing.T, out []byte) []string {
 	t.Helper()
 	m := parseYAML(t, out)
@@ -1134,7 +1134,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 		Team:      "research",
 		Lane:      "training",
 		Mode:      "fixed",
-		Topology:  "single-node-nvlink",
+		Topology:  "same-host",
 		Shape:     "8xa100-80gb",
 		GPUClass:  "a100-80gb",
 	})
@@ -1177,20 +1177,20 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	}
 }
 
-func TestRender_ResourceFlavorRequiredTopologyWithoutUserPlacement(t *testing.T) {
+func TestRender_SameSitePlacement(t *testing.T) {
 	out, err := Render(trainProfile(), Options{
-		Name:             "managed-tas",
-		Namespace:        "tau",
-		Command:          []string{"true"},
-		QueueName:        "jobqueue",
-		RequiredTopology: "kubernetes.io/hostname",
+		Name:      "managed-tas",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		Topology:  profile.PlacementSameSite,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := parseYAML(t, out)
-	if got := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)[runtopology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
-		t.Fatalf("pod required topology=%v, want kubernetes.io/hostname", got)
+	if got := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/site" {
+		t.Fatalf("pod required topology=%v, want tau.azure.com/site", got)
 	}
 }
 
@@ -1318,22 +1318,22 @@ func TestRender_WorkloadProfilePlacementTASContract(t *testing.T) {
 		value      string
 	}{
 		{
-			name:       "independent Job uses unconstrained TAS",
-			placement:  profile.PlacementIndependent,
+			name:       "unconstrained Job uses unconstrained TAS",
+			placement:  profile.PlacementUnconstrained,
 			annotation: "kueue.x-k8s.io/podset-unconstrained-topology",
 			value:      "true",
 		},
 		{
 			name:       "large-memory Job requires one hostname",
-			placement:  profile.PlacementSingleNodeNVLink,
+			placement:  profile.PlacementSameHost,
 			annotation: "kueue.x-k8s.io/podset-required-topology",
 			value:      "kubernetes.io/hostname",
 		},
 		{
-			name:       "multi-node Job uses unconstrained TAS",
-			placement:  profile.PlacementMultiNodeNCCL,
-			annotation: "kueue.x-k8s.io/podset-unconstrained-topology",
-			value:      "true",
+			name:       "network-domain Job requires one fabric",
+			placement:  profile.PlacementSameNetworkDomain,
+			annotation: "kueue.x-k8s.io/podset-required-topology",
+			value:      "tau.azure.com/network-domain",
 		},
 	}
 	for _, tc := range tests {
@@ -1373,7 +1373,7 @@ func TestRender_DRAProfileOptionsOmitTASAnnotations(t *testing.T) {
 	}
 	ApplyTopologyOptions(&opts, runtopology.Options{
 		QueueName:                       runtopology.SharedDRAQueueName,
-		Placement:                       profile.PlacementIndependent,
+		Placement:                       profile.PlacementUnconstrained,
 		DisableKueueTopologyAnnotations: true,
 	})
 
@@ -1410,7 +1410,7 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 		Team:            "experimental",
 		Lane:            "elastic",
 		Mode:            "elastic",
-		Topology:        "independent",
+		Topology:        "unconstrained",
 		GPUClass:        "h100-95gb",
 		Shape:           "1xh100-95gb",
 		CheckpointEvery: "15m",

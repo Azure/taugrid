@@ -71,10 +71,14 @@ matching solely on that label: `ndm-a100-v4`, `nd-h200-v5`, and
 `taugrid-default` are platform identifiers, distinct from researcher API
 values.
 
-Placement stays in `policy.topology`: `independent`, `single-node-nvlink`,
-`multi-node-nccl`, or `elastic-workers`. GPU class values encode hardware
+Placement stays in `policy.topology`: `unconstrained`, `same-host`,
+`same-network-domain`, or `same-site`. GPU class values encode hardware
 only; NVLink, InfiniBand, NCCL, and same-host placement are expressed
 separately through `policy.topology`.
+
+`same-network-domain` requires one shared fabric but does not require one worker
+per host. Full-node GPU requests naturally separate workers when a Node cannot
+fit two of them; smaller workers may co-locate.
 
 The legacy inputs `a100-nvlink-80gb`, `h100-standalone-95gb`, and
 `h200-nvlink-141gb` are accepted for one compatibility window, normalized
@@ -156,11 +160,10 @@ single-flavor installs by draining admission and splitting the flavor:
    counts to reach zero. Keep PVCs and namespaces in place.
 2. Create a generic non-TAS CPU ResourceFlavor that carries no GPU labels or GPU
    admission taints. Create separate GPU ResourceFlavors with exact
-   `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, `topologyName`, and the
-   managed resource annotation
-   `kueue.x-k8s.io/podset-required-topology=<level>`. Connected TauGrid submission
-   copies that platform requirement onto generated GPU pod templates when no
-   explicit placement policy is present. CPU-only jobs remain admissible through
+   `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, and `topologyName`.
+   Workloads explicitly select `unconstrained`, `same-host`,
+   `same-network-domain`, or `same-site`; ResourceFlavors do not impose one
+   locality policy on every workload. CPU-only jobs remain admissible through
    the non-TAS CPU flavor and cannot consume GPU quota.
 3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
    Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor

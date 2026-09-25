@@ -137,9 +137,9 @@ func serveTestProfile(
 	gpus, workers int32,
 	generation int64,
 ) profile.ResolvedWorkloadProfile {
-	placement := profile.PlacementIndependent
+	placement := profile.PlacementUnconstrained
 	if workers > 1 {
-		placement = profile.PlacementMultiNodeNCCL
+		placement = profile.PlacementSameNetworkDomain
 	}
 	return profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{

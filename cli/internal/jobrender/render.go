@@ -210,7 +210,7 @@ type Options struct {
 	// CLI callers can override the researcher-facing intent here. Render turns
 	// this into protected Kueue queue/topology metadata and rejects unsafe
 	// combinations (for example elastic jobs without checkpoints, or eval on
-	// scarce H200 NVLink capacity).
+	// scarce H200 capacity).
 	Team            string
 	Lane            string
 	Mode            string
@@ -224,7 +224,6 @@ type Options struct {
 	// gpu.nvidia.com). It does not alter rendered pod resources.
 	GPUResourceName                 string
 	PriorityTier                    string
-	RequiredTopology                string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
 	DisableKueueTopologyAnnotations bool
@@ -291,7 +290,6 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		CheckpointEvery:                 o.CheckpointEvery,
 		QueueName:                       o.QueueName,
 		PriorityTier:                    o.PriorityTier,
-		RequiredTopology:                o.RequiredTopology,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,

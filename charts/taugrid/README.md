@@ -104,7 +104,7 @@ for isolation, tenant authorization, and rollback.
 All components are enabled by default. Disable any with
 `--set components.<key>.enabled=false`.
 
-GPU monitoring is deliberately not an independent toggle: a cluster running a
+GPU monitoring is deliberately not an unconstrained toggle: a cluster running a
 Tau control plane always gets GPU node health signal, so a fleet cannot end up
 scheduling GPU work it cannot observe. Disabling the controller disables it too.
 To decouple them, set `components.gpuMonitoring.enabled` explicitly — that key
@@ -145,7 +145,6 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Reference the controller-owned Topology from GPU flavors |
 | `baselineQueue.topology.name` | string | `taugrid-gpu-topology` | Controller-owned Topology object name |
-| `baselineQueue.topology.requiredLevel` | string | `tau.azure.com/network-domain` | Required topology level copied from managed GPU ResourceFlavors to connected multi-node pod templates |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
@@ -161,12 +160,12 @@ flavor across all requested resources. The fresh-install GPU flavor
 hardware is known, replace the entire GPU flavor list with class-labeled
 flavors; do not retain the generic GPU flavor alongside them.
 
-When topology is enabled, only GPU flavors carry `topologyName` and the
-`kueue.x-k8s.io/podset-required-topology` resource-metadata annotation. Connected
-Tau submission copies that requirement to generated GPU pod templates when the
-workload has no explicit placement request. Explicit placement remains
-authoritative, and raw Kubernetes manifests are never rewritten. The CPU/memory
-flavor remains non-TAS so CPU-only workloads can be admitted.
+When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
+workload explicitly selects `unconstrained`, `same-host`,
+`same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability
+but never choose workload locality. Raw Kubernetes manifests remain
+expert-controlled. The CPU/memory flavor remains non-TAS so CPU-only workloads
+can be admitted.
 
 The controller assigns every Node a conservative topology identity and
 reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
@@ -178,35 +177,34 @@ topology level.
 
 Azure is recognized from `aks.azure.com/cloud=azure`, the Azure provider ID, or
 managed AKS labels. Region comes from `topology.kubernetes.io/region` or
-`aks.azure.com/region`. Managed Azure Nodes share a regional site; managed GPU
-capacity in that site shares one network domain under the launch assumption
-that it is InfiniBand-connected. Managed CPU or unclassified capacity remains
-in the regional site but uses singleton non-IB domains.
+`aks.azure.com/region`. Managed Azure Nodes share a regional site. Only Azure
+ND-series Nodes with an authoritative agent-pool label share a derived network
+domain, scoped by region, agent pool, and VM size. Other capacity uses singleton
+non-IB domains.
 
 Externally joined Azure Flex nodes are detected from
 `kubernetes.azure.com/managed=false` or `aks.azure.com/stretch-managed=true`.
-Their provisioning template must stamp both
-`net.unbounded-cloud.io/site=<globally-unique-site>` and
-`net.unbounded-cloud.io/infiniband=true|false`. Nodes in one Flex site share the
-top-level site label. IB-enabled nodes also share its network domain; non-IB
-nodes receive singleton domains within that site. Flex supports these
-declarations through its existing `kubeadm.nodeLabels` map, so no region or
-provider list is duplicated in TauCluster configuration. Zone is omitted
-because it is not consistently available across providers. Azure Flex Nodes
-also accept the older `aks.azure.com/infiniband` label as a compatibility
-fallback.
+Their provisioning template must stamp
+`net.unbounded-cloud.io/site=<globally-unique-site>`. Nodes in one Flex site
+share the top-level site label. Nodes may additionally stamp
+`net.unbounded-cloud.io/network-domain=<provider-authoritative-fabric-id>` to
+share a fabric; nodes without it receive singleton non-IB domains within the
+site. Flex supports these declarations through its existing
+`kubeadm.nodeLabels` map, so no region or provider list is duplicated in
+TauCluster configuration. Zone is omitted because it is not consistently
+available across providers.
 
-The topology name and required network-domain level are fixed because the
-controller owns this object and Kueue makes `ResourceFlavor.spec.topologyName`
-immutable. The new default GPU flavor identity avoids mutating flavors created
-by older releases. Operators carrying custom GPU flavor names from an older
-release must rename those flavors when enabling this topology contract.
+The topology name is fixed because the controller owns this object and Kueue
+makes `ResourceFlavor.spec.topologyName` immutable. The new default GPU flavor
+identity avoids mutating flavors created by older releases. Operators carrying
+custom GPU flavor names from an older release must rename those flavors when
+enabling this topology contract.
 
 ```yaml
 kubeadm:
   nodeLabels:
     net.unbounded-cloud.io/site: research-flex
-    net.unbounded-cloud.io/infiniband: "true"
+    net.unbounded-cloud.io/network-domain: research-fabric-a
 ```
 
 ```yaml
@@ -227,7 +225,7 @@ baselineQueue:
 
 Canonical classes cover the supported A10, A100, H100, H200, GB200, and GB300
 memory variants. Placement and interconnect requirements remain separate
-(`independent`, `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`).
+(`unconstrained`, `same-host`, `same-network-domain`, or `same-site`).
 
 Default queue values:
 

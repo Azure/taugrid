@@ -220,7 +220,7 @@ func TestSelectedProfileRejectsAuthoritativeConflicts(t *testing.T) {
 	}{
 		{"queue", func(o *unresolvedRunOptions) { o.queue = "other" }, "policy.queue"},
 		{"mode", func(o *unresolvedRunOptions) { o.mode = "elastic" }, "policy.mode"},
-		{"placement", func(o *unresolvedRunOptions) { o.topology = profile.PlacementIndependent }, "policy.topology"},
+		{"placement", func(o *unresolvedRunOptions) { o.topology = profile.PlacementUnconstrained }, "policy.topology"},
 		{"workers", func(o *unresolvedRunOptions) { o.workers, o.workersExplicit = 4, true }, "compute.workers"},
 		{"gpus", func(o *unresolvedRunOptions) { o.gpusPerWorker, o.gpusPerWorkerExplicit = 1, true }, "compute.gpus_per_worker"},
 		{"priority", func(o *unresolvedRunOptions) { o.podPriorityClass = "other" }, "policy.pod_priority_class"},
@@ -690,9 +690,9 @@ func testRunResolvedProfile(
 	gpus, workers int32,
 	generation int64,
 ) profile.ResolvedWorkloadProfile {
-	placement := profile.PlacementIndependent
+	placement := profile.PlacementUnconstrained
 	if workers > 1 {
-		placement = profile.PlacementMultiNodeNCCL
+		placement = profile.PlacementSameNetworkDomain
 	}
 	return profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{

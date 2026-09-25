@@ -13,7 +13,7 @@ spec:
       gpusPerWorker: 0
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: kind-cpu
       executionTarget: singleCluster
       priorities:
@@ -29,7 +29,7 @@ spec:
       gpusPerWorker: 0
       workerCount: 2
       mode: fixed
-      placement: multi-node-nccl
+      placement: same-network-domain
       defaultLocalQueue: kind-cpu
       executionTarget: singleCluster
       priorities:

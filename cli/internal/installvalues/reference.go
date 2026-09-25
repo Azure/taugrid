@@ -31,7 +31,6 @@ var catalog = []struct {
 	{"baselineQueue.namespaceSelector", fieldInfo{"object", "{matchExpressions: [{key: " + workloadmeta.LabelWorkspace + ", operator: Exists}]}", "Which namespaces receive the LocalQueue"}},
 	{"baselineQueue.topology.enabled", fieldInfo{"bool", "true", "Reference the controller-owned Topology from GPU flavors"}},
 	{"baselineQueue.topology.name", fieldInfo{"string", "taugrid-gpu-topology", "Controller-owned Topology object name"}},
-	{"baselineQueue.topology.requiredLevel", fieldInfo{"string", "tau.azure.com/network-domain", "Required topology level for connected multi-node workloads"}},
 	{"baselineQueue.flavor.name", fieldInfo{"string", "taugrid-default-cpu", "CPU/memory ResourceFlavor name"}},
 	{"baselineQueue.flavor.nodeLabels", fieldInfo{"map", "{kubernetes.io/os: linux}", "CPU/memory flavor node selector labels"}},
 	{"baselineQueue.flavor.tolerations", fieldInfo{"list", "[]", "CPU/memory flavor tolerations; keep GPU taint tolerations out of this flavor"}},

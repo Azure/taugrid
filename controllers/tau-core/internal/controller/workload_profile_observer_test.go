@@ -806,7 +806,7 @@ func testWorkloadProfile(name string, namespaces []string) profile.WorkloadProfi
 		GPUsPerWorker:     1,
 		WorkerCount:       1,
 		Mode:              profile.ModeFixed,
-		Placement:         profile.PlacementIndependent,
+		Placement:         profile.PlacementUnconstrained,
 		DefaultLocalQueue: name,
 		Priorities: profile.ProfilePriorities{
 			WorkloadPriorityClassName: name + "-priority",
