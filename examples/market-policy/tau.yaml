@@ -45,5 +45,7 @@ metrics:
 policy:
   workspace: default
   gpu_class: h200-141gb
+  # Use same-accelerator-domain for multi-host NVL72/GB200/GB300 workloads
+  # only when the provider publishes a shared accelerator-domain identity.
   topology: same-host
   disable_default_priorities: true

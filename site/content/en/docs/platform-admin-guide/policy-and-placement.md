@@ -72,9 +72,17 @@ matching solely on that label: `ndm-a100-v4`, `nd-h200-v5`, and
 values.
 
 Placement stays in `policy.topology`: `unconstrained`, `same-host`,
-`same-network-domain`, or `same-site`. GPU class values encode hardware
-only; NVLink, InfiniBand, NCCL, and same-host placement are expressed
-separately through `policy.topology`.
+`same-accelerator-domain`, `same-network-domain`, or `same-site`. GPU class
+values encode hardware only; NVLink, InfiniBand, NCCL, and same-host placement
+are expressed separately through `policy.topology`.
+
+`same-accelerator-domain` requires one `tau.azure.com/accelerator-domain`
+subtree. TauGrid assigns deterministic singleton domains unless the provider
+publishes an authoritative `net.unbounded-cloud.io/accelerator-domain` value,
+so matching GPU models alone never imply that Nodes share an NVL72 island.
+Provider-declared domains may span hosts. The placement does not add
+anti-affinity or guarantee distinct hosts, and insufficient capacity remains
+pending rather than falling back to a network domain or site.
 
 `same-network-domain` requires one shared fabric but does not require one worker
 per host. Full-node GPU requests naturally separate workers when a Node cannot
@@ -87,6 +95,59 @@ multi-host workload remains pending when no one domain has sufficient eligible
 capacity, while workers that all fit on one Node may still run in that Node's
 singleton domain. TauGrid never falls back automatically to `same-site` or
 `unconstrained`.
+
+### Upgrade the three-level topology
+
+The accelerator-domain release extends the controller-owned
+`taugrid-gpu-topology` from three levels to four. Kueue treats
+`Topology.spec.levels` as immutable, so an existing object cannot be patched in
+place. During this drift, TauGrid continues reconciling Node labels but reports
+`QueuesReady=False` with reason `ImmutableTopologyDrift`; admission must remain
+drained until the object is recreated.
+
+Use a maintenance window for every ClusterQueue whose GPU ResourceFlavors
+reference `taugrid-gpu-topology`:
+
+1. Stop submissions, set each affected ClusterQueue to `HoldAndDrain`, cancel
+   pending workload owners, and wait until no Workloads are reserving or
+   admitted.
+
+   ```bash
+   CLUSTER_QUEUE=jobqueue # replace with each affected ClusterQueue
+   kubectl patch clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" \
+     --type=merge -p '{"spec":{"stopPolicy":"HoldAndDrain"}}'
+   kubectl get workloads.kueue.x-k8s.io -A
+   ```
+2. Confirm the affected flavors before deletion:
+
+   ```bash
+   kubectl get resourceflavors.kueue.x-k8s.io \
+     -o jsonpath='{range .items[?(@.spec.topologyName=="taugrid-gpu-topology")]}{.metadata.name}{"\n"}{end}'
+   ```
+
+3. Delete only the Tau-owned immutable Topology:
+
+   ```bash
+   kubectl delete topologies.kueue.x-k8s.io taugrid-gpu-topology
+   ```
+
+   The Tau controller recreates the same object name with
+   `site -> network-domain -> accelerator-domain -> hostname`, so existing
+   ResourceFlavor references remain valid. Do not delete or rename custom
+   ResourceFlavors unless their own immutable fields also need migration.
+4. Wait for the TauCluster `QueuesReady=True` condition and verify the four
+   levels before restoring admission:
+
+   ```bash
+   kubectl get topologies.kueue.x-k8s.io taugrid-gpu-topology \
+     -o jsonpath='{range .spec.levels[*]}{.nodeLabel}{"\n"}{end}'
+   kubectl patch clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" \
+     --type=merge -p '{"spec":{"stopPolicy":"None"}}'
+   ```
+
+If deletion is rejected because workloads are still using the topology, keep
+the queue drained and finish removing those workload owners; do not force
+finalizers or resume admission against the old hierarchy.
 
 The legacy inputs `a100-nvlink-80gb`, `h100-standalone-95gb`, and
 `h200-nvlink-141gb` are accepted for one compatibility window, normalized
@@ -170,9 +231,10 @@ single-flavor installs by draining admission and splitting the flavor:
    admission taints. Create separate GPU ResourceFlavors with exact
    `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, and `topologyName`.
    Workloads explicitly select `unconstrained`, `same-host`,
-   `same-network-domain`, or `same-site`; ResourceFlavors do not impose one
-   locality policy on every workload. CPU-only jobs remain admissible through
-   the non-TAS CPU flavor and cannot consume GPU quota.
+   `same-accelerator-domain`, `same-network-domain`, or `same-site`;
+   ResourceFlavors do not impose one locality policy on every workload.
+   CPU-only jobs remain admissible through the non-TAS CPU flavor and cannot
+   consume GPU quota.
 3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
    Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor
    CPU, memory, and GPU quota. Kueue then assigns one node flavor across every

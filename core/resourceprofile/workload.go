@@ -22,10 +22,11 @@ const (
 	ModeFixed   = "fixed"
 	ModeElastic = "elastic"
 
-	PlacementUnconstrained     = "unconstrained"
-	PlacementSameHost          = "same-host"
-	PlacementSameNetworkDomain = "same-network-domain"
-	PlacementSameSite          = "same-site"
+	PlacementUnconstrained         = "unconstrained"
+	PlacementSameHost              = "same-host"
+	PlacementSameAcceleratorDomain = "same-accelerator-domain"
+	PlacementSameNetworkDomain     = "same-network-domain"
+	PlacementSameSite              = "same-site"
 
 	ExecutionTargetSingleCluster ExecutionTarget = "singleCluster"
 	ExecutionTargetMultiKueue    ExecutionTarget = "multiKueue"
@@ -59,7 +60,7 @@ type WorkloadProfile struct {
 	WorkerCount int32 `json:"workerCount" yaml:"workerCount"`
 	// +kubebuilder:validation:Enum=fixed;elastic
 	Mode string `json:"mode" yaml:"mode"`
-	// +kubebuilder:validation:Enum=unconstrained;same-host;same-network-domain;same-site
+	// +kubebuilder:validation:Enum=unconstrained;same-host;same-accelerator-domain;same-network-domain;same-site
 	Placement string `json:"placement" yaml:"placement"`
 	// +kubebuilder:validation:MinLength=1
 	DefaultLocalQueue string `json:"defaultLocalQueue" yaml:"defaultLocalQueue"`
@@ -211,12 +212,13 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 		return fmt.Errorf("mode must be %q or %q, got %q", ModeFixed, ModeElastic, p.Mode)
 	}
 	switch p.Placement {
-	case PlacementUnconstrained, PlacementSameHost, PlacementSameNetworkDomain, PlacementSameSite:
+	case PlacementUnconstrained, PlacementSameHost, PlacementSameAcceleratorDomain, PlacementSameNetworkDomain, PlacementSameSite:
 	default:
 		return fmt.Errorf(
-			"placement must be %q, %q, %q, or %q, got %q",
+			"placement must be %q, %q, %q, %q, or %q, got %q",
 			PlacementUnconstrained,
 			PlacementSameHost,
+			PlacementSameAcceleratorDomain,
 			PlacementSameNetworkDomain,
 			PlacementSameSite,
 			p.Placement,

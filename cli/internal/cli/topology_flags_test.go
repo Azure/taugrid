@@ -121,6 +121,7 @@ func TestValidateRenderedQueueAcceptsExplicitTopologyOnTASOnlyFlavor(t *testing.
 	}{
 		{name: "unconstrained", annotation: "kueue.x-k8s.io/podset-unconstrained-topology", value: "true"},
 		{name: "same-host", annotation: "kueue.x-k8s.io/podset-required-topology", value: "kubernetes.io/hostname"},
+		{name: "same-accelerator-domain", annotation: "kueue.x-k8s.io/podset-required-topology", value: "tau.azure.com/accelerator-domain"},
 		{name: "same-network-domain", annotation: "kueue.x-k8s.io/podset-required-topology", value: "tau.azure.com/network-domain"},
 		{name: "same-site", annotation: "kueue.x-k8s.io/podset-required-topology", value: "tau.azure.com/site"},
 	} {
@@ -538,6 +539,23 @@ func TestTopologyFlagsWarnsAboutSameNetworkDomainLimits(t *testing.T) {
 		!strings.Contains(warnings[0], "does not by itself require InfiniBand or distinct hosts") ||
 		!strings.Contains(warnings[0], "singleton domains") ||
 		!strings.Contains(warnings[0], "may remain pending") {
+		t.Fatalf("warnings=%#v", warnings)
+	}
+}
+
+func TestTopologyFlagsWarnsAboutSameAcceleratorDomainLimits(t *testing.T) {
+	flags := topologyFlags{topology: "same-accelerator-domain"}
+	var opts jobrender.Options
+
+	warnings, err := flags.applyWithChanged(&opts, func(string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 ||
+		!strings.Contains(warnings[0], "provider-declared accelerator island") ||
+		!strings.Contains(warnings[0], "does not guarantee distinct hosts") ||
+		!strings.Contains(warnings[0], "singleton domains") ||
+		!strings.Contains(warnings[0], "remains pending") {
 		t.Fatalf("warnings=%#v", warnings)
 	}
 }

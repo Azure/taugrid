@@ -59,14 +59,15 @@ A portable Kueue queue bootstrapped on first install. These quotas bound concurr
 | `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resources covered by the node-resource group |
 | `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu-topology` | GPU flavors and per-flavor quotas |
 
-CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all of its requested resources. `taugrid-default-cpu` has zero GPU quota, while the generic `taugrid-default-gpu-topology` has CPU/memory plus GPU quota and supports `gpu_class: any` on a fresh install. When hardware is known, replace the GPU flavor list with class-specific flavors and label matching nodes with the canonical A10, A100, H100, H200, GB200, or GB300 class from `policy.gpu_class`. Only GPU flavors carry `topologyName`; each workload's `policy.topology` selects `unconstrained`, `same-host`, `same-network-domain`, or `same-site`. Raw Kubernetes manifests remain expert-controlled. The CPU/memory flavor remains non-TAS. For upgrades with saved legacy values, remove GPU resources from `baselineQueue.resources` and move all GPU class/series labels and GPU-node tolerations out of `baselineQueue.flavor` before adding their replacements under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's `nodeTaints`. TauGrid fails template rendering if the old mixed values would duplicate GPU coverage or constrain CPU-only admission. Replace the generic GPU flavor with class-specific flavors rather than keeping both: exact class quota must not fall back to an unlabeled ResourceFlavor.
+CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all of its requested resources. `taugrid-default-cpu` has zero GPU quota, while the generic `taugrid-default-gpu-topology` has CPU/memory plus GPU quota and supports `gpu_class: any` on a fresh install. When hardware is known, replace the GPU flavor list with class-specific flavors and label matching nodes with the canonical A10, A100, H100, H200, GB200, or GB300 class from `policy.gpu_class`. Only GPU flavors carry `topologyName`; each workload's `policy.topology` selects `unconstrained`, `same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`. Raw Kubernetes manifests remain expert-controlled. The CPU/memory flavor remains non-TAS. For upgrades with saved legacy values, remove GPU resources from `baselineQueue.resources` and move all GPU class/series labels and GPU-node tolerations out of `baselineQueue.flavor` before adding their replacements under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's `nodeTaints`. TauGrid fails template rendering if the old mixed values would duplicate GPU coverage or constrain CPU-only admission. Replace the generic GPU flavor with class-specific flavors rather than keeping both: exact class quota must not fall back to an unlabeled ResourceFlavor.
 
 `tau-core-controller` assigns every Node a conservative topology identity and
 reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
-`tau.azure.com/network-domain` → `kubernetes.io/hostname`. Nodes without
-authoritative shared-site or fabric metadata receive deterministic singleton
-site/domain labels. `tau.azure.com/region` remains normalized metadata but is
-not a Kueue topology level.
+`tau.azure.com/network-domain` → `tau.azure.com/accelerator-domain` →
+`kubernetes.io/hostname`. Nodes without authoritative shared-site, fabric, or
+accelerator-island metadata receive deterministic singleton labels.
+`tau.azure.com/region` remains normalized metadata but is not a Kueue topology
+level.
 
 The controller recognizes Azure from `aks.azure.com/cloud=azure`, the Azure
 provider ID, or managed AKS labels, and derives region from
@@ -81,14 +82,25 @@ Their provisioning template must stamp
 `net.unbounded-cloud.io/site=<globally-unique-site>`. Nodes share the top-level
 Flex site. Nodes may additionally stamp
 `net.unbounded-cloud.io/network-domain=<provider-authoritative-fabric-id>` to
-share a fabric; without it, each Node receives a singleton non-IB domain. Zone
-is omitted because it is not consistently available across providers.
+share a fabric. NVL72/GB200/GB300 nodes may stamp
+`net.unbounded-cloud.io/accelerator-domain=<provider-authoritative-island-id>`
+to share an accelerator island. Without those inputs, each Node receives
+singleton domains; TauGrid never infers accelerator sharing from GPU model or
+SKU alone. Zone is omitted because it is not consistently available across
+providers.
 
 The topology name is fixed because the controller owns this object and Kueue
 makes `ResourceFlavor.spec.topologyName` immutable. The new default GPU flavor
 identity avoids mutating flavors created by older releases. Operators carrying
 custom GPU flavor names from an older release must rename those flavors when
 enabling this topology contract.
+
+Upgrading an existing three-level `taugrid-gpu-topology` requires a drained
+delete/recreate because Kueue also makes `Topology.spec.levels` immutable. The
+controller continues adding the new Node labels while reporting
+`ImmutableTopologyDrift`; follow the maintenance procedure in
+[Policy and placement](../platform-admin-guide/policy-and-placement/#upgrade-the-three-level-topology)
+before restoring ClusterQueue admission.
 
 ```yaml
 kubeadm:

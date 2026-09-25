@@ -133,7 +133,7 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		report.TopologyName = target.TopologyName
 		if target.GPUCount > 0 && !target.TopologyRequest {
 			return report, fmt.Errorf(
-				"GPU workload profile uses topology %q, but rendered pods do not declare policy.topology; choose unconstrained, same-host, same-network-domain, or same-site",
+				"GPU workload profile uses topology %q, but rendered pods do not declare policy.topology; choose unconstrained, same-host, same-accelerator-domain, same-network-domain, or same-site",
 				target.TopologyName)
 		}
 	}
@@ -637,7 +637,7 @@ func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.C
 	}
 	sort.Strings(names)
 	return fmt.Errorf(
-		"GPU request has no policy.topology, but compatible ResourceFlavors in ClusterQueue %q use TopologyAwareScheduling (%s); choose unconstrained, same-host, same-network-domain, or same-site",
+		"GPU request has no policy.topology, but compatible ResourceFlavors in ClusterQueue %q use TopologyAwareScheduling (%s); choose unconstrained, same-host, same-accelerator-domain, same-network-domain, or same-site",
 		target.ClusterQueue, strings.Join(names, ", "))
 }
 
@@ -744,7 +744,7 @@ func validateResourceFlavorTopologyIntent(rf kueueapi.ResourceFlavor, target val
 		return nil
 	}
 	return fmt.Errorf(
-		"GPU request has no policy.topology, but ResourceFlavor %q in ClusterQueue %q uses TopologyAwareScheduling; choose unconstrained, same-host, same-network-domain, or same-site",
+		"GPU request has no policy.topology, but ResourceFlavor %q in ClusterQueue %q uses TopologyAwareScheduling; choose unconstrained, same-host, same-accelerator-domain, same-network-domain, or same-site",
 		rf.Metadata.Name, target.ClusterQueue)
 }
 

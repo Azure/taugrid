@@ -124,6 +124,19 @@ func TestBuild_SameNetworkDomainPlacement(t *testing.T) {
 	}
 }
 
+func TestBuild_SameAcceleratorDomainPlacement(t *testing.T) {
+	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
+		QueueName: SharedGPUQueueName,
+		Placement: profile.PlacementSameAcceleratorDomain,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plan.Annotations[RequiredTopologyAnnotation]; got != acceleratorDomainTopology {
+		t.Fatalf("required topology annotation=%q, want %q", got, acceleratorDomainTopology)
+	}
+}
+
 func TestBuild_SameSitePlacement(t *testing.T) {
 	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
 		QueueName: SharedGPUQueueName,
@@ -260,7 +273,7 @@ func TestBuild_DeniesH200OutsideLargeMemory(t *testing.T) {
 }
 
 func TestBuild_H100ClassDoesNotConstrainPlacement(t *testing.T) {
-	for _, placement := range []string{"same-host", "same-network-domain"} {
+	for _, placement := range []string{"same-host", "same-accelerator-domain", "same-network-domain"} {
 		t.Run(placement, func(t *testing.T) {
 			if _, err := Build(topologyProfile(), Options{
 				Team:      "research",
