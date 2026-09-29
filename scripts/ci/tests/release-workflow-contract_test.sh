@@ -48,5 +48,9 @@ fi
 if grep -Fq 'allow_main_release_notes' "${WORKFLOW}"; then
   fail "published legacy releases must not retain a recovery path"
 fi
+grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" "${WORKFLOW}" ||
+  fail "release notes must include GitHub-generated change and contributor attribution"
+grep -Fq "cat \"\$RUNNER_TEMP/generated-release-notes.md\"" "${WORKFLOW}" ||
+  fail "generated change and contributor notes must be appended to curated notes"
 
 echo "Release workflow contract tests passed"

@@ -20,7 +20,8 @@ The workflow:
 
 1. Requires a manual dispatch from the existing annotated tag ref.
 2. Verifies the annotated tag and reviewed `main` commit.
-3. Requires checked-in release notes.
+3. Requires checked-in curated release notes and appends GitHub-generated
+   change attribution, new-contributor recognition, and a full changelog link.
 4. Runs Go and Python release gates.
 5. Compares two independent binary builds.
 6. Builds the Python SDK wheel twice and requires byte-for-byte identical
