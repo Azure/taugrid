@@ -5,8 +5,8 @@ package nodeutil
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -27,7 +27,6 @@ func (f *fakeQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row, er
 }
 
 func TestBoardAggregatesJoinedRows(t *testing.T) {
-	// CPU rates are now reduced from per-core samples in Go rather than KQL.
 	var rows []kustoquery.Row
 	for _, node := range []struct {
 		instance string
@@ -39,16 +38,13 @@ func TestBoardAggregatesJoinedRows(t *testing.T) {
 		{"node-0", 64, 10.5, 200, 50},
 		{"node-1", 16, 52.5, 100, 90},
 	} {
-		for cpu := 0; cpu < node.cores; cpu++ {
-			rows = append(rows, kustoquery.Row{
-				"Cluster": "cluster-a", "instance": node.instance, "kind": "cpu",
-				"cpu": fmt.Sprint(cpu), "sampleCount": 2.0,
-				"samples": []any{
-					map[string]any{"timestamp": "2026-09-01T00:00:00Z", "value": 0.0},
-					map[string]any{"timestamp": "2026-09-01T00:01:00Z", "value": node.idle},
-				},
-			})
-		}
+		rows = append(rows, kustoquery.Row{
+			"Cluster": "cluster-a", "instance": node.instance, "kind": "cpu",
+			"cpuCores": float64(node.cores), "cpuUtilPct": 100 * (1 - node.idle/60),
+			"samples": float64(node.cores * 2), "observedCores": float64(node.cores),
+			"usableCores": float64(node.cores), "observedSeconds": 60.0, "counterResets": 0.0,
+			"firstSampleAt": "2026-09-01T00:00:00Z", "lastSampleAt": "2026-09-01T00:01:00Z",
+		})
 		rows = append(rows,
 			kustoquery.Row{"Cluster": "cluster-a", "instance": node.instance, "kind": "memory_total", "memoryValue": node.total, "memoryTimestamp": "2026-09-01T00:01:00Z"},
 			kustoquery.Row{"Cluster": "cluster-a", "instance": node.instance, "kind": "memory_available", "memoryValue": node.avail, "memoryTimestamp": "2026-09-01T00:01:00Z"},
@@ -124,6 +120,8 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		"Cluster == @'prod-eastus'",
 		"Host == @'node-7'",
 		"instance = Host",
+		"cpuUtilPct = avgif(utilization",
+		"counterResets = sum(counterResets)",
 	} {
 		if !strings.Contains(kql, want) {
 			t.Fatalf("KQL missing %q:\n%s", want, kql)
@@ -131,12 +129,51 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 	}
 }
 
+func TestKQLPushdownShrinksCPUIntermediatePayload(t *testing.T) {
+	const nodes, cores, samples = 8, 64, 60
+	legacy := make([]map[string]any, 0, nodes*cores)
+	reduced := make([]map[string]any, 0, nodes)
+	for node := range nodes {
+		for core := range cores {
+			points := make([]map[string]any, 0, samples)
+			for sample := range samples {
+				points = append(points, map[string]any{
+					"timestamp": "2026-09-01T00:00:00Z",
+					"value":     float64(sample),
+				})
+			}
+			legacy = append(legacy, map[string]any{
+				"Cluster": "cluster-a", "instance": node, "cpu": core,
+				"samples": points, "sampleCount": samples,
+			})
+		}
+		reduced = append(reduced, map[string]any{
+			"Cluster": "cluster-a", "instance": node, "cpuCores": cores,
+			"cpuUtilPct": 42.0, "samples": cores * samples, "observedCores": cores,
+			"usableCores": cores, "observedSeconds": 900.0, "counterResets": 0,
+		})
+	}
+	legacyJSON, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reducedJSON, err := json.Marshal(reduced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reducedJSON)*100 >= len(legacyJSON) {
+		t.Fatalf("KQL pushdown payload = %d bytes, legacy = %d; want >99%% reduction", len(reducedJSON), len(legacyJSON))
+	}
+	t.Logf("CPU intermediate payload: %d -> %d bytes (%.2f%% reduction)",
+		len(legacyJSON), len(reducedJSON), 100*(1-float64(len(reducedJSON))/float64(len(legacyJSON))))
+}
+
 func TestBuildKQLNoFilters(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
 	_, _ = Board(context.Background(), q, Options{})
 	kql := q.lastKQL
 	// With no filters, no Cluster/Host equality clauses appear.
-	if strings.Contains(kql, "Cluster ==") || strings.Contains(kql, "Host ==") {
+	if strings.Contains(kql, "| where Cluster ==") || strings.Contains(kql, "| where Host ==") {
 		t.Fatalf("unfiltered KQL should have no equality filters:\n%s", kql)
 	}
 }

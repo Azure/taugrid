@@ -31,7 +31,6 @@ package nodeutil
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -45,10 +44,9 @@ import (
 // memory sample, matching the cluster board's ago(15m).
 const DefaultWindow = 15 * time.Minute
 
-// Bound transferred CPU data even for a caller-supplied long window. Overflow
-// fails the board explicitly; an incomplete series must never look like a rate.
+// Bound scanned CPU data even for a caller-supplied long window. Overflow fails
+// the board explicitly; an incomplete series must never look like a rate.
 const maxCPUSamples = 250000
-const maxSamplesPerCore = 4096
 
 // Options controls the board query. Window defaults to DefaultWindow; the
 // optional Cluster/Instance filters are interpolated as safe KQL string
@@ -116,9 +114,10 @@ func queryWindow(opts Options) time.Duration {
 	return time.Duration(max(int64(window/time.Second), 1)) * time.Second
 }
 
-// buildKQL keeps CPU samples paired with their timestamps. make_list order is
-// deliberately not assumed; sampleCount detects truncation at Kusto's list cap.
-// Unioning latest memory readings retains nodes with no CPU observations.
+// buildKQL reduces CPU counters in ADX instead of transferring every timestamp
+// and value to the portal. Duplicate timestamps are collapsed exactly as the Go
+// reducer did: identical values count once and conflicts invalidate that point.
+// Reset and invalid intervals are excluded before per-core rates are averaged.
 func buildKQL(opts Options) string {
 	seconds := int64(queryWindow(opts) / time.Second)
 
@@ -137,11 +136,31 @@ func buildKQL(opts Options) string {
 	b.WriteString("let cpuSamples = NodeCpuSecondsTotal\n")
 	fmt.Fprintf(&b, "  | where Timestamp > ago(%ds) and Timestamp <= now() and tostring(Labels.mode) == 'idle'\n", seconds)
 	b.WriteString(scope.String())
-	b.WriteString("  | extend cpu = tostring(Labels.cpu);\n")
+	b.WriteString("  | project Cluster, Host, cpu = tostring(Labels.cpu), Timestamp, value = todouble(Value);\n")
 	b.WriteString("let cpuSampleCount = toscalar(cpuSamples | count);\n")
-	fmt.Fprintf(&b, "let cpu = cpuSamples | where cpuSampleCount <= %d\n", maxCPUSamples)
-	fmt.Fprintf(&b, "  | summarize samples = make_list(bag_pack('timestamp', Timestamp, 'value', todouble(Value)), %d), sampleCount = count() by Cluster, Host, cpu\n", maxSamplesPerCore)
-	b.WriteString("  | project Cluster, instance = Host, ['kind'] = 'cpu', cpu, samples, sampleCount;\n")
+	fmt.Fprintf(&b, "let cpuPoints = cpuSamples | where cpuSampleCount <= %d\n", maxCPUSamples)
+	b.WriteString("  | summarize minValue = min(value), maxValue = max(value) by Cluster, Host, cpu, Timestamp\n")
+	b.WriteString("  | extend valid = isnotnull(minValue) and minValue == maxValue and minValue >= 0.0\n")
+	b.WriteString("  | order by Cluster asc, Host asc, cpu asc, Timestamp asc\n")
+	b.WriteString("  | serialize\n")
+	b.WriteString("  | extend sameCore = Cluster == prev(Cluster) and Host == prev(Host) and cpu == prev(cpu),\n")
+	b.WriteString("      previousTimestamp = prev(Timestamp), previousValue = prev(minValue), previousValid = prev(valid)\n")
+	b.WriteString("  | extend seconds = datetime_diff('millisecond', Timestamp, previousTimestamp) / 1000.0,\n")
+	b.WriteString("      delta = minValue - previousValue\n")
+	b.WriteString("  | extend usable = sameCore and valid and previousValid and seconds > 0.0 and delta >= 0.0 and delta <= seconds,\n")
+	b.WriteString("      reset = sameCore and valid and previousValid and delta < 0.0;\n")
+	b.WriteString("let cpuCores = cpuPoints\n")
+	b.WriteString("  | summarize samples = countif(valid), observedSeconds = sumif(seconds, usable), idleSeconds = sumif(delta, usable),\n")
+	b.WriteString("      counterResets = countif(reset), firstSampleAt = minif(Timestamp, valid), lastSampleAt = maxif(Timestamp, valid)\n")
+	b.WriteString("      by Cluster, Host, cpu\n")
+	b.WriteString("  | extend utilization = iff(observedSeconds > 0.0, 100.0 * (1.0 - idleSeconds / observedSeconds), real(null));\n")
+	b.WriteString("let cpu = cpuCores\n")
+	b.WriteString("  | summarize cpuCores = count(), samples = sum(samples), observedCores = count(),\n")
+	b.WriteString("      usableCores = countif(observedSeconds > 0.0), observedSeconds = avg(observedSeconds),\n")
+	b.WriteString("      counterResets = sum(counterResets), firstSampleAt = min(firstSampleAt), lastSampleAt = max(lastSampleAt),\n")
+	b.WriteString("      cpuUtilPct = avgif(utilization, observedSeconds > 0.0) by Cluster, Host\n")
+	b.WriteString("  | project Cluster, instance = Host, ['kind'] = 'cpu', cpuCores, cpuUtilPct, samples,\n")
+	b.WriteString("      observedCores, usableCores, observedSeconds, counterResets, firstSampleAt, lastSampleAt;\n")
 	b.WriteString("let memTotal = NodeMemoryMemTotalBytes\n")
 	fmt.Fprintf(&b, "  | where Timestamp > ago(%ds) and Timestamp <= now()\n", seconds)
 	b.WriteString(scope.String())
@@ -162,8 +181,7 @@ func aggregate(rows []kustoquery.Row, opts Options) (Snapshot, error) {
 	snap := Snapshot{Window: window.String(), QueriedAt: time.Now().UTC(), Availability: "empty", Nodes: make([]Node, 0)}
 	type identity struct{ cluster, instance string }
 	type nodeSamples struct {
-		node    Node
-		utilSum float64
+		node Node
 	}
 	nodes := map[identity]*nodeSamples{}
 	for _, row := range rows {
@@ -182,24 +200,43 @@ func aggregate(rows []kustoquery.Row, opts Options) (Snapshot, error) {
 		n := &entry.node
 		switch row.Str("kind") {
 		case "cpu":
-			if row.Str("cpu") == "" {
-				return Snapshot{}, fmt.Errorf("node CPU row has no core identity")
-			}
-			samples, err := decodeSamples(row)
+			cpuCores, err := rowNumber(row, "cpuCores")
 			if err != nil {
-				return Snapshot{}, fmt.Errorf("decode node CPU samples: %w", err)
+				return Snapshot{}, err
 			}
-			rate, coverage := cpuRate(samples)
-			n.CPUCores++
-			n.CPUCoverage.ObservedCores++
-			n.CPUCoverage.Samples += coverage.Samples
-			n.CPUCoverage.CounterResets += coverage.CounterResets
-			n.CPUCoverage.ObservedSeconds += coverage.ObservedSeconds
-			n.CPUCoverage.FirstSampleAt = earliest(n.CPUCoverage.FirstSampleAt, coverage.FirstSampleAt)
-			n.CPUCoverage.LastSampleAt = latest(n.CPUCoverage.LastSampleAt, coverage.LastSampleAt)
-			if rate != nil {
-				n.CPUCoverage.UsableCores++
-				entry.utilSum += *rate
+			samples, err := rowInt(row, "samples")
+			if err != nil {
+				return Snapshot{}, err
+			}
+			observedCores, err := rowInt(row, "observedCores")
+			if err != nil {
+				return Snapshot{}, err
+			}
+			usableCores, err := rowInt(row, "usableCores")
+			if err != nil {
+				return Snapshot{}, err
+			}
+			observedSeconds, err := rowNumber(row, "observedSeconds")
+			if err != nil {
+				return Snapshot{}, err
+			}
+			counterResets, err := rowInt(row, "counterResets")
+			if err != nil {
+				return Snapshot{}, err
+			}
+			n.CPUCores = cpuCores
+			n.CPUCoverage = CPUCoverage{
+				Samples:           samples,
+				ObservedCores:     observedCores,
+				UsableCores:       usableCores,
+				ObservedSeconds:   observedSeconds,
+				CounterResets:     counterResets,
+				FirstSampleAt:     optionalTime(row.Str("firstSampleAt")),
+				LastSampleAt:      optionalTime(row.Str("lastSampleAt")),
+				WindowCoveragePct: 0,
+			}
+			if util, ok := row.Num("cpuUtilPct"); ok && finite(util) && util >= 0 && util <= 100 {
+				n.CPUUtilPct = &util
 			}
 		case "memory_total", "memory_available":
 			value, valid := row.Num("memoryValue")
@@ -218,12 +255,7 @@ func aggregate(rows []kustoquery.Row, opts Options) (Snapshot, error) {
 	}
 	for _, entry := range nodes {
 		n := entry.node
-		if n.CPUCoverage.UsableCores > 0 {
-			util := entry.utilSum / float64(n.CPUCoverage.UsableCores)
-			n.CPUUtilPct = &util
-		}
 		if n.CPUCoverage.ObservedCores > 0 {
-			n.CPUCoverage.ObservedSeconds /= float64(n.CPUCoverage.ObservedCores)
 			n.CPUCoverage.WindowCoveragePct = min(100, n.CPUCoverage.ObservedSeconds/window.Seconds()*100)
 		}
 		if n.MemTotalBytes != nil && n.MemAvailBytes != nil && *n.MemTotalBytes > 0 && *n.MemAvailBytes <= *n.MemTotalBytes {
@@ -252,98 +284,30 @@ func aggregate(rows []kustoquery.Row, opts Options) (Snapshot, error) {
 	return snap, nil
 }
 
-type counterSample struct {
-	Timestamp time.Time `json:"timestamp"`
-	Value     *float64  `json:"value"`
-}
-
-func decodeSamples(row kustoquery.Row) ([]counterSample, error) {
-	var raw []byte
-	if text, ok := row["samples"].(string); ok {
-		raw = []byte(text)
-	} else {
-		var err error
-		raw, err = json.Marshal(row["samples"])
-		if err != nil {
-			return nil, err
-		}
-	}
-	var samples []counterSample
-	if err := json.Unmarshal(raw, &samples); err != nil {
-		return nil, err
-	}
-	count, ok := row.Num("sampleCount")
-	if !ok || count != float64(len(samples)) {
-		return nil, fmt.Errorf("CPU sample list is missing or truncated; retry with a shorter window")
-	}
-	return samples, nil
-}
-
 func finite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
-// cpuRate excludes resets because their occurrence time is unknown. Identical
-// duplicate samples are collapsed; conflicting duplicates invalidate that
-// timestamp. Rates are duration-weighted within a core, never between cores.
-func cpuRate(samples []counterSample) (*float64, CPUCoverage) {
-	sort.Slice(samples, func(i, j int) bool { return samples[i].Timestamp.Before(samples[j].Timestamp) })
-	unique := make([]counterSample, 0, len(samples))
-	for _, sample := range samples {
-		if len(unique) > 0 && sample.Timestamp.Equal(unique[len(unique)-1].Timestamp) {
-			previous := &unique[len(unique)-1]
-			if previous.Value == nil || sample.Value == nil || *previous.Value != *sample.Value {
-				previous.Value = nil
-			}
-			continue
-		}
-		unique = append(unique, sample)
+func rowNumber(row kustoquery.Row, name string) (float64, error) {
+	value, ok := row.Num(name)
+	if !ok || !finite(value) || value < 0 {
+		return 0, fmt.Errorf("node CPU row has invalid %s", name)
 	}
-	coverage := CPUCoverage{}
-	idle := 0.0
-	for i, sample := range unique {
-		if sample.Timestamp.IsZero() || sample.Value == nil || !finite(*sample.Value) || *sample.Value < 0 {
-			continue
-		}
-		coverage.Samples++
-		coverage.FirstSampleAt = earliest(coverage.FirstSampleAt, &sample.Timestamp)
-		coverage.LastSampleAt = latest(coverage.LastSampleAt, &sample.Timestamp)
-		if i == 0 {
-			continue
-		}
-		previous := unique[i-1]
-		if previous.Timestamp.IsZero() || previous.Value == nil || !finite(*previous.Value) || *previous.Value < 0 {
-			continue
-		}
-		delta := *sample.Value - *previous.Value
-		seconds := sample.Timestamp.Sub(previous.Timestamp).Seconds()
-		if delta < 0 {
-			coverage.CounterResets++
-			continue
-		}
-		if seconds <= 0 || delta > seconds {
-			continue
-		}
-		idle += delta
-		coverage.ObservedSeconds += seconds
-	}
-	if coverage.ObservedSeconds == 0 {
-		return nil, coverage
-	}
-	util := 100 * (1 - idle/coverage.ObservedSeconds)
-	return &util, coverage
+	return value, nil
 }
 
-func earliest(a, b *time.Time) *time.Time {
-	if a == nil || (b != nil && b.Before(*a)) {
-		return b
+func rowInt(row kustoquery.Row, name string) (int, error) {
+	value, err := rowNumber(row, name)
+	if err != nil || value != math.Trunc(value) {
+		return 0, fmt.Errorf("node CPU row has invalid %s", name)
 	}
-	return a
+	return int(value), nil
 }
 
-func latest(a, b *time.Time) *time.Time {
-	if a == nil || (b != nil && b.After(*a)) {
-		return b
+func optionalTime(value string) *time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil
 	}
-	return a
+	return &parsed
 }

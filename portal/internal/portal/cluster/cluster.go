@@ -135,6 +135,7 @@ func buildKQL(opts Options) string {
 	if opts.Model != "" {
 		fmt.Fprintf(&b, "| where modelName == %s\n", kustoquery.QuoteString(opts.Model))
 	}
+	b.WriteString("| project Timestamp, Cluster, instance, gpu, metric, Value, namespace, pod, modelName\n")
 	b.WriteString(");\n")
 	b.WriteString("let latest_attribution = samples\n")
 	b.WriteString("| summarize arg_max(Timestamp, namespace, pod, modelName) by Cluster, instance, gpu\n")

@@ -145,6 +145,7 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		"namespace == @'team-alpha'",
 		"instance == @'node-7'",
 		"modelName == @'H100'",
+		"project Timestamp, Cluster, instance, gpu, metric, Value, namespace, pod, modelName",
 		"let latest_attribution = samples",
 		"arg_max(Timestamp, Value) by Cluster, instance, gpu, metric",
 		"arg_max(Timestamp, namespace, pod, modelName) by Cluster, instance, gpu",
