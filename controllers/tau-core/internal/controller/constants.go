@@ -15,6 +15,18 @@ const (
 	labelPSAAudit               = "pod-security.kubernetes.io/audit"
 	labelPSAWarn                = "pod-security.kubernetes.io/warn"
 	labelAzureWIUse             = "azure.workload.identity/use"
+	labelFlexSite               = "net.unbounded-cloud.io/site"
+	labelFlexNetworkDomain      = "net.unbounded-cloud.io/network-domain"
+	labelRegion                 = "topology.kubernetes.io/region"
+	labelHostname               = "kubernetes.io/hostname"
+	labelAKSCloud               = "aks.azure.com/cloud"
+	labelAKSRegion              = "aks.azure.com/region"
+	labelAKSAgentPool           = "kubernetes.azure.com/agentpool"
+	labelAzureManaged           = "kubernetes.azure.com/managed"
+	labelAzureManagedCluster    = "kubernetes.azure.com/managed-cluster"
+	labelStretchManaged         = "aks.azure.com/stretch-managed"
+
+	tauGPUNodeTopologyName = "taugrid-gpu-topology"
 
 	annotationApproved        = labelkeys.AnnotationApproved
 	annotationRejected        = labelkeys.AnnotationRejected

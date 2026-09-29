@@ -1323,8 +1323,8 @@ runtime:
 		t.Fatalf("rendered RayJob worker groups=%d want 1", len(rayJob.Spec.RayClusterSpec.WorkerGroupSpecs))
 	}
 	workerAnnotations := rayJob.Spec.RayClusterSpec.WorkerGroupSpecs[0].Template.Metadata.Annotations
-	if got := workerAnnotations["kueue.x-k8s.io/podset-unconstrained-topology"]; got != "true" {
-		t.Errorf("worker unconstrained TAS annotation=%q want true; annotations=%v", got, workerAnnotations)
+	if got := workerAnnotations["kueue.x-k8s.io/podset-required-topology"]; got != "tau.azure.com/network-domain" {
+		t.Errorf("worker required TAS annotation=%q want tau.azure.com/network-domain; annotations=%v", got, workerAnnotations)
 	}
 	if value, ok := workerAnnotations["kueue.x-k8s.io/podset-preferred-topology"]; ok {
 		t.Errorf("worker requests undeclared preferred topology %q", value)

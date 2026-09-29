@@ -97,14 +97,14 @@ for isolation, tenant authorization, and rollback.
 |---|---|---|
 | Kueue | `components.kueue.enabled` | Job scheduling, admission, quota |
 | KubeRay Operator | `components.kuberayOperator.enabled` | RayCluster/RayJob/RayService lifecycle |
-| tau-core-controller | `components.tauCoreController.enabled` | TauWorkspace reconciliation, Node topology labels |
+| tau-core-controller | `components.tauCoreController.enabled` | TauWorkspace reconciliation, Azure GPU topology labels, and the TauGrid Kueue Topology |
 | taugrid-core | `components.taugridCore.enabled` | Default Portal plus opt-in Stellar, lifecycle recorder, and image prewarm services |
 | gpu-monitoring | follows `components.tauCoreController.enabled` | GPU/IB/NVMe node health checks, DCGM, Node conditions |
 
 All components are enabled by default. Disable any with
 `--set components.<key>.enabled=false`.
 
-GPU monitoring is deliberately not an independent toggle: a cluster running a
+GPU monitoring is deliberately not an unconstrained toggle: a cluster running a
 Tau control plane always gets GPU node health signal, so a fleet cannot end up
 scheduling GPU work it cannot observe. Disabling the controller disables it too.
 To decouple them, set `components.gpuMonitoring.enabled` explicitly — that key
@@ -140,33 +140,79 @@ should replace this with deliberate capacity policy.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, ResourceFlavors, and Topology |
+| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, and ResourceFlavors |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (must be a valid DNS label) |
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
-| `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
-| `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Topology level Tau copies from managed GPU ResourceFlavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
+| `baselineQueue.topology.enabled` | bool | `true` | Reference the controller-owned Topology from GPU flavors |
+| `baselineQueue.topology.name` | string | `taugrid-gpu-topology` | Controller-owned Topology object name |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
 | `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resource names covered by the node-resource group |
-| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu` | GPU ResourceFlavors and per-flavor quotas |
+| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu-topology` | GPU ResourceFlavors and per-flavor quotas |
 
 CPU, memory, and GPU are in one Kueue ResourceGroup because they are all tied to
 the selected node pool. The CPU flavor `taugrid-default-cpu` has no GPU selector,
 no GPU taint toleration, and zero GPU quota. Each GPU flavor receives the same
 CPU/memory quota plus its declared GPU quota, so a GPU pod set receives one
 flavor across all requested resources. The fresh-install GPU flavor
-`taugrid-default-gpu` is unlabeled and supports `gpu_class: any` only. Once
+`taugrid-default-gpu-topology` is unlabeled and supports `gpu_class: any` only. Once
 hardware is known, replace the entire GPU flavor list with class-labeled
 flavors; do not retain the generic GPU flavor alongside them.
 
-When topology is enabled, only GPU flavors carry `topologyName` and the
-`kueue.x-k8s.io/podset-required-topology` resource-metadata annotation. Connected
-Tau submission copies that requirement to generated GPU pod templates when the
-workload has no explicit placement request. Explicit placement remains
-authoritative, and raw Kubernetes manifests are never rewritten. The CPU/memory
-flavor remains non-TAS so CPU-only workloads can be admitted.
+When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
+workload explicitly selects `unconstrained`, `same-host`,
+`same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability
+but never choose workload locality. Raw Kubernetes manifests remain
+expert-controlled. The CPU/memory flavor remains non-TAS so CPU-only workloads
+can be admitted.
+
+The controller assigns every Node a conservative topology identity and
+reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
+`tau.azure.com/network-domain` → `kubernetes.io/hostname`. Nodes without
+authoritative shared-site or fabric metadata receive deterministic singleton
+site/domain labels, so they remain topology-complete without being treated as
+connected. `tau.azure.com/region` is normalized metadata rather than a Kueue
+topology level.
+
+Selecting `same-network-domain` does not independently require
+`tau.azure.com/infiniband=true` or one worker per host. Nodes without
+authoritative shared-fabric metadata have singleton domains. Multi-host work
+therefore remains pending when no domain has enough eligible capacity, while
+workers that fit on one Node may still run there. Tau warns about this contract
+and does not fall back to `same-site` or `unconstrained`.
+
+Azure is recognized from `aks.azure.com/cloud=azure`, the Azure provider ID, or
+managed AKS labels. Region comes from `topology.kubernetes.io/region` or
+`aks.azure.com/region`. Managed Azure Nodes share a regional site. Only Azure
+ND-series Nodes with an authoritative agent-pool label share a derived network
+domain, scoped by region, agent pool, and VM size. Other capacity uses singleton
+non-IB domains.
+
+Externally joined Azure Flex nodes are detected from
+`kubernetes.azure.com/managed=false` or `aks.azure.com/stretch-managed=true`.
+Their provisioning template must stamp
+`net.unbounded-cloud.io/site=<globally-unique-site>`. Nodes in one Flex site
+share the top-level site label. Nodes may additionally stamp
+`net.unbounded-cloud.io/network-domain=<provider-authoritative-fabric-id>` to
+share a fabric; nodes without it receive singleton non-IB domains within the
+site. Flex supports these declarations through its existing
+`kubeadm.nodeLabels` map, so no region or provider list is duplicated in
+TauCluster configuration. Zone is omitted because it is not consistently
+available across providers.
+
+The topology name is fixed because the controller owns this object and Kueue
+makes `ResourceFlavor.spec.topologyName` immutable. The new default GPU flavor
+identity avoids mutating flavors created by older releases. Operators carrying
+custom GPU flavor names from an older release must rename those flavors when
+enabling this topology contract.
+
+```yaml
+kubeadm:
+  nodeLabels:
+    net.unbounded-cloud.io/site: research-flex
+    net.unbounded-cloud.io/network-domain: research-fabric-a
+```
 
 ```yaml
 baselineQueue:
@@ -186,7 +232,7 @@ baselineQueue:
 
 Canonical classes cover the supported A10, A100, H100, H200, GB200, and GB300
 memory variants. Placement and interconnect requirements remain separate
-(`independent`, `single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`).
+(`unconstrained`, `same-host`, `same-network-domain`, or `same-site`).
 
 Default queue values:
 
@@ -199,7 +245,7 @@ resources:
 gpu:
   coveredResources: [nvidia.com/gpu]
   flavors:
-    - name: taugrid-default-gpu
+    - name: taugrid-default-gpu-topology
       nodeLabels: {kubernetes.io/os: linux}
       nodeTaints: [{key: sku, value: gpu, effect: NoSchedule}]
       tolerations: []

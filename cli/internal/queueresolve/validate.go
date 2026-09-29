@@ -42,14 +42,13 @@ type ValidationOptions struct {
 
 // ValidationReport is the read-only queue topology observed from the cluster.
 type ValidationReport struct {
-	Namespace        string   `json:"namespace"`
-	QueueName        string   `json:"queueName,omitempty"`
-	ClusterQueue     string   `json:"clusterQueue,omitempty"`
-	ResourceFlavor   string   `json:"resourceFlavor,omitempty"`
-	TopologyName     string   `json:"topologyName,omitempty"`
-	RequiredTopology string   `json:"requiredTopology,omitempty"`
-	GPUMax           int64    `json:"gpuMax,omitempty"`
-	Warnings         []string `json:"warnings,omitempty"`
+	Namespace      string   `json:"namespace"`
+	QueueName      string   `json:"queueName,omitempty"`
+	ClusterQueue   string   `json:"clusterQueue,omitempty"`
+	ResourceFlavor string   `json:"resourceFlavor,omitempty"`
+	TopologyName   string   `json:"topologyName,omitempty"`
+	GPUMax         int64    `json:"gpuMax,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 type validationTarget struct {
@@ -120,7 +119,7 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 
 	policyTopologyContract := target.CatalogTopologyContract
 	if policyTopologyContract {
-		capabilityFlavor, compatibleFlavors, err := findCatalogTopologyFlavor(ctx, r, cq, target)
+		capabilityFlavor, _, err := findCatalogTopologyFlavor(ctx, r, cq, target)
 		if err != nil {
 			return report, err
 		}
@@ -133,30 +132,17 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		report.ResourceFlavor = capabilityFlavor
 		report.TopologyName = target.TopologyName
 		if target.GPUCount > 0 && !target.TopologyRequest {
-			required, missingMetadata, err := consistentRequiredTopology(compatibleFlavors, target.ClusterQueue)
-			if err != nil {
-				return report, err
-			}
-			if len(missingMetadata) > 0 {
-				return report, fmt.Errorf(
-					"compatible ResourceFlavors for topology %q in ClusterQueue %q are missing managed resource metadata annotation %s (%s); ask the platform owner to set the required Topology level (for example kubernetes.io/hostname)",
-					target.TopologyName, target.ClusterQueue, topology.RequiredTopologyAnnotation, strings.Join(missingMetadata, ", "))
-			}
-			report.RequiredTopology = required
-			target.TopologyRequest = true
+			return report, fmt.Errorf(
+				"GPU workload profile uses topology %q, but rendered pods do not declare policy.topology; choose unconstrained, same-host, same-network-domain, or same-site",
+				target.TopologyName)
 		}
 	}
 	if !policyTopologyContract &&
 		target.ResourceFlavor == "" &&
 		target.GPUCount > 0 &&
 		target.GPUResourceName != "" {
-		required, err := validateQueueTopologyIntent(ctx, r, cq, target)
-		if err != nil {
+		if err := validateQueueTopologyIntent(ctx, r, cq, target); err != nil {
 			return report, err
-		}
-		if required != "" {
-			report.RequiredTopology = required
-			target.TopologyRequest = true
 		}
 		allowedFlavors, err := gpuClassAllowedFlavors(
 			ctx, r, cq, target.GPUClass, target.GPUResourceName, target.NodeSelector, target.PodTolerations, target.TopologyRequest)
@@ -189,12 +175,8 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 			if err := validateResourceFlavor(rf, target); err != nil {
 				return report, err
 			}
-			required, err := validateResourceFlavorTopologyIntent(rf, target)
-			if err != nil {
+			if err := validateResourceFlavorTopologyIntent(rf, target); err != nil {
 				return report, err
-			}
-			if required != "" {
-				report.RequiredTopology = required
 			}
 			report.TopologyName = strings.TrimSpace(rf.Spec.TopologyName)
 		}
@@ -436,13 +418,12 @@ type AutoSelectOptions struct {
 }
 
 type QueueCandidate struct {
-	QueueName        string
-	ClusterQueue     string
-	ResourceFlavor   string
-	RequiredTopology string
-	GPUMax           int64
-	Score            int
-	Reason           string
+	QueueName      string
+	ClusterQueue   string
+	ResourceFlavor string
+	GPUMax         int64
+	Score          int
+	Reason         string
 }
 
 func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (QueueCandidate, []QueueCandidate, error) {
@@ -468,9 +449,8 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 			continue
 		}
 		topologyRequest := opts.TopologyRequest
-		requiredTopology := ""
 		if !topologyRequest {
-			requiredTopology, err = validateQueueTopologyIntent(ctx, r, cq, validationTarget{
+			err = validateQueueTopologyIntent(ctx, r, cq, validationTarget{
 				ClusterQueue:    cqName,
 				GPUClass:        gpuClass,
 				NodeSelector:    opts.NodeSelector,
@@ -486,7 +466,6 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 				})
 				continue
 			}
-			topologyRequest = requiredTopology != ""
 		}
 		allowedFlavors, err := gpuClassAllowedFlavors(
 			ctx, r, cq, gpuClass, opts.GPUResourceName, opts.NodeSelector, opts.PodTolerations, topologyRequest)
@@ -515,7 +494,6 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 			candidates = append(candidates, c)
 			continue
 		}
-		c.RequiredTopology = requiredTopology
 		c.Score = 100
 		c.Reason = "fits requested GPU count"
 		candidates = append(candidates, c)
@@ -614,17 +592,17 @@ func validateResourceFlavor(rf kueueapi.ResourceFlavor, target validationTarget)
 	return nil
 }
 
-func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) (string, error) {
+func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) error {
 	if target.GPUCount <= 0 ||
 		target.GPUResourceName == "" ||
 		target.TopologyRequest ||
 		target.ResourceFlavor != "" {
-		return "", nil
+		return nil
 	}
 
 	flavors := compatibleGPUFlavorNames(cq, target)
 	if len(flavors) == 0 {
-		return "", nil
+		return nil
 	}
 	var tasOnly []kueueapi.ResourceFlavor
 	var unreadable []string
@@ -641,48 +619,26 @@ func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.C
 			continue
 		}
 		if strings.TrimSpace(rf.Spec.TopologyName) == "" {
-			return "", nil
+			return nil
 		}
 		tasOnly = append(tasOnly, rf)
 	}
 	if len(unreadable) > 0 {
-		return "", fmt.Errorf(
+		return fmt.Errorf(
 			"cannot determine whether GPU request without policy.topology is compatible with ClusterQueue %q because ResourceFlavor capabilities could not be read: %s; grant read access to ResourceFlavors or ask the platform owner to inspect the queue",
 			target.ClusterQueue, strings.Join(unreadable, ", "))
 	}
-	requiredTopology, missingMetadata, err := consistentRequiredTopology(tasOnly, target.ClusterQueue)
-	if err != nil {
-		return "", err
-	}
-	if len(missingMetadata) > 0 {
-		return "", fmt.Errorf(
-			"GPU request has no policy.topology, and compatible ResourceFlavors in ClusterQueue %q support only TopologyAwareScheduling but are missing managed resource metadata annotation %s (%s); ask the platform owner to set the required Topology level (for example kubernetes.io/hostname)",
-			target.ClusterQueue, topology.RequiredTopologyAnnotation, strings.Join(missingMetadata, ", "))
-	}
 	if len(tasOnly) == 0 {
-		return "", nil
+		return nil
 	}
-	return requiredTopology, nil
-}
-
-func consistentRequiredTopology(flavors []kueueapi.ResourceFlavor, clusterQueue string) (string, []string, error) {
-	requiredTopology := ""
-	var missingMetadata []string
-	for _, rf := range flavors {
-		required := strings.TrimSpace(rf.Metadata.Annotations[topology.RequiredTopologyAnnotation])
-		if required == "" {
-			missingMetadata = append(missingMetadata, rf.Metadata.Name)
-			continue
-		}
-		if requiredTopology != "" && requiredTopology != required {
-			return "", nil, fmt.Errorf(
-				"compatible ResourceFlavors in ClusterQueue %q require conflicting %s values (%q and %q); ask the platform owner to split the queue or make its managed flavor metadata consistent",
-				clusterQueue, topology.RequiredTopologyAnnotation, requiredTopology, required)
-		}
-		requiredTopology = required
+	names := make([]string, 0, len(tasOnly))
+	for _, rf := range tasOnly {
+		names = append(names, rf.Metadata.Name)
 	}
-	sort.Strings(missingMetadata)
-	return requiredTopology, missingMetadata, nil
+	sort.Strings(names)
+	return fmt.Errorf(
+		"GPU request has no policy.topology, but compatible ResourceFlavors in ClusterQueue %q use TopologyAwareScheduling (%s); choose unconstrained, same-host, same-network-domain, or same-site",
+		target.ClusterQueue, strings.Join(names, ", "))
 }
 
 func compatibleGPUFlavorNames(cq kueueapi.ClusterQueue, target validationTarget) []string {
@@ -771,37 +727,25 @@ func podToleratesTaint(tolerations []kueueapi.Toleration, taint kueueapi.Taint) 
 	return false
 }
 
-func validateResourceFlavorTopologyIntent(rf kueueapi.ResourceFlavor, target validationTarget) (string, error) {
+func validateResourceFlavorTopologyIntent(rf kueueapi.ResourceFlavor, target validationTarget) error {
 	if target.GPUCount <= 0 || target.GPUResourceName == "" {
-		return "", nil
+		return nil
 	}
 	hasTopology := strings.TrimSpace(rf.Spec.TopologyName) != ""
 	if target.TopologyRequest {
 		if hasTopology {
-			return "", nil
+			return nil
 		}
-		return "", fmt.Errorf(
+		return fmt.Errorf(
 			"GPU request sets policy.topology, but ResourceFlavor %q in ClusterQueue %q does not support TopologyAwareScheduling; choose a topology-capable queue or ask the platform owner to set spec.topologyName",
 			rf.Metadata.Name, target.ClusterQueue)
 	}
 	if !hasTopology {
-		return "", nil
+		return nil
 	}
-	required, err := requiredTopologyForFlavor(rf, target.ClusterQueue)
-	if err != nil {
-		return "", err
-	}
-	return required, nil
-}
-
-func requiredTopologyForFlavor(rf kueueapi.ResourceFlavor, clusterQueue string) (string, error) {
-	required := strings.TrimSpace(rf.Metadata.Annotations[topology.RequiredTopologyAnnotation])
-	if required != "" {
-		return required, nil
-	}
-	return "", fmt.Errorf(
-		"ResourceFlavor %q in ClusterQueue %q supports only TopologyAwareScheduling but is missing managed resource metadata annotation %s; ask the platform owner to set that annotation to the required Topology level (for example kubernetes.io/hostname), or set policy.topology explicitly",
-		rf.Metadata.Name, clusterQueue, topology.RequiredTopologyAnnotation)
+	return fmt.Errorf(
+		"GPU request has no policy.topology, but ResourceFlavor %q in ClusterQueue %q uses TopologyAwareScheduling; choose unconstrained, same-host, same-network-domain, or same-site",
+		rf.Metadata.Name, target.ClusterQueue)
 }
 
 func missingLocalQueueError(target validationTarget, detail string) error {

@@ -492,7 +492,7 @@ func TestValidateWorkloadProfileTopologyUsesResolvedClusterQueueGPUContracts(t *
 				GPUsPerWorker:     1,
 				WorkerCount:       1,
 				Mode:              profile.ModeFixed,
-				Placement:         profile.PlacementIndependent,
+				Placement:         profile.PlacementUnconstrained,
 				DefaultLocalQueue: "jobqueue",
 				ExecutionTarget:   profile.ExecutionTargetSingleCluster,
 				Priorities: profile.ProfilePriorities{

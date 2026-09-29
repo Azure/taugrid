@@ -22,9 +22,10 @@ const (
 	ModeFixed   = "fixed"
 	ModeElastic = "elastic"
 
-	PlacementIndependent      = "independent"
-	PlacementSingleNodeNVLink = "single-node-nvlink"
-	PlacementMultiNodeNCCL    = "multi-node-nccl"
+	PlacementUnconstrained     = "unconstrained"
+	PlacementSameHost          = "same-host"
+	PlacementSameNetworkDomain = "same-network-domain"
+	PlacementSameSite          = "same-site"
 
 	ExecutionTargetSingleCluster ExecutionTarget = "singleCluster"
 	ExecutionTargetMultiKueue    ExecutionTarget = "multiKueue"
@@ -47,7 +48,6 @@ type ExecutionTarget string
 
 // WorkloadProfile is stable workload intent. It deliberately excludes observed
 // capacity, quota, flavor selectors, and topology selectors.
-// +kubebuilder:validation:XValidation:rule="self.workerCount == 1 || self.placement == 'multi-node-nccl'",message="workerCount greater than one requires placement=multi-node-nccl"
 type WorkloadProfile struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
 	Name          string               `json:"name" yaml:"name"`
@@ -59,7 +59,7 @@ type WorkloadProfile struct {
 	WorkerCount int32 `json:"workerCount" yaml:"workerCount"`
 	// +kubebuilder:validation:Enum=fixed;elastic
 	Mode string `json:"mode" yaml:"mode"`
-	// +kubebuilder:validation:Enum=independent;single-node-nvlink;multi-node-nccl
+	// +kubebuilder:validation:Enum=unconstrained;same-host;same-network-domain;same-site
 	Placement string `json:"placement" yaml:"placement"`
 	// +kubebuilder:validation:MinLength=1
 	DefaultLocalQueue string `json:"defaultLocalQueue" yaml:"defaultLocalQueue"`
@@ -211,12 +211,16 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 		return fmt.Errorf("mode must be %q or %q, got %q", ModeFixed, ModeElastic, p.Mode)
 	}
 	switch p.Placement {
-	case PlacementIndependent, PlacementSingleNodeNVLink, PlacementMultiNodeNCCL:
+	case PlacementUnconstrained, PlacementSameHost, PlacementSameNetworkDomain, PlacementSameSite:
 	default:
-		return fmt.Errorf("placement must be %q, %q, or %q, got %q", PlacementIndependent, PlacementSingleNodeNVLink, PlacementMultiNodeNCCL, p.Placement)
-	}
-	if p.WorkerCount > 1 && p.Placement != PlacementMultiNodeNCCL {
-		return fmt.Errorf("workerCount > 1 (got %d) requires placement=%s", p.WorkerCount, PlacementMultiNodeNCCL)
+		return fmt.Errorf(
+			"placement must be %q, %q, %q, or %q, got %q",
+			PlacementUnconstrained,
+			PlacementSameHost,
+			PlacementSameNetworkDomain,
+			PlacementSameSite,
+			p.Placement,
+		)
 	}
 	if err := validateDNSName("defaultLocalQueue", p.DefaultLocalQueue); err != nil {
 		return err

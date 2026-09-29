@@ -25,7 +25,7 @@ func TestNormalizeAndValidateWorkloadProfile(t *testing.T) {
 		GPUsPerWorker:     1,
 		WorkerCount:       1,
 		Mode:              " FIXED ",
-		Placement:         " SINGLE_NODE_NVLINK ",
+		Placement:         " SAME_HOST ",
 		DefaultLocalQueue: " JobQueue ",
 		Priorities: ProfilePriorities{
 			WorkloadPriorityClassName: " Tau_Default ",
@@ -44,7 +44,7 @@ func TestNormalizeAndValidateWorkloadProfile(t *testing.T) {
 	if strings.Join(got.Applicability.Namespaces, ",") != "team-a" {
 		t.Fatalf("namespaces = %#v, want one normalized value", got.Applicability.Namespaces)
 	}
-	if got.Mode != ModeFixed || got.Placement != PlacementSingleNodeNVLink || got.DefaultLocalQueue != "jobqueue" {
+	if got.Mode != ModeFixed || got.Placement != PlacementSameHost || got.DefaultLocalQueue != "jobqueue" {
 		t.Fatalf("normalized routing = %#v", got)
 	}
 	if got.ExecutionTarget != ExecutionTargetSingleCluster {
@@ -64,7 +64,6 @@ func TestValidateWorkloadProfileCrossFields(t *testing.T) {
 		{"unknown mode", func(p *WorkloadProfile) { p.Mode = "spot" }, "mode"},
 		{"unknown placement", func(p *WorkloadProfile) { p.Placement = "same-rack" }, "placement"},
 		{"unknown execution target", func(p *WorkloadProfile) { p.ExecutionTarget = "multiCluster" }, "executionTarget"},
-		{"multi-worker placement", func(p *WorkloadProfile) { p.WorkerCount = 2 }, "multi-node-nccl"},
 		{"duplicate applicability", func(p *WorkloadProfile) { p.Applicability.Teams = []string{"research", "research"} }, "duplicate"},
 		{"missing priority", func(p *WorkloadProfile) { p.Priorities.PodPriorityClassName = "" }, "required unless"},
 		{"disabled with priority", func(p *WorkloadProfile) { p.Priorities.DisableDefaultPriorities = true }, "cannot be combined"},
@@ -210,7 +209,7 @@ func TestResolvedWorkloadProfileRenderProfile(t *testing.T) {
 		t.Fatalf("RenderProfile() error = %v", err)
 	}
 	if render.Name != resolved.Name || render.Queue != "jobqueue" || render.Topology.Mode != ModeFixed ||
-		render.Topology.Placement != PlacementIndependent || render.Resources.GPU.Count != 1 ||
+		render.Topology.Placement != PlacementUnconstrained || render.Resources.GPU.Count != 1 ||
 		render.ExecutionTarget != ExecutionTargetSingleCluster {
 		t.Fatalf("render profile = %#v", render)
 	}
@@ -236,7 +235,7 @@ func testWorkloadProfile() WorkloadProfile {
 		GPUsPerWorker:     1,
 		WorkerCount:       1,
 		Mode:              ModeFixed,
-		Placement:         PlacementIndependent,
+		Placement:         PlacementUnconstrained,
 		DefaultLocalQueue: "jobqueue",
 		ExecutionTarget:   ExecutionTargetSingleCluster,
 		Priorities: ProfilePriorities{

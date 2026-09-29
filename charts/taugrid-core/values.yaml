@@ -24,9 +24,8 @@ logging:
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class
 # to a canonical policy.gpu_class value, and matching GPU nodes must carry the
 # same label. ResourceFlavor metadata.name is platform-owned and is never parsed
-# as the researcher gpu_class API. TAS-only flavors must declare both
-# topologyName and requiredTopology; Tau copies the latter to generated GPU pod
-# templates as kueue.x-k8s.io/podset-required-topology.
+# as the researcher gpu_class API. TAS-capable flavors declare topologyName;
+# each workload's policy.topology selects its own required topology level.
 resourceFlavors:
   enabled: false
   items: []

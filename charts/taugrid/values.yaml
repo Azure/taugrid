@@ -40,10 +40,8 @@ baselineQueue:
         operator: Exists
   topology:
     enabled: true
-    name: default-node-topology
-    # Tau copies this ResourceFlavor-owned requirement onto generated GPU pod
-    # templates after queue resolution.
-    requiredLevel: kubernetes.io/hostname
+    # Owned and reconciled by tau-core-controller.
+    name: taugrid-gpu-topology
   flavor:
     # New identity avoids mutating the topologyName of the chart 0.2.0
     # taugrid-default ResourceFlavor, which Kueue treats as immutable.
@@ -72,7 +70,9 @@ baselineQueue:
     # class-specific flavors or specific-class work could consume generic quota.
     # When topology is enabled, a selected GPU flavor is the sole TAS flavor.
     flavors:
-      - name: taugrid-default-gpu
+      # New identity avoids mutating the immutable topologyName on GPU flavors
+      # created by releases before tau-core-controller owned the Topology.
+      - name: taugrid-default-gpu-topology
         nodeLabels:
           kubernetes.io/os: linux
         nodeTaints:
@@ -174,7 +174,6 @@ tau-core-controller:
     # reconciles gpu-class and gpu-series labels from instance-type. Append
     # cluster-specific hardware without replacing that catalog.
     extraNodeLabelRules: []
-
 # Portal is part of the default operator experience. The remaining first-party
 # services stay opt-in and all enabled services use release-versioned MCR tags.
 taugrid-core:

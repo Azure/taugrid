@@ -1,6 +1,6 @@
 apiVersion: tau.azure.com/v1alpha1
 kind: TauWorkloadProfileSnapshot
-profileSetHash: ee32774f1376b6b8bf80703973d71f08f71e04511da40dd69852f9dfdd4d3cc9
+profileSetHash: d1a798fc6c0b43dc8cd3092cf1ce9cb4e8e2376cf0fc299d3b279346baf31908
 profiles:
 - applicability:
     lanes:
@@ -28,7 +28,7 @@ profiles:
     namespace: taugrid-default
   mode: fixed
   name: h100-nvl-8node
-  placement: multi-node-nccl
+  placement: same-network-domain
   podPriorityClasses:
   - tau-default
   priorities:

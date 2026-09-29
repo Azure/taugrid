@@ -144,7 +144,7 @@ tauCluster:
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -159,7 +159,7 @@ tauCluster:
       gpusPerWorker: 2
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -174,7 +174,7 @@ tauCluster:
       gpusPerWorker: 4
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -189,7 +189,7 @@ tauCluster:
       gpusPerWorker: 8
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -204,7 +204,7 @@ tauCluster:
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -219,7 +219,7 @@ tauCluster:
       gpusPerWorker: 1
       workerCount: 1
       mode: elastic
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -234,7 +234,7 @@ tauCluster:
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -249,7 +249,7 @@ tauCluster:
       gpusPerWorker: 2
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -264,7 +264,7 @@ tauCluster:
       gpusPerWorker: 4
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -279,7 +279,7 @@ tauCluster:
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -294,7 +294,7 @@ tauCluster:
       gpusPerWorker: 1
       workerCount: 1
       mode: elastic
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -309,7 +309,7 @@ tauCluster:
       gpusPerWorker: 2
       workerCount: 1
       mode: fixed
-      placement: single-node-nvlink
+      placement: same-host
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -324,7 +324,7 @@ tauCluster:
       gpusPerWorker: 4
       workerCount: 1
       mode: fixed
-      placement: single-node-nvlink
+      placement: same-host
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -339,7 +339,7 @@ tauCluster:
       gpusPerWorker: 8
       workerCount: 1
       mode: fixed
-      placement: single-node-nvlink
+      placement: same-host
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:
@@ -354,7 +354,7 @@ tauCluster:
       gpusPerWorker: 8
       workerCount: 2
       mode: fixed
-      placement: multi-node-nccl
+      placement: same-network-domain
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:

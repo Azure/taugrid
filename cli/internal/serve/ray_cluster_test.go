@@ -20,7 +20,7 @@ func distributedRayProfile() profile.Profile {
 	p := makeServeProfile()
 	p.ExecutionTarget = profile.ExecutionTargetSingleCluster
 	p.Topology.Mode = profile.ModeFixed
-	p.Topology.Placement = profile.PlacementMultiNodeNCCL
+	p.Topology.Placement = profile.PlacementSameNetworkDomain
 	p.Topology.PodPriorityClassName = "serve-priority"
 	p.Topology.WorkloadPriorityClassName = "serve-priority"
 	return p
@@ -99,7 +99,7 @@ func TestRenderDistributedRayService(t *testing.T) {
 		t.Fatal("Ray logical GPU count must match the device-plugin request")
 	}
 	annotations := getPath(t, group, "template", "metadata", "annotations").(map[string]any)
-	if annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" {
+	if annotations["kueue.x-k8s.io/podset-required-topology"] != "tau.azure.com/network-domain" {
 		t.Fatalf("worker topology contract missing: %#v", annotations)
 	}
 	spread := getPath(t, workerPod, "affinity", "podAntiAffinity",
@@ -140,7 +140,7 @@ func TestRenderDistributedRayService(t *testing.T) {
 	app := application["applications"].([]any)[0].(map[string]any)
 	if app["import_path"] != "model_app:app" ||
 		app["deployments"].([]any)[0].(map[string]any)["num_replicas"] != 1 {
-		t.Fatalf("expected one model replica, not eight independent copies: %#v", app)
+		t.Fatalf("expected one model replica, not eight unconstrained copies: %#v", app)
 	}
 	if p.Resources.Requests["nvidia.com/gpu"] != nil {
 		t.Fatal("rendering mutated the caller's profile resource map")
@@ -198,7 +198,7 @@ func TestDistributedRayRejectsIncompatibleInputs(t *testing.T) {
 	}{
 		{"no GPU", func(p *profile.Profile, _ *Options) { p.Resources.GPU.Count = 0 }, "at least one GPU"},
 		{"elastic", func(p *profile.Profile, _ *Options) { p.Topology.Mode = profile.ModeElastic }, "fixed"},
-		{"placement", func(p *profile.Profile, _ *Options) { p.Topology.Placement = profile.PlacementIndependent }, "multi-node-nccl"},
+		{"placement", func(p *profile.Profile, _ *Options) { p.Topology.Placement = profile.PlacementUnconstrained }, "same-network-domain"},
 		{"remote", func(p *profile.Profile, _ *Options) { p.ExecutionTarget = profile.ExecutionTargetMultiKueue }, "singleCluster"},
 		{"raw launcher", func(_ *profile.Profile, o *Options) { o.Args = []string{"--use-ray"} }, "legacy --args"},
 		{"bad shm", func(_ *profile.Profile, o *Options) { o.ShmSize = "0" }, "--shm-size"},

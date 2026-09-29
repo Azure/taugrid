@@ -22,6 +22,8 @@ const (
 	preferredTopologyAnnotation = "kueue.x-k8s.io/podset-preferred-topology"
 	unconstrainedTopologyAnnot  = "kueue.x-k8s.io/podset-unconstrained-topology"
 	hostnameTopology            = "kubernetes.io/hostname"
+	networkDomainTopology       = "tau.azure.com/network-domain"
+	siteTopology                = "tau.azure.com/site"
 	defaultElasticPodPriority   = "taugrid-default"
 	DefaultElasticWorkloadPrio  = "taugrid-default"
 	DefaultTrainPodPriority     = "taugrid-default"
@@ -213,9 +215,6 @@ type Options struct {
 	// PriorityTier is a user-facing shorthand for Tau-managed priority classes.
 	// Supported values are "default" and "priority".
 	PriorityTier string
-	// RequiredTopology is a platform-owned ResourceFlavor requirement copied to
-	// generated GPU pod templates after live queue resolution.
-	RequiredTopology string
 	// DisableKueueTopologyAnnotations keeps Tau's topology labels/explainability
 	// while omitting Kueue TAS podset annotations. Use this when the selected
 	// ResourceFlavor does not define spec.topologyName; Kueue rejects podset
@@ -288,33 +287,14 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	}
 
 	if !spec.disableKueueTopology {
-		if spec.requiredTopology != "" {
-			plan.Annotations[requiredTopologyAnnotation] = spec.requiredTopology
-		}
 		switch spec.placement {
-		case "single-node-nvlink":
-			if spec.requiredTopology != "" && spec.requiredTopology != hostnameTopology {
-				return Plan{}, fmt.Errorf(
-					"profile %q topology: ResourceFlavor requires %s=%q, but placement=single-node-nvlink requires %q",
-					p.Name, requiredTopologyAnnotation, spec.requiredTopology, hostnameTopology)
-			}
+		case profile.PlacementSameHost:
 			plan.Annotations[requiredTopologyAnnotation] = hostnameTopology
-		case "multi-node-nccl":
-			if spec.requiredTopology != "" {
-				return Plan{}, fmt.Errorf(
-					"profile %q topology: ResourceFlavor requires %s=%q, which conflicts with placement=multi-node-nccl",
-					p.Name, requiredTopologyAnnotation, spec.requiredTopology)
-			}
-			// Multi-node gangs must span hosts. The managed worker Topologies
-			// expose hostname only, so an explicit hostname preference would
-			// first try to co-locate the gang and broader levels are invalid.
-			plan.Annotations[unconstrainedTopologyAnnot] = "true"
-		case "independent", "elastic-workers":
-			if spec.requiredTopology != "" {
-				return Plan{}, fmt.Errorf(
-					"profile %q topology: ResourceFlavor requires %s=%q, which conflicts with placement=%s",
-					p.Name, requiredTopologyAnnotation, spec.requiredTopology, spec.placement)
-			}
+		case profile.PlacementSameNetworkDomain:
+			plan.Annotations[requiredTopologyAnnotation] = networkDomainTopology
+		case profile.PlacementSameSite:
+			plan.Annotations[requiredTopologyAnnotation] = siteTopology
+		case profile.PlacementUnconstrained:
 			plan.Annotations[unconstrainedTopologyAnnot] = "true"
 		}
 	}
@@ -334,7 +314,6 @@ type contract struct {
 	podPriorityClassName      string
 	workloadPriorityClassName string
 	priorityTier              string
-	requiredTopology          string
 	disableKueueTopology      bool
 	disableDefaultPriorities  bool
 }
@@ -383,9 +362,6 @@ func (c *contract) apply(o Options) {
 		c.priorityTier = o.PriorityTier
 		c.workloadPriorityClassName = ""
 		c.podPriorityClassName = ""
-	}
-	if o.RequiredTopology != "" {
-		c.requiredTopology = strings.TrimSpace(o.RequiredTopology)
 	}
 	if o.WorkloadPriorityClassName != "" {
 		c.workloadPriorityClassName = o.WorkloadPriorityClassName
@@ -494,7 +470,14 @@ func (c contract) validate(profileName string) error {
 		}
 	}
 	if c.placement != "" {
-		if err := validEnum("placement", c.placement, "independent", "single-node-nvlink", "multi-node-nccl", "elastic-workers"); err != nil {
+		if err := validEnum(
+			"placement",
+			c.placement,
+			profile.PlacementUnconstrained,
+			profile.PlacementSameHost,
+			profile.PlacementSameNetworkDomain,
+			profile.PlacementSameSite,
+		); err != nil {
 			return fmt.Errorf("profile %q topology: %w", profileName, err)
 		}
 	}
@@ -527,8 +510,8 @@ func (c contract) validate(profileName string) error {
 		if c.gpuClass == GPUClassH200141GB {
 			return fmt.Errorf("profile %q topology: elastic jobs cannot request scarce %s", profileName, GPUClassH200141GB)
 		}
-		if c.placement != "" && c.placement != "independent" && c.placement != "elastic-workers" {
-			return fmt.Errorf("profile %q topology: mode=elastic must use independent or elastic-workers placement, got %q", profileName, c.placement)
+		if c.placement != "" && c.placement != profile.PlacementUnconstrained {
+			return fmt.Errorf("profile %q topology: mode=elastic must use unconstrained placement, got %q", profileName, c.placement)
 		}
 	}
 	if c.lane == "elastic" && c.mode != "elastic" {
@@ -557,7 +540,7 @@ func (o Options) hasValues() bool {
 	return o.Team != "" || o.Lane != "" || o.Mode != "" || o.Placement != "" ||
 		o.Shape != "" || o.GPUClass != "" || o.CheckpointEvery != "" || o.QueueName != "" ||
 		o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.PriorityTier != "" ||
-		o.RequiredTopology != "" || o.DisableKueueTopologyAnnotations || o.DisableDefaultPriorities
+		o.DisableKueueTopologyAnnotations || o.DisableDefaultPriorities
 }
 
 func normalizeLabelValue(v string) string {

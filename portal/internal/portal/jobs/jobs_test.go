@@ -298,7 +298,7 @@ func (f *fakeProfileReader) ProfileSet(context.Context) (profile.ProfileSet, err
 func readyProfile(name string, target profile.ExecutionTarget, generation int64, namespaces, teams []string) profile.ResolvedWorkloadProfile {
 	return profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{
-			Name: name, ExecutionTarget: target, Placement: profile.PlacementIndependent,
+			Name: name, ExecutionTarget: target, Placement: profile.PlacementUnconstrained,
 			DefaultLocalQueue: "research-training", GPUsPerWorker: 1, WorkerCount: 1,
 			Applicability: profile.ProfileApplicability{Namespaces: namespaces, Teams: teams},
 		},

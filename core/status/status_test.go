@@ -1719,7 +1719,7 @@ func TestRenderRunProfile(t *testing.T) {
 	out := RenderRunProfile(Snapshot{
 		Name:          "train-001",
 		Namespace:     "ray",
-		Labels:        map[string]string{workloadmeta.LabelRunID: "train-001", workloadmeta.LabelWorkloadKind: "job", workloadmeta.LabelProfile: "research-train-gpu", workloadmeta.LabelPreset: "azure.research.training.xl", "kueue.x-k8s.io/queue-name": "training-queue", workloadmeta.LabelTeam: "research", workloadmeta.LabelLane: "training", workloadmeta.LabelTopology: "single-node-nvlink", workloadmeta.LabelGPUClass: "a100-nvlink-80gb"},
+		Labels:        map[string]string{workloadmeta.LabelRunID: "train-001", workloadmeta.LabelWorkloadKind: "job", workloadmeta.LabelProfile: "research-train-gpu", workloadmeta.LabelPreset: "azure.research.training.xl", "kueue.x-k8s.io/queue-name": "training-queue", workloadmeta.LabelTeam: "research", workloadmeta.LabelLane: "training", workloadmeta.LabelTopology: "same-host", workloadmeta.LabelGPUClass: "a100-nvlink-80gb"},
 		Annotations:   map[string]string{workloadmeta.AnnotationCaptureVersion: "v1alpha1", workloadmeta.AnnotationNamespace: "ray", workloadmeta.AnnotationTauCommand: "tau submit train-001", workloadmeta.AnnotationImage: "acr.io/train:v1", workloadmeta.AnnotationConfigHash: "abc123", workloadmeta.AnnotationGPUCount: "8", workloadmeta.AnnotationDRAClaim: "ds-8gpus", workloadmeta.AnnotationStorageMounts: `[{"source":"pvc","path":"/data","source_ref":"training-nfs"}]`, workloadmeta.AnnotationResultPath: "/data/evals/train-001", workloadmeta.AnnotationResultArtifacts: "metrics.json, track.png", workloadmeta.AnnotationPresetExplain: "A100 NVLink protected queue"},
 		JobFound:      true,
 		JobCreatedAt:  created,
@@ -1766,7 +1766,7 @@ func TestRenderRunProfile(t *testing.T) {
 		"phase=Finished admitted=true queue=training-queue",
 		"research",
 		"azure.research.training.xl",
-		"single-node-nvlink",
+		"same-host",
 		"a100-80gb",
 		"30m00s (finished)",
 		"1 pod(s) x 1 x h100 = 1 GPU(s)",

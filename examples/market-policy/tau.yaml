@@ -45,5 +45,5 @@ metrics:
 policy:
   workspace: default
   gpu_class: h200-141gb
-  topology: single-node-nvlink
+  topology: same-host
   disable_default_priorities: true

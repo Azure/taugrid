@@ -522,7 +522,7 @@ func TestJobsAndOverviewExposeReadOnlyProfileRevisionAndMetadata(t *testing.T) {
 	resolved := profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{
 			Name: "federated", ExecutionTarget: profile.ExecutionTargetMultiKueue,
-			Placement: profile.PlacementMultiNodeNCCL, DefaultLocalQueue: "jobqueue",
+			Placement: profile.PlacementSameNetworkDomain, DefaultLocalQueue: "jobqueue",
 			GPUsPerWorker: 8, WorkerCount: 2,
 			Applicability: profile.ProfileApplicability{Namespaces: []string{"ray"}, Teams: []string{"research"}},
 		},

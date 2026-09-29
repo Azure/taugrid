@@ -35,7 +35,7 @@ spec:
       gpusPerWorker: 1
       workerCount: 1
       mode: fixed
-      placement: independent
+      placement: unconstrained
       defaultLocalQueue: jobqueue
       executionTarget: singleCluster
       priorities:

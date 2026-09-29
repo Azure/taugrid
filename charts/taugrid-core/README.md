@@ -46,17 +46,16 @@ resourceFlavors:
       nodeLabels:
         tau.azure.com/gpu-class: h200-141gb
       topologyName: default-node-topology
-      requiredTopology: kubernetes.io/hostname
 ```
 
-Keep placement/interconnect in workload topology (`independent`,
-`single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`), not in the
+Keep placement/interconnect in workload topology (`unconstrained`,
+`same-host`, `same-network-domain`, or `same-site`), not in the
 class label. The sibling `tau-core-controller` chart continuously derives class
 and series labels for its reviewed AKS GPU VM-size catalog. Install an
 equivalent node-label reconciler when deploying this services chart alone.
-For TAS-only flavors, `requiredTopology` renders the ResourceFlavor metadata
-annotation Tau uses to make generated workloads admissible without a hidden
-user-side annotation. Expert-authored raw manifests are not modified.
+For TAS-capable flavors, `topologyName` advertises the available hierarchy;
+each workload chooses its own placement level. Expert-authored raw manifests
+are not modified.
 
 ## What this chart does NOT install
 
@@ -338,7 +337,7 @@ shared connections fail rendering. Inheriting the identity requires
 set its name and client-ID annotation to match the externally managed object.
 The chart derives `azure.workload.identity/use: "true"` on the pod.
 `portal.kusto.queryCommand` remains an optional adapter override, and
-`portal.kusto.costDatabase` remains independent (Viewer access there is needed
+`portal.kusto.costDatabase` remains unconstrained (Viewer access there is needed
 for Cost). Empty shared values preserve existing degraded behavior; local/auto
 sources do not inherit them. Workspace scope, ClusterIP exposure, and disabled
 workspace-directory defaults are unchanged.

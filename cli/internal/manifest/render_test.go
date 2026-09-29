@@ -1258,7 +1258,7 @@ runtime:
 	}
 }
 
-func TestRenderResourceFlavorRequiredTopologyAcrossManagedWorkloadKinds(t *testing.T) {
+func TestRenderSameHostTopologyAcrossManagedWorkloadKinds(t *testing.T) {
 	baseRaw := []byte(`
 schema_version: 1
 name: managed-tas
@@ -1293,8 +1293,8 @@ runtime:
 				ManifestRaw:      tc.raw,
 				ManifestFilename: "managed-tas.yaml",
 				TopologyOptions: topology.Options{
-					QueueName:        "jobqueue",
-					RequiredTopology: "kubernetes.io/hostname",
+					QueueName: "jobqueue",
+					Placement: "same-host",
 				},
 				WorkloadKind: tc.kind,
 				MainScript:   []byte("# trainer\n"),
@@ -1647,7 +1647,7 @@ runtime:
 			Team:      "research",
 			Lane:      "training",
 			Mode:      "fixed",
-			Placement: "single-node-nvlink",
+			Placement: "same-host",
 			Shape:     "8xa100-80gb",
 			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
@@ -2570,7 +2570,7 @@ runtime:
 		WorkloadKind:     WorkloadKindRayJob,
 		TopologyOptions: topology.Options{
 			Lane:      "training",
-			Placement: "independent",
+			Placement: "unconstrained",
 			Shape:     "cpu-ray-5-pod",
 			QueueName: "cpu-training-ray",
 		},
@@ -2914,7 +2914,7 @@ runtime:
 			Team:      "research",
 			Lane:      "training",
 			Mode:      "fixed",
-			Placement: "single-node-nvlink",
+			Placement: "same-host",
 			Shape:     "8xa100-80gb",
 			GPUClass:  "a100-80gb",
 			QueueName: "research-training",
@@ -3587,7 +3587,7 @@ runtime:
 		MainScript:         []byte("# stub wrapper\n"),
 		UpstreamCheckpoint: "/data/checkpoints/train-fullft/last.safetensors",
 		TopologyOptions: topology.Options{
-			Placement: "single-node-nvlink",
+			Placement: "same-host",
 			QueueName: "jobqueue",
 		},
 		NodeSelector: map[string]string{
@@ -4130,7 +4130,7 @@ runtime:
 //
 // These tests lock in three PR2 guarantees that are easy to silently
 // regress: (1) Tau never stamps spec.managedBy (KubeRay/Kueue own that
-// field), (2) the two independent embedded payloads (script, manifest) are
+// field), (2) the two unconstrained embedded payloads (script, manifest) are
 // each capped at payload.MaxDecodedBytes and the fully-rendered workload
 // JSON is additionally capped at maxRenderedWorkloadBytes, and (3) an
 // oversized JobSecret can never hide an oversized workload (the size guard
@@ -4217,7 +4217,7 @@ runtime:
 // embedded in every workload (script, manifest) never collide: they use
 // different init-container names, different volumes/mount targets, and
 // (since their content always differs) different digests. This is the
-// Design A guarantee that the two payload artifacts are fully independent,
+// Design A guarantee that the two payload artifacts are fully unconstrained,
 // not a single shared payload wearing two names.
 func TestRenderScriptAndManifestPayloadsAreDistinct(t *testing.T) {
 	raw := []byte(`

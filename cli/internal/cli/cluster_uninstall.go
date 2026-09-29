@@ -153,8 +153,8 @@ func (q baselineQueuePolicy) objects() []string {
 func tauGridBaselineQueue(cmd *cobra.Command, spec clusterUninstallSpec) baselineQueuePolicy {
 	defaults := baselineQueuePolicy{
 		ClusterQueue: "jobqueue",
-		Flavor:       "taugrid-default",
-		Topology:     "default-node-topology",
+		Flavor:       "taugrid-default-cpu",
+		Topology:     "taugrid-gpu-topology",
 	}
 	raw, err := tauGridReleaseValues(cmd, spec.KubeContext, spec.Release, spec.Namespace)
 	if err != nil {
