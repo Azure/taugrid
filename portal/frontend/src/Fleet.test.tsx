@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Fleet } from './Fleet';
 import { WorkspaceProvider, createPortalQueryClient } from './data';
 import type { WorkspaceScope } from './types';
-import { fleetGPUHealth, fleetNodes, fleetNodeUtil } from './test/fleet-fixtures';
+import { fleetGPUHealth, fleetNodes, fleetNodeUtil, largeFleetFixture } from './test/fleet-fixtures';
 
 const scope: WorkspaceScope = {
   workspace: 'research', name: 'Research', cluster: 'research-west', namespace: 'tau-system',
@@ -481,7 +481,10 @@ describe('Fleet dashboard', () => {
     }));
     renderPortal('/portal/fleet?instance=h200-node-a');
 
-    expect(await screen.findByRole('region', { name: 'GPU details for h200-node-a' })).toBeVisible();
+    const details = await screen.findByRole('region', { name: 'GPU details for h200-node-a' });
+    expect(details).toBeVisible();
+    expect(details.compareDocumentPosition(screen.getByRole('heading', { name: 'GPU Dashboard' })) &
+      Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'GPU details · h200-node-a' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Clear focus' })).toHaveAttribute('href', '/portal/fleet');
     expect(screen.getByRole('cell', { name: '41' })).toBeVisible();
@@ -514,6 +517,60 @@ describe('Fleet dashboard', () => {
 
     await screen.findByRole('heading', { name: 'GPU Dashboard' });
     expect(screen.getAllByText('Unknown', { selector: '.fabric-signals b' }).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('progressively discloses large sites while keeping a deep-linked node visible', async () => {
+    const fixture = largeFleetFixture(2_048);
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fixture.nodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json(fixture.gpuHealth));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fixture.nodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet?instance=gpu-node-2047');
+
+    expect(await screen.findByRole('heading', { name: 'GPU Dashboard' })).toBeVisible();
+    expect(document.querySelectorAll('.fabric-node')).toHaveLength((3 * 48) + 49);
+    expect(screen.getByText('gpu-node-2047', { selector: '.fabric-node-head strong' })).toBeVisible();
+    expect(screen.getAllByRole('button', { name: /Hide 256 node details in site/ })).toHaveLength(3);
+    expect(screen.getAllByRole('button', { name: /Show 256 node details in site/ })).toHaveLength(4);
+    expect(screen.getAllByRole('button', { name: /Show all 256 nodes in site/ })).toHaveLength(4);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show 256 node details in site site-3' }));
+
+    expect(document.querySelectorAll('.fabric-node')).toHaveLength((4 * 48) + 49);
+    expect(screen.getAllByRole('button', { name: /Hide 256 node details in site/ })).toHaveLength(4);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Show all 256 nodes in site site-0' }));
+
+    expect(document.querySelectorAll('.fabric-node')).toHaveLength((3 * 48) + 49 + 256);
+    expect(screen.getByRole('button', { name: 'Show fewer nodes in site site-0' })).toBeVisible();
+  });
+
+  it('bounds independent evidence tables until explicitly expanded', async () => {
+    const unmatched = Array.from({ length: 250 }, (_, index) => ({
+      ...fleetGPUHealth.gpus[0],
+      cluster: 'other-cluster',
+      instance: `unmatched-node-${String(index).padStart(3, '0')}`,
+      gpu: String(index),
+    }));
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
+      if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ ...fleetGPUHealth, gpus: unmatched }));
+      if (url.includes('/api/portal/nodeutil')) return Promise.resolve(json(fleetNodeUtil));
+      return Promise.resolve(json({}));
+    }));
+    renderPortal('/portal/fleet');
+
+    const independent = await screen.findByRole('region', { name: 'Independent source evidence' });
+    expect(within(independent).getAllByRole('row')).toHaveLength(101);
+
+    await userEvent.click(within(independent).getByRole('button', { name: 'Show all 250 GPU telemetry records' }));
+
+    expect(within(independent).getAllByRole('row')).toHaveLength(251);
+    expect(within(independent).getByRole('button', { name: 'Show fewer GPU telemetry records' })).toBeVisible();
   });
 
 });

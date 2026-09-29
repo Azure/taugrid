@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { boardStaleTimeMs, useBoard } from './data';
 import { Empty, Note, ScopedLink, Table, measured, n1, utilizationSummary } from './components';
@@ -10,6 +10,9 @@ import type { Cluster, GPU, Nodes, NodeUtil } from './types';
 const conditionFreshnessMs = 15 * 60 * 1000;
 const futureClockSkewMs = 60 * 1000;
 const nodeMetricsFreshnessMs = 2 * 60 * 1000;
+const initialDetailedSiteLimit = 3;
+export const initialFleetNodeLimit = 48;
+const initialIndependentEvidenceLimit = 100;
 const gpuConditionRequirements = [
   { type: 'DcgmExporterUnavailable' },
   { type: 'NvidiaSmiProblem' },
@@ -167,8 +170,7 @@ function hasFreshNodeMetrics(node: FleetNode, now = Date.now()) {
     now - observedAt <= nodeMetricsFreshnessMs;
 }
 
-function telemetrySummary(node: FleetNode, samples: GPU[]): EvidenceSummary {
-  const nodeSamples = samples.filter(sample => sample.instance === node.name);
+function telemetrySummary(node: FleetNode, nodeSamples: GPU[]): EvidenceSummary {
   const byGPU = new Map(nodeSamples.map(sample => [sample.gpu, sample]));
   const values = [...byGPU.values()];
   const faults = values.filter(sample => sample.healthy === false);
@@ -197,54 +199,333 @@ function evidenceLabel(state: EvidenceState) {
   return state === 'observed_ok' ? 'Observed OK' : state === 'fault' ? 'Fault' : 'Unknown';
 }
 
-function average(values: (number | null)[]) {
-  const observed = values.filter(measured);
-  return observed.length ? observed.reduce((sum, value) => sum + value, 0) / observed.length : null;
-}
-
 function sourceIdentityMatches(cluster: string | undefined, instance: string, inventoryCluster: string, inventoryNodes: Set<string>) {
   return inventoryCluster !== '' && cluster === inventoryCluster && inventoryNodes.has(instance);
 }
 
 function IndependentSourceEvidence({ gpuSamples, nodeUtil }: { gpuSamples: GPU[]; nodeUtil: NodeUtil['nodes'] }) {
+  const [showAllGPUs, setShowAllGPUs] = useState(false);
+  const [showAllNodeUtil, setShowAllNodeUtil] = useState(false);
   if (!gpuSamples.length && !nodeUtil.length) return null;
+  const visibleGPUs = showAllGPUs ? gpuSamples : gpuSamples.slice(0, initialIndependentEvidenceLimit);
+  const visibleNodeUtil = showAllNodeUtil ? nodeUtil : nodeUtil.slice(0, initialIndependentEvidenceLimit);
   return <section className="focused-gpus" aria-label="Independent source evidence">
     <div><h3>Independent source evidence</h3></div>
     <Note>These measurements are not attached to inventory nodes because exact cluster and instance identity is unavailable or does not match.</Note>
     {!!gpuSamples.length && <Table headers={['Cluster', 'Instance', 'GPU', 'Model', '#Util %', '#Temp °C', 'Health']}
-      rows={gpuSamples.map(gpu => [
+      rows={visibleGPUs.map(gpu => [
         known(gpu.cluster), gpu.instance, gpu.gpu, known(gpu.modelName), n1(gpu.utilizationPct), n1(gpu.temperatureCelsius),
         <span className={gpu.healthy === false ? 'warn' : gpu.healthy === true ? '' : 'muted'}>{gpu.healthy === true ? 'Observed OK' : gpu.healthy === false ? 'Fault' : 'Unknown'}</span>,
       ])}/>}
+    {gpuSamples.length > initialIndependentEvidenceLimit && <button type="button" className="btn disclosure-button"
+      aria-expanded={showAllGPUs} onClick={() => setShowAllGPUs(value => !value)}>
+      {showAllGPUs ? 'Show fewer GPU telemetry records' : `Show all ${gpuSamples.length} GPU telemetry records`}
+    </button>}
     {!!nodeUtil.length && <Table headers={['Cluster', 'Instance', 'CPU cores', '#CPU utilization', '#Memory used', '#CPU coverage']}
-      rows={nodeUtil.map(node => [
+      rows={visibleNodeUtil.map(node => [
         known(node.cluster), node.instance, node.cpuCores, measured(node.cpuUtilPct) ? `${n1(node.cpuUtilPct)}%` : 'Unknown',
         measured(node.memUsedPct) ? `${n1(node.memUsedPct)}%` : 'Unknown',
         `${n1(node.cpuCoverage.windowCoveragePct)}%`,
       ])}/>}
+    {nodeUtil.length > initialIndependentEvidenceLimit && <button type="button" className="btn disclosure-button"
+      aria-expanded={showAllNodeUtil} onClick={() => setShowAllNodeUtil(value => !value)}>
+      {showAllNodeUtil ? 'Show fewer node utilization records' : `Show all ${nodeUtil.length} node utilization records`}
+    </button>}
   </section>;
 }
 
-function FleetFabricMap({
-  nodes, gpuConditions, ibConditions, gpuTelemetry, gpuSamples, nodeUtil,
+interface IndexedFleetNode {
+  node: FleetNode;
+  index: number;
+}
+
+interface FleetPoolGroup {
+  pool: string;
+  models: string[];
+  nodes: IndexedFleetNode[];
+}
+
+interface FleetSiteGroup {
+  site: string;
+  gpuCount: number;
+  rdmaGPUs: number;
+  siteLabels: string[];
+  regions: string[];
+  nodeCount: number;
+  pools: FleetPoolGroup[];
+}
+
+interface FleetGroupingOperations {
+  nodeVisits: number;
+  bucketAppends: number;
+}
+
+export function buildFleetGroups(
+  nodes: FleetNode[],
+  operations?: FleetGroupingOperations,
+  groupByUnboundedSite = nodes.some(node => Boolean(node.site)),
+): FleetSiteGroup[] {
+  const sites = new Map<string, {
+    gpuCount: number;
+    rdmaGPUs: number;
+    siteLabels: Set<string>;
+    regions: Set<string>;
+    nodeCount: number;
+    pools: Map<string, { models: Set<string>; nodes: IndexedFleetNode[] }>;
+  }>();
+  nodes.forEach((node, index) => {
+    if (operations) operations.nodeVisits++;
+    const site = groupByUnboundedSite ? node.site || 'Unknown' : node.region || 'Region Unknown';
+    let siteGroup = sites.get(site);
+    if (!siteGroup) {
+      siteGroup = {
+        gpuCount: 0,
+        rdmaGPUs: 0,
+        siteLabels: new Set(),
+        regions: new Set(),
+        nodeCount: 0,
+        pools: new Map(),
+      };
+      sites.set(site, siteGroup);
+    }
+    siteGroup.nodeCount++;
+    siteGroup.gpuCount += node.gpuCapacity;
+    if (node.rdmaResources?.length) siteGroup.rdmaGPUs += node.gpuCapacity;
+    if (node.siteLabel) siteGroup.siteLabels.add(node.siteLabel);
+    if (node.region) siteGroup.regions.add(node.region);
+    if (operations) operations.bucketAppends++;
+
+    const pool = node.agentPool || 'Pool Unknown';
+    let poolGroup = siteGroup.pools.get(pool);
+    if (!poolGroup) {
+      poolGroup = { models: new Set(), nodes: [] };
+      siteGroup.pools.set(pool, poolGroup);
+    }
+    poolGroup.models.add(gpuModelLabel(node));
+    poolGroup.nodes.push({ node, index });
+    if (operations) operations.bucketAppends++;
+  });
+  return [...sites.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([site, group]) => ({
+      site,
+      gpuCount: group.gpuCount,
+      rdmaGPUs: group.rdmaGPUs,
+      siteLabels: [...group.siteLabels].sort(),
+      regions: [...group.regions].sort(),
+      nodeCount: group.nodeCount,
+      pools: [...group.pools.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([pool, poolGroup]) => ({
+          pool,
+          models: [...poolGroup.models].sort(),
+          nodes: poolGroup.nodes.sort((left, right) => left.node.name.localeCompare(right.node.name)),
+        })),
+    }));
+}
+
+export function selectInitialFleetNodes(group: FleetSiteGroup, focusedInstance: string) {
+  if (group.nodeCount <= initialFleetNodeLimit) return null;
+  const visible: IndexedFleetNode[] = [];
+  let poolIndex = 0;
+  while (visible.length < initialFleetNodeLimit) {
+    let added = false;
+    for (const pool of group.pools) {
+      const entry = pool.nodes[poolIndex];
+      if (entry) {
+        visible.push(entry);
+        added = true;
+        if (visible.length === initialFleetNodeLimit) break;
+      }
+    }
+    if (!added) break;
+    poolIndex++;
+  }
+  let focused: IndexedFleetNode | undefined;
+  if (focusedInstance) {
+    for (const pool of group.pools) {
+      focused = pool.nodes.find(entry => entry.node.name === focusedInstance);
+      if (focused) break;
+    }
+  }
+  if (focused && !visible.includes(focused)) visible.push(focused);
+  return visible;
+}
+
+function summarizeGPUMetrics(samples: GPU[]) {
+  let utilizationTotal = 0;
+  let utilizationCount = 0;
+  let maxTemperature: number | null = null;
+  let memoryUsedTotal = 0;
+  let memoryTotal = 0;
+  let memoryCount = 0;
+  for (const sample of samples) {
+    if (measured(sample.utilizationPct)) {
+      utilizationTotal += sample.utilizationPct;
+      utilizationCount++;
+    }
+    if (measured(sample.temperatureCelsius)) {
+      maxTemperature = maxTemperature === null
+        ? sample.temperatureCelsius
+        : Math.max(maxTemperature, sample.temperatureCelsius);
+    }
+    if (measured(sample.memoryUsedMB) && measured(sample.memoryFreeMB)) {
+      memoryUsedTotal += sample.memoryUsedMB;
+      memoryTotal += sample.memoryUsedMB + sample.memoryFreeMB;
+      memoryCount++;
+    }
+  }
+  return {
+    utilization: utilizationCount ? utilizationTotal / utilizationCount : null,
+    utilizationCount,
+    maxTemperature,
+    memoryUsedTotal,
+    memoryTotal,
+    memoryCount,
+  };
+}
+
+function FleetNodeCard({
+  entry, gpuCondition, ibCondition, gpuTelemetry, samples, usage,
 }: {
-  nodes: FleetNode[];
+  entry: IndexedFleetNode;
+  gpuCondition: EvidenceSummary;
+  ibCondition: EvidenceSummary;
+  gpuTelemetry: EvidenceSummary;
+  samples: GPU[];
+  usage: NodeUtil['nodes'][number] | undefined;
+}) {
+  const { node } = entry;
+  const rdmaAdvertised = Boolean(node.rdmaResources?.length);
+  const gpuMetrics = summarizeGPUMetrics(samples);
+  const currentNodeMetrics = hasFreshNodeMetrics(node);
+  const cpuUtilization = currentNodeMetrics && measured(node.cpuUtilPct) ? node.cpuUtilPct : usage?.cpuUtilPct;
+  const memoryUtilization = currentNodeMetrics && measured(node.memUsedPct) ? node.memUsedPct : usage?.memUsedPct;
+  const currentMetricsDetail = node.metricsWindow ? `Metrics API · ${node.metricsWindow} window` : 'Metrics API';
+  const gpuMemoryDetail = gpuMetrics.memoryCount
+    ? `GPU ${n1(gpuMetrics.memoryUsedTotal / 1024)} / ${n1(gpuMetrics.memoryTotal / 1024)} GiB`
+    : '';
+  return <article className="fabric-node">
+    <div className="fabric-node-head"><strong>{node.name}</strong>
+      <div className="fabric-node-badges">
+        <span className={`fabric-capability ${!node.ready ? 'fault' : node.schedulable === false ? 'warning' : ''}`}>
+          {!node.ready ? 'Not Ready' : node.schedulable === false ? 'Scheduling disabled' : 'Ready'}
+        </span>
+        <span className={`fabric-capability ${rdmaAdvertised ? 'rdma' : 'unknown'}`}>{rdmaAdvertised ? 'RDMA advertised' : 'No RDMA resource'}</span>
+      </div>
+    </div>
+    <span>{node.gpuCapacity} × {gpuModelLabel(node)}{isCount(node.gpuAvailable) && isCount(node.gpuAllocated)
+      ? ` · ${node.gpuAvailable} free · ${node.gpuAllocated} assigned`
+      : ' · availability Unknown'}</span>
+    <span>{node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
+    <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
+    {node.siteLabelConflict && <span className="warn">Unbounded site label conflict · canonical value shown</span>}
+    <div className="fabric-metrics">
+      {gpuMetrics.utilization !== null && <span><small>GPU load</small><b>{n1(gpuMetrics.utilization)}%</b><i>{gpuMetrics.utilizationCount}/{node.gpuCapacity} observed</i></span>}
+      {gpuMetrics.maxTemperature !== null && <span><small>GPU temp</small><b>{n1(gpuMetrics.maxTemperature)}°C</b><i>max observed</i></span>}
+      <span><small>CPU</small><b>{measured(cpuUtilization) ? `${n1(cpuUtilization)}%` : 'Unknown'}</b><i>{currentNodeMetrics && measured(node.cpuUtilPct)
+        ? currentMetricsDetail
+        : usage?.cpuCoverage ? `ADX · ${n1(usage.cpuCoverage.windowCoveragePct)}% coverage` : 'no current sample'}</i></span>
+      <span><small>Node memory</small><b>{measured(memoryUtilization) ? `${n1(memoryUtilization)}%` : 'Unknown'}</b><i>{[
+        currentNodeMetrics && measured(node.memUsedPct) ? currentMetricsDetail : measured(usage?.memUsedPct) ? 'ADX fallback' : 'no current sample',
+        gpuMemoryDetail,
+      ].filter(Boolean).join(' · ')}</i></span>
+    </div>
+    <div className="fabric-signals">
+      <span className={gpuCondition.state}>GPU/NVLink <b>{evidenceLabel(gpuCondition.state)}</b></span>
+      <span className={ibCondition.state}>InfiniBand <b>{evidenceLabel(ibCondition.state)}</b></span>
+      <span className={gpuTelemetry.state}>Telemetry <b>{evidenceLabel(gpuTelemetry.state)}</b></span>
+    </div>
+    <ScopedLink to={'/portal/fleet?instance=' + encodeURIComponent(node.name)}>GPU details →</ScopedLink>
+  </article>;
+}
+
+function FleetSite({
+  group, siteIndex, useUnboundedSites, focusedInstance, detailsVisible, onToggleDetails,
+  gpuConditions, ibConditions, gpuTelemetry, gpuSamplesByNode, nodeUtilByNode,
+}: {
+  group: FleetSiteGroup;
+  siteIndex: number;
+  useUnboundedSites: boolean;
+  focusedInstance: string;
+  detailsVisible: boolean;
+  onToggleDetails?: () => void;
   gpuConditions: EvidenceSummary[];
   ibConditions: EvidenceSummary[];
   gpuTelemetry: EvidenceSummary[];
-  gpuSamples: GPU[];
-  nodeUtil: NodeUtil['nodes'];
+  gpuSamplesByNode: Map<string, GPU[]>;
+  nodeUtilByNode: Map<string, NodeUtil['nodes'][number]>;
 }) {
-  const labeledSiteNodes = nodes.filter(node => node.site).length;
-  const conflictingSiteNodes = nodes.filter(node => node.siteLabelConflict).length;
+  const [expanded, setExpanded] = useState(false);
+  const visibleNodes = useMemo(() => {
+    const visible = expanded ? null : selectInitialFleetNodes(group, focusedInstance);
+    return visible ? new Set(visible) : null;
+  }, [expanded, focusedInstance, group]);
+  const groupLabel = useUnboundedSites ? `Unbounded site ${group.site}` : `Region ${group.site}`;
+  return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={groupLabel}>
+    <header><div><strong>{group.site}</strong>
+      <span>{useUnboundedSites
+        ? `${group.siteLabels.join(', ') || 'No Unbounded site label'} · ${group.regions.length ? `Region ${group.regions.join(', ')}` : 'Region Unknown'}`
+        : 'Region placement · Unbounded site Unknown'} · {group.gpuCount} GPUs</span>
+    </div>
+      <span>{group.rdmaGPUs}/{group.gpuCount} GPUs on RDMA-advertised nodes</span>
+    </header>
+    {onToggleDetails && <button type="button" className="fabric-site-toggle"
+      aria-expanded={detailsVisible} onClick={onToggleDetails}
+      aria-label={detailsVisible
+        ? `Hide ${group.nodeCount} node details in site ${group.site}`
+        : `Show ${group.nodeCount} node details in site ${group.site}`}>
+      {detailsVisible ? `Hide ${group.nodeCount} node details` : `Show ${group.nodeCount} node details`}
+    </button>}
+    {detailsVisible && <div className="fabric-pools">
+      {group.pools.map(poolGroup => {
+        const poolNodes = visibleNodes ? poolGroup.nodes.filter(entry => visibleNodes.has(entry)) : poolGroup.nodes;
+        if (!poolNodes.length) return null;
+        return <section className="fabric-pool" aria-label={`${poolGroup.models.join(', ')}, pool ${poolGroup.pool}`} key={poolGroup.pool}>
+          <h4>{poolGroup.models.join(' / ')}<span>Pool {poolGroup.pool} · {poolGroup.nodes.length} node{poolGroup.nodes.length === 1 ? '' : 's'}</span></h4>
+          <div className="fabric-nodes">{poolNodes.map(entry =>
+            <FleetNodeCard key={entry.node.name} entry={entry}
+              gpuCondition={gpuConditions[entry.index]} ibCondition={ibConditions[entry.index]}
+              gpuTelemetry={gpuTelemetry[entry.index]} samples={gpuSamplesByNode.get(entry.node.name) || []}
+              usage={nodeUtilByNode.get(entry.node.name)}/>,
+          )}</div>
+        </section>;
+      })}
+      {group.nodeCount > initialFleetNodeLimit && <button type="button" className="btn disclosure-button"
+        aria-expanded={expanded} onClick={() => setExpanded(value => !value)}
+        aria-label={expanded ? `Show fewer nodes in site ${group.site}` : `Show all ${group.nodeCount} nodes in site ${group.site}`}>
+        {expanded ? 'Show fewer nodes' : `Show all ${group.nodeCount} nodes`}
+      </button>}
+    </div>}
+  </section>;
+}
+
+const FleetFabricMap = memo(function FleetFabricMap({
+  nodes, focusedInstance, gpuConditions, ibConditions, gpuTelemetry, gpuSamplesByNode, nodeUtilByNode,
+}: {
+  nodes: FleetNode[];
+  focusedInstance: string;
+  gpuConditions: EvidenceSummary[];
+  ibConditions: EvidenceSummary[];
+  gpuTelemetry: EvidenceSummary[];
+  gpuSamplesByNode: Map<string, GPU[]>;
+  nodeUtilByNode: Map<string, NodeUtil['nodes'][number]>;
+}) {
+  let labeledSiteNodes = 0;
+  let conflictingSiteNodes = 0;
+  for (const node of nodes) {
+    if (node.site) labeledSiteNodes++;
+    if (node.siteLabelConflict) conflictingSiteNodes++;
+  }
   const useUnboundedSites = labeledSiteNodes > 0;
   const partialSiteCoverage = useUnboundedSites && labeledSiteNodes < nodes.length;
-  const sites = new Map<string, { node: FleetNode; index: number }[]>();
-  nodes.forEach((node, index) => {
-    const site = useUnboundedSites
-      ? node.site || 'Unknown'
-      : node.region || 'Region Unknown';
-    sites.set(site, [...(sites.get(site) || []), { node, index }]);
+  const groups = useMemo(() => buildFleetGroups(nodes, undefined, useUnboundedSites), [nodes, useUnboundedSites]);
+  const [expandedSites, setExpandedSites] = useState<Set<string>>(() => new Set());
+  const toggleSite = (site: string) => setExpandedSites(current => {
+    const next = new Set(current);
+    if (next.has(site)) next.delete(site);
+    else next.add(site);
+    return next;
   });
   return <section className="fabric-map" aria-label={useUnboundedSites ? 'GPU InfiniBand fabric by Unbounded site' : 'GPU fleet by region and pool'}>
     <div className="fabric-map-head">
@@ -263,90 +544,22 @@ function FleetFabricMap({
       <span>{conflictingSiteNodes}/{nodes.length} GPU nodes have conflicting canonical and fallback site labels. Canonical values are shown; topology evidence remains conflicted.</span>
     </div>}
     <div className="fabric-sites">
-      {[...sites.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([site, siteNodes], siteIndex) => {
-        const pools = new Map<string, { node: FleetNode; index: number }[]>();
-        siteNodes.forEach(entry => {
-          const pool = entry.node.agentPool || 'Pool Unknown';
-          pools.set(pool, [...(pools.get(pool) || []), entry]);
-        });
-        const siteGPUCount = siteNodes.reduce((total, entry) => total + entry.node.gpuCapacity, 0);
-        const siteRDMAGPUs = siteNodes.reduce((total, entry) =>
-          total + ((entry.node.rdmaResources || []).length ? entry.node.gpuCapacity : 0), 0);
-        const siteLabels = [...new Set(siteNodes.flatMap(entry => entry.node.siteLabel ? [entry.node.siteLabel] : []))].sort();
-        const regions = [...new Set(siteNodes.flatMap(entry => entry.node.region ? [entry.node.region] : []))].sort();
-        const groupLabel = useUnboundedSites ? `Unbounded site ${site}` : `Region ${site}`;
-        return <section className={`fabric-site site-tone-${siteIndex % 4}`} aria-label={groupLabel} key={site}>
-          <header><div><strong>{site}</strong>
-            <span>{useUnboundedSites
-              ? `${siteLabels.join(', ') || 'No Unbounded site label'} · ${regions.length ? `Region ${regions.join(', ')}` : 'Region Unknown'}`
-              : 'Region placement · Unbounded site Unknown'} · {siteGPUCount} GPUs</span>
-          </div>
-            <span>{siteRDMAGPUs}/{siteGPUCount} GPUs on RDMA-advertised nodes</span>
-          </header>
-          <div className="fabric-pools">
-            {[...pools.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([pool, poolNodes]) => {
-              const models = [...new Set(poolNodes.map(entry => gpuModelLabel(entry.node)))].sort();
-              return <section className="fabric-pool" aria-label={`${models.join(', ')}, pool ${pool}`} key={pool}>
-                <h4>{models.join(' / ')}<span>Pool {pool} · {poolNodes.length} node{poolNodes.length === 1 ? '' : 's'}</span></h4>
-                <div className="fabric-nodes">{poolNodes.sort((left, right) => left.node.name.localeCompare(right.node.name)).map(({ node, index }) => {
-                  const rdmaAdvertised = Boolean(node.rdmaResources?.length);
-                  const samples = gpuSamples.filter(sample => sample.instance === node.name);
-                  const gpuUtilization = average(samples.map(sample => sample.utilizationPct));
-                  const gpuTemperature = samples.map(sample => sample.temperatureCelsius).filter(measured);
-                  const gpuMemoryUsed = samples.map(sample => sample.memoryUsedMB).filter(measured);
-                  const gpuMemoryTotal = samples.flatMap(sample =>
-                    measured(sample.memoryUsedMB) && measured(sample.memoryFreeMB)
-                      ? [sample.memoryUsedMB + sample.memoryFreeMB] : []);
-                  const usage = nodeUtil.find(sample => sample.instance === node.name);
-                  const currentNodeMetrics = hasFreshNodeMetrics(node);
-                  const cpuUtilization = currentNodeMetrics && measured(node.cpuUtilPct) ? node.cpuUtilPct : usage?.cpuUtilPct;
-                  const memoryUtilization = currentNodeMetrics && measured(node.memUsedPct) ? node.memUsedPct : usage?.memUsedPct;
-                  const currentMetricsDetail = node.metricsWindow ? `Metrics API · ${node.metricsWindow} window` : 'Metrics API';
-                  const gpuMemoryDetail = gpuMemoryUsed.length && gpuMemoryTotal.length
-                    ? `GPU ${n1(gpuMemoryUsed.reduce((sum, value) => sum + value, 0) / 1024)} / ${n1(gpuMemoryTotal.reduce((sum, value) => sum + value, 0) / 1024)} GiB`
-                    : '';
-                  return <article className="fabric-node" key={node.name}>
-                    <div className="fabric-node-head"><strong>{node.name}</strong>
-                      <div className="fabric-node-badges">
-                        <span className={`fabric-capability ${!node.ready ? 'fault' : node.schedulable === false ? 'warning' : ''}`}>
-                          {!node.ready ? 'Not Ready' : node.schedulable === false ? 'Scheduling disabled' : 'Ready'}
-                        </span>
-                        <span className={`fabric-capability ${rdmaAdvertised ? 'rdma' : 'unknown'}`}>{rdmaAdvertised ? 'RDMA advertised' : 'No RDMA resource'}</span>
-                      </div>
-                    </div>
-                    <span>{node.gpuCapacity} × {gpuModelLabel(node)}{isCount(node.gpuAvailable) && isCount(node.gpuAllocated)
-                      ? ` · ${node.gpuAvailable} free · ${node.gpuAllocated} assigned`
-                      : ' · availability Unknown'}</span>
-                    <span>{node.cpuCores} CPU · {n1(node.memoryGiB)} GiB</span>
-                    <span>{node.region ? `Region ${node.region}` : 'Region Unknown'} · {node.zone ? `Zone ${node.zone}` : 'Zone Unknown'} · {node.agentPool ? `Pool ${node.agentPool}` : 'Pool Unknown'}</span>
-                    {node.siteLabelConflict && <span className="warn">Unbounded site label conflict · canonical value shown</span>}
-                    <div className="fabric-metrics">
-                      {gpuUtilization !== null && <span><small>GPU load</small><b>{n1(gpuUtilization)}%</b><i>{samples.filter(sample => measured(sample.utilizationPct)).length}/{node.gpuCapacity} observed</i></span>}
-                      {!!gpuTemperature.length && <span><small>GPU temp</small><b>{n1(Math.max(...gpuTemperature))}°C</b><i>max observed</i></span>}
-                      <span><small>CPU</small><b>{measured(cpuUtilization) ? `${n1(cpuUtilization)}%` : 'Unknown'}</b><i>{currentNodeMetrics && measured(node.cpuUtilPct)
-                        ? currentMetricsDetail
-                        : usage?.cpuCoverage ? `ADX · ${n1(usage.cpuCoverage.windowCoveragePct)}% coverage` : 'no current sample'}</i></span>
-                      <span><small>Node memory</small><b>{measured(memoryUtilization) ? `${n1(memoryUtilization)}%` : 'Unknown'}</b><i>{[
-                        currentNodeMetrics && measured(node.memUsedPct) ? currentMetricsDetail : measured(usage?.memUsedPct) ? 'ADX fallback' : 'no current sample',
-                        gpuMemoryDetail,
-                      ].filter(Boolean).join(' · ')}</i></span>
-                    </div>
-                    <div className="fabric-signals">
-                      <span className={gpuConditions[index].state}>GPU/NVLink <b>{evidenceLabel(gpuConditions[index].state)}</b></span>
-                      <span className={ibConditions[index].state}>InfiniBand <b>{evidenceLabel(ibConditions[index].state)}</b></span>
-                      <span className={gpuTelemetry[index].state}>Telemetry <b>{evidenceLabel(gpuTelemetry[index].state)}</b></span>
-                    </div>
-                    <ScopedLink to={'/portal/fleet?instance=' + encodeURIComponent(node.name)}>GPU details →</ScopedLink>
-                  </article>;
-                })}</div>
-              </section>;
-            })}
-          </div>
-        </section>;
+      {groups.map((group, siteIndex) => {
+        const hasFocusedNode = group.pools.some(pool =>
+          pool.nodes.some(entry => entry.node.name === focusedInstance));
+        const detailsVisible = groups.length <= initialDetailedSiteLimit ||
+          siteIndex < initialDetailedSiteLimit || expandedSites.has(group.site) || hasFocusedNode;
+        const onToggleDetails = groups.length > initialDetailedSiteLimit && !hasFocusedNode
+          ? () => toggleSite(group.site)
+          : undefined;
+        return <FleetSite key={group.site} group={group} siteIndex={siteIndex} useUnboundedSites={useUnboundedSites}
+          detailsVisible={detailsVisible} onToggleDetails={onToggleDetails}
+          focusedInstance={focusedInstance} gpuConditions={gpuConditions} ibConditions={ibConditions}
+          gpuTelemetry={gpuTelemetry} gpuSamplesByNode={gpuSamplesByNode} nodeUtilByNode={nodeUtilByNode}/>;
       })}
     </div>
   </section>;
-}
+});
 
 function FleetInfiniBandEvidence() {
   const location = useLocation();
@@ -357,43 +570,81 @@ function FleetInfiniBandEvidence() {
   const sourceQueries = [inventoryQuery, telemetryQuery, nodeUtilQuery];
   const refreshAll = () => Promise.all(sourceQueries.map(query => query.refetch()));
   const snapshot = inventoryQuery.data;
-  const nodes = (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0);
+  const nodes = useMemo(() => (snapshot?.nodes || []).filter(node => node.gpuCapacity > 0), [snapshot]);
   const gpuSchedulable = snapshot?.gpuSchedulable ?? snapshot?.gpuAllocatable ?? snapshot?.totalGPUs ?? 0;
   const gpuAllocationKnown = snapshot?.gpuAllocationKnown === true &&
     isCount(snapshot.gpuAllocated) && isCount(snapshot.gpuAvailable) && isCount(gpuSchedulable);
   const telemetry = telemetryQuery.data?.gpus || [];
   const nodeUtil = nodeUtilQuery.data?.nodes || [];
-  const nodeNames = new Set(nodes.map(node => node.name));
+  const nodeNames = useMemo(() => new Set(nodes.map(node => node.name)), [nodes]);
   const inventoryCluster = snapshot?.scope?.cluster?.trim() || '';
   const canCorrelateInventory = Boolean(snapshot && inventoryCluster);
-  const attributedTelemetry = canCorrelateInventory
-    ? telemetry.filter(sample => sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : [];
-  const independentTelemetry = canCorrelateInventory
-    ? telemetry.filter(sample => !sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : telemetry;
-  const attributedNodeUtil = canCorrelateInventory
-    ? nodeUtil.filter(sample => sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : [];
-  const independentNodeUtil = canCorrelateInventory
-    ? nodeUtil.filter(sample => !sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames))
-    : nodeUtil;
+  const {
+    attributedTelemetry, independentTelemetry, independentNodeUtil,
+    gpuSamplesByNode, nodeUtilByNode,
+  } = useMemo(() => {
+    const matchedTelemetry: GPU[] = [];
+    const unmatchedTelemetry: GPU[] = [];
+    const matchedNodeUtil: NodeUtil['nodes'] = [];
+    const unmatchedNodeUtil: NodeUtil['nodes'] = [];
+    for (const sample of telemetry) {
+      (canCorrelateInventory && sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames)
+        ? matchedTelemetry : unmatchedTelemetry).push(sample);
+    }
+    for (const sample of nodeUtil) {
+      (canCorrelateInventory && sourceIdentityMatches(sample.cluster, sample.instance, inventoryCluster, nodeNames)
+        ? matchedNodeUtil : unmatchedNodeUtil).push(sample);
+    }
+    const samplesByNode = new Map<string, GPU[]>();
+    for (const sample of matchedTelemetry) {
+      const samples = samplesByNode.get(sample.instance);
+      if (samples) samples.push(sample);
+      else samplesByNode.set(sample.instance, [sample]);
+    }
+    return {
+      attributedTelemetry: matchedTelemetry,
+      independentTelemetry: canCorrelateInventory ? unmatchedTelemetry : telemetry,
+      independentNodeUtil: canCorrelateInventory ? unmatchedNodeUtil : nodeUtil,
+      gpuSamplesByNode: samplesByNode,
+      nodeUtilByNode: new Map(matchedNodeUtil.map(sample => [sample.instance, sample])),
+    };
+  }, [telemetry, nodeUtil, canCorrelateInventory, inventoryCluster, nodeNames]);
   const summaryTelemetry = canCorrelateInventory ? attributedTelemetry : telemetry;
-  const utilization = utilizationSummary(summaryTelemetry);
-  const knownHealth = summaryTelemetry.filter(sample => sample.healthy === true || sample.healthy === false);
-  const healthFaults = summaryTelemetry.filter(sample => sample.healthy === false);
-  const focusedGPUs = canCorrelateInventory && focusedInstance
-    ? attributedTelemetry.filter(sample => sample.instance === focusedInstance)
-    : [];
-  const gpuConditions = nodes.map(node => conditionSummary(node.operationalConditions, 'gpu'));
-  const ibConditions = nodes.map(node => conditionSummary(
-    node.operationalConditions, 'infiniband', Boolean(node.rdmaResources?.length),
-  ));
-  const gpuTelemetry = nodes.map(node => telemetrySummary(node, attributedTelemetry));
-  const gpuConditionCoveredGPUs = nodes.reduce((total, node, index) =>
-    total + (gpuConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
-  const ibConditionCoveredGPUs = nodes.reduce((total, node, index) =>
-    total + (ibConditions[index].state === 'unknown' ? 0 : node.gpuCapacity), 0);
+  const { utilization, knownHealth, healthFaults } = useMemo(() => ({
+    utilization: utilizationSummary(summaryTelemetry),
+    knownHealth: summaryTelemetry.filter(sample => sample.healthy === true || sample.healthy === false),
+    healthFaults: summaryTelemetry.filter(sample => sample.healthy === false),
+  }), [summaryTelemetry]);
+  const focusedGPUs = canCorrelateInventory && focusedInstance ? gpuSamplesByNode.get(focusedInstance) || [] : [];
+  const {
+    gpuConditions, ibConditions, gpuTelemetry,
+    gpuConditionCoveredGPUs, ibConditionCoveredGPUs,
+  } = useMemo(() => {
+    const gpuConditions: EvidenceSummary[] = [];
+    const ibConditions: EvidenceSummary[] = [];
+    const gpuTelemetry: EvidenceSummary[] = [];
+    let gpuConditionCoveredGPUs = 0;
+    let ibConditionCoveredGPUs = 0;
+    const now = Date.now();
+    for (const node of nodes) {
+      const gpuCondition = conditionSummary(node.operationalConditions, 'gpu', true, now);
+      const ibCondition = conditionSummary(
+        node.operationalConditions, 'infiniband', Boolean(node.rdmaResources?.length), now,
+      );
+      gpuConditions.push(gpuCondition);
+      ibConditions.push(ibCondition);
+      gpuTelemetry.push(telemetrySummary(node, gpuSamplesByNode.get(node.name) || []));
+      if (gpuCondition.state !== 'unknown') gpuConditionCoveredGPUs += node.gpuCapacity;
+      if (ibCondition.state !== 'unknown') ibConditionCoveredGPUs += node.gpuCapacity;
+    }
+    return {
+      gpuConditions,
+      ibConditions,
+      gpuTelemetry,
+      gpuConditionCoveredGPUs,
+      ibConditionCoveredGPUs,
+    };
+  }, [nodes, gpuSamplesByNode]);
   const sourceResults = [
     { name: 'inventory', query: inventoryQuery },
     { name: 'GPU telemetry', query: telemetryQuery },
@@ -454,11 +705,7 @@ function FleetInfiniBandEvidence() {
           <span><strong>Node utilization</strong> {sourceFreshness(nodeUtilQuery, freshnessNow)}</span>
         </div>
         {!snapshot ? <Empty warn>GPU inventory is unavailable. Telemetry remains visible; fleet denominators, RDMA scheduling capability, and Unbounded site boundaries are Unknown.</Empty>
-          : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty>
-          : <><FleetFabricMap nodes={nodes} gpuConditions={gpuConditions} ibConditions={ibConditions}
-            gpuTelemetry={gpuTelemetry} gpuSamples={attributedTelemetry} nodeUtil={attributedNodeUtil}/>
-            </>}
-        <IndependentSourceEvidence gpuSamples={independentTelemetry} nodeUtil={independentNodeUtil}/>
+          : !nodes.length ? <Empty>No GPU or RDMA-capable nodes were reported by the authorized fleet inventory.</Empty> : null}
         {focusedInstance && <section className="focused-gpus" aria-label={`GPU details for ${focusedInstance}`}>
           <div><h3>GPU details · {focusedInstance}</h3><ScopedLink to="/portal/fleet">Clear focus</ScopedLink></div>
           {!focusedGPUs.length ? <Empty>No per-GPU telemetry is available for this node in the current window.</Empty>
@@ -470,6 +717,10 @@ function FleetInfiniBandEvidence() {
                 <span className={gpu.healthy === false ? 'warn' : gpu.healthy === true ? '' : 'muted'}>{gpu.healthy === true ? 'Observed OK' : gpu.healthy === false ? 'Fault' : 'Unknown'}</span>,
               ])}/>}
         </section>}
+        {snapshot && nodes.length > 0 && <FleetFabricMap nodes={nodes} focusedInstance={focusedInstance}
+          gpuConditions={gpuConditions} ibConditions={ibConditions}
+          gpuTelemetry={gpuTelemetry} gpuSamplesByNode={gpuSamplesByNode} nodeUtilByNode={nodeUtilByNode}/>}
+        <IndependentSourceEvidence gpuSamples={independentTelemetry} nodeUtil={independentNodeUtil}/>
       </>}
     </div>
   </section>;
