@@ -74,6 +74,8 @@ kind: ResourceFlavor
 metadata:
   name: taugrid-default-gpu-topology
 spec:
+  nodeLabels:
+    kubernetes.io/os: linux
   topologyName: taugrid-gpu-topology
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
@@ -81,6 +83,8 @@ kind: ResourceFlavor
 metadata:
   name: taugrid-default-gpu-topology-v2
 spec:
+  nodeLabels:
+    kubernetes.io/os: linux
   topologyName: taugrid-gpu-topology-v2
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
