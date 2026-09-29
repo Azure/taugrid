@@ -96,7 +96,9 @@ wheel with the CLI assets.
 5. The read-only validation job verifies that the tag is annotated, follows
    SemVer, points to `main`, has checked-in release notes, and has no published
    GitHub Release.
-6. The workflow reruns all release gates, compares two independent builds, and
+6. The workflow appends GitHub-generated change attribution, new-contributor
+   recognition, and the full changelog link to the checked-in curated notes.
+   It then reruns all release gates, compares two independent builds, and
    transfers the validated assets to a separate write-authorized publish job.
 7. The publish job creates a draft release, uploads the assets once, verifies
    every GitHub asset digest, and only then publishes the draft. A retry resumes
