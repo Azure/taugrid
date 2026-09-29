@@ -1,7 +1,7 @@
 {{- if .Values.baselineQueue.enabled }}
 {{- $topologyEnabled := and .Values.baselineQueue.topology.enabled .Values.components.tauCoreController.enabled }}
-{{- if and .Values.baselineQueue.topology.enabled (ne .Values.baselineQueue.topology.name "taugrid-gpu-topology") }}
-{{- fail "baselineQueue.topology.name is fixed at taugrid-gpu-topology because tau-core-controller owns the Topology" }}
+{{- if and .Values.baselineQueue.topology.enabled (ne .Values.baselineQueue.topology.name "taugrid-gpu-topology-v2") }}
+{{- fail "baselineQueue.topology.name is fixed at taugrid-gpu-topology-v2 because tau-core-controller owns the Topology" }}
 {{- end }}
 {{- if and .Values.baselineQueue.gpu.enabled (empty .Values.baselineQueue.gpu.flavors) }}
 {{- fail "baselineQueue.gpu.flavors must contain at least one flavor when baselineQueue.gpu.enabled is true" }}

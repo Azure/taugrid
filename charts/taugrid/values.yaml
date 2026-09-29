@@ -41,7 +41,7 @@ baselineQueue:
   topology:
     enabled: true
     # Owned and reconciled by tau-core-controller.
-    name: taugrid-gpu-topology
+    name: taugrid-gpu-topology-v2
   flavor:
     # New identity avoids mutating the topologyName of the chart 0.2.0
     # taugrid-default ResourceFlavor, which Kueue treats as immutable.
@@ -72,7 +72,7 @@ baselineQueue:
     flavors:
       # New identity avoids mutating the immutable topologyName on GPU flavors
       # created by releases before tau-core-controller owned the Topology.
-      - name: taugrid-default-gpu-topology
+      - name: taugrid-default-gpu-topology-v2
         nodeLabels:
           kubernetes.io/os: linux
         nodeTaints:

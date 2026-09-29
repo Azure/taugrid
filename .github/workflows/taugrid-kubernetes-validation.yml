@@ -48,7 +48,7 @@ jobs:
   controller-smoke:
     name: Controller smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,6 +78,9 @@ jobs:
           TAU_CORE_KIND_DELETE_CLUSTER: "1"
           TAU_CORE_KIND_RECREATE: "1"
         run: make -C controllers/tau-core test-kind-e2e
+
+      - name: Run Kueue topology migration smoke
+        run: make -C controllers/tau-core test-kind-topology-migration
 
   runtime-smoke:
     name: Runtime smoke
