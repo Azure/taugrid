@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { boardScopeKey, fetchJSON, scopedURL, useWorkspace } from '../data';
 import { stellarURL } from './api';
 import {
-  decodeExperimentPage, decodeMetricCatalog, decodeMetricSeries, decodeRunDetail, decodeRunPage,
+  decodeExperimentFaultEvents, decodeExperimentPage, decodeMetricCatalog, decodeMetricSeries, decodeRunDetail, decodeRunPage,
 } from './contracts';
 
 function segment(value: string) {
@@ -89,6 +89,14 @@ export function useRunDetailQuery(experiment: string, runID: string, project: st
   return useStellarQuery(stellarURL(`runs/${segment(runID)}`, {
     project: project || undefined, target: experiment,
   }), decodeRunDetail, !!experiment && !!runID);
+}
+
+export function useExperimentFaultEventsQuery(experiment: string) {
+  return useStellarQuery(
+    `/api/portal/experiments/${segment(experiment)}/fault-events`,
+    decodeExperimentFaultEvents,
+    !!experiment,
+  );
 }
 
 export function useRunResolverQuery(runID: string, project: string, enabled = true) {

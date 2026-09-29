@@ -152,6 +152,11 @@ nodes' current conditions, but explicitly reports that historical fault evidence
 is unavailable. Non-local experiment sources currently report allocation
 evidence as unavailable rather than guessing from cluster-wide node state.
 
+The prototype stack shows that structured condition normalization and live
+experiment-to-node correlation are straightforward. Durable historical
+timelines, per-GPU attribution, and remediation require new ingestion, storage,
+and stable workload/GPU identity infrastructure.
+
 Existing `/api/stellar`, `/api/v1/stellar`, broad v2 snapshot/search routes,
 `/stellar`, CLI HTML/TUI/JSON, and report/artifact consumers remain compatible.
 Dashboard-shaped routes advertise deprecation and a canonical successor.
