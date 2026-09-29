@@ -177,6 +177,7 @@ type NodeUtilOptions struct {
 type Server struct {
 	mux                   *http.ServeMux
 	stellar               *expapi.Server
+	stellarSource         string
 	stellarKustoAvailable bool
 	stellarBackendTimeout time.Duration
 	jobs                  JobsOptions
@@ -246,6 +247,7 @@ func NewServer(opts Options) (*Server, error) {
 	s := &Server{
 		mux:                   http.NewServeMux(),
 		stellar:               stellar,
+		stellarSource:         canonicalStellarSource(opts.Stellar.Source, kustoStellarAvailable(opts.Stellar)),
 		stellarKustoAvailable: kustoStellarAvailable(opts.Stellar),
 		jobs:                  opts.Jobs,
 		cluster:               opts.Cluster,
@@ -378,6 +380,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/portal/nodes", s.handleNodes)
 	s.mux.HandleFunc("/api/portal/nodeutil", s.handleNodeUtil)
 	s.mux.HandleFunc("/api/portal/runs", s.handleRuns)
+	s.mux.HandleFunc(experimentFaultsPathPrefix, s.handleExperimentFaultEvents)
 	// Trailing slash keeps the per-job detail route
 	// ("/api/portal/runs/{namespace}/{name}") distinct from the runs list above.
 	s.mux.HandleFunc("/api/portal/runs/", s.handleJobDetail)

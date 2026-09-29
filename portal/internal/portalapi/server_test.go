@@ -14,12 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/queue"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/Azure/taugrid/portal/internal/expapi"
+	"github.com/Azure/taugrid/portal/internal/expstore"
 	"github.com/Azure/taugrid/portal/internal/portal/jobs"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -1256,6 +1258,226 @@ func TestNodesBoardUnavailableWithoutReader(t *testing.T) {
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/nodes", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+}
+
+type faultNodesReader struct {
+	observedAt time.Time
+}
+
+func (f faultNodesReader) ListNodes(_ context.Context) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[
+		  {"metadata":{"name":"node-a"},"status":{"conditions":[
+		    {"type":"XIDErrors","status":"True","reason":"XID48","message":"double-bit ECC error",
+		     "lastHeartbeatTime":%q,"lastTransitionTime":%q}]}},
+		  {"metadata":{"name":"node-b"},"status":{"conditions":[
+		    {"type":"IBLinkDown","status":"True","reason":"LinkDown",
+		     "lastHeartbeatTime":%q,"lastTransitionTime":%q}]}}
+		]}`,
+		f.observedAt.Format(time.RFC3339Nano),
+		f.observedAt.Add(-time.Minute).Format(time.RFC3339Nano),
+		f.observedAt.Format(time.RFC3339Nano),
+		f.observedAt.Add(-time.Minute).Format(time.RFC3339Nano),
+	)), nil
+}
+
+func (faultNodesReader) ListDaemonSets(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func seedFaultExperiment(
+	t *testing.T,
+	root string,
+	experimentID string,
+	runs []expstore.ExperimentRunEvidence,
+	workspaces map[string]string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	store, _, err := expstore.Init(ctx, root, expstore.InitOptions{
+		Name:    experimentID,
+		Project: "fault-project",
+	})
+	if err != nil {
+		t.Fatalf("init experiment store: %v", err)
+	}
+	defer store.Close()
+	for _, run := range runs {
+		state := "running"
+		if run.CompletedAt != "" {
+			state = "succeeded"
+		}
+		var tags []expstore.TagRecord
+		if workspace := workspaces[run.RunID]; workspace != "" {
+			tags = append(tags, expstore.TagRecord{
+				ScopeType: "run",
+				ScopeID:   run.RunID,
+				Key:       exptelemetry.TauWorkspaceTag,
+				Value:     workspace,
+			})
+		}
+		if _, err := store.RecordRunData(ctx, expstore.RecordRunDataOptions{
+			Run: expstore.RunRecord{
+				RunID:        run.RunID,
+				Project:      "fault-project",
+				ExperimentID: experimentID,
+				RunGroupID:   "default",
+				State:        state,
+				CreatedAt:    run.CreatedAt,
+				StartedAt:    run.StartedAt,
+				CompletedAt:  run.CompletedAt,
+			},
+			RunContext: run.Context,
+			Tags:       tags,
+		}); err != nil {
+			t.Fatalf("record run %s: %v", run.RunID, err)
+		}
+	}
+}
+
+func TestExperimentFaultEventsCorrelateAllocatedNodesAndRespectWorkspace(t *testing.T) {
+	now := time.Now().UTC()
+	root := t.TempDir()
+	seedFaultExperiment(t, root, "experiment-a", []expstore.ExperimentRunEvidence{
+		{
+			RunID:     "run-alpha",
+			CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano),
+			StartedAt: now.Add(-50 * time.Minute).Format(time.RFC3339Nano),
+			Context: &expstore.RunContextRecord{
+				RunID: "run-alpha", Cluster: "cluster-a", Namespace: "team-alpha", NodeNames: "node-a",
+			},
+		},
+		{
+			RunID:     "run-beta",
+			CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano),
+			StartedAt: now.Add(-45 * time.Minute).Format(time.RFC3339Nano),
+			Context: &expstore.RunContextRecord{
+				RunID: "run-beta", Cluster: "cluster-a", Namespace: "team-beta", NodeNames: "node-b",
+			},
+		},
+	}, map[string]string{"run-alpha": "alpha", "run-beta": "beta"})
+
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{
+				ID: "alpha", Cluster: "cluster-a", Namespace: "team-alpha", Source: "local", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}},
+			},
+			{
+				ID: "beta", Cluster: "cluster-a", Namespace: "team-beta", Source: "local",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"admins"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "local", StorePath: root, Workspace: "alpha"},
+		Nodes:              NodesOptions{Reader: faultNodesReader{observedAt: now}},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := managedRequest(t, server, "/api/portal/experiments/experiment-a/fault-events?workspace=alpha")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		State          string   `json:"state"`
+		AllocatedNodes []string `json:"allocatedNodes"`
+		Coverage       struct {
+			Correlation string `json:"correlation"`
+			Allocation  string `json:"allocation"`
+			TimeBounds  string `json:"timeBounds"`
+			Evidence    string `json:"evidence"`
+		} `json:"coverage"`
+		Events []struct {
+			Node      string `json:"node"`
+			CheckType string `json:"checkType"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, rec.Body.String())
+	}
+	if len(got.AllocatedNodes) != 1 || got.AllocatedNodes[0] != "node-a" {
+		t.Fatalf("allocated nodes = %v, want [node-a]", got.AllocatedNodes)
+	}
+	if got.Coverage.Allocation != "exact" || got.Coverage.TimeBounds != "exact" ||
+		got.Coverage.Evidence != "current-only" || got.Coverage.Correlation != "current-only" ||
+		got.State != "current-only" {
+		t.Fatalf("coverage = %+v, state = %q", got.Coverage, got.State)
+	}
+	if len(got.Events) != 1 || got.Events[0].Node != "node-a" || got.Events[0].CheckType != "XIDErrors" {
+		t.Fatalf("events = %+v, want only node-a XIDErrors", got.Events)
+	}
+
+	rec = managedRequest(t, server, "/api/portal/experiments/experiment-a/fault-events?workspace=beta")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unauthorized workspace status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExperimentFaultEventsCompletedExperimentIsCurrentOnly(t *testing.T) {
+	now := time.Now().UTC()
+	root := t.TempDir()
+	completedAt := now.Add(-24 * time.Hour)
+	seedFaultExperiment(t, root, "completed-experiment", []expstore.ExperimentRunEvidence{{
+		RunID:       "completed-run",
+		CreatedAt:   completedAt.Add(-time.Hour).Format(time.RFC3339Nano),
+		StartedAt:   completedAt.Add(-50 * time.Minute).Format(time.RFC3339Nano),
+		CompletedAt: completedAt.Format(time.RFC3339Nano),
+		Context: &expstore.RunContextRecord{
+			RunID: "completed-run", Cluster: "cluster-a", Namespace: "team-alpha", NodeNames: `["node-a"]`,
+		},
+	}}, map[string]string{"completed-run": "alpha"})
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "local", StorePath: root, Workspace: "alpha"},
+		Nodes:   NodesOptions{Reader: faultNodesReader{observedAt: now}},
+		Cluster: ClusterOptions{Cluster: "cluster-a"},
+		Runs:    RunsOptions{Namespace: "team-alpha"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(
+		http.MethodGet,
+		"/api/portal/experiments/completed-experiment/fault-events?workspace=alpha",
+		nil,
+	))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		TimeBounds struct {
+			Active      bool       `json:"active"`
+			CompletedAt *time.Time `json:"completedAt"`
+		} `json:"timeBounds"`
+		Coverage struct {
+			Correlation string   `json:"correlation"`
+			Reasons     []string `json:"reasons"`
+		} `json:"coverage"`
+		Events []struct {
+			ObservedAt *time.Time `json:"observedAt"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v\n%s", err, rec.Body.String())
+	}
+	if got.TimeBounds.Active || got.TimeBounds.CompletedAt == nil {
+		t.Fatalf("time bounds = %+v, want completed experiment", got.TimeBounds)
+	}
+	if got.Coverage.Correlation != "current-only" || len(got.Events) != 1 ||
+		got.Events[0].ObservedAt == nil || !got.Events[0].ObservedAt.After(*got.TimeBounds.CompletedAt) {
+		t.Fatalf("response did not preserve current-only historical limitation: %+v", got)
+	}
+	if !strings.Contains(strings.Join(got.Coverage.Reasons, " "), "no historical Node-condition log") {
+		t.Fatalf("coverage reasons = %v, want historical limitation", got.Coverage.Reasons)
 	}
 }
 
