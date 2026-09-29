@@ -232,6 +232,7 @@ spec:
                       enum:
                       - unconstrained
                       - same-host
+                      - same-accelerator-domain
                       - same-network-domain
                       - same-site
                       type: string
@@ -562,6 +563,7 @@ spec:
                           enum:
                           - unconstrained
                           - same-host
+                          - same-accelerator-domain
                           - same-network-domain
                           - same-site
                           type: string

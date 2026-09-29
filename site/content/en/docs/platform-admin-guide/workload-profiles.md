@@ -48,6 +48,14 @@ default catalog. Helm lists replace rather than merge, so a site override must
 supply the complete reviewed catalog. The chart synchronization test keeps the
 checked-in Helm, Kustomize, and controller sample declarations identical.
 
+`placement` accepts `unconstrained`, `same-host`,
+`same-accelerator-domain`, `same-network-domain`, or `same-site`.
+Accelerator-domain placement selects one provider-declared NVLink/NVL72 island;
+network-domain placement selects one scale-out InfiniBand or RoCE fabric and
+may span accelerator domains. Matching GPU models never imply a shared island.
+Neither placement guarantees distinct hosts, and an unavailable shared domain
+remains pending instead of falling back.
+
 Delete old policy ConfigMaps, volume mounts, environment variables, and files
 only after every submitter uses a ready TauCluster profile. There is no
 compatibility fallback.

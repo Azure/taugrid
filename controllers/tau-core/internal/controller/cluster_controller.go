@@ -319,6 +319,7 @@ func isDerivedTopologyLabel(key string) bool {
 	case labelkeys.LabelSite,
 		labelkeys.LabelRegion,
 		labelkeys.LabelNetworkDomain,
+		labelkeys.LabelAcceleratorDomain,
 		labelkeys.LabelInfiniband:
 		return true
 	default:

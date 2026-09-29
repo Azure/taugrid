@@ -593,6 +593,33 @@ func TestRenderSameNetworkDomainTopologyOnlyOnGPUWorkers(t *testing.T) {
 	}
 }
 
+func TestRenderSameAcceleratorDomainTopologyOnlyOnGPUWorkers(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "accelerator-tas",
+		Namespace:     "taugrid-default",
+		ScriptName:    "train.py",
+		Script:        []byte("print('train')\n"),
+		Workers:       2,
+		GPUsPerWorker: 4,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			Placement: "same-accelerator-domain",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headAnnotations := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if _, ok := headAnnotations[topology.RequiredTopologyAnnotation]; ok {
+		t.Fatalf("control head retained GPU topology requirement: %v", headAnnotations)
+	}
+	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "tau.azure.com/accelerator-domain" {
+		t.Fatalf("worker required topology=%v, want tau.azure.com/accelerator-domain", got)
+	}
+}
+
 func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "ray-cpu",

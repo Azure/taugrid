@@ -17,6 +17,7 @@ const (
 	labelAzureWIUse             = "azure.workload.identity/use"
 	labelFlexSite               = "net.unbounded-cloud.io/site"
 	labelFlexNetworkDomain      = "net.unbounded-cloud.io/network-domain"
+	labelFlexAcceleratorDomain  = "net.unbounded-cloud.io/accelerator-domain"
 	labelRegion                 = "topology.kubernetes.io/region"
 	labelHostname               = "kubernetes.io/hostname"
 	labelAKSCloud               = "aks.azure.com/cloud"
@@ -26,7 +27,7 @@ const (
 	labelAzureManagedCluster    = "kubernetes.azure.com/managed-cluster"
 	labelStretchManaged         = "aks.azure.com/stretch-managed"
 
-	tauGPUNodeTopologyName = "taugrid-gpu-topology"
+	tauGPUNodeTopologyName = "taugrid-gpu-topology-v2"
 
 	annotationApproved        = labelkeys.AnnotationApproved
 	annotationRejected        = labelkeys.AnnotationRejected

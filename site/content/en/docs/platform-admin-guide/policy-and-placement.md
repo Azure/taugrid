@@ -72,9 +72,17 @@ matching solely on that label: `ndm-a100-v4`, `nd-h200-v5`, and
 values.
 
 Placement stays in `policy.topology`: `unconstrained`, `same-host`,
-`same-network-domain`, or `same-site`. GPU class values encode hardware
-only; NVLink, InfiniBand, NCCL, and same-host placement are expressed
-separately through `policy.topology`.
+`same-accelerator-domain`, `same-network-domain`, or `same-site`. GPU class
+values encode hardware only; NVLink, InfiniBand, NCCL, and same-host placement
+are expressed separately through `policy.topology`.
+
+`same-accelerator-domain` requires one `tau.azure.com/accelerator-domain`
+subtree. TauGrid assigns deterministic singleton domains unless the provider
+publishes an authoritative `net.unbounded-cloud.io/accelerator-domain` value,
+so matching GPU models alone never imply that Nodes share an NVL72 island.
+Provider-declared domains may span hosts. The placement does not add
+anti-affinity or guarantee distinct hosts, and insufficient capacity remains
+pending rather than falling back to a network domain or site.
 
 `same-network-domain` requires one shared fabric but does not require one worker
 per host. Full-node GPU requests naturally separate workers when a Node cannot
@@ -87,6 +95,73 @@ multi-host workload remains pending when no one domain has sufficient eligible
 capacity, while workers that all fit on one Node may still run in that Node's
 singleton domain. TauGrid never falls back automatically to `same-site` or
 `unconstrained`.
+
+### Upgrade the three-level topology
+
+The accelerator-domain release does not mutate the existing three-level
+`taugrid-gpu-topology`. It creates `taugrid-gpu-topology-v2` and moves GPU
+ResourceFlavors to that four-level hierarchy. This versioning is required
+because Kueue treats both `Topology.spec.levels` and
+`ResourceFlavor.spec.topologyName` as immutable.
+
+Kueue also protects a deleting Topology with
+`kueue.x-k8s.io/resource-in-use` while any ResourceFlavor references it.
+Deleting the old Topology before deleting its old flavors therefore waits
+forever, even after every Workload drains. Migrate in dependency order:
+
+1. Stop submissions, set every affected ClusterQueue to `HoldAndDrain`, cancel
+   pending workload owners, and wait until no Workloads are reserving or
+   admitted.
+
+   ```bash
+   CLUSTER_QUEUE=jobqueue # replace with each affected ClusterQueue
+   kubectl patch clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" \
+     --type=merge -p '{"spec":{"stopPolicy":"HoldAndDrain"}}'
+   kubectl get workloads.kueue.x-k8s.io -A
+   ```
+2. Upgrade TauGrid. The controller creates `taugrid-gpu-topology-v2`. The
+   default Helm values create `taugrid-default-gpu-topology-v2` and move the
+   ClusterQueue from the old default flavor to the v2 flavor.
+
+   Operators with custom TAS flavors must give each replacement a new
+   `metadata.name` and set `spec.topologyName: taugrid-gpu-topology-v2`;
+   changing `topologyName` on an existing flavor is not supported.
+3. Verify the new hierarchy, replacement flavors, and ClusterQueue references
+   before deleting anything old:
+
+   ```bash
+   kubectl get topology.kueue.x-k8s.io taugrid-gpu-topology-v2 \
+     -o jsonpath='{range .spec.levels[*]}{.nodeLabel}{"\n"}{end}'
+   kubectl get resourceflavors.kueue.x-k8s.io \
+     -o custom-columns=NAME:.metadata.name,TOPOLOGY:.spec.topologyName
+   kubectl get clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" -o yaml
+   ```
+4. Delete the old ResourceFlavors only after no ClusterQueue references them.
+   Then delete the old Topology:
+
+   ```bash
+   kubectl delete resourceflavor.kueue.x-k8s.io taugrid-default-gpu-topology
+   kubectl delete topologies.kueue.x-k8s.io taugrid-gpu-topology
+   ```
+
+   Replace the default old flavor name with every old custom flavor discovered
+   in step 3. Kueue releases the old Topology finalizer only after the final
+   referencing flavor disappears.
+5. Confirm the old objects are gone and the TauCluster reports
+   `QueuesReady=True`, then restore admission:
+
+   ```bash
+   kubectl wait --for=delete \
+     topology.kueue.x-k8s.io/taugrid-gpu-topology --timeout=2m
+   kubectl patch clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" \
+     --type=merge -p '{"spec":{"stopPolicy":"None"}}'
+   ```
+
+If the old Topology remains terminating, query ResourceFlavors whose
+`spec.topologyName` is `taugrid-gpu-topology` and remove the remaining
+ClusterQueue references before deleting those flavors. Do not force-remove the
+Kueue finalizer and do not resume admission while a ClusterQueue references a
+missing flavor.
 
 The legacy inputs `a100-nvlink-80gb`, `h100-standalone-95gb`, and
 `h200-nvlink-141gb` are accepted for one compatibility window, normalized
@@ -170,9 +245,10 @@ single-flavor installs by draining admission and splitting the flavor:
    admission taints. Create separate GPU ResourceFlavors with exact
    `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, and `topologyName`.
    Workloads explicitly select `unconstrained`, `same-host`,
-   `same-network-domain`, or `same-site`; ResourceFlavors do not impose one
-   locality policy on every workload. CPU-only jobs remain admissible through
-   the non-TAS CPU flavor and cannot consume GPU quota.
+   `same-accelerator-domain`, `same-network-domain`, or `same-site`;
+   ResourceFlavors do not impose one locality policy on every workload.
+   CPU-only jobs remain admissible through the non-TAS CPU flavor and cannot
+   consume GPU quota.
 3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
    Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor
    CPU, memory, and GPU quota. Kueue then assigns one node flavor across every

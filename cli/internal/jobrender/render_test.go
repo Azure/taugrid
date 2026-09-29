@@ -1330,6 +1330,12 @@ func TestRender_WorkloadProfilePlacementTASContract(t *testing.T) {
 			value:      "kubernetes.io/hostname",
 		},
 		{
+			name:       "accelerator-domain Job requires one island",
+			placement:  profile.PlacementSameAcceleratorDomain,
+			annotation: "kueue.x-k8s.io/podset-required-topology",
+			value:      "tau.azure.com/accelerator-domain",
+		},
+		{
 			name:       "network-domain Job requires one fabric",
 			placement:  profile.PlacementSameNetworkDomain,
 			annotation: "kueue.x-k8s.io/podset-required-topology",

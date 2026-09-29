@@ -19,7 +19,7 @@ tests:
         documentIndex: 0
       - equal:
           path: metadata.name
-          value: taugrid-default-gpu-topology
+          value: taugrid-default-gpu-topology-v2
         documentIndex: 1
       - notExists:
           path: spec.nodeLabels["tau.azure.com/gpu-class"]
@@ -36,7 +36,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: taugrid-gpu-topology
+          value: taugrid-gpu-topology-v2
         documentIndex: 1
       - notExists:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
@@ -80,7 +80,7 @@ tests:
         documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].name
-          value: taugrid-default-gpu-topology
+          value: taugrid-default-gpu-topology-v2
         documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].resources
@@ -162,7 +162,7 @@ tests:
       baselineQueue.topology.name: custom-topology
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.topology.name is fixed at taugrid-gpu-topology because tau-core-controller owns the Topology
+          errorMessage: baselineQueue.topology.name is fixed at taugrid-gpu-topology-v2 because tau-core-controller owns the Topology
 
   - it: leaves GPU flavors non-TAS when topology is disabled
     set:
@@ -179,7 +179,7 @@ tests:
     asserts:
       - equal:
           path: spec.topologyName
-          value: taugrid-gpu-topology
+          value: taugrid-gpu-topology-v2
         documentIndex: 1
       - notExists:
           path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
@@ -210,7 +210,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: taugrid-gpu-topology
+          value: taugrid-gpu-topology-v2
         documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].coveredResources
@@ -354,7 +354,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: taugrid-gpu-topology
+          value: taugrid-gpu-topology-v2
         documentIndex: 1
       - notExists:
           path: spec.tolerations

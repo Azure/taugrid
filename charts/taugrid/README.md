@@ -144,36 +144,44 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (must be a valid DNS label) |
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Reference the controller-owned Topology from GPU flavors |
-| `baselineQueue.topology.name` | string | `taugrid-gpu-topology` | Controller-owned Topology object name |
+| `baselineQueue.topology.name` | string | `taugrid-gpu-topology-v2` | Controller-owned Topology object name |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
 | `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resource names covered by the node-resource group |
-| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu-topology` | GPU ResourceFlavors and per-flavor quotas |
+| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu-topology-v2` | GPU ResourceFlavors and per-flavor quotas |
 
 CPU, memory, and GPU are in one Kueue ResourceGroup because they are all tied to
 the selected node pool. The CPU flavor `taugrid-default-cpu` has no GPU selector,
 no GPU taint toleration, and zero GPU quota. Each GPU flavor receives the same
 CPU/memory quota plus its declared GPU quota, so a GPU pod set receives one
 flavor across all requested resources. The fresh-install GPU flavor
-`taugrid-default-gpu-topology` is unlabeled and supports `gpu_class: any` only. Once
+`taugrid-default-gpu-topology-v2` is unlabeled and supports `gpu_class: any` only. Once
 hardware is known, replace the entire GPU flavor list with class-labeled
 flavors; do not retain the generic GPU flavor alongside them.
 
 When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
 workload explicitly selects `unconstrained`, `same-host`,
-`same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability
+`same-accelerator-domain`, `same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability
 but never choose workload locality. Raw Kubernetes manifests remain
 expert-controlled. The CPU/memory flavor remains non-TAS so CPU-only workloads
 can be admitted.
 
 The controller assigns every Node a conservative topology identity and
-reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
-`tau.azure.com/network-domain` → `kubernetes.io/hostname`. Nodes without
-authoritative shared-site or fabric metadata receive deterministic singleton
-site/domain labels, so they remain topology-complete without being treated as
-connected. `tau.azure.com/region` is normalized metadata rather than a Kueue
-topology level.
+reconciles `taugrid-gpu-topology-v2` with the hierarchy `tau.azure.com/site` →
+`tau.azure.com/network-domain` → `tau.azure.com/accelerator-domain` →
+`kubernetes.io/hostname`. Nodes without authoritative shared-site, fabric, or
+accelerator-island metadata receive deterministic singleton labels, so they
+remain topology-complete without being treated as connected.
+`tau.azure.com/region` is normalized metadata rather than a Kueue topology
+level.
+
+Providers can declare a shared NVL72/GB200/GB300 island with
+`net.unbounded-cloud.io/accelerator-domain`. TauGrid namespaces and copies that
+identity to `tau.azure.com/accelerator-domain`; it never infers sharing from
+GPU model or SKU alone. `same-accelerator-domain` may span hosts inside that
+island, does not guarantee distinct hosts, and remains pending when the island
+cannot fit the workload.
 
 Selecting `same-network-domain` does not independently require
 `tau.azure.com/infiniband=true` or one worker per host. Nodes without
@@ -207,6 +215,14 @@ identity avoids mutating flavors created by older releases. Operators carrying
 custom GPU flavor names from an older release must rename those flavors when
 enabling this topology contract.
 
+The accelerator-domain hierarchy uses versioned objects:
+`taugrid-gpu-topology-v2` and the default
+`taugrid-default-gpu-topology-v2` flavor. Drain admission, create replacement
+custom flavors with new names that reference v2, move ClusterQueues to those
+flavors, delete the old referencing flavors, and only then delete
+`taugrid-gpu-topology`. Kueue retains the old Topology finalizer while any
+ResourceFlavor references it; never force-remove that finalizer.
+
 ```yaml
 kubeadm:
   nodeLabels:
@@ -232,7 +248,7 @@ baselineQueue:
 
 Canonical classes cover the supported A10, A100, H100, H200, GB200, and GB300
 memory variants. Placement and interconnect requirements remain separate
-(`unconstrained`, `same-host`, `same-network-domain`, or `same-site`).
+(`unconstrained`, `same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`).
 
 Default queue values:
 
@@ -245,7 +261,7 @@ resources:
 gpu:
   coveredResources: [nvidia.com/gpu]
   flavors:
-    - name: taugrid-default-gpu-topology
+    - name: taugrid-default-gpu-topology-v2
       nodeLabels: {kubernetes.io/os: linux}
       nodeTaints: [{key: sku, value: gpu, effect: NoSchedule}]
       tolerations: []

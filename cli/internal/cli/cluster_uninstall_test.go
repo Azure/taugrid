@@ -200,7 +200,7 @@ func TestClusterUninstallReportsLeftoversOnFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("uninstall must still report the Helm failure")
 	}
-	for _, want := range []string{"jobqueue", "taugrid-default-cpu", "taugrid-gpu-topology", "finalizers"} {
+	for _, want := range []string{"jobqueue", "taugrid-default-cpu", "taugrid-gpu-topology-v2", "finalizers"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("recovery guidance missing %q:\n%s", want, out)
 		}

@@ -96,6 +96,20 @@ func TestValidateWorkloadProfileCrossFields(t *testing.T) {
 	if err := ValidateWorkloadProfile(multiKueue); err != nil {
 		t.Fatalf("MultiKueue profile with global applicability should validate: %v", err)
 	}
+
+	for _, placement := range []string{
+		PlacementUnconstrained,
+		PlacementSameHost,
+		PlacementSameAcceleratorDomain,
+		PlacementSameNetworkDomain,
+		PlacementSameSite,
+	} {
+		p := valid
+		p.Placement = placement
+		if err := ValidateWorkloadProfile(p); err != nil {
+			t.Errorf("placement %q should validate: %v", placement, err)
+		}
+	}
 }
 
 func TestProfileSetHashIsCanonicalAndOperationallyStable(t *testing.T) {
