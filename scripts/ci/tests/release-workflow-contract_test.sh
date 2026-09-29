@@ -13,6 +13,21 @@ fail() {
   exit 1
 }
 
+job_block() {
+  local job="$1"
+  awk -v job="${job}" '
+    $0 == "  " job ":" {
+      in_job = 1
+    }
+    in_job && $0 ~ /^  [[:alnum:]_-]+:$/ && $0 != "  " job ":" {
+      exit
+    }
+    in_job {
+      print
+    }
+  ' "${WORKFLOW}"
+}
+
 on_block="$(
   awk '
     /^on:$/ {
@@ -48,9 +63,16 @@ fi
 if grep -Fq 'allow_main_release_notes' "${WORKFLOW}"; then
   fail "published legacy releases must not retain a recovery path"
 fi
-grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" "${WORKFLOW}" ||
+validate_block="$(job_block validate)"
+publish_block="$(job_block publish)"
+if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
+  fail "read-only validation must not call the write-authorized generate-notes endpoint"
+fi
+grep -Fq 'contents: write' <<<"${publish_block}" ||
+  fail "release publication must retain narrowly scoped contents write permission"
+grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" <<<"${publish_block}" ||
   fail "release notes must include GitHub-generated change and contributor attribution"
-grep -Fq "cat \"\$RUNNER_TEMP/generated-release-notes.md\"" "${WORKFLOW}" ||
+grep -Fq "cat \"\$generated\"" <<<"${publish_block}" ||
   fail "generated change and contributor notes must be appended to curated notes"
 
 echo "Release workflow contract tests passed"

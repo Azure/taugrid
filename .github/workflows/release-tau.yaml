@@ -85,18 +85,6 @@ jobs:
           git show "$notes_source:$notes_path" > "$RUNNER_TEMP/release-notes.md"
           test -s "$RUNNER_TEMP/release-notes.md"
 
-          gh api \
-            --method POST \
-            "/repos/$GITHUB_REPOSITORY/releases/generate-notes" \
-            -f tag_name="$TAG" \
-            -f target_commitish="$commit" \
-            --jq .body > "$RUNNER_TEMP/generated-release-notes.md"
-          test -s "$RUNNER_TEMP/generated-release-notes.md"
-          {
-            printf '\n'
-            cat "$RUNNER_TEMP/generated-release-notes.md"
-          } >> "$RUNNER_TEMP/release-notes.md"
-
           status="$(
             curl --silent --show-error --output "$RUNNER_TEMP/existing-release.json" \
               --write-out '%{http_code}' \
@@ -126,7 +114,6 @@ jobs:
             echo "- Commit: \`$commit\`"
             echo "- Commit date: \`$date\`"
             echo "- Release notes source: \`$notes_source\`"
-            echo "- GitHub change and contributor notes: generated"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload validated release notes
@@ -339,6 +326,28 @@ jobs:
         with:
           name: tau-release-notes-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release-notes
+
+      - name: Append change and contributor attribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+
+          notes="$RUNNER_TEMP/tau-release-notes/release-notes.md"
+          generated="$RUNNER_TEMP/generated-release-notes.md"
+          commit="$(git rev-parse HEAD)"
+          gh api \
+            --method POST \
+            "/repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" \
+            -f target_commitish="$commit" \
+            --jq .body > "$generated"
+          test -s "$generated"
+          {
+            printf '\n'
+            cat "$generated"
+          } >> "$notes"
 
       - name: Create, verify, and publish release
         env:
