@@ -509,8 +509,8 @@ spec:
 	}
 }
 
-func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
-	flags := topologyFlags{gpuClass: "a100-nvlink-80gb"}
+func TestTopologyFlagsPreservesGPUClass(t *testing.T) {
+	flags := topologyFlags{gpuClass: "a100-80gb"}
 	var opts jobrender.Options
 
 	warnings, err := flags.applyWithChanged(&opts, func(string) bool { return false })
@@ -520,9 +520,7 @@ func TestTopologyFlagsWarnsAndNormalizesLegacyGPUClass(t *testing.T) {
 	if opts.GPUClass != runtopology.GPUClassA10080GB {
 		t.Fatalf("GPUClass=%q want %q", opts.GPUClass, runtopology.GPUClassA10080GB)
 	}
-	if len(warnings) != 1 ||
-		!strings.Contains(warnings[0], `"a100-nvlink-80gb"`) ||
-		!strings.Contains(warnings[0], `"`+runtopology.GPUClassA10080GB+`"`) {
+	if len(warnings) != 0 {
 		t.Fatalf("warnings=%#v", warnings)
 	}
 }
@@ -675,7 +673,7 @@ kind: Job
 metadata:
   labels:
     kueue.x-k8s.io/queue-name: jobqueue
-    %s: a100-nvlink-80gb
+    %s: a100-80gb
 spec:
   template:
     spec:

@@ -213,7 +213,7 @@ func pendingWorkloads(l workloadList) []PendingWorkload {
 			continue
 		}
 		labels := it.Metadata.Labels
-		gpuClass, _ := topology.NormalizeGPUClass(labels[topology.LabelGPUClass])
+		gpuClass := topology.NormalizeGPUClass(labels[topology.LabelGPUClass])
 		priorityClass, priorityClassKind := workloadPriorityClass(it.Spec)
 		out = append(out, PendingWorkload{
 			Name:                       it.Metadata.Name,
@@ -331,7 +331,7 @@ type filter struct {
 }
 
 func normalizedFilter(o Options) filter {
-	gpuClass, _ := topology.NormalizeGPUClass(o.GPUClass)
+	gpuClass := topology.NormalizeGPUClass(o.GPUClass)
 	return filter{
 		team:     normalize(o.Team),
 		lane:     normalize(o.Lane),

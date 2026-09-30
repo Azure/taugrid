@@ -35,9 +35,9 @@ import (
 // are user data rather than schema.
 //
 // Structured entries matter because these subtrees carry directives. A silently
-// dropped runtime.rdma.enabled leaves an IB/NCCL job without its RDMA resource,
-// and a dropped storage.mounts[].readOnly renders a PVC writable -- the same
-// fail-open this warning exists to close, one level down.
+// dropped runtime.rdma.enabled leaves an IB/NCCL job without its required
+// topology/runtime setup, and a dropped storage.mounts[].readOnly renders a PVC
+// writable -- the same fail-open this warning exists to close, one level down.
 //
 // TestManagedPassthroughCoversManifestSchema in cli/internal/manifest reflects
 // over the real manifest.Manifest type and fails if this list drifts.
@@ -57,8 +57,6 @@ var managedPassthroughPaths = map[string]bool{
 	"compute.worker_memory_limit": false,
 	"runtime.rdma":                true,
 	"runtime.rdma.enabled":        false,
-	"runtime.rdma.resource_name":  false,
-	"runtime.rdma.count":          false,
 	"storage.mounts":              true,
 	"storage.mounts.name":         false,
 	"storage.mounts.mountPath":    false,

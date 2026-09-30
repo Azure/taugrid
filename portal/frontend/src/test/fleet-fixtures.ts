@@ -63,7 +63,6 @@ export const fleetNodes: Nodes = {
       gpuProduct: 'NVIDIA H200',
       ready: true,
       schedulable: true,
-      rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
       operationalConditions: observedConditions(),
     },
     {
@@ -86,7 +85,6 @@ export const fleetNodes: Nodes = {
       gpuProduct: 'NVIDIA H200',
       ready: true,
       schedulable: true,
-      rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
       operationalConditions: observedConditions('GPUNVLinkReplayErrors')
         .filter(condition => condition.type !== 'NvidiaDeviceFilesProblem')
         .reverse(),

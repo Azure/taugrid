@@ -23,15 +23,13 @@ func readFineWebFixture(t *testing.T) string {
 	return string(data)
 }
 
-// TestFineWebFixtureRequestsInfiniBand asserts the worker requests the RDMA shared
-// device, adds IPC_LOCK, and provides a real 16Gi /dev/shm — the three pod-level
-// requirements for NCCL to use GPUDirect RDMA over InfiniBand.
+// TestFineWebFixtureRequestsInfiniBand asserts the worker uses network-domain
+// TAS, adds IPC_LOCK, and provides a real 16Gi /dev/shm.
 func TestFineWebFixtureRequestsInfiniBand(t *testing.T) {
 	text := readFineWebFixture(t)
 
-	// rdma/rdma_shared_device_a must appear in both requests and limits.
-	if got := strings.Count(text, "rdma/rdma_shared_device_a:"); got != 2 {
-		t.Fatalf("expected rdma/rdma_shared_device_a in worker requests and limits (2), got %d", got)
+	if !strings.Contains(text, "kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain") {
+		t.Fatal("expected worker podset to require the Tau network domain through Kueue TAS")
 	}
 	if !strings.Contains(text, "IPC_LOCK") {
 		t.Fatal("expected worker securityContext to add the IPC_LOCK capability for RDMA")

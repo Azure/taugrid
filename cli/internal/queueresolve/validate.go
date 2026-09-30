@@ -283,7 +283,7 @@ func findCatalogTopologyFlavor(ctx context.Context, r RawRunner, cq kueueapi.Clu
 
 func (o ValidationOptions) resolve() validationTarget {
 	ns := strings.TrimSpace(o.Namespace)
-	gpuClass, _ := topology.NormalizeGPUClass(o.GPUClass)
+	gpuClass := topology.NormalizeGPUClass(o.GPUClass)
 	target := validationTarget{
 		Namespace:               ns,
 		QueueName:               strings.TrimSpace(o.QueueName),
@@ -372,7 +372,7 @@ func gpuClassAllowedFlavors(
 	podTolerations [][]kueueapi.Toleration,
 	topologyRequest bool,
 ) (map[string]bool, error) {
-	class, _ := topology.NormalizeGPUClass(strings.TrimSpace(gpuClass))
+	class := topology.NormalizeGPUClass(strings.TrimSpace(gpuClass))
 	allowed := map[string]bool{}
 	seen := map[string]bool{}
 	var unreadable []string
@@ -431,7 +431,7 @@ func SelectQueue(ctx context.Context, r RawRunner, opts AutoSelectOptions) (Queu
 	if ns == "" {
 		ns = topology.DefaultLocalQueueNamespace
 	}
-	gpuClass, _ := topology.NormalizeGPUClass(opts.GPUClass)
+	gpuClass := topology.NormalizeGPUClass(opts.GPUClass)
 	lqs, err := listLocalQueues(ctx, r, ns)
 	if err != nil {
 		return QueueCandidate{}, nil, fmt.Errorf("list LocalQueues in namespace %q for policy.queue=auto: %w", ns, err)

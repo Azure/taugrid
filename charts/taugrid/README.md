@@ -140,25 +140,32 @@ should replace this with deliberate capacity policy.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, and ResourceFlavors |
+| `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, and CPU ResourceFlavor |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (must be a valid DNS label) |
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
 | `baselineQueue.topology.enabled` | bool | `true` | Reference the controller-owned Topology from GPU flavors |
-| `baselineQueue.topology.name` | string | `taugrid-gpu-topology-v2` | Controller-owned Topology object name |
+| `baselineQueue.topology.name` | string | `taugrid-gpu-topology` | Controller-owned Topology object name |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
-| `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
+| `baselineQueue.gpu.enabled` | bool | `true` | Cover GPU resources and enable controller discovery |
 | `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resource names covered by the node-resource group |
-| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu-topology-v2` | GPU ResourceFlavors and per-flavor quotas |
+| `baselineQueue.gpu.flavors` | list | `[]` | Optional externally configured GPU ResourceFlavors |
 
 CPU, memory, and GPU are in one Kueue ResourceGroup because they are all tied to
 the selected node pool. The CPU flavor `taugrid-default-cpu` has no GPU selector,
-no GPU taint toleration, and zero GPU quota. Each GPU flavor receives the same
-CPU/memory quota plus its declared GPU quota, so a GPU pod set receives one
-flavor across all requested resources. The fresh-install GPU flavor
-`taugrid-default-gpu-topology-v2` is unlabeled and supports `gpu_class: any` only. Once
-hardware is known, replace the entire GPU flavor list with class-labeled
-flavors; do not retain the generic GPU flavor alongside them.
+no GPU taint toleration, and zero GPU quota. When GPU admission, topology, and
+`tau-core-controller` are enabled, the
+controller discovers Nodes with both `tau.azure.com/gpu-class` and allocatable
+`nvidia.com/gpu`, creates one topology-aware ResourceFlavor per observed GPU
+class, and adds its summed allocatable GPU capacity to the baseline ClusterQueue
+marked `tau.azure.com/discover-gpu-flavors=true`. Each discovered flavor
+declares `sku=gpu:NoSchedule` as an admission taint so CPU-only workloads cannot
+consume its quota. Node creation, GPU-class label changes, and allocatable GPU
+capacity changes trigger reconciliation, so a pool may join with zero published
+capacity and receive quota once kubelet reports its GPUs.
+Discovered capacity only grows automatically: scaling a pool to zero does not
+remove its flavor or reduce its last known quota. Explicitly configured flavors
+are not pruned by controller discovery.
 
 When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
 workload explicitly selects `unconstrained`, `same-host`,
@@ -168,7 +175,7 @@ expert-controlled. The CPU/memory flavor remains non-TAS so CPU-only workloads
 can be admitted.
 
 The controller assigns every Node a conservative topology identity and
-reconciles `taugrid-gpu-topology-v2` with the hierarchy `tau.azure.com/site` →
+reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
 `tau.azure.com/network-domain` → `tau.azure.com/accelerator-domain` →
 `kubernetes.io/hostname`. Nodes without authoritative shared-site, fabric, or
 accelerator-island metadata receive deterministic singleton labels, so they
@@ -210,18 +217,8 @@ TauCluster configuration. Zone is omitted because it is not consistently
 available across providers.
 
 The topology name is fixed because the controller owns this object and Kueue
-makes `ResourceFlavor.spec.topologyName` immutable. The new default GPU flavor
-identity avoids mutating flavors created by older releases. Operators carrying
-custom GPU flavor names from an older release must rename those flavors when
-enabling this topology contract.
-
-The accelerator-domain hierarchy uses versioned objects:
-`taugrid-gpu-topology-v2` and the default
-`taugrid-default-gpu-topology-v2` flavor. Drain admission, create replacement
-custom flavors with new names that reference v2, move ClusterQueues to those
-flavors, delete the old referencing flavors, and only then delete
-`taugrid-gpu-topology`. Kueue retains the old Topology finalizer while any
-ResourceFlavor references it; never force-remove that finalizer.
+makes `ResourceFlavor.spec.topologyName` immutable. Discovered flavors use
+deterministic names derived from `tau.azure.com/gpu-class`.
 
 ```yaml
 kubeadm:
@@ -260,34 +257,13 @@ resources:
     nominalQuota: 100Ti
 gpu:
   coveredResources: [nvidia.com/gpu]
-  flavors:
-    - name: taugrid-default-gpu-topology-v2
-      nodeLabels: {kubernetes.io/os: linux}
-      nodeTaints: [{key: sku, value: gpu, effect: NoSchedule}]
-      tolerations: []
-      resources:
-        - {name: nvidia.com/gpu, nominalQuota: "1000"}
+  flavors: []
 ```
 
 These quotas bound concurrent Kueue admission; Kubernetes scheduling still
-enforces the cluster's real capacity.
-
-Upgrades from chart 0.2.0 create the replacement CPU flavor
-`taugrid-default-cpu` instead of mutating the old mixed `taugrid-default`
-flavor. Stop submissions, hold and drain the ClusterQueue, explicitly cancel
-pending workload owners, then replace `spec.resourceGroups` with one group
-where the CPU flavor has zero GPU quota and GPU flavors carry CPU, memory, and
-GPU quota.
-Do not patch a GPU class onto the old sole flavor: that selector would also
-apply to CPU-only admission. ResourceFlavor fields may be immutable or protected
-while referenced, so replacement names are the safe migration path.
-
-Before running `helm upgrade`, also update saved values: remove GPU resources
-from `baselineQueue.resources`, move every GPU class/series label and GPU-node
-toleration out of `baselineQueue.flavor`, and declare GPU admission taints under
-`baselineQueue.gpu.flavors[].nodeTaints`. The chart fails rendering rather than
-emitting a duplicate or CPU-constraining resource contract when legacy mixed
-values remain.
+enforces the cluster's real capacity. The controller creates the minimum GPU
+flavor set required by observed GPU classes and initializes quota from summed
+allocatable capacity.
 
 **`baselineQueue.gpu.flavors[].nodeTaints`** — Declare the taints associated
 with GPU nodes (for example `sku=gpu:NoSchedule`). Kueue then prevents CPU-only

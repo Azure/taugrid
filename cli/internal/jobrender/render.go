@@ -176,7 +176,7 @@ type Options struct {
 	// SecurityMode applies the typed runtime.security contract.
 	SecurityMode string
 
-	// RDMA opts the Job into RDMA device resources and injects the
+	// RDMA opts the Job into network-domain topology placement and injects the
 	// IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities NCCL NET/IB needs.
 	RDMA RDMAOptions
 
@@ -280,7 +280,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	topologyPlan, err := topology.Build(p, topology.Options{
+	topologyOptions := topology.Options{
 		Team:                            o.Team,
 		Lane:                            o.Lane,
 		Mode:                            o.Mode,
@@ -294,7 +294,11 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,
 		DisableDefaultPriorities:        o.DisableDefaultPriorities,
-	})
+	}
+	if o.RDMA.Enabled {
+		topologyOptions = topology.WithNetworkDomainRequirement(p, topologyOptions)
+	}
+	topologyPlan, err := topology.Build(p, topologyOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -869,9 +873,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	applyContainerResourceOverrides(resources, o)
 	profile.AddGPUResources(resources, gpu.Count)
-	if o.RDMA.Enabled {
-		addRDMAResources(resources, o.RDMA)
-	}
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
@@ -1233,16 +1234,6 @@ func applyContainerResourceOverrides(resources map[string]any, o Options) {
 	if len(limits) > 0 {
 		resources["limits"] = limits
 	}
-}
-
-func addRDMAResources(resources map[string]any, rdma RDMAOptions) {
-	requests := copyResourceQuantities(resources["requests"])
-	limits := copyResourceQuantities(resources["limits"])
-	count := strconv.Itoa(rdma.Count)
-	requests[rdma.ResourceName] = count
-	limits[rdma.ResourceName] = count
-	resources["requests"] = requests
-	resources["limits"] = limits
 }
 
 func copyResourceQuantities(existing any) map[string]any {

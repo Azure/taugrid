@@ -519,9 +519,8 @@ func largeGPUUsesManagerWorkloadAccess() bool {
 // TestFineWebRayTrain16xH200IB validates the live FineWeb InfiniBand conformance
 // path: Kueue admits a 16-GPU KubeRay RayJob whose workers shard a ~1.7B GPT with
 // FSDP across both H200 nodes (split 8+8), NCCL runs over InfiniBand
-// (rdma/rdma_shared_device_a + IPC_LOCK + a real /dev/shm), and Ray Train reaches
-// and persists its FIRST checkpoint. Gated by E2E_GPU=1 + E2E_FINEWEB=1 (and
-// requires enable-infiniband.sh to have advertised the RDMA resource first).
+// (network-domain TAS + IPC_LOCK + a real /dev/shm), and Ray Train reaches and
+// persists its FIRST checkpoint. Gated by E2E_GPU=1 + E2E_FINEWEB=1.
 //
 // The success contract is "reach + persist the first checkpoint", not
 // convergence. The job is bounded (default 60 steps, first checkpoint at 50) so it
@@ -563,7 +562,7 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	applyRayJobFixture(t, tc, "fineweb-rayjob-16xh200-ib.yaml", rayJobNameFineWeb)
 
 	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, 2*time.Minute)
-	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload (large-gpu queue must cover rdma/rdma_shared_device_a)")
+	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
 
 	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running and ready")

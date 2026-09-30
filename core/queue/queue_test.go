@@ -103,7 +103,7 @@ func TestBuildSnapshotFiltersNormalizeInput(t *testing.T) {
 	snap, err := BuildSnapshot("ray", testPolicy(), []byte(localQueuesJSON), []byte(clusterQueuesJSON), []byte(workloadsJSON), Options{
 		Team:     "Research",
 		Lane:     "large_memory",
-		GPUClass: "H200 NVLINK 141GB",
+		GPUClass: "H200 141GB",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +322,7 @@ const workloadsJSON = `{
         "labels": {
           "` + workloadmeta.LabelTeam + `": "research",
           "` + workloadmeta.LabelLane + `": "training",
-          "` + workloadmeta.LabelGPUClass + `": "a100-nvlink-80gb",
+          "` + workloadmeta.LabelGPUClass + `": "a100-80gb",
           "` + workloadmeta.LabelShape + `": "8xa100-80gb",
           "` + workloadmeta.LabelPreset + `": "azure.research.training.xl"
         }

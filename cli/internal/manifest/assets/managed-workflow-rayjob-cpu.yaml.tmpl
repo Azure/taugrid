@@ -164,8 +164,8 @@ ${RUNTIME_ENV_WORKER}
                       - DAC_OVERRIDE
 {{end}}
                 resources:
-                  requests: { cpu: "${WORKER_CPUS}", memory: ${WORKER_MEMORY}{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: ${WORKER_MEMORY_LIMIT}{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
+                  requests: { cpu: "${WORKER_CPUS}", memory: ${WORKER_MEMORY} }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: ${WORKER_MEMORY_LIMIT} }
                 volumeMounts:
                   - { name: script,   mountPath: /script,   readOnly: true }
                   - { name: data,     mountPath: /data }

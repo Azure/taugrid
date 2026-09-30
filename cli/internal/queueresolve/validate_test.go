@@ -1011,11 +1011,11 @@ func TestSelectQueueNormalizesLegacyGPUClassAliasBeforeMatching(t *testing.T) {
 	selected, candidates, err := SelectQueue(context.Background(), runner, AutoSelectOptions{
 		Namespace:       "ray",
 		GPUCount:        1,
-		GPUClass:        "a100-nvlink-80gb",
+		GPUClass:        "a100-80gb",
 		GPUResourceName: kueueapi.GPUResourceDevicePlugin,
 	})
 	if err != nil {
-		t.Fatalf("SelectQueue legacy alias: %v; candidates=%+v", err, candidates)
+		t.Fatalf("SelectQueue canonical class: %v; candidates=%+v", err, candidates)
 	}
 	if selected.ResourceFlavor != "ndm-a100-v4" {
 		t.Fatalf("selected=%+v, want canonical-label flavor ndm-a100-v4", selected)

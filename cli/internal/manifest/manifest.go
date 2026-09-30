@@ -262,9 +262,6 @@ func (m *Manifest) Validate() error {
 	if err := runconfig.ValidateLiteralEnvPayloads(envspec.DirectMap(m.Runtime.Env)); err != nil {
 		return err
 	}
-	if err := runconfig.ValidateRDMA(m.Runtime.RDMA); err != nil {
-		return err
-	}
 	if err := validateStorage(m.Storage.DataPVC, m.Storage.Mounts); err != nil {
 		return err
 	}

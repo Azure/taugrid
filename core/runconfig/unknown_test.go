@@ -296,10 +296,10 @@ func TestNestedPassthroughTypoWarns(t *testing.T) {
 			want: "runtime.rdma.enabeld",
 		},
 		{
-			name: "rdma resource_name typo",
+			name: "removed rdma resource name",
 			raw: "schema_version: 1\nname: x\nworkflow:\n  script: t.py\n" +
-				"runtime:\n  rdma:\n    enabled: true\n    resource_nmae: rdma/x\n",
-			want: "runtime.rdma.resource_nmae",
+				"runtime:\n  rdma:\n    enabled: true\n    resource_name: rdma/x\n",
+			want: "runtime.rdma.resource_name",
 		},
 		{
 			name: "mount readOnly typo",
@@ -329,7 +329,7 @@ func TestNestedPassthroughTypoWarns(t *testing.T) {
 // turn correct manifests into warning spam.
 func TestValidNestedPassthroughIsSilent(t *testing.T) {
 	raw := "schema_version: 1\nname: x\nworkflow:\n  script: t.py\n" +
-		"runtime:\n  rdma:\n    enabled: true\n    resource_name: rdma/rdma_shared_device_a\n    count: 1\n" +
+		"runtime:\n  rdma:\n    enabled: true\n" +
 		"storage:\n  data_pvc: blob-training\n  mounts:\n" +
 		"    - name: a\n      mountPath: /a\n      pvc: p\n      readOnly: true\n" +
 		"    - name: b\n      mountPath: /b\n      pvc: q\n"

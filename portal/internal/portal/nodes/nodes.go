@@ -163,8 +163,8 @@ type Node struct {
 	Conditions        []Condition    `json:"operationalConditions,omitempty"`
 }
 
-// RDMAResource is one device-plugin resource advertised by a node. Presence
-// establishes schedulable RDMA capability, not link health.
+// RDMAResource is one device-plugin resource advertised by a node. It is
+// diagnostic inventory only; workload placement uses Tau topology labels.
 type RDMAResource struct {
 	Name        string `json:"name"`
 	Capacity    int64  `json:"capacity"`

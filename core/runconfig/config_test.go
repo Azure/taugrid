@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Azure/taugrid/core/envspec"
+	"github.com/Azure/taugrid/core/topology"
 )
 
 func parse(raw []byte, source string) (Config, error) {
@@ -457,48 +458,8 @@ storage:
 	}
 }
 
-func TestValidateDirectRejectsInvalidRDMA(t *testing.T) {
-	zero := 0
-	negative := -1
-	tests := []struct {
-		name string
-		rdma RDMA
-		want string
-	}{
-		{
-			name: "zero count",
-			rdma: RDMA{Enabled: true, Count: &zero},
-			want: "runtime.rdma.count: want ≥ 1",
-		},
-		{
-			name: "negative count",
-			rdma: RDMA{Enabled: true, Count: &negative},
-			want: "runtime.rdma.count: want ≥ 1",
-		},
-		{
-			name: "whitespace resource name",
-			rdma: RDMA{Enabled: true, ResourceName: " rdma/foo "},
-			want: "runtime.rdma.resource_name: must not have surrounding whitespace",
-		},
-		{
-			name: "invalid resource name",
-			rdma: RDMA{Enabled: true, ResourceName: "INVALID"},
-			want: "runtime.rdma.resource_name",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{Runtime: Runtime{RDMA: tt.rdma}}
-			if err := cfg.ValidateDirect(); err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("ValidateDirect() error = %v, want %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestValidateDirectAcceptsValidRDMA(t *testing.T) {
-	one := 1
-	cfg := Config{Runtime: Runtime{RDMA: RDMA{Enabled: true, Count: &one, ResourceName: "rdma/rdma_shared_device_a"}}}
+func TestValidateDirectAcceptsRDMA(t *testing.T) {
+	cfg := Config{Runtime: Runtime{RDMA: RDMA{Enabled: true}}}
 	if err := cfg.ValidateDirect(); err != nil {
 		t.Fatalf("ValidateDirect() unexpected error: %v", err)
 	}
@@ -1081,7 +1042,7 @@ func TestJSONSchemaDurationRendersAsString(t *testing.T) {
 	}
 }
 
-func TestJSONSchemaAcceptsDeprecatedGPUClassAliases(t *testing.T) {
+func TestJSONSchemaListsCanonicalGPUClasses(t *testing.T) {
 	raw, err := JSONSchema()
 	if err != nil {
 		t.Fatal(err)
@@ -1093,22 +1054,14 @@ func TestJSONSchemaAcceptsDeprecatedGPUClassAliases(t *testing.T) {
 	props := schema["properties"].(map[string]any)
 	policy := props["policy"].(map[string]any)["properties"].(map[string]any)
 	gpuClass := policy["gpu_class"].(map[string]any)
-	choices, ok := gpuClass["oneOf"].([]any)
-	if !ok || len(choices) != 2 {
-		t.Fatalf("gpu_class oneOf = %#v, want canonical and deprecated choices", gpuClass["oneOf"])
-	}
-	deprecated := choices[1].(map[string]any)
-	if deprecated["deprecated"] != true {
-		t.Fatalf("deprecated gpu_class aliases are not marked deprecated: %#v", deprecated)
-	}
-	got := deprecated["enum"].([]any)
-	want := []string{"a100-nvlink-80gb", "h100-standalone-95gb", "h200-nvlink-141gb"}
+	got := gpuClass["enum"].([]any)
+	want := topology.SupportedGPUClasses()
 	if len(got) != len(want) {
-		t.Fatalf("deprecated aliases = %#v, want %v", got, want)
+		t.Fatalf("gpu_class values = %#v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("deprecated alias[%d] = %v, want %q", i, got[i], want[i])
+			t.Fatalf("gpu_class[%d] = %v, want %q", i, got[i], want[i])
 		}
 	}
 }

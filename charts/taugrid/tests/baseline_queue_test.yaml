@@ -5,7 +5,7 @@ tests:
   - it: renders the portable queue contract by default
     asserts:
       - hasDocuments:
-          count: 7
+          count: 6
       - equal:
           path: kind
           value: ResourceFlavor
@@ -18,128 +18,94 @@ tests:
           path: spec.topologyName
         documentIndex: 0
       - equal:
-          path: metadata.name
-          value: taugrid-default-gpu-topology-v2
-        documentIndex: 1
-      - notExists:
-          path: spec.nodeLabels["tau.azure.com/gpu-class"]
-        documentIndex: 1
-      - equal:
-          path: spec.nodeTaints[0]
-          value:
-            key: sku
-            value: gpu
-            effect: NoSchedule
-        documentIndex: 1
-      - notExists:
-          path: spec.tolerations
-        documentIndex: 1
-      - equal:
-          path: spec.topologyName
-          value: taugrid-gpu-topology-v2
-        documentIndex: 1
-      - notExists:
-          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
-        documentIndex: 1
-      - equal:
           path: kind
           value: ClusterQueue
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: metadata.name
           value: jobqueue
-        documentIndex: 2
+        documentIndex: 1
+      - equal:
+          path: metadata.labels["tau.azure.com/discover-gpu-flavors"]
+          value: "true"
+        documentIndex: 1
       - equal:
           path: spec.queueingStrategy
           value: BestEffortFIFO
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.preemption.withinClusterQueue
           value: LowerPriority
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.namespaceSelector.matchExpressions[0].key
           value: tau.azure.com/workspace
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].coveredResources
           value:
             - cpu
             - memory
             - nvidia.com/gpu
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].flavors[0].name
           value: taugrid-default-cpu
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].flavors[0].resources[2]
           value:
             name: nvidia.com/gpu
             nominalQuota: "0"
-        documentIndex: 2
-      - equal:
-          path: spec.resourceGroups[0].flavors[1].name
-          value: taugrid-default-gpu-topology-v2
-        documentIndex: 2
-      - equal:
-          path: spec.resourceGroups[0].flavors[1].resources
-          value:
-            - name: cpu
-              nominalQuota: "100000"
-            - name: memory
-              nominalQuota: 100Ti
-            - name: nvidia.com/gpu
-              nominalQuota: "1000"
-        documentIndex: 2
+        documentIndex: 1
       - equal:
           path: kind
           value: PriorityClass
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: metadata.name
           value: taugrid-default
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: value
           value: 1000
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: preemptionPolicy
           value: PreemptLowerPriority
-        documentIndex: 3
+        documentIndex: 2
       - equal:
           path: metadata.name
           value: taugrid-priority
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: value
           value: 1200
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: preemptionPolicy
           value: PreemptLowerPriority
-        documentIndex: 4
+        documentIndex: 3
       - equal:
           path: kind
           value: WorkloadPriorityClass
-        documentIndex: 5
+        documentIndex: 4
       - equal:
           path: metadata.name
           value: taugrid-default
-        documentIndex: 5
+        documentIndex: 4
       - equal:
           path: value
           value: 1000
-        documentIndex: 5
+        documentIndex: 4
       - equal:
           path: metadata.name
           value: taugrid-priority
-        documentIndex: 6
+        documentIndex: 5
       - equal:
           path: value
           value: 1200
-        documentIndex: 6
+        documentIndex: 5
 
   - it: disables every baseline queue object together
     set:
@@ -155,34 +121,22 @@ tests:
       - equal:
           path: metadata.name
           value: research
-        documentIndex: 2
+        documentIndex: 1
 
   - it: rejects a topology name the controller does not own
     set:
       baselineQueue.topology.name: custom-topology
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.topology.name is fixed at taugrid-gpu-topology-v2 because tau-core-controller owns the Topology
+          errorMessage: baselineQueue.topology.name is fixed at taugrid-gpu-topology because tau-core-controller owns the Topology
 
-  - it: leaves GPU flavors non-TAS when topology is disabled
-    set:
-      baselineQueue.topology.enabled: false
+  - it: defers GPU ResourceFlavors to controller discovery by default
     asserts:
-      - notExists:
-          path: spec.topologyName
-        documentIndex: 1
-      - notExists:
-          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
-        documentIndex: 1
-
-  - it: enables the controller-owned topology by default
-    asserts:
-      - equal:
-          path: spec.topologyName
-          value: taugrid-gpu-topology-v2
-        documentIndex: 1
-      - notExists:
-          path: metadata.annotations["kueue.x-k8s.io/podset-required-topology"]
+      - hasDocuments:
+          count: 6
+      - lengthEqual:
+          path: spec.resourceGroups[0].flavors
+          count: 1
         documentIndex: 1
 
   - it: renders a class-labeled GPU flavor without constraining the CPU flavor
@@ -210,7 +164,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: taugrid-gpu-topology-v2
+          value: taugrid-gpu-topology
         documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].coveredResources
@@ -256,8 +210,27 @@ tests:
                     - name: memory
                       nominalQuota: 100Ti
         documentIndex: 1
+      - notExists:
+          path: metadata.labels["tau.azure.com/discover-gpu-flavors"]
+        documentIndex: 1
 
-  - it: rejects legacy mixed CPU and GPU resource values during upgrade
+  - it: disables controller discovery when topology is disabled
+    set:
+      baselineQueue.topology.enabled: false
+    asserts:
+      - notExists:
+          path: metadata.labels["tau.azure.com/discover-gpu-flavors"]
+        documentIndex: 1
+
+  - it: disables controller discovery when the controller is disabled
+    set:
+      components.tauCoreController.enabled: false
+    asserts:
+      - notExists:
+          path: metadata.labels["tau.azure.com/discover-gpu-flavors"]
+        documentIndex: 1
+
+  - it: rejects GPU resources in the CPU and memory resource list
     set:
       baselineQueue.resources:
         - name: cpu
@@ -268,7 +241,7 @@ tests:
           nominalQuota: "1000"
     asserts:
       - failedTemplate:
-          errorMessage: resource nvidia.com/gpu appears in both baselineQueue.resources and baselineQueue.gpu.coveredResources; remove GPU resources from baselineQueue.resources before upgrading
+          errorMessage: resource nvidia.com/gpu appears in both baselineQueue.resources and baselineQueue.gpu.coveredResources; GPU resources belong only in baselineQueue.gpu.coveredResources
 
   - it: rejects a GPU class label on the CPU flavor
     set:
@@ -277,18 +250,18 @@ tests:
         tau.azure.com/gpu-class: a100-80gb
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not set GPU class or series labels; move GPU placement labels to baselineQueue.gpu.flavors before upgrading
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not set GPU placement labels; configure GPU placement through baselineQueue.gpu.flavors
 
-  - it: rejects legacy GPU series placement on the CPU flavor
+  - it: rejects a GPU series label on the CPU flavor
     set:
       baselineQueue.flavor.nodeLabels:
         kubernetes.io/os: linux
         kueue.azure.com/gpu-series: ndm-a100-v4
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not set GPU class or series labels; move GPU placement labels to baselineQueue.gpu.flavors before upgrading
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not set GPU placement labels; configure GPU placement through baselineQueue.gpu.flavors
 
-  - it: rejects legacy GPU taint toleration on the CPU flavor
+  - it: rejects a GPU taint toleration on the CPU flavor
     set:
       baselineQueue.flavor.tolerations:
         - key: sku
@@ -297,7 +270,7 @@ tests:
           effect: NoSchedule
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; configure GPU tolerations through baselineQueue.gpu.flavors
 
   - it: rejects an Exists GPU toleration on the CPU flavor
     set:
@@ -307,7 +280,7 @@ tests:
           effect: NoSchedule
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; configure GPU tolerations through baselineQueue.gpu.flavors
 
   - it: rejects a wildcard toleration on the CPU flavor
     set:
@@ -317,7 +290,7 @@ tests:
           effect: NoSchedule
     asserts:
       - failedTemplate:
-          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; move GPU tolerations to baselineQueue.gpu.flavors before upgrading
+          errorMessage: baselineQueue.flavor is the CPU/memory flavor and must not tolerate GPU node taints; configure GPU tolerations through baselineQueue.gpu.flavors
 
   - it: rejects GPU flavor resources that differ from coveredResources
     set:
@@ -354,7 +327,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.topologyName
-          value: taugrid-gpu-topology-v2
+          value: taugrid-gpu-topology
         documentIndex: 1
       - notExists:
           path: spec.tolerations

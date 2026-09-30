@@ -77,8 +77,8 @@ const nodesJSON = `{"items":[
       "unbounded-cloud.io/site":"cluster",
       "topology.kubernetes.io/region":"westeurope",
       "topology.kubernetes.io/zone":"westeurope-0"}},
-   "status":{"capacity":{"cpu":"40","memory":"329974272Ki","nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
-     "allocatable":{"nvidia.com/gpu":"1","rdma/rdma_shared_device_a":"1"},
+   "status":{"capacity":{"cpu":"40","memory":"329974272Ki","nvidia.com/gpu":"1","rdma/example_hca":"1"},
+     "allocatable":{"nvidia.com/gpu":"1","rdma/example_hca":"1"},
      "conditions":[
        {"type":"MemoryPressure","status":"False"},
        {"type":"GPUNVLinkCRCDataErrors","status":"False","reason":"GPUNVLinkCRCDataErrorsOk","lastHeartbeatTime":"2026-09-14T20:03:00Z","lastTransitionTime":"2026-09-11T02:51:06Z"},
@@ -164,7 +164,7 @@ func TestBoardParsesNodeFields(t *testing.T) {
 		t.Fatalf("location label sources = pool %q region %q zone %q", n.AgentPoolLabel, n.RegionLabel, n.ZoneLabel)
 	}
 	if len(n.RDMAResources) != 1 ||
-		n.RDMAResources[0].Name != "rdma/rdma_shared_device_a" ||
+		n.RDMAResources[0].Name != "rdma/example_hca" ||
 		n.RDMAResources[0].Capacity != 1 ||
 		n.RDMAResources[0].Allocatable != 1 {
 		t.Fatalf("RDMA resources = %+v", n.RDMAResources)

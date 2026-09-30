@@ -129,7 +129,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	warnings = append(warnings, topoWarnings...)
 
 	p := selected.Render
-	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
+	topologyHolder.GPUClass = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
 	var runner *kube.Runner
 	if o.dryRun != "client" {
 		runner = kube.New(kubeContext)
