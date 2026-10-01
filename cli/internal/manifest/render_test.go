@@ -2094,7 +2094,7 @@ func assertPortableSystemAffinity(t *testing.T, podSpec any) {
 	}
 }
 
-func assertRDMAContainer(t *testing.T, label string, container map[string]any, resourceName string, count string) {
+func assertRDMAContainer(t *testing.T, label string, container map[string]any) {
 	t.Helper()
 	securityContext, ok := container["securityContext"].(map[string]any)
 	if !ok {
@@ -2125,20 +2125,6 @@ func assertRDMAContainer(t *testing.T, label string, container map[string]any, r
 		if !stringListContains(capabilities, want) {
 			t.Fatalf("%s: missing capability %s in %+v", label, want, capabilities)
 		}
-	}
-	requests, ok := dig(container, "resources", "requests").(map[string]any)
-	if !ok {
-		t.Fatalf("%s: missing resource requests: %+v", label, container["resources"])
-	}
-	limits, ok := dig(container, "resources", "limits").(map[string]any)
-	if !ok {
-		t.Fatalf("%s: missing resource limits: %+v", label, container["resources"])
-	}
-	if requests[resourceName] != count {
-		t.Fatalf("%s: RDMA request %s=%v, want %s", label, resourceName, requests[resourceName], count)
-	}
-	if limits[resourceName] != count {
-		t.Fatalf("%s: RDMA limit %s=%v, want %s", label, resourceName, limits[resourceName], count)
 	}
 }
 
@@ -3193,13 +3179,13 @@ runtime:
 	if image := rayJobHeadContainer(t, rj)["image"]; image != defaultRayJobImage {
 		t.Fatalf("RayJob runtime.rdma should keep the canonical MCR Ray image, got %v", image)
 	}
-	if got := dig(rayJobHeadContainer(t, rj), "resources", "requests", "rdma/rdma_shared_device_a"); got != nil {
-		t.Fatalf("control head must not request RDMA, got %v", got)
-	}
 	if got := dig(rayJobHeadContainer(t, rj), "securityContext"); got != nil {
 		t.Fatalf("control head must not carry RDMA security context, got %v", got)
 	}
-	assertRDMAContainer(t, "rayjob worker", rayJobWorkerContainer(t, rj), "rdma/rdma_shared_device_a", "1")
+	assertRDMAContainer(t, "rayjob worker", rayJobWorkerContainer(t, rj))
+	if got := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "metadata", "annotations", topology.RequiredTopologyAnnotation); got != "tau.azure.com/network-domain" {
+		t.Fatalf("RDMA worker required topology=%v, want tau.azure.com/network-domain", got)
+	}
 	assertSocketProbe(t, "rayjob head", rayJobHeadContainer(t, rj), "8265")
 	assertSocketProbe(t, "rayjob worker", rayJobWorkerContainer(t, rj), "52365")
 	assertEnvVar(t, "rayjob head", rayJobHeadContainer(t, rj), "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/rj-rdma/metrics-history.jsonl")
@@ -3236,12 +3222,6 @@ runtime:
 	} {
 		if _, ok := container["securityContext"]; ok {
 			t.Fatalf("%s: RDMA securityContext should be opt-in only: %+v", label, container["securityContext"])
-		}
-		if request := dig(container, "resources", "requests", "rdma/rdma_shared_device_a"); request != nil {
-			t.Fatalf("%s: RDMA resource request should be opt-in only, got %v", label, request)
-		}
-		if limit := dig(container, "resources", "limits", "rdma/rdma_shared_device_a"); limit != nil {
-			t.Fatalf("%s: RDMA resource limit should be opt-in only, got %v", label, limit)
 		}
 	}
 }

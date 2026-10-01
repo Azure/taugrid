@@ -185,7 +185,11 @@ func Render(o Options) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("script payload: %w", err)
 	}
-	plan, err := topology.Build(o.Profile, o.TopologyOptions)
+	topologyOptions := o.TopologyOptions
+	if o.RDMA.Enabled {
+		topologyOptions = topology.WithNetworkDomainRequirement(o.Profile, topologyOptions)
+	}
+	plan, err := topology.Build(o.Profile, topologyOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -879,11 +883,6 @@ func resources(o Options, containerName string) map[string]any {
 		}
 		requests[gpuResource] = o.GPUsPerWorker
 		limits[gpuResource] = o.GPUsPerWorker
-	}
-	if o.RDMA.Enabled && containerName == "ray-worker" {
-		count := strconv.Itoa(o.RDMA.Count)
-		requests[o.RDMA.ResourceName] = count
-		limits[o.RDMA.ResourceName] = count
 	}
 	applyResourceOverrides(requests, limits, ResourceOverrides{
 		CPURequest:    o.Resources.CPURequest,

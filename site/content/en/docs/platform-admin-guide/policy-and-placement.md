@@ -96,109 +96,24 @@ capacity, while workers that all fit on one Node may still run in that Node's
 singleton domain. TauGrid never falls back automatically to `same-site` or
 `unconstrained`.
 
-### Upgrade the three-level topology
+## Current cluster contract
 
-The accelerator-domain release does not mutate the existing three-level
-`taugrid-gpu-topology`. It creates `taugrid-gpu-topology-v2` and moves GPU
-ResourceFlavors to that four-level hierarchy. This versioning is required
-because Kueue treats both `Topology.spec.levels` and
-`ResourceFlavor.spec.topologyName` as immutable.
+TauGrid creates one controller-owned Topology named `taugrid-gpu-topology`
+with the levels `tau.azure.com/site`, `tau.azure.com/network-domain`,
+`tau.azure.com/accelerator-domain`, and `kubernetes.io/hostname`.
 
-Kueue also protects a deleting Topology with
-`kueue.x-k8s.io/resource-in-use` while any ResourceFlavor references it.
-Deleting the old Topology before deleting its old flavors therefore waits
-forever, even after every Workload drains. Migrate in dependency order:
+The baseline queue contains the non-TAS CPU flavor `taugrid-default-cpu` with
+zero GPU quota. `tau-core-controller` discovers GPU Nodes and creates one
+topology-aware ResourceFlavor per distinct `tau.azure.com/gpu-class`. Initial
+GPU quota is the summed allocatable `nvidia.com/gpu` capacity for that class;
+the controller increases quota when more capacity appears and does not
+automatically decrease or prune discovered flavors. Each discovered flavor
+declares `sku=gpu:NoSchedule` as an admission taint, keeping CPU-only workloads
+out of GPU quota. Node creation and later allocatable GPU updates both trigger
+reconciliation, so newly joining pools receive quota as soon as kubelet reports
+their devices.
 
-1. Stop submissions, set every affected ClusterQueue to `HoldAndDrain`, cancel
-   pending workload owners, and wait until no Workloads are reserving or
-   admitted.
-
-   ```bash
-   CLUSTER_QUEUE=jobqueue # replace with each affected ClusterQueue
-   kubectl patch clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" \
-     --type=merge -p '{"spec":{"stopPolicy":"HoldAndDrain"}}'
-   kubectl get workloads.kueue.x-k8s.io -A
-   ```
-2. Upgrade TauGrid. The controller creates `taugrid-gpu-topology-v2`. The
-   default Helm values create `taugrid-default-gpu-topology-v2` and move the
-   ClusterQueue from the old default flavor to the v2 flavor.
-
-   Operators with custom TAS flavors must give each replacement a new
-   `metadata.name` and set `spec.topologyName: taugrid-gpu-topology-v2`;
-   changing `topologyName` on an existing flavor is not supported.
-3. Verify the new hierarchy, replacement flavors, and ClusterQueue references
-   before deleting anything old:
-
-   ```bash
-   kubectl get topology.kueue.x-k8s.io taugrid-gpu-topology-v2 \
-     -o jsonpath='{range .spec.levels[*]}{.nodeLabel}{"\n"}{end}'
-   kubectl get resourceflavors.kueue.x-k8s.io \
-     -o custom-columns=NAME:.metadata.name,TOPOLOGY:.spec.topologyName
-   kubectl get clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" -o yaml
-   ```
-4. Delete the old ResourceFlavors only after no ClusterQueue references them.
-   Then delete the old Topology:
-
-   ```bash
-   kubectl delete resourceflavor.kueue.x-k8s.io taugrid-default-gpu-topology
-   kubectl delete topologies.kueue.x-k8s.io taugrid-gpu-topology
-   ```
-
-   Replace the default old flavor name with every old custom flavor discovered
-   in step 3. Kueue releases the old Topology finalizer only after the final
-   referencing flavor disappears.
-5. Confirm the old objects are gone and the TauCluster reports
-   `QueuesReady=True`, then restore admission:
-
-   ```bash
-   kubectl wait --for=delete \
-     topology.kueue.x-k8s.io/taugrid-gpu-topology --timeout=2m
-   kubectl patch clusterqueue.kueue.x-k8s.io "$CLUSTER_QUEUE" \
-     --type=merge -p '{"spec":{"stopPolicy":"None"}}'
-   ```
-
-If the old Topology remains terminating, query ResourceFlavors whose
-`spec.topologyName` is `taugrid-gpu-topology` and remove the remaining
-ClusterQueue references before deleting those flavors. Do not force-remove the
-Kueue finalizer and do not resume admission while a ClusterQueue references a
-missing flavor.
-
-The legacy inputs `a100-nvlink-80gb`, `h100-standalone-95gb`, and
-`h200-nvlink-141gb` are accepted for one compatibility window, normalized
-before validation/rendering, and produce a CLI deprecation warning. New
-configs and platform assets must use canonical values.
-
-## Existing-cluster migration
-
-Update downstream run configs/examples to canonical values first. Before
-changing live queue or flavor objects, stop submitters, hold admission, and
-drain the queue. `HoldAndDrain` evicts admitted/reserving workloads while
-leaving already-pending workloads in place; inspect those workloads and
-delete or deactivate their owning Job, RayJob, or workflow before waiting for
-zero. Keep namespaces and PVCs in place throughout.
-
-```bash
-export CLUSTER_QUEUE=jobqueue
-kubectl patch clusterqueue "$CLUSTER_QUEUE" --type=merge \
-  -p '{"spec":{"stopPolicy":"HoldAndDrain"}}'
-# Inspect pending owners and cancel them through their owning controller.
-kubectl get workloads -A -o \
-  custom-columns=NAMESPACE:.metadata.namespace,WORKLOAD:.metadata.name,OWNER_KIND:.metadata.ownerReferences[0].kind,OWNER:.metadata.ownerReferences[0].name,ADMITTED:.status.conditions[?(@.type==\"Admitted\")].status
-kubectl wait --for=jsonpath='{.status.reservingWorkloads}'=0 \
-  "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
-kubectl wait --for=jsonpath='{.status.admittedWorkloads}'=0 \
-  "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
-kubectl wait --for=jsonpath='{.status.pendingWorkloads}'=0 \
-  "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
-```
-
-After the queue is empty, upgrade the Tau controller chart so its reviewed
-VM-size catalog reconciles both labels. Add custom hardware through
-`extraNodeLabelRules`, which defines those labels directly rather than
-relying on labels a node might already carry:
-
-CPU-only clusters and GPU pools scaled to zero remain ready when no catalog
-entry currently matches.
+Add custom hardware through `extraNodeLabelRules`:
 
 ```yaml
 tau-core-controller:
@@ -211,62 +126,24 @@ tau-core-controller:
           tau.azure.com/gpu-class: h200-141gb
 ```
 
-Wait for the singleton `TauCluster` to report `NodesReady`, then create
-replacement ResourceFlavors with new names rather than patching referenced
-objects: Kueue may protect or reject changes to immutable/in-use flavor fields.
-
-Verify the exact contract before submitting specific-class work:
+Verify the active contract with:
 
 ```bash
+kubectl get topology taugrid-gpu-topology -o yaml
 kubectl get resourceflavor -o \
-  custom-columns=NAME:.metadata.name,GPU_CLASS:.spec.nodeLabels.tau\\.azure\\.com/gpu-class
-kubectl get nodes -L tau.azure.com/gpu-class
-tau cluster validate nodes --gpu-class a100-80gb --min-healthy 1
+  custom-columns=NAME:.metadata.name,GPU_CLASS:.spec.nodeLabels.tau\\.azure\\.com/gpu-class,TOPOLOGY:.spec.topologyName
+kubectl get nodes -L tau.azure.com/gpu-class,tau.azure.com/network-domain
 tau cluster validate nodes --gpu-class h200-141gb --min-healthy 1
 ```
 
-Fresh installs use a generic CPU flavor, `taugrid-default-cpu`, with zero GPU quota
-and a generic GPU flavor, `taugrid-default-gpu`, with CPU, memory, and GPU quota
-in the same node-resource group. The GPU flavor remains valid for
-`gpu_class: any` and must not be advertised as a specific hardware class.
-
-Keep the sole ResourceFlavor in a resource group that covers CPU, memory,
-and GPU free of any GPU class label. Kueue injects that flavor's node labels for every
-admitted workload, which pins CPU-only work to GPU nodes. Use a zero-GPU CPU
-flavor plus class-labeled GPU flavors in the same group. Upgrade older
-single-flavor installs by draining admission and splitting the flavor:
-
-1. Stop new submissions and set `stopPolicy: HoldAndDrain`. Kueue drains
-   reserving/admitted workloads, but pending workloads remain pending. Inspect
-   them with `kubectl get workloads -A`, then cancel or delete each pending
-   workload's owning Job, RayJob, or workflow before waiting for all three
-   counts to reach zero. Keep PVCs and namespaces in place.
-2. Create a generic non-TAS CPU ResourceFlavor that carries no GPU labels or GPU
-   admission taints. Create separate GPU ResourceFlavors with exact
-   `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, and `topologyName`.
-   Workloads explicitly select `unconstrained`, `same-host`,
-   `same-accelerator-domain`, `same-network-domain`, or `same-site`;
-   ResourceFlavors do not impose one locality policy on every workload.
-   CPU-only jobs remain admissible through the non-TAS CPU flavor and cannot
-   consume GPU quota.
-3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
-   Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor
-   CPU, memory, and GPU quota. Kueue then assigns one node flavor across every
-   resource requested by a pod set.
-4. Restore admission with
-   `kubectl patch clusterqueue "$CLUSTER_QUEUE" --type=merge -p
-   '{"spec":{"stopPolicy":"None"}}'`, submit CPU and GPU smoke targets, and
-   remove the old mixed flavor only after it is no longer referenced, keeping
-   namespaces, PVCs, and workspace data in place throughout this migration.
-
-For a one-GPU A100 cluster the resulting queue shape is:
+For a one-GPU A100 cluster the queue shape is:
 
 ```yaml
 spec:
   resourceGroups:
     - coveredResources: [cpu, memory, nvidia.com/gpu]
       flavors:
-        - name: taugrid-system
+        - name: taugrid-default-cpu
           resources:
             - {name: cpu, nominalQuota: "100000"}
             - {name: memory, nominalQuota: 100Ti}

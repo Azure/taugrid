@@ -62,7 +62,9 @@ type topologyReconcileState struct {
 // +kubebuilder:rbac:groups=tau.azure.com,resources=clusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=tau.azure.com,resources=clusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues;clusterqueues;resourceflavors;workloadpriorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues;workloadpriorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=clusterqueues,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=topologies,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=get;list;watch
 
@@ -158,7 +160,15 @@ func nodeLabelChangePredicate() predicate.Predicate {
 			}
 			oldNode, oldOK := update.ObjectOld.(*corev1.Node)
 			newNode, newOK := update.ObjectNew.(*corev1.Node)
-			return oldOK && newOK && oldNode.Spec.ProviderID != newNode.Spec.ProviderID
+			if !oldOK || !newOK {
+				return false
+			}
+			if oldNode.Spec.ProviderID != newNode.Spec.ProviderID {
+				return true
+			}
+			oldGPU := oldNode.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+			newGPU := newNode.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+			return oldGPU.Cmp(newGPU) != 0
 		},
 		GenericFunc: func(event.GenericEvent) bool {
 			return false

@@ -2262,7 +2262,7 @@ storage:
 		"IPC_LOCK",
 		"SYS_RESOURCE",
 		"DAC_OVERRIDE",
-		"rdma/rdma_shared_device_a",
+		"kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("RDMA config dry-run missing %q:\n%s", want, rendered)

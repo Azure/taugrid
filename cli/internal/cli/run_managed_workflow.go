@@ -327,7 +327,7 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 	}
 	topologyRenderProfile := selected.Render
 	var topologyProfile *profile.Profile = &topologyRenderProfile
-	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(topologyRenderProfile, topologyHolder.GPUClass)
+	topologyHolder.GPUClass = runtopology.ResolveGPUClass(topologyRenderProfile, topologyHolder.GPUClass)
 	var kvSpec *kvspec.Spec
 	if len(m.Runtime.EnvKV) > 0 || o.keyVault != "" {
 		entries, err := kvspec.ParseEntries(m.Runtime.EnvKV, o.keyVault)

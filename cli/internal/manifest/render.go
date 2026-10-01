@@ -770,7 +770,11 @@ func buildSchedulingMetadata(opts RenderOptions) (schedulingMetadata, error) {
 		p.Name = profileName
 	}
 
-	plan, err := topology.Build(p, opts.TopologyOptions)
+	topologyOptions := opts.TopologyOptions
+	if opts.Manifest != nil && opts.Manifest.RuntimeRDMA().Enabled {
+		topologyOptions = topology.WithNetworkDomainRequirement(p, topologyOptions)
+	}
+	plan, err := topology.Build(p, topologyOptions)
 	if err != nil {
 		return schedulingMetadata{}, err
 	}
@@ -1886,8 +1890,6 @@ func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
 		"DataPVC":                        in.DataPVC,
 		"RuntimePip":                     pip,
 		"RDMAEnabled":                    in.RDMA.Enabled,
-		"RDMAResourceName":               in.RDMA.ResourceName,
-		"RDMACount":                      in.RDMA.Count,
 		"PipPackages":                    shellQuotePipPackages(pip),
 		"JobLabels":                      in.Blocks.JobLabels,
 		"JobAnnotationsBlock":            in.Blocks.JobAnnotationsBlock,

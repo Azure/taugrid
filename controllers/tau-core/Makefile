@@ -5,7 +5,7 @@ BINARY := tau-core-controller
 
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
 
-.PHONY: build test test-kind-e2e test-kind-topology-migration lint generate manifests clean
+.PHONY: build test test-kind-e2e lint generate manifests clean
 
 build:
 	CGO_ENABLED=0 go build -o bin/$(BINARY) ./cmd/controller
@@ -18,9 +18,6 @@ test:
 # needs the local `build` binary target.
 test-kind-e2e:
 	./scripts/kind-e2e.sh
-
-test-kind-topology-migration:
-	./scripts/kueue-topology-migration-e2e.sh
 
 lint:
 	go vet ./...

@@ -124,7 +124,7 @@ func canonicalGPUClassLabel(v string) string {
 	if strings.TrimSpace(v) == "" {
 		return ""
 	}
-	canonical, _ := topology.NormalizeGPUClass(v)
+	canonical := topology.NormalizeGPUClass(v)
 	return canonical
 }
 

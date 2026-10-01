@@ -1,7 +1,7 @@
 # FineWeb 16xH200 InfiniBand conformance RayJob: Kueue admits a 16-worker Ray
 # Train job that shards a ~1.7B GPT across all 16 H200 GPUs with FSDP, talks NCCL
-# over InfiniBand (rdma/rdma_shared_device_a + IPC_LOCK + a real /dev/shm), splits
-# 8+8 across both H200 nodes, and persists its first checkpoint.
+# over InfiniBand (network-domain TAS + IPC_LOCK + a real /dev/shm), splits 8+8
+# across both H200 nodes, and persists its first checkpoint.
 #
 # The driver script is embedded directly (head-only initContainer + emptyDir at
 # /script) instead of mounted from a ConfigMap, matching PR1's
@@ -327,13 +327,15 @@ spec:
             # placement assertion both key on this so they never match unrelated
             # Ray worker pods.
             e2e-test: fineweb-16xh200-ib
+          annotations:
+            kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain
         spec:
           initContainers:
           # The published Ray image is Azure Linux 3.0 and does NOT ship the RDMA
           # userspace stack (libibverbs / the mlx5 verbs provider). Without it NCCL
           # logs "Failed to open libibverbs.so[.1]" and silently falls back to the
           # TCP socket transport ("Using network Socket"), so InfiniBand never
-          # engages no matter how the pod requests rdma/rdma_shared_device_a. This
+          # engages even when placement selects the correct fabric. This
           # initContainer stages a glibc/ABI-matched rdma-core (libibverbs,
           # librdmacm, the mlx5 provider, libnl, and the /etc/libibverbs.d driver
           # configs) into a shared volume that the worker then exposes to NCCL via
@@ -418,12 +420,10 @@ spec:
                 cpu: "4"
                 memory: "48Gi"
                 nvidia.com/gpu: "1"
-                rdma/rdma_shared_device_a: "1"
               limits:
                 cpu: "4"
                 memory: "48Gi"
                 nvidia.com/gpu: "1"
-                rdma/rdma_shared_device_a: "1"
             startupProbe:
               httpGet:
                 path: /api/healthz

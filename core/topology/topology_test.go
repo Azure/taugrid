@@ -124,6 +124,52 @@ func TestBuild_SameNetworkDomainPlacement(t *testing.T) {
 	}
 }
 
+func TestWithNetworkDomainRequirement(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile profile.Profile
+		options Options
+		want    string
+		wantTAS bool
+	}{
+		{
+			name:    "defaults to network domain",
+			options: Options{},
+			want:    profile.PlacementSameNetworkDomain,
+			wantTAS: true,
+		},
+		{
+			name: "preserves narrower profile placement",
+			profile: profile.Profile{Topology: profile.Topology{
+				Placement: profile.PlacementSameAcceleratorDomain,
+			}},
+			options: Options{},
+			want:    "",
+			wantTAS: true,
+		},
+		{
+			name: "upgrades unconstrained placement and forces TAS",
+			options: Options{
+				Placement:                       profile.PlacementUnconstrained,
+				DisableKueueTopologyAnnotations: true,
+			},
+			want:    profile.PlacementSameNetworkDomain,
+			wantTAS: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := WithNetworkDomainRequirement(tc.profile, tc.options)
+			if got.Placement != tc.want {
+				t.Fatalf("placement=%q, want %q", got.Placement, tc.want)
+			}
+			if got.DisableKueueTopologyAnnotations == tc.wantTAS {
+				t.Fatalf("DisableKueueTopologyAnnotations=%v, want %v", got.DisableKueueTopologyAnnotations, !tc.wantTAS)
+			}
+		})
+	}
+}
+
 func TestBuild_SameAcceleratorDomainPlacement(t *testing.T) {
 	plan, err := Build(profile.Profile{Name: "managed-gpu"}, Options{
 		QueueName: SharedGPUQueueName,
@@ -288,56 +334,41 @@ func TestBuild_H100ClassDoesNotConstrainPlacement(t *testing.T) {
 	}
 }
 
-func TestNormalizeGPUClassLegacyAliases(t *testing.T) {
-	for legacy, want := range map[string]string{
-		"a100-nvlink-80gb":     GPUClassA10080GB,
-		"h100-standalone-95gb": GPUClassH10095GB,
-		"h200-nvlink-141gb":    GPUClassH200141GB,
-	} {
-		got, deprecated := NormalizeGPUClass(legacy)
-		if got != want || !deprecated {
-			t.Errorf("NormalizeGPUClass(%q)=(%q,%t), want (%q,true)", legacy, got, deprecated, want)
-		}
-	}
+func TestNormalizeGPUClass(t *testing.T) {
 	for _, canonical := range SupportedGPUClasses() {
-		got, deprecated := NormalizeGPUClass(canonical)
-		if got != canonical || deprecated {
-			t.Errorf("NormalizeGPUClass(%q)=(%q,%t), want (%q,false)", canonical, got, deprecated, canonical)
+		got := NormalizeGPUClass(canonical)
+		if got != canonical {
+			t.Errorf("NormalizeGPUClass(%q)=%q, want %q", canonical, got, canonical)
 		}
 		if !IsSupportedGPUClass(canonical) {
 			t.Errorf("IsSupportedGPUClass(%q)=false, want true", canonical)
 		}
 	}
-	if IsSupportedGPUClass("a100") {
-		t.Error("IsSupportedGPUClass(a100)=true, want false")
+	for _, unsupported := range []string{"a100", "unsupported-gpu"} {
+		if IsSupportedGPUClass(unsupported) {
+			t.Errorf("IsSupportedGPUClass(%q)=true, want false", unsupported)
+		}
 	}
 }
 
-func TestBuildNormalizesLegacyGPUClassBeforeRendering(t *testing.T) {
+func TestBuildRejectsUnsupportedGPUClass(t *testing.T) {
 	p := topologyProfile()
-	p.Topology.GPUClass = "a100-nvlink-80gb"
+	p.Topology.GPUClass = "unsupported-gpu"
 
-	plan, err := Build(p, Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := plan.NodeSelector[NodeLabelGPUClass]; got != GPUClassA10080GB {
-		t.Fatalf("legacy alias rendered selector %q, want %q", got, GPUClassA10080GB)
-	}
-	if got := plan.Labels[LabelGPUClass]; got != GPUClassA10080GB {
-		t.Fatalf("legacy alias rendered label %q, want %q", got, GPUClassA10080GB)
+	if _, err := Build(p, Options{}); err == nil {
+		t.Fatal("Build() accepted unsupported GPU class")
 	}
 }
 
 func TestResolveGPUClassUsesProfileAndExplicitOverride(t *testing.T) {
 	p := profile.Profile{
-		Topology: profile.Topology{GPUClass: "a100-nvlink-80gb"},
+		Topology: profile.Topology{GPUClass: GPUClassA10080GB},
 	}
-	if got, deprecated := ResolveGPUClass(p, ""); got != GPUClassA10080GB || !deprecated {
-		t.Fatalf("profile class = %q deprecated=%v, want %q true", got, deprecated, GPUClassA10080GB)
+	if got := ResolveGPUClass(p, ""); got != GPUClassA10080GB {
+		t.Fatalf("profile class = %q, want %q", got, GPUClassA10080GB)
 	}
-	if got, deprecated := ResolveGPUClass(p, GPUClassAny); got != GPUClassAny || deprecated {
-		t.Fatalf("override class = %q deprecated=%v, want %q false", got, deprecated, GPUClassAny)
+	if got := ResolveGPUClass(p, GPUClassAny); got != GPUClassAny {
+		t.Fatalf("override class = %q, want %q", got, GPUClassAny)
 	}
 }
 

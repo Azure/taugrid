@@ -123,19 +123,15 @@ func TestRenderPriorityTierAppliesToRayJobAndEveryPod(t *testing.T) {
 	}
 }
 
-func TestRenderRDMAAppliesToWorkersOnly(t *testing.T) {
+func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 	out, err := Render(Options{
-		Name:          "rdma-ray",
-		Namespace:     "tau",
-		ScriptName:    "train.py",
-		Script:        []byte("print('ok')\n"),
-		Workers:       2,
-		GPUsPerWorker: 8,
-		RDMA: runconfig.NormalizedRDMA{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		Name:            "rdma-ray",
+		Namespace:       "tau",
+		ScriptName:      "train.py",
+		Script:          []byte("print('ok')\n"),
+		Workers:         2,
+		GPUsPerWorker:   8,
+		RDMA:            runconfig.NormalizedRDMA{Enabled: true},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 	})
 	if err != nil {
@@ -150,8 +146,8 @@ func TestRenderRDMAAppliesToWorkersOnly(t *testing.T) {
 		t.Fatalf("head must not receive RDMA securityContext: %v", headContainer["securityContext"])
 	}
 	headResources := headContainer["resources"].(map[string]any)
-	if _, exists := headResources["requests"].(map[string]any)["rdma/rdma_shared_device_a"]; exists {
-		t.Fatalf("head must not request RDMA resources: %v", headResources)
+	if got := len(headResources["requests"].(map[string]any)); got != 2 {
+		t.Fatalf("head resource requests=%v, want only cpu and memory", headResources)
 	}
 
 	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
@@ -164,10 +160,14 @@ func TestRenderRDMAAppliesToWorkersOnly(t *testing.T) {
 	if got := fmt.Sprint(capabilities); got != "[IPC_LOCK SYS_RESOURCE DAC_OVERRIDE]" {
 		t.Fatalf("worker RDMA capabilities = %s", got)
 	}
+	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Fatalf("worker RDMA topology=%v, want tau.azure.com/network-domain", got)
+	}
 	workerResources := workerContainer["resources"].(map[string]any)
 	for _, field := range []string{"requests", "limits"} {
-		if got := workerResources[field].(map[string]any)["rdma/rdma_shared_device_a"]; got != "1" {
-			t.Fatalf("worker %s RDMA resource = %v, want 1", field, got)
+		if got := len(workerResources[field].(map[string]any)); got != 3 {
+			t.Fatalf("worker %s=%v, want cpu, memory, and GPU only", field, workerResources[field])
 		}
 	}
 }
@@ -394,7 +394,7 @@ func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
 		GPUsPerWorker: 1,
 		TopologyOptions: topology.Options{
 			QueueName: "jobqueue",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 		},
 	})
 	if err != nil {
@@ -514,7 +514,7 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 		},
 		TopologyOptions: topology.Options{
 			Placement: "same-host",
-			GPUClass:  "h200-nvlink-141gb",
+			GPUClass:  "h200-141gb",
 			QueueName: "jobqueue",
 		},
 	})

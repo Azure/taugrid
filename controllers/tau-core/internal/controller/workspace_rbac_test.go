@@ -35,6 +35,49 @@ func TestSystemReaderLoggingPermissionUsesConfiguredNamespace(t *testing.T) {
 }
 
 func TestKustomizeResearcherRoleGrantsRayServicePermissions(t *testing.T) {
+	role := kustomizeClusterRole(t, defaultRoleName)
+	want := rbacv1.PolicyRule{
+		APIGroups: []string{"ray.io"},
+		Resources: []string{"rayjobs", "rayservices"},
+		Verbs:     []string{"create", "get", "list", "watch", "delete", "patch", "update"},
+	}
+	for _, rule := range role.Rules {
+		if reflect.DeepEqual(rule, want) {
+			return
+		}
+	}
+	t.Fatalf("researcher role must grant RayService lifecycle permissions: %#v", role.Rules)
+}
+
+func TestKustomizeControllerRoleMatchesGPUFlavorDiscoveryPermissions(t *testing.T) {
+	role := kustomizeClusterRole(t, "tau-core-controller")
+	for _, want := range []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{"kueue.x-k8s.io"},
+			Resources: []string{"clusterqueues"},
+			Verbs:     []string{"get", "list", "watch", "update"},
+		},
+		{
+			APIGroups: []string{"kueue.x-k8s.io"},
+			Resources: []string{"resourceflavors"},
+			Verbs:     []string{"get", "list", "watch", "create"},
+		},
+	} {
+		found := false
+		for _, rule := range role.Rules {
+			if reflect.DeepEqual(rule, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Kustomize controller role is missing GPU discovery rule %#v: %#v", want, role.Rules)
+		}
+	}
+}
+
+func kustomizeClusterRole(t *testing.T, name string) rbacv1.ClusterRole {
+	t.Helper()
 	file, err := os.Open("../../../../charts/tau-core-controller/kustomize/rbac.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -48,20 +91,11 @@ func TestKustomizeResearcherRoleGrantsRayServicePermissions(t *testing.T) {
 		} else if err != nil {
 			t.Fatal(err)
 		}
-		if role.Kind != "ClusterRole" || role.Name != defaultRoleName {
+		if role.Kind != "ClusterRole" || role.Name != name {
 			continue
 		}
-		want := rbacv1.PolicyRule{
-			APIGroups: []string{"ray.io"},
-			Resources: []string{"rayjobs", "rayservices"},
-			Verbs:     []string{"create", "get", "list", "watch", "delete", "patch", "update"},
-		}
-		for _, rule := range role.Rules {
-			if reflect.DeepEqual(rule, want) {
-				return
-			}
-		}
-		t.Fatalf("researcher role must grant RayService lifecycle permissions: %#v", role.Rules)
+		return role
 	}
-	t.Fatalf("ClusterRole %q is missing from Kustomize RBAC", defaultRoleName)
+	t.Fatalf("ClusterRole %q is missing from Kustomize RBAC", name)
+	return rbacv1.ClusterRole{}
 }

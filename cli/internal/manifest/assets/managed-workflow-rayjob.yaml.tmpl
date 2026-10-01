@@ -314,12 +314,12 @@ ${RUNTIME_ENV_WORKER}
                 resources:{{if .UseDRA}}
                   claims:
                     - name: gpu
-                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else if .UseDevicePlugin}}
-                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}", {{.GPUResourceName}}: "{{.GPUs}}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{else}}
-                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }
-                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"{{if .RDMAEnabled}}, {{.RDMAResourceName}}: "{{.RDMACount}}"{{end}} }{{end}}
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}" }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}" }{{else if .UseDevicePlugin}}
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}", {{.GPUResourceName}}: "{{.GPUs}}" }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}", {{.GPUResourceName}}: "{{.GPUs}}" }{{else}}
+                  requests: { cpu: "${WORKER_CPUS}", memory: "${WORKER_MEMORY}" }
+                  limits:   { cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}" }{{end}}
                 volumeMounts:
                   - { name: script,   mountPath: /script,   readOnly: true }
                   - { name: data,     mountPath: /data }

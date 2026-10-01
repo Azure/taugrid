@@ -26,8 +26,9 @@ const (
 	labelAzureManaged           = "kubernetes.azure.com/managed"
 	labelAzureManagedCluster    = "kubernetes.azure.com/managed-cluster"
 	labelStretchManaged         = "aks.azure.com/stretch-managed"
+	labelDiscoverGPUFlavors     = labelkeys.LabelDiscoverGPUFlavors
 
-	tauGPUNodeTopologyName = "taugrid-gpu-topology-v2"
+	tauGPUNodeTopologyName = "taugrid-gpu-topology"
 
 	annotationApproved        = labelkeys.AnnotationApproved
 	annotationRejected        = labelkeys.AnnotationRejected

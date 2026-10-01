@@ -41,10 +41,8 @@ baselineQueue:
   topology:
     enabled: true
     # Owned and reconciled by tau-core-controller.
-    name: taugrid-gpu-topology-v2
+    name: taugrid-gpu-topology
   flavor:
-    # New identity avoids mutating the topologyName of the chart 0.2.0
-    # taugrid-default ResourceFlavor, which Kueue treats as immutable.
     name: taugrid-default-cpu
     # The baseline flavor covers CPU and memory only. Keep it free of GPU labels
     # and GPU taint tolerations so CPU-only workloads remain on general-purpose
@@ -61,28 +59,12 @@ baselineQueue:
     enabled: true
     coveredResources:
       - nvidia.com/gpu
-    # CPU, memory, and GPU are node-local resources in one Kueue ResourceGroup.
-    # The CPU flavor receives zero GPU quota; each flavor below receives the
-    # CPU/memory quotas above plus its declared GPU quota. This makes Kueue
-    # assign one flavor across all pod resources without steering CPU-only jobs
-    # onto GPU nodes. The default generic flavor supports gpu_class: any. Replace
-    # it with class-labeled flavors when hardware is known; do not keep it beside
-    # class-specific flavors or specific-class work could consume generic quota.
-    # When topology is enabled, a selected GPU flavor is the sole TAS flavor.
-    flavors:
-      # New identity avoids mutating the immutable topologyName on GPU flavors
-      # created by releases before tau-core-controller owned the Topology.
-      - name: taugrid-default-gpu-topology-v2
-        nodeLabels:
-          kubernetes.io/os: linux
-        nodeTaints:
-          - key: sku
-            value: gpu
-            effect: NoSchedule
-        tolerations: []
-        resources:
-          - name: nvidia.com/gpu
-            nominalQuota: "1000"
+    # When GPU admission, topology, and tau-core-controller are enabled, the
+    # controller discovers one topology-aware ResourceFlavor per GPU class and
+    # grows its quota from live allocatable capacity. Existing discovered
+    # flavors and quota are retained when pools scale to zero.
+    # Configure this list only to retain externally managed custom flavors.
+    flavors: []
 
 kueue:
   # TauGrid installs the Kueue MultiKueue capability by default. Operators still

@@ -76,15 +76,12 @@ Requires cluster-admin or equivalent RBAC to create privileged pods.`,
 	return cmd
 }
 
-func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec validateNodesSpec, out, errOut io.Writer) error {
+func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec validateNodesSpec, out, _ io.Writer) error {
 	selector := spec.Selector
 	if spec.GPUClass != "" {
-		gpuClass, deprecated := topology.NormalizeGPUClass(spec.GPUClass)
+		gpuClass := topology.NormalizeGPUClass(spec.GPUClass)
 		if !topology.IsSupportedGPUClass(gpuClass) {
 			return fmt.Errorf("unsupported --gpu-class %q; use one of %s", spec.GPUClass, strings.Join(topology.SupportedGPUClasses(), ", "))
-		}
-		if deprecated {
-			fmt.Fprintf(errOut, "warning: gpu_class %q is deprecated; use %q instead\n", spec.GPUClass, gpuClass)
 		}
 		if gpuClass == topology.GPUClassAny {
 			if selectorReferencesGPUClass(selector) {

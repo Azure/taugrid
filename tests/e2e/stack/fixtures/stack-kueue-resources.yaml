@@ -48,10 +48,21 @@ spec:
 # The regular stack queue stays small so the PR/hourly smoke tests keep their
 # existing quota contract; this queue is only used by nanogpt-rayjob-large-gpu.yaml.
 apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: e2e-stack-gpu-topology
+spec:
+  levels:
+  - nodeLabel: tau.azure.com/network-domain
+  - nodeLabel: tau.azure.com/accelerator-domain
+  - nodeLabel: kubernetes.io/hostname
+---
+apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
   name: e2e-stack-large-gpu-flavor
-spec: {}
+spec:
+  topologyName: e2e-stack-gpu-topology
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
@@ -61,7 +72,7 @@ spec:
   namespaceSelector: {}
   queueingStrategy: BestEffortFIFO
   resourceGroups:
-  - coveredResources: ["cpu", "memory", "nvidia.com/gpu", "rdma/rdma_shared_device_a"]
+  - coveredResources: ["cpu", "memory", "nvidia.com/gpu"]
     flavors:
     - name: e2e-stack-large-gpu-flavor
       resources:
@@ -75,12 +86,6 @@ spec:
         nominalQuota: 832Gi
       - name: nvidia.com/gpu
         nominalQuota: 16
-      # InfiniBand extended resource advertised by the RDMA shared device plugin
-      # (only present once enable-infiniband.sh has run on the H200 nodes). The
-      # FineWeb IB job requests 1 per worker; without this covered resource the
-      # Workload would stay Pending. nanoGPT requests no rdma so it is unaffected.
-      - name: rdma/rdma_shared_device_a
-        nominalQuota: 32
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue

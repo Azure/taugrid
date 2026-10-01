@@ -1719,7 +1719,7 @@ func TestRenderRunProfile(t *testing.T) {
 	out := RenderRunProfile(Snapshot{
 		Name:          "train-001",
 		Namespace:     "ray",
-		Labels:        map[string]string{workloadmeta.LabelRunID: "train-001", workloadmeta.LabelWorkloadKind: "job", workloadmeta.LabelProfile: "research-train-gpu", workloadmeta.LabelPreset: "azure.research.training.xl", "kueue.x-k8s.io/queue-name": "training-queue", workloadmeta.LabelTeam: "research", workloadmeta.LabelLane: "training", workloadmeta.LabelTopology: "same-host", workloadmeta.LabelGPUClass: "a100-nvlink-80gb"},
+		Labels:        map[string]string{workloadmeta.LabelRunID: "train-001", workloadmeta.LabelWorkloadKind: "job", workloadmeta.LabelProfile: "research-train-gpu", workloadmeta.LabelPreset: "azure.research.training.xl", "kueue.x-k8s.io/queue-name": "training-queue", workloadmeta.LabelTeam: "research", workloadmeta.LabelLane: "training", workloadmeta.LabelTopology: "same-host", workloadmeta.LabelGPUClass: "a100-80gb"},
 		Annotations:   map[string]string{workloadmeta.AnnotationCaptureVersion: "v1alpha1", workloadmeta.AnnotationNamespace: "ray", workloadmeta.AnnotationTauCommand: "tau submit train-001", workloadmeta.AnnotationImage: "acr.io/train:v1", workloadmeta.AnnotationConfigHash: "abc123", workloadmeta.AnnotationGPUCount: "8", workloadmeta.AnnotationDRAClaim: "ds-8gpus", workloadmeta.AnnotationStorageMounts: `[{"source":"pvc","path":"/data","source_ref":"training-nfs"}]`, workloadmeta.AnnotationResultPath: "/data/evals/train-001", workloadmeta.AnnotationResultArtifacts: "metrics.json, track.png", workloadmeta.AnnotationPresetExplain: "A100 NVLink protected queue"},
 		JobFound:      true,
 		JobCreatedAt:  created,
@@ -1791,7 +1791,7 @@ func TestExperimentRunProfileGPUClassContract(t *testing.T) {
 		costType  string
 		wantClass string
 	}{
-		{name: "legacy alias", label: "h100-standalone-95gb", wantClass: "h100-95gb"},
+		{name: "canonical class", label: "h100-95gb", wantClass: "h100-95gb"},
 		{name: "explicit any", label: "any", wantClass: "any"},
 		{name: "missing label does not infer from cost", costType: "h100", wantClass: ""},
 	} {

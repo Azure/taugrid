@@ -79,9 +79,6 @@ jobs:
           TAU_CORE_KIND_RECREATE: "1"
         run: make -C controllers/tau-core test-kind-e2e
 
-      - name: Run Kueue topology migration smoke
-        run: make -C controllers/tau-core test-kind-topology-migration
-
   runtime-smoke:
     name: Runtime smoke
     runs-on: ubuntu-latest

@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -466,6 +467,13 @@ func TestNodeWatchIgnoresStatusOnlyUpdates(t *testing.T) {
 	}}
 	if watch.Update(event.UpdateEvent{ObjectOld: original, ObjectNew: statusUpdate}) {
 		t.Fatal("status-only Node update should not enqueue a full topology reconciliation")
+	}
+	capacityUpdate := statusUpdate.DeepCopy()
+	capacityUpdate.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName): resource.MustParse("8"),
+	}
+	if !watch.Update(event.UpdateEvent{ObjectOld: statusUpdate, ObjectNew: capacityUpdate}) {
+		t.Fatal("GPU allocatable capacity update must enqueue flavor reconciliation")
 	}
 
 	labelUpdate := statusUpdate.DeepCopy()

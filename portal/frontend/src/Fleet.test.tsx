@@ -294,7 +294,7 @@ describe('Fleet dashboard', () => {
     expect(within(card!).getByText('72%')).toBeVisible();
   });
 
-  it('separates RDMA capability, continuous conditions, and per-GPU health', async () => {
+  it('separates continuous conditions and per-GPU health', async () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(fleetNodes));
@@ -310,7 +310,6 @@ describe('Fleet dashboard', () => {
     expect(screen.getByRole('region', { name: 'Unbounded site eastus2' })).toBeVisible();
     expect(screen.getByRole('region', { name: 'Unbounded site cluster' })).toBeVisible();
     expect(screen.getAllByText(/Region eastus2euap/)).not.toHaveLength(0);
-    expect(screen.getAllByText(/RDMA advertised/, { selector: '.fabric-capability' })).toHaveLength(2);
     expect(screen.getAllByText('Ready', { selector: '.fabric-capability' })).toHaveLength(3);
     expect(screen.getAllByRole('link', { name: /GPU details/ }).some(link =>
       link.getAttribute('href')?.includes('instance=h200-node-a'))).toBe(true);

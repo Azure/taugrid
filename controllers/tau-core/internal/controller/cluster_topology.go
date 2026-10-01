@@ -96,7 +96,28 @@ func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 			managedResources:     managedTopologyStatus(topology),
 		}, nodeErr
 	}
-	return readyTopologyState(generation, nodeStatus, nodeDrift, topology), nil
+	flavorResources, flavorDrift, flavorErr := r.reconcileDiscoveredGPUFlavors(ctx, mutate)
+	managedResources := append(managedTopologyStatus(topology), flavorResources...)
+	if flavorErr != nil {
+		message := flavorErr.Error()
+		return topologyReconcileState{
+			status:               tauv1alpha1.TauClusterSectionStatus{Observed: int32(len(managedResources)), Drifted: 1},
+			queuesCondition:      condition(tauv1alpha1.ConditionQueuesReady, metav1.ConditionFalse, "GPUFlavorReconcileFailed", message, generation),
+			driftCondition:       condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "GPUFlavorDrift", message, generation),
+			ownershipCondition:   condition(tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionFalse, "NoConflictObserved", "no topology ownership conflict was found", generation),
+			reconciliationFailed: true,
+			managedResources:     managedResources,
+		}, flavorErr
+	}
+
+	state := readyTopologyState(generation, nodeStatus, nodeDrift, topology)
+	state.managedResources = managedResources
+	if flavorDrift {
+		state.status.Drifted++
+		state.queuesCondition = condition(tauv1alpha1.ConditionQueuesReady, metav1.ConditionFalse, "GPUFlavorsNeedReconciliation", "Discovered GPU ResourceFlavors or quota need reconciliation", generation)
+		state.driftCondition = condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionTrue, "GPUFlavorDrift", "Discovered GPU ResourceFlavors or quota need reconciliation", generation)
+	}
+	return state, nil
 }
 
 type nodeTopologyPlan struct {

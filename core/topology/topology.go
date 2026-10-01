@@ -115,19 +115,6 @@ func WithoutKueueTopologyAnnotations(annotations map[string]string) map[string]s
 
 var labelValueRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$`)
 
-// legacyGPUClassAliases maps pre-canonical gpu_class spellings -- which
-// folded interconnect/placement terms (NVLink, standalone) into the
-// hardware name -- to their canonical, hardware-only replacement. These
-// aliases exist only for one compatibility window: NormalizeGPUClass accepts
-// them as input so existing profiles/configs/presets keep working, but every
-// validation, rendering, status, and explain surface operates on the
-// canonical value, and no new aliases should be added here.
-var legacyGPUClassAliases = map[string]string{
-	"a100-nvlink-80gb":     GPUClassA10080GB,
-	"h100-standalone-95gb": GPUClassH10095GB,
-	"h200-nvlink-141gb":    GPUClassH200141GB,
-}
-
 var supportedGPUClasses = []string{
 	GPUClassAny,
 	GPUClassA104GB,
@@ -148,23 +135,14 @@ func SupportedGPUClasses() []string {
 	return append([]string(nil), supportedGPUClasses...)
 }
 
-// NormalizeGPUClass maps a researcher-supplied gpu_class value (from a CLI
-// flag, run config, preset, or profile Topology.GPUClass) to its
-// canonical hardware-only spelling. It returns the canonical value and
-// whether the input was a deprecated legacy alias that should be migrated.
-// Unrecognized values (including "any" and already-canonical values) are
-// returned unchanged with deprecatedAlias=false; callers still run the
-// result through validEnum to reject truly invalid classes.
-func NormalizeGPUClass(v string) (canonical string, deprecatedAlias bool) {
-	normalized := normalizeLabelValue(v)
-	if mapped, ok := legacyGPUClassAliases[normalized]; ok {
-		return mapped, true
-	}
-	return normalized, false
+// NormalizeGPUClass normalizes researcher-supplied gpu_class spelling before
+// callers validate it against SupportedGPUClasses.
+func NormalizeGPUClass(v string) string {
+	return normalizeLabelValue(v)
 }
 
 func IsSupportedGPUClass(v string) bool {
-	canonical, _ := NormalizeGPUClass(v)
+	canonical := NormalizeGPUClass(v)
 	for _, supported := range supportedGPUClasses {
 		if canonical == supported {
 			return true
@@ -174,7 +152,7 @@ func IsSupportedGPUClass(v string) bool {
 }
 
 func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) error {
-	canonical, _ := NormalizeGPUClass(gpuClass)
+	canonical := NormalizeGPUClass(gpuClass)
 	selected := strings.TrimSpace(selector[workloadmeta.NodeLabelGPUClass])
 	if selected == "" || canonical == "" {
 		return nil
@@ -190,7 +168,7 @@ func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) e
 
 // ResolveGPUClass returns the effective canonical gpu_class after applying an
 // explicit override to a profile's topology contract.
-func ResolveGPUClass(p profile.Profile, override string) (string, bool) {
+func ResolveGPUClass(p profile.Profile, override string) string {
 	gpuClass := p.Topology.GPUClass
 	if override != "" {
 		gpuClass = override
@@ -224,6 +202,26 @@ type Options struct {
 	// DisableDefaultPriorities omits TauGrid default priority classes unless the
 	// caller/preset supplied explicit priority names.
 	DisableDefaultPriorities bool
+}
+
+// WithNetworkDomainRequirement makes a network fabric the broadest placement
+// allowed for a workload. Explicit host or accelerator-domain placement is
+// preserved because those domains are narrower than a network domain. The TAS
+// annotation cannot be disabled for a workload that requires a network domain.
+func WithNetworkDomainRequirement(p profile.Profile, o Options) Options {
+	placement := o.Placement
+	if strings.TrimSpace(placement) == "" {
+		placement = p.Topology.Placement
+	}
+	switch normalizeLabelValue(placement) {
+	case profile.PlacementSameHost,
+		profile.PlacementSameAcceleratorDomain,
+		profile.PlacementSameNetworkDomain:
+	case "", profile.PlacementUnconstrained, profile.PlacementSameSite:
+		o.Placement = profile.PlacementSameNetworkDomain
+	}
+	o.DisableKueueTopologyAnnotations = false
+	return o
 }
 
 // Plan is the topology-aware scheduling decoration Render should apply.
@@ -386,7 +384,7 @@ func (c *contract) normalize() {
 	c.mode = normalizeLabelValue(c.mode)
 	c.placement = normalizeLabelValue(c.placement)
 	c.shape = normalizeLabelValue(c.shape)
-	c.gpuClass, _ = NormalizeGPUClass(c.gpuClass)
+	c.gpuClass = NormalizeGPUClass(c.gpuClass)
 	c.queue = normalizeLabelValue(c.queue)
 	c.podPriorityClassName = normalizeLabelValue(c.podPriorityClassName)
 	c.workloadPriorityClassName = normalizeLabelValue(c.workloadPriorityClassName)

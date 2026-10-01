@@ -578,7 +578,7 @@ func rdmaProfile() profile.Profile {
 	return p
 }
 
-func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
+func TestRender_RDMAInjectsSecurityContextAndNetworkTopology(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "train.py")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\nprint('hello')\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -589,16 +589,18 @@ func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
 		ScriptPath:       script,
 		Launcher:         "torchrun",
 		ProcessesPerNode: 8,
-		RDMA: RDMAOptions{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		RDMA:             RDMAOptions{Enabled: true},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	job := parseYAML(t, out)
+	template := job["spec"].(map[string]any)["template"].(map[string]any)
+	annotations := template["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := annotations[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Fatalf("RDMA required topology=%v, want tau.azure.com/network-domain", got)
+	}
+	pod := template["spec"].(map[string]any)
 	c := pod["containers"].([]any)[0].(map[string]any)
 
 	// Verify securityContext capabilities.
@@ -621,15 +623,14 @@ func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
 		t.Errorf("expected allowPrivilegeEscalation=false")
 	}
 
-	// Verify RDMA device resources.
 	resources := c["resources"].(map[string]any)
 	requests := resources["requests"].(map[string]any)
 	limits := resources["limits"].(map[string]any)
-	if requests["rdma/rdma_shared_device_a"] != "1" {
-		t.Errorf("requests missing RDMA resource: %v", requests)
+	if got := len(requests); got != 3 {
+		t.Errorf("resource requests=%v, want cpu, memory, and GPU only", requests)
 	}
-	if limits["rdma/rdma_shared_device_a"] != "1" {
-		t.Errorf("limits missing RDMA resource: %v", limits)
+	if got := len(limits); got != 1 {
+		t.Errorf("resource limits=%v, want GPU only", limits)
 	}
 
 	// Verify /dev/shm size is 32Gi.
@@ -661,11 +662,7 @@ func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 		Name:      "rdma-merge",
 		Namespace: "tau",
 		Command:   []string{"python", "train.py"},
-		RDMA: RDMAOptions{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		RDMA:      RDMAOptions{Enabled: true},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -706,11 +703,7 @@ func TestRender_RDMARejectsRunAsNonRootProfile(t *testing.T) {
 		Name:      "rdma-nonroot-conflict",
 		Namespace: "tau",
 		Command:   []string{"python", "train.py"},
-		RDMA: RDMAOptions{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		RDMA:      RDMAOptions{Enabled: true},
 	})
 	if err == nil || !strings.Contains(err.Error(), "runAsNonRoot=true") {
 		t.Fatalf("expected runAsNonRoot conflict, got %v", err)
@@ -728,26 +721,6 @@ func TestNormalizeRDMA(t *testing.T) {
 		opts := runconfig.NormalizeRDMA(runconfig.RDMA{Enabled: true})
 		if !opts.Enabled {
 			t.Fatal("expected enabled")
-		}
-		if opts.ResourceName != "rdma/rdma_shared_device_a" {
-			t.Errorf("resource name = %q", opts.ResourceName)
-		}
-		if opts.Count != 1 {
-			t.Errorf("count = %d", opts.Count)
-		}
-	})
-	t.Run("custom", func(t *testing.T) {
-		count := 2
-		opts := runconfig.NormalizeRDMA(runconfig.RDMA{
-			Enabled:      true,
-			ResourceName: "rdma/hca_shared_devices_a",
-			Count:        &count,
-		})
-		if opts.ResourceName != "rdma/hca_shared_devices_a" {
-			t.Errorf("resource name = %q", opts.ResourceName)
-		}
-		if opts.Count != 2 {
-			t.Errorf("count = %d", opts.Count)
 		}
 	})
 }
@@ -1200,7 +1173,7 @@ func TestRender_LegacyGPUClassAliasRendersCanonicalContract(t *testing.T) {
 		Namespace: "tau",
 		Command:   []string{"true"},
 		QueueName: "jobqueue",
-		GPUClass:  "a100-nvlink-80gb",
+		GPUClass:  "a100-80gb",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -233,7 +233,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if jobGPUCount > 0 {
 		configureGPUQueueModeWithChanged("device-plugin", &opts, func(string) bool { return false })
 	}
-	opts.GPUClass, _ = runtopology.ResolveGPUClass(p, opts.GPUClass)
+	opts.GPUClass = runtopology.ResolveGPUClass(p, opts.GPUClass)
 	warnings = append(warnings, topoWarnings...)
 
 	var runner *kube.Runner

@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,6 +44,7 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
+
 	var gotNode corev1.Node
 	if err := c.Get(ctx, client.ObjectKey{Name: node.Name}, &gotNode); err != nil {
 		t.Fatalf("Get Node: %v", err)
@@ -90,6 +94,213 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 	}
 	if len(recording.mutations) != 0 {
 		t.Fatalf("idempotent reconcile mutations = %v", recording.mutations)
+	}
+}
+
+func TestTauClusterDiscoversMinimalGPUFlavorsAndCapacity(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	cluster.Spec.Queues = tauv1alpha1.TauClusterQueuesSpec{
+		Ownership:     tauv1alpha1.ClusterOwnershipManage,
+		ClusterQueues: []tauv1alpha1.TauClusterObjectReference{{Name: "jobqueue"}},
+	}
+	firstH200 := topologyTestNode("h200-a", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-a")
+	secondH200 := topologyTestNode("h200-b", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-b")
+	a100 := topologyTestNode("a100-a", map[string]string{
+		labelkeys.LabelGPUClass: "a100-80gb",
+	}, "azure:///a100-a")
+	setNodeGPUCapacity(firstH200, "8")
+	setNodeGPUCapacity(secondH200, "8")
+	setNodeGPUCapacity(a100, "4")
+	queue := topologyTestClusterQueue("jobqueue")
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, firstH200, secondH200, a100, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	for gpuClass, wantCapacity := range map[string]string{
+		"a100-80gb":  "4",
+		"h200-141gb": "16",
+	} {
+		name := discoveredGPUFlavorName(gpuClass)
+		flavor := newQueueObject(resourceFlavorGVK)
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, flavor); err != nil {
+			t.Fatalf("Get ResourceFlavor %q: %v", name, err)
+		}
+		if got := flavor.GetLabels()[labelkeys.LabelGPUClass]; got != gpuClass {
+			t.Fatalf("ResourceFlavor %q gpu-class = %q, want %q", name, got, gpuClass)
+		}
+		if got, _, _ := unstructured.NestedString(flavor.Object, "spec", "topologyName"); got != tauGPUNodeTopologyName {
+			t.Fatalf("ResourceFlavor %q topologyName = %q, want %q", name, got, tauGPUNodeTopologyName)
+		}
+		nodeTaints, found, err := unstructured.NestedSlice(flavor.Object, "spec", "nodeTaints")
+		if err != nil || !found {
+			t.Fatalf("ResourceFlavor %q nodeTaints: found=%v err=%v", name, found, err)
+		}
+		wantNodeTaints := []any{
+			map[string]any{
+				"key":    "sku",
+				"value":  "gpu",
+				"effect": string(corev1.TaintEffectNoSchedule),
+			},
+		}
+		if !reflect.DeepEqual(nodeTaints, wantNodeTaints) {
+			t.Fatalf("ResourceFlavor %q nodeTaints = %#v, want %#v", name, nodeTaints, wantNodeTaints)
+		}
+		if got := clusterQueueGPUQuota(t, c, "jobqueue", name); got != wantCapacity {
+			t.Fatalf("ClusterQueue flavor %q GPU quota = %q, want %q", name, got, wantCapacity)
+		}
+	}
+
+	var flavors unstructured.UnstructuredList
+	flavors.SetGroupVersionKind(resourceFlavorGVK.GroupVersion().WithKind("ResourceFlavorList"))
+	if err := c.List(ctx, &flavors); err != nil {
+		t.Fatalf("List ResourceFlavors: %v", err)
+	}
+	if len(flavors.Items) != 2 {
+		t.Fatalf("ResourceFlavors = %d, want one per GPU class: %#v", len(flavors.Items), flavors.Items)
+	}
+}
+
+func TestTauClusterDiscoversGPUCapacityAsNodesJoin(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	queue := topologyTestClusterQueue("jobqueue")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}, &corev1.Node{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+	flavorName := discoveredGPUFlavorName("h200-141gb")
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() before GPU Nodes join error = %v", err)
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); !apierrors.IsNotFound(err) {
+		t.Fatalf("ResourceFlavor exists before GPU capacity is allocatable: %v", err)
+	}
+
+	firstNode := topologyTestNode("h200-a", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-a")
+	if err := c.Create(ctx, firstNode); err != nil {
+		t.Fatalf("Create joining Node: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() before Node GPU capacity is published error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); !apierrors.IsNotFound(err) {
+		t.Fatalf("ResourceFlavor exists for Node without allocatable GPU capacity: %v", err)
+	}
+
+	var currentFirstNode corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: firstNode.Name}, &currentFirstNode); err != nil {
+		t.Fatalf("Get joining Node before publishing capacity: %v", err)
+	}
+	setNodeGPUCapacity(&currentFirstNode, "8")
+	if err := c.Status().Update(ctx, &currentFirstNode); err != nil {
+		t.Fatalf("Publish joining Node GPU capacity: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after Node GPU capacity is published error = %v", err)
+	}
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
+		t.Fatalf("GPU quota after first Node joins = %q, want 8", got)
+	}
+
+	secondNode := topologyTestNode("h200-b", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-b")
+	setNodeGPUCapacity(secondNode, "8")
+	if err := c.Create(ctx, secondNode); err != nil {
+		t.Fatalf("Create second joining Node: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after second Node joins error = %v", err)
+	}
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "16" {
+		t.Fatalf("GPU quota after second Node joins = %q, want 16", got)
+	}
+}
+
+func TestTauClusterDiscoveredGPUQuotaIsMonotonicAndNotPruned(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	cluster.Spec.Queues = tauv1alpha1.TauClusterQueuesSpec{
+		Ownership:     tauv1alpha1.ClusterOwnershipManage,
+		ClusterQueues: []tauv1alpha1.TauClusterObjectReference{{Name: "jobqueue"}},
+	}
+	node := topologyTestNode("h200-a", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-a")
+	setNodeGPUCapacity(node, "8")
+	queue := topologyTestClusterQueue("jobqueue")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("initial Reconcile() error = %v", err)
+	}
+	flavorName := discoveredGPUFlavorName("h200-141gb")
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
+		t.Fatalf("initial GPU quota = %q, want 8", got)
+	}
+
+	if err := c.Delete(ctx, node); err != nil {
+		t.Fatalf("Delete Node: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after scale-to-zero error = %v", err)
+	}
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
+		t.Fatalf("GPU quota after scale-to-zero = %q, want persisted 8", got)
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); err != nil {
+		t.Fatalf("ResourceFlavor was pruned after scale-to-zero: %v", err)
+	}
+}
+
+func TestTauClusterIgnoresClusterQueueWithoutDiscoveryLabel(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	node := topologyTestNode("h200-a", nil, "azure:///h200-a")
+	setNodeGPUCapacity(node, "8")
+	queue := topologyTestClusterQueue("jobqueue")
+	queue.SetLabels(nil)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	err := c.Get(ctx, client.ObjectKey{Name: discoveredGPUFlavorName("h200-141gb")}, flavor)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("unlabeled ClusterQueue triggered ResourceFlavor discovery: %v", err)
 	}
 }
 
@@ -835,10 +1046,75 @@ func topologyTestNode(name string, labels map[string]string, providerID string) 
 		labels = map[string]string{}
 	}
 	labels[labelHostname] = name
-	labels[labelkeys.LabelGPUClass] = "h200-141gb"
+	if labels[labelkeys.LabelGPUClass] == "" {
+		labels[labelkeys.LabelGPUClass] = "h200-141gb"
+	}
 	labels["kubernetes.io/os"] = "linux"
 	return &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
 		Spec:       corev1.NodeSpec{ProviderID: providerID},
 	}
+}
+
+func setNodeGPUCapacity(node *corev1.Node, count string) {
+	node.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName): resource.MustParse(count),
+	}
+}
+
+func topologyTestClusterQueue(name string) *unstructured.Unstructured {
+	queue := newQueueObject(clusterQueueGVK)
+	queue.SetName(name)
+	queue.SetLabels(map[string]string{labelDiscoverGPUFlavors: "true"})
+	queue.Object["spec"] = map[string]any{
+		"resourceGroups": []any{
+			map[string]any{
+				"coveredResources": []any{"cpu", "memory", nvidiaGPUResourceName},
+				"flavors": []any{
+					map[string]any{
+						"name": "taugrid-default-cpu",
+						"resources": []any{
+							map[string]any{"name": "cpu", "nominalQuota": "100000"},
+							map[string]any{"name": "memory", "nominalQuota": "100Ti"},
+							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "0"},
+						},
+					},
+				},
+			},
+		},
+	}
+	return queue
+}
+
+func clusterQueueGPUQuota(
+	t *testing.T,
+	c client.Client,
+	queueName string,
+	flavorName string,
+) string {
+	t.Helper()
+	queue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Name: queueName}, queue); err != nil {
+		t.Fatalf("Get ClusterQueue %q: %v", queueName, err)
+	}
+	groups, _, _ := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
+	for _, rawGroup := range groups {
+		group, _ := rawGroup.(map[string]any)
+		flavors, _, _ := unstructured.NestedSlice(group, "flavors")
+		for _, rawFlavor := range flavors {
+			flavor, _ := rawFlavor.(map[string]any)
+			if flavor["name"] != flavorName {
+				continue
+			}
+			resources, _, _ := unstructured.NestedSlice(flavor, "resources")
+			for _, rawResource := range resources {
+				resourceQuota, _ := rawResource.(map[string]any)
+				if resourceQuota["name"] == nvidiaGPUResourceName {
+					return fmt.Sprint(resourceQuota["nominalQuota"])
+				}
+			}
+		}
+	}
+	t.Fatalf("ClusterQueue %q has no GPU quota for flavor %q", queueName, flavorName)
+	return ""
 }

@@ -90,7 +90,7 @@ func TestRayJobDispatchRendersRDMA(t *testing.T) {
 		o.rdma = runconfig.RDMA{Enabled: true}
 	})
 	for _, want := range []string{
-		"rdma/rdma_shared_device_a: \"1\"",
+		"kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain",
 		"IPC_LOCK",
 		"SYS_RESOURCE",
 		"DAC_OVERRIDE",

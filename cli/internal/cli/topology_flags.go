@@ -84,12 +84,6 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, c
 	if changed("disable-default-priorities") {
 		o.DisableDefaultPriorities = f.disableDefaultPriorities
 	}
-	if canonical, deprecated := runtopology.NormalizeGPUClass(o.GPUClass); deprecated {
-		warnings = append(warnings, fmt.Sprintf(
-			"warning: gpu_class %q is deprecated; use %q instead (placement and interconnect belong in policy.topology)",
-			o.GPUClass, canonical))
-		o.GPUClass = canonical
-	}
 	if o.Topology == profile.PlacementSameNetworkDomain {
 		warnings = append(warnings,
 			"warning: policy.topology \"same-network-domain\" requires one topology domain but does not by itself require InfiniBand or distinct hosts; nodes without an authoritative shared fabric use singleton domains, so a multi-host workload may remain pending while workers that fit on one node may still run")
@@ -405,7 +399,7 @@ func renderedQueueContractFromManifest(manifest []byte) (renderedQueueContract, 
 		}
 		if out.GPUClass == "" {
 			if gpuClass, _ := labels[workloadmeta.LabelGPUClass].(string); strings.TrimSpace(gpuClass) != "" {
-				out.GPUClass, _ = runtopology.NormalizeGPUClass(gpuClass)
+				out.GPUClass = runtopology.NormalizeGPUClass(gpuClass)
 			}
 		}
 		if kind, _ := obj["kind"].(string); kind == "RayJob" {

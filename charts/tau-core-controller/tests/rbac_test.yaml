@@ -25,3 +25,17 @@ tests:
             resources: ["topologies"]
             verbs: ["get", "list", "watch", "create"]
         documentIndex: 2
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kueue.x-k8s.io"]
+            resources: ["resourceflavors"]
+            verbs: ["get", "list", "watch", "create"]
+        documentIndex: 2
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kueue.x-k8s.io"]
+            resources: ["clusterqueues"]
+            verbs: ["get", "list", "watch", "update"]
+        documentIndex: 2
