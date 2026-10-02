@@ -1390,6 +1390,7 @@ func gvrFromObject(obj *unstructured.Unstructured) (schema.GroupVersionResource,
 	// Map Kind → plural resource name for types we use in tests.
 	kindToResource := map[string]string{
 		"ResourceFlavor": "resourceflavors",
+		"Topology":       "topologies",
 		"ClusterQueue":   "clusterqueues",
 		"LocalQueue":     "localqueues",
 		"Workload":       "workloads",

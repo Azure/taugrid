@@ -13,12 +13,30 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/Azure/taugrid/tests/e2e/bundle"
 )
+
+func TestGVRFromObjectMapsTopology(t *testing.T) {
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion("kueue.x-k8s.io/v1beta2")
+	obj.SetKind("Topology")
+	obj.SetName("test-topology")
+	obj.SetCreationTimestamp(metav1.Now())
+
+	got, err := gvrFromObject(obj)
+	if err != nil {
+		t.Fatalf("gvrFromObject: %v", err)
+	}
+	if got.Group != "kueue.x-k8s.io" || got.Version != "v1beta2" || got.Resource != "topologies" {
+		t.Fatalf("gvrFromObject = %s, want kueue.x-k8s.io/v1beta2, Resource=topologies", got.String())
+	}
+}
 
 func TestRayJobTerminalFailureIncludesDeploymentFailure(t *testing.T) {
 	terminal, reason := rayJobTerminalFailure("", "Failed")
