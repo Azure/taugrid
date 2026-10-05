@@ -13,7 +13,9 @@ on:
       - images/tau-core-controller/**
       - images/taugrid-portal/**
       - images/taugrid-metrics-collector/**
+      - images/gpu-metrics-collector/**
       - metrics/experiment-metrics-collector/**
+      - monitoring/gpu-metrics-collector/**
       - portal/**
       - scripts/ci/tests/image-build-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
@@ -31,7 +33,9 @@ on:
       - images/tau-core-controller/**
       - images/taugrid-portal/**
       - images/taugrid-metrics-collector/**
+      - images/gpu-metrics-collector/**
       - metrics/experiment-metrics-collector/**
+      - monitoring/gpu-metrics-collector/**
       - portal/**
       - scripts/ci/tests/image-build-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
@@ -55,7 +59,7 @@ env:
 
 jobs:
   image:
-    name: Image / ${{ matrix.name }}
+    name: Image / ${{ matrix.name }} / linux/${{ matrix.architecture }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -64,24 +68,40 @@ jobs:
         include:
           - name: Tau
             image: tau
+            architecture: amd64
             make_directory: images/tau
             context: .
             dockerfile: images/tau/Dockerfile
           - name: TauGrid Portal
             image: taugrid-portal
+            architecture: amd64
             make_directory: images/taugrid-portal
             context: .
             dockerfile: images/taugrid-portal/Dockerfile
           - name: Tau core controller
             image: tau-core-controller
+            architecture: amd64
             make_directory: images/tau-core-controller
             context: .
             dockerfile: images/tau-core-controller/Dockerfile
           - name: TauGrid metrics collector
             image: taugrid-metrics-collector
+            architecture: amd64
             make_directory: images/taugrid-metrics-collector
             context: .
             dockerfile: images/taugrid-metrics-collector/Dockerfile
+          - name: GPU metrics collector
+            image: gpu-metrics-collector
+            architecture: amd64
+            make_directory: images/gpu-metrics-collector
+            context: .
+            dockerfile: images/gpu-metrics-collector/Dockerfile
+          - name: GPU metrics collector
+            image: gpu-metrics-collector
+            architecture: arm64
+            make_directory: images/gpu-metrics-collector
+            context: .
+            dockerfile: images/gpu-metrics-collector/Dockerfile
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,6 +111,12 @@ jobs:
           IMAGE: ${{ matrix.image }}
           MAKE_DIRECTORY: ${{ matrix.make_directory }}
         run: scripts/ci/validate-image-build-contract.sh "$MAKE_DIRECTORY" "$IMAGE"
+
+      - name: Set up QEMU
+        if: matrix.architecture != 'amd64'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: ${{ matrix.architecture }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
@@ -102,13 +128,43 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           load: true
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.architecture }}
           pull: true
           push: false
-          tags: taugrid/${{ matrix.image }}:validation
+          tags: taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation
+
+      - name: Validate collector entrypoint during build
+        if: matrix.image == 'gpu-metrics-collector'
+        run: >-
+          docker buildx build
+          --platform "linux/${{ matrix.architecture }}"
+          --target validation
+          --file "${{ matrix.dockerfile }}"
+          "${{ matrix.context }}"
 
       - name: Smoke test image
-        run: docker run --rm "taugrid/${{ matrix.image }}:validation" --help
+        run: >-
+          docker run --rm
+          --platform "linux/${{ matrix.architecture }}"
+          "taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation"
+          --help
+
+      - name: Verify static collector binary
+        if: matrix.image == 'gpu-metrics-collector'
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          IMAGE: taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation
+        run: |
+          container_id="$(docker create --platform "linux/${ARCHITECTURE}" "${IMAGE}")"
+          trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
+          docker cp "${container_id}:/gpu-metrics-collector" "./gpu-metrics-collector-${ARCHITECTURE}"
+          file_output="$(file "./gpu-metrics-collector-${ARCHITECTURE}")"
+          echo "${file_output}"
+          grep -Fq "statically linked" <<<"${file_output}"
+          case "${ARCHITECTURE}" in
+            amd64) grep -Eq "x86-64|x86_64" <<<"${file_output}" ;;
+            arm64) grep -Eq "ARM aarch64|aarch64" <<<"${file_output}" ;;
+          esac
 
       - name: Scan image for critical vulnerabilities
         run: |
@@ -122,7 +178,7 @@ jobs:
             --ignore-unfixed \
             --scanners vuln \
             --severity CRITICAL \
-            "taugrid/${{ matrix.image }}:validation"
+            "taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation"
 
       - name: Generate Trivy SARIF report
         id: sarif
@@ -137,10 +193,10 @@ jobs:
             image \
             --format sarif \
             --ignore-unfixed \
-            --output "/workspace/trivy-${{ matrix.image }}.sarif" \
+            --output "/workspace/trivy-${{ matrix.image }}-${{ matrix.architecture }}.sarif" \
             --scanners vuln \
             --severity HIGH,CRITICAL \
-            "taugrid/${{ matrix.image }}:validation"
+            "taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation"
 
       - name: Upload Trivy SARIF report
         if: >-
@@ -149,8 +205,8 @@ jobs:
         continue-on-error: true
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          sarif_file: trivy-${{ matrix.image }}.sarif
-          category: trivy-${{ matrix.image }}
+          sarif_file: trivy-${{ matrix.image }}-${{ matrix.architecture }}.sarif
+          category: trivy-${{ matrix.image }}-${{ matrix.architecture }}
 
   required:
     name: Required

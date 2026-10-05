@@ -4,13 +4,18 @@
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1-azurelinux3.0 AS builder
 ARG TARGETARCH
 RUN tdnf install -y glibc-static && tdnf clean all
-WORKDIR /app
-COPY go.mod go.sum ./
+WORKDIR /src/monitoring/gpu-metrics-collector
+COPY monitoring/gpu-metrics-collector/go.mod monitoring/gpu-metrics-collector/go.sum ./
 RUN go mod download
-COPY . .
+COPY monitoring/gpu-metrics-collector/ ./
 RUN GOEXPERIMENT=none CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags '-s -w -linkmode external -extldflags "-static"' -o /gpu-metrics-collector ./cmd/collector
 
-FROM mcr.microsoft.com/cbl-mariner/distroless/base:2.0
+FROM mcr.microsoft.com/cbl-mariner/distroless/base:2.0 AS runtime
 COPY --from=builder /gpu-metrics-collector /gpu-metrics-collector
 USER 65532:65532
 ENTRYPOINT ["/gpu-metrics-collector"]
+
+FROM runtime AS validation
+RUN ["/gpu-metrics-collector", "--help"]
+
+FROM runtime AS final
