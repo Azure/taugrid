@@ -81,11 +81,13 @@ monitoring/gpu-metrics-collector/
 │   └── config/
 │       ├── config.go              # YAML config loader with validation
 │       └── config_test.go
-├── Dockerfile                     # Multi-stage: Microsoft Go 1.26.7 → distroless/static
 ├── Makefile
 ├── go.mod
 └── go.sum
 ```
+
+The container definition and image targets live in
+`images/gpu-metrics-collector/`.
 
 ## Building
 
@@ -403,15 +405,18 @@ used as health conditions because portable failure thresholds are not defined.
 
 ## Deployment
 
-The collector runs as a sidecar in the NPD DaemonSet. Enable it per-SKU via overlay values:
+The collector runs as a sidecar in each GPU monitoring DaemonSet alongside
+NPD. TauGrid owns this deployment in `charts/gpu-monitoring`; it has no
+separate `applications/npd` overlay. Deployment repositories may override the
+chart values, but should consume an inspected immutable digest:
 
 ```yaml
-# applications/npd/overlays/cx/values-spark.yaml
 metricsCollector:
   enabled: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
-    tag: 5e606678
+    tag: ""
+    digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
 ```
 
 ### Adding Custom Rules
