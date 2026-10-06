@@ -92,8 +92,10 @@ type Options struct {
 	// Quota configures the live workspace/team quota endpoint. It reuses the
 	// same Kubernetes client as the other read-only cluster boards.
 	Quota QuotaOptions
-	// WorkspaceDirectory enables authenticated, server-resolved multi-workspace
-	// mode. When it is unset, Stellar.Workspace configures the single workspace.
+	// WorkspaceDirectory enables server-resolved multi-workspace mode. Entries
+	// normally require authenticated identity; an explicitly configured
+	// cluster-wide directory may expose selected scopes without per-user RBAC.
+	// When it is unset, Stellar.Workspace configures the single workspace.
 	WorkspaceDirectory WorkspaceDirectory
 	// Identity names trusted Entra identity headers. It is used only when
 	// WorkspaceDirectory is configured.

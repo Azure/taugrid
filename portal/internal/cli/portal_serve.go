@@ -196,7 +196,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	cmd.Flags().StringSliceVar(&operatorScopes, "jobs-operator-scope", nil, "trusted operator Jobs scope as team=namespace/localQueue (repeatable; operator mode only)")
 	cmd.Flags().StringVar(&clusterName, "cluster", "", "cluster scope for Kusto-backed boards (required when durable run history is configured without a workspace directory)")
 	cmd.Flags().StringVar(&costDatabase, "kusto-cost-database", "CostTracking", "Kusto database containing allocation-based GPU cost rollups")
-	cmd.Flags().StringVar(&directory, "workspace-directory", "", "metadata-only JSON workspace directory; enables trusted Entra identity headers and server-resolved workspace scope")
+	cmd.Flags().StringVar(&directory, "workspace-directory", "", "metadata-only JSON workspace directory; enables server-resolved workspace scope (identity required unless public cluster-wide entries are explicitly enabled)")
 	cmd.Flags().StringVar(&userHeader, "workspace-user-header", "", "trusted authenticated user header (default: X-MS-CLIENT-PRINCIPAL-NAME)")
 	cmd.Flags().StringVar(&groupsHeader, "workspace-groups-header", "", "trusted authenticated groups header (default: X-MS-CLIENT-PRINCIPAL-GROUPS; comma or semicolon separated)")
 	cmd.Flags().BoolVar(&historyEnabled, "run-history-enabled", false, "enable durable Kusto run history (requires a deployed lifecycle recorder)")

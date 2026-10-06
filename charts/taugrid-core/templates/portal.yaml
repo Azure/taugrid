@@ -134,7 +134,7 @@ metadata:
     {{- include "taugrid-core.labels" . | nindent 4 }}
 data:
   workspaces.json: |
-    {{- dict "localCluster" $workspaceDirectory.localCluster "endpoints" (default list $workspaceDirectory.endpoints) "workspaces" (default list $workspaceDirectory.workspaces) | toPrettyJson | nindent 4 }}
+    {{- dict "localCluster" $workspaceDirectory.localCluster "allowUnauthenticatedClusterWide" (default false $workspaceDirectory.allowUnauthenticatedClusterWide) "endpoints" (default list $workspaceDirectory.endpoints) "workspaces" (default list $workspaceDirectory.workspaces) | toPrettyJson | nindent 4 }}
 ---
 {{ end }}
 {{- if $rbac.create }}

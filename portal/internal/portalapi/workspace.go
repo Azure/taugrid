@@ -56,7 +56,8 @@ type IdentityOptions struct {
 }
 
 // WorkspaceDirectory returns only scopes authorized for the supplied viewer.
-// Implementations own the mapping from authenticated principals to workspaces.
+// Implementations own the mapping from principals or explicitly public
+// cluster-wide entries to workspaces.
 type WorkspaceDirectory interface {
 	List(ctx context.Context, viewer Viewer) []WorkspaceScope
 	Resolve(ctx context.Context, viewer Viewer, workspaceID string) (WorkspaceScope, error)
@@ -64,9 +65,12 @@ type WorkspaceDirectory interface {
 
 // WorkspaceDirectoryConfig is the metadata-only on-disk Portal registry.
 type WorkspaceDirectoryConfig struct {
-	LocalCluster string                    `json:"localCluster"`
-	Endpoints    []WorkspacePortalEndpoint `json:"endpoints,omitempty"`
-	Workspaces   []WorkspaceRecord         `json:"workspaces"`
+	LocalCluster string `json:"localCluster"`
+	// AllowUnauthenticatedClusterWide permits anonymous selection only for
+	// cluster-wide entries that intentionally omit users and groups.
+	AllowUnauthenticatedClusterWide bool                      `json:"allowUnauthenticatedClusterWide,omitempty"`
+	Endpoints                       []WorkspacePortalEndpoint `json:"endpoints,omitempty"`
+	Workspaces                      []WorkspaceRecord         `json:"workspaces"`
 }
 
 // WorkspacePortalEndpoint registers the Portal serving one cluster. Remote
@@ -126,9 +130,10 @@ type WorkspaceScope struct {
 }
 
 type staticWorkspaceDirectory struct {
-	localCluster string
-	endpoints    map[string]WorkspacePortalEndpoint
-	workspaces   []WorkspaceRecord
+	localCluster                    string
+	allowUnauthenticatedClusterWide bool
+	endpoints                       map[string]WorkspacePortalEndpoint
+	workspaces                      []WorkspaceRecord
 }
 
 type workspaceDirectoryResponse struct {
@@ -218,7 +223,9 @@ func NewWorkspaceDirectory(cfg WorkspaceDirectoryConfig) (WorkspaceDirectory, er
 		}
 		ws.Authorization.Users = normalizePrincipals(ws.Authorization.Users)
 		ws.Authorization.Groups = normalizePrincipals(ws.Authorization.Groups)
-		if len(ws.Authorization.Users) == 0 && len(ws.Authorization.Groups) == 0 {
+		publicClusterWide := cfg.AllowUnauthenticatedClusterWide &&
+			ws.Authorization.Mode == workspaceAuthorizationClusterWide
+		if !publicClusterWide && len(ws.Authorization.Users) == 0 && len(ws.Authorization.Groups) == 0 {
 			return nil, fmt.Errorf("workspace directory workspace %q: authorization must name at least one user or group", ws.ID)
 		}
 		if ws.Default {
@@ -251,19 +258,17 @@ func NewWorkspaceDirectory(cfg WorkspaceDirectoryConfig) (WorkspaceDirectory, er
 		return nil, errors.New("workspace directory may contain at most one default workspace")
 	}
 	return &staticWorkspaceDirectory{
-		localCluster: cfg.LocalCluster,
-		endpoints:    endpoints,
-		workspaces:   workspaces,
+		localCluster:                    cfg.LocalCluster,
+		allowUnauthenticatedClusterWide: cfg.AllowUnauthenticatedClusterWide,
+		endpoints:                       endpoints,
+		workspaces:                      workspaces,
 	}, nil
 }
 
 func (d *staticWorkspaceDirectory) List(_ context.Context, viewer Viewer) []WorkspaceScope {
-	if strings.TrimSpace(viewer.ID) == "" {
-		return nil
-	}
 	scopes := make([]WorkspaceScope, 0, len(d.workspaces))
 	for _, ws := range d.workspaces {
-		if authorized(viewer, ws.Authorization) {
+		if d.authorized(viewer, ws.Authorization) {
 			scopes = append(scopes, d.scope(ws))
 		}
 	}
@@ -274,28 +279,44 @@ func (d *staticWorkspaceDirectory) List(_ context.Context, viewer Viewer) []Work
 }
 
 func (d *staticWorkspaceDirectory) Resolve(ctx context.Context, viewer Viewer, workspaceID string) (WorkspaceScope, error) {
-	if strings.TrimSpace(viewer.ID) == "" {
-		return WorkspaceScope{}, errViewerUnauthenticated
-	}
 	workspaceID = strings.TrimSpace(workspaceID)
 	if workspaceID != "" {
 		for _, ws := range d.workspaces {
-			if ws.ID == workspaceID && authorized(viewer, ws.Authorization) {
-				return d.scope(ws), nil
+			if ws.ID == workspaceID {
+				if d.authorized(viewer, ws.Authorization) {
+					return d.scope(ws), nil
+				}
+				if strings.TrimSpace(viewer.ID) == "" {
+					return WorkspaceScope{}, errViewerUnauthenticated
+				}
+				return WorkspaceScope{}, errWorkspaceNotFound
 			}
 		}
 		return WorkspaceScope{}, errWorkspaceNotFound
 	}
 	for _, ws := range d.workspaces {
-		if ws.Default && authorized(viewer, ws.Authorization) {
+		if ws.Default && d.authorized(viewer, ws.Authorization) {
 			return d.scope(ws), nil
 		}
 	}
 	scopes := d.List(ctx, viewer)
 	if len(scopes) == 0 {
+		if strings.TrimSpace(viewer.ID) == "" {
+			return WorkspaceScope{}, errViewerUnauthenticated
+		}
 		return WorkspaceScope{}, errWorkspaceNotFound
 	}
 	return scopes[0], nil
+}
+
+func (d *staticWorkspaceDirectory) authorized(viewer Viewer, auth WorkspaceAuthorization) bool {
+	if strings.TrimSpace(viewer.ID) == "" {
+		return d.allowUnauthenticatedClusterWide &&
+			auth.Mode == workspaceAuthorizationClusterWide &&
+			len(auth.Users) == 0 &&
+			len(auth.Groups) == 0
+	}
+	return authorized(viewer, auth)
 }
 
 func (d *staticWorkspaceDirectory) scope(ws WorkspaceRecord) WorkspaceScope {
@@ -575,11 +596,11 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusRequestHeaderFieldsTooLarge, err.Error())
 		return
 	}
-	if strings.TrimSpace(viewer.ID) == "" {
+	scopes := s.workspaceDirectory.List(r.Context(), viewer)
+	if strings.TrimSpace(viewer.ID) == "" && len(scopes) == 0 {
 		writeJSONError(w, http.StatusUnauthorized, errViewerUnauthenticated.Error())
 		return
 	}
-	scopes := s.workspaceDirectory.List(r.Context(), viewer)
 	for i := range scopes {
 		scopes[i].ExperimentsNative = s.nativeExperiments(scopes[i])
 	}
@@ -587,6 +608,10 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if requested := strings.TrimSpace(r.URL.Query().Get("workspace")); requested != "" {
 		scope, err := s.workspaceDirectory.Resolve(r.Context(), viewer, requested)
 		if err != nil {
+			if errors.Is(err, errViewerUnauthenticated) {
+				writeJSONError(w, http.StatusUnauthorized, err.Error())
+				return
+			}
 			writeJSONError(w, http.StatusNotFound, errWorkspaceNotFound.Error())
 			return
 		}
