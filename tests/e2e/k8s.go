@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1328,19 +1329,149 @@ func deleteYAMLWithClient(ctx context.Context, dynClient dynamic.Interface, yaml
 			return err
 		}
 
-		var client dynamic.ResourceInterface
-		if obj.GetNamespace() != "" {
-			client = dynClient.Resource(gvr).Namespace(obj.GetNamespace())
-		} else {
-			client = dynClient.Resource(gvr)
-		}
-
+		client := dynamicResourceClient(dynClient, gvr, obj.GetNamespace())
 		propagation := metav1.DeletePropagationBackground
 		_ = client.Delete(ctx, obj.GetName(), metav1.DeleteOptions{
 			PropagationPolicy: &propagation,
 		})
 		return nil
 	})
+}
+
+type fixtureDeleteTarget struct {
+	client    dynamic.ResourceInterface
+	kind      string
+	namespace string
+	name      string
+	uid       string
+}
+
+// deleteYAMLWithClientAndWait deletes every rendered object before waiting for
+// the deleted UIDs to disappear. Documents are deleted in reverse order so a
+// Namespace listed first in a fixture is requested last.
+func deleteYAMLWithClientAndWait(ctx context.Context, dynClient dynamic.Interface, yamlBytes []byte, timeout time.Duration) error {
+	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var objects []*unstructured.Unstructured
+	if err := forEachYAMLDocument(yamlBytes, func(obj *unstructured.Unstructured) error {
+		objects = append(objects, obj.DeepCopy())
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	var targets []fixtureDeleteTarget
+	var deleteErrs []error
+	foreground := metav1.DeletePropagationForeground
+	for i := len(objects) - 1; i >= 0; i-- {
+		obj := objects[i]
+		gvr, err := gvrFromObject(obj)
+		if err != nil {
+			deleteErrs = append(deleteErrs, err)
+			continue
+		}
+		client := dynamicResourceClient(dynClient, gvr, obj.GetNamespace())
+		current, err := client.Get(cleanupCtx, obj.GetName(), metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			deleteErrs = append(deleteErrs, fmt.Errorf("getting %s %s: %w", obj.GetKind(), objectName(obj), err))
+			continue
+		}
+		uid := current.GetUID()
+		options := metav1.DeleteOptions{
+			PropagationPolicy: &foreground,
+			Preconditions:     &metav1.Preconditions{UID: &uid},
+		}
+		if err := client.Delete(cleanupCtx, obj.GetName(), options); err != nil {
+			switch {
+			case apierrors.IsNotFound(err), apierrors.IsConflict(err):
+				continue
+			default:
+				deleteErrs = append(deleteErrs, fmt.Errorf("deleting %s %s: %w", obj.GetKind(), objectName(obj), err))
+				continue
+			}
+		}
+		targets = append(targets, fixtureDeleteTarget{
+			client:    client,
+			kind:      obj.GetKind(),
+			namespace: obj.GetNamespace(),
+			name:      obj.GetName(),
+			uid:       string(uid),
+		})
+	}
+
+	if err := waitForFixtureTargetsDeleted(cleanupCtx, targets); err != nil {
+		deleteErrs = append(deleteErrs, err)
+	}
+	return errors.Join(deleteErrs...)
+}
+
+func waitForFixtureTargetsDeleted(ctx context.Context, targets []fixtureDeleteTarget) error {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	pending := append([]fixtureDeleteTarget(nil), targets...)
+	var lastErr error
+	for len(pending) > 0 {
+		remaining := pending[:0]
+		lastErr = nil
+		for _, target := range pending {
+			current, err := target.client.Get(ctx, target.name, metav1.GetOptions{})
+			switch {
+			case apierrors.IsNotFound(err):
+				continue
+			case err != nil:
+				lastErr = fmt.Errorf("getting %s %s: %w", target.kind, target.objectName(), err)
+				remaining = append(remaining, target)
+			case target.uid != "" && string(current.GetUID()) != target.uid:
+				continue
+			default:
+				remaining = append(remaining, target)
+			}
+		}
+		pending = remaining
+		if len(pending) == 0 {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			objects := make([]string, 0, len(pending))
+			for _, target := range pending {
+				objects = append(objects, target.kind+" "+target.objectName())
+			}
+			if lastErr != nil {
+				return fmt.Errorf("waiting for fixture deletion (%s): %w; last poll error: %v", strings.Join(objects, ", "), ctx.Err(), lastErr)
+			}
+			return fmt.Errorf("waiting for fixture deletion (%s): %w", strings.Join(objects, ", "), ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
+func dynamicResourceClient(dynClient dynamic.Interface, gvr schema.GroupVersionResource, namespace string) dynamic.ResourceInterface {
+	if namespace != "" {
+		return dynClient.Resource(gvr).Namespace(namespace)
+	}
+	return dynClient.Resource(gvr)
+}
+
+func objectName(obj *unstructured.Unstructured) string {
+	if obj.GetNamespace() == "" {
+		return obj.GetName()
+	}
+	return obj.GetNamespace() + "/" + obj.GetName()
+}
+
+func (target fixtureDeleteTarget) objectName() string {
+	if target.namespace == "" {
+		return target.name
+	}
+	return target.namespace + "/" + target.name
 }
 
 // forEachYAMLDocument splits multi-doc YAML and calls fn for each document.

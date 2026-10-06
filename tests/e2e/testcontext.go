@@ -525,6 +525,17 @@ func DeleteFixtureWithClient(ctx context.Context, dynClient dynamic.Interface, n
 	return deleteYAMLWithClient(ctx, dynClient, yamlBytes)
 }
 
+// DeleteFixtureWithClientAndWait renders a fixture, deletes every object, and waits
+// until the deleted object UIDs are gone. Use it when another test process may
+// recreate the same fixed-name objects immediately.
+func DeleteFixtureWithClientAndWait(ctx context.Context, dynClient dynamic.Interface, name string, timeout time.Duration) error {
+	yamlBytes, err := readFixture(name)
+	if err != nil {
+		return err
+	}
+	return deleteYAMLWithClientAndWait(ctx, dynClient, yamlBytes, timeout)
+}
+
 // ApplyFixture reads a YAML fixture, applies it to the cluster, and registers
 // cleanup to delete the resources when the test finishes.
 func (tc *TestContext) ApplyFixture(t *testing.T, name string) {
