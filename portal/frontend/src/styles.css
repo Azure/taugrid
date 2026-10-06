@@ -29,11 +29,15 @@
   }
   .tab-toggle button:hover { color: var(--text); }
   .tab-toggle button.active { background: var(--accent); color: #fff; }
-  .workspace-picker { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+  .workspace-picker {
+    display: flex; align-items: center; gap: 8px; color: var(--muted);
+    font-size: 12px; font-weight: 650; white-space: nowrap;
+  }
   .workspace-picker select {
-    min-width: 170px; max-width: 260px; border: 1px solid var(--line); border-radius: 7px;
+    min-width: 210px; max-width: 320px; border: 1px solid var(--line); border-radius: 7px;
     background: #fff; color: var(--text); padding: 6px 28px 6px 9px; font: inherit;
   }
+  .workspace-picker select:disabled { color: var(--muted); background: var(--bg); cursor: not-allowed; }
   .scope-banner {
     display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; padding: 10px 12px;
     border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--muted);
@@ -416,6 +420,8 @@
     main { padding: 16px; }
     .card { padding: 16px; }
     .tab-toggle button { padding: 5px 10px; }
+    .workspace-picker { order: 3; width: 100%; }
+    .workspace-picker select { flex: 1 1 auto; min-width: 0; max-width: none; }
     .evidence-strip { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
     .evidence-strip > div:nth-child(3) { border-right: 0; }
     .evidence-strip > div:nth-child(-n+3) { border-bottom: 1px solid var(--line); }

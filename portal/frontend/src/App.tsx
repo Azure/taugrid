@@ -31,9 +31,10 @@ class BoardBoundary extends Component<{ children: ReactNode }, { error?: Error }
   render() { return this.state.error ? <div className="empty warn" role="alert">Failed to load: {this.state.error.message}</div> : this.props.children; }
 }
 export function ScopeBanner({ scope }: { scope?: WorkspaceScope }) {
-  if (!scope) return <div className="scope-banner unavailable">No authorized workspace is available.</div>;
+  if (!scope) return <div className="scope-banner unavailable">No authorized project workspace is available.</div>;
   const fields = [
-    ['workspace', scope.name || scope.workspace], ['cluster', scope.cluster], ['namespace', scope.namespace], ['queue', scope.localQueue],
+    ['project workspace', scope.name || scope.workspace], ['team', scope.team], ['cluster', scope.cluster],
+    ['namespace', scope.namespace], ['queue', scope.localQueue],
     ['result scope', scope.resultScope], ['authorization', scope.authorizationMode], ['source', scope.source], ['state', scope.availability],
   ];
   return <div className={'scope-banner' + (scope.availability === 'available' ? '' : ' unavailable')}>{fields.map(([label, value]) => <span key={label}><strong>{label}: </strong>{value || 'not configured'}</span>)}</div>;
@@ -89,7 +90,7 @@ export function App() {
       void prefetchBoardPaths(queryClient, scope, managed, fleetBoardPaths);
     }
   }
-  const workspacePicker = <label className="workspace-picker">Workspace <select id="workspace-select" aria-label="Workspace" value={scope?.workspace || workspace} disabled={!data || data.workspaces.length < 2} onChange={e => {
+  const workspacePicker = <label className="workspace-picker"><span>Project workspace</span><select id="workspace-select" aria-label="Project workspace" value={scope?.workspace || workspace} disabled={!data || data.workspaces.length < 2} onChange={e => {
       const params = new URLSearchParams(location.search);
       params.set('workspace', e.target.value);
       params.delete('namespace'); params.delete('cluster');
@@ -101,8 +102,10 @@ export function App() {
       }
       navigate(location.pathname + '?' + params + location.hash);
     }}>
-      {!scope && <option value={workspace}>{workspace || 'No workspace'}</option>}
-      {data?.workspaces.map(w => <option key={w.workspace} value={w.workspace}>{w.name || w.workspace}</option>)}
+      {!scope && <option value={workspace}>{workspace || 'No project workspace'}</option>}
+      {data?.workspaces.map(w => <option key={w.workspace} value={w.workspace}>
+        {w.name || w.workspace}{w.team ? ` · ${w.team}` : ''}
+      </option>)}
     </select></label>;
   return <div className={experimentView ? 'portal-stellar-shell' : undefined}>
     <header className="topbar"><div className="brand"><strong>TauGrid</strong><div className="eyebrow">Observability Portal</div></div><div className="spacer"/>
@@ -117,9 +120,9 @@ export function App() {
       onMouseEnter={() => prefetchRoute(path)} onFocus={() => prefetchRoute(path)}
       onPointerDown={() => prefetchRoute(path)}>{title}</Link>;
   })}</div></nav></aside>}<main><div id="scope-banner">{!directory.isPending && (!experimentView || scope?.availability !== 'available') && <ScopeBanner scope={scope}/>}</div><div className="card" id="view">
-    {directory.isPending || needsSelection ? <div className="empty" role="status">Loading workspace…</div>
-      : directory.error ? <div className="empty warn" role="alert">Failed to load: workspace directory: {directory.error.message}</div>
-        : !scope ? <Empty>No authorized workspace is available.</Empty>
+    {directory.isPending || needsSelection ? <div className="empty" role="status">Loading project workspace…</div>
+      : directory.error ? <div className="empty warn" role="alert">Failed to load project workspace directory: {directory.error.message}</div>
+        : !scope ? <Empty>No authorized project workspace is available.</Empty>
           : scope.availability !== 'available' && !experimentSurface ? <Empty warn>{scope.availability === 'redirect' ? 'Redirecting to the workspace Portal…' : `Workspace data is ${scope.availability} on this Portal. No local fallback was used.`}</Empty>
             : <WorkspaceProvider key={scope.workspace + ':' + scope.cluster + ':' + scope.namespace} scope={scope} managed={managed}>
               <BoardBoundary key={location.pathname + persona + ':' + new URLSearchParams(location.search).get('target')}>
