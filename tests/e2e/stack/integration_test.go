@@ -61,6 +61,7 @@ const (
 
 	defaultFineWebTrainWorkers = 16
 	defaultFineWebTrainSteps   = 60
+	fixtureCleanupTimeout      = 3 * time.Minute
 
 	// FineWeb conformance asserts the runtime param count lands in the ~1.7B band
 	// (1.716B at the default 32L/2048d config); the workload also self-checks this.
@@ -98,7 +99,9 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
-	if stackUsesArgoCDQueue() {
+	preserveKueueRecords := os.Getenv("E2E_PRESERVE_KUEUE_RECORDS") == "1"
+	usesArgoCDQueue := stackUsesArgoCDQueue()
+	if usesArgoCDQueue {
 		if !largeGPUUsesManagerWorkloadAccess() {
 			if err := requireArgoCDStackQueue(ctx, kubeClient, dynamicClient); err != nil {
 				fmt.Fprintf(os.Stderr, "ArgoCD stack queue is not ready: %v\n", err)
@@ -108,27 +111,36 @@ func runTests(m *testing.M) int {
 			}
 		}
 	} else {
+		if !preserveKueueRecords {
+			if err := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to remove stale stack Kueue resources: %v\n", err)
+				return 1
+			}
+		}
 		// Setup order matters: the Kueue fixture must create the namespace before
 		// any RayJob fixtures are applied into it.
 		if err := e2e.ApplyFixtureWithClient(ctx, dynamicClient, "stack-kueue-resources.yaml"); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to setup stack Kueue resources: %v\n", err)
 			e2e.DumpDeploymentDiagnostics(ctx, kubeClient, "kueue-system", "kueue-controller-manager")
 			e2e.DumpDeploymentDiagnostics(ctx, kubeClient, "kuberay-system", "kuberay-operator")
+			if !preserveKueueRecords {
+				if cleanupErr := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); cleanupErr != nil {
+					fmt.Fprintf(os.Stderr, "Failed to roll back partial stack Kueue setup: %v\n", cleanupErr)
+				}
+			}
 			return 1
 		}
-		if os.Getenv("E2E_PRESERVE_KUEUE_RECORDS") != "1" {
-			defer e2e.DeleteFixtureWithClient(ctx, dynamicClient, "stack-kueue-resources.yaml")
-		}
-	}
-
-	if os.Getenv("E2E_STACK_TAU_ENTRYPOINT_ONLY") == "1" {
-		defer results.FlushAll()
-		return m.Run()
 	}
 
 	defer results.FlushAll()
-
-	return m.Run()
+	code := m.Run()
+	if !usesArgoCDQueue && !preserveKueueRecords {
+		if err := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to clean up stack Kueue resources: %v\n", err)
+			code = 1
+		}
+	}
+	return code
 }
 
 func stackUsesArgoCDQueue() bool {

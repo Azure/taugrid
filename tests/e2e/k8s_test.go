@@ -6,6 +6,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,6 +36,165 @@ func TestGVRFromObjectMapsTopology(t *testing.T) {
 	}
 	if got.Group != "kueue.x-k8s.io" || got.Version != "v1beta2" || got.Resource != "topologies" {
 		t.Fatalf("gvrFromObject = %s, want kueue.x-k8s.io/v1beta2, Resource=topologies", got.String())
+	}
+}
+
+func TestDeleteYAMLWithClientAndWaitDeletesInReverseAndWaitsForUID(t *testing.T) {
+	manifest := []byte(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-stack
+  uid: namespace-uid
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: e2e-stack-queue
+  namespace: e2e-stack
+  uid: queue-uid
+`)
+
+	var mu sync.Mutex
+	var deletes []string
+	deleted := make(map[string]bool)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		path := r.URL.Path
+		switch r.Method {
+		case http.MethodGet:
+			if deleted[path] {
+				writeJSONResponse(w, http.StatusNotFound, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404}`)
+				return
+			}
+			uid := "namespace-uid"
+			kind := "Namespace"
+			apiVersion := "v1"
+			name := "e2e-stack"
+			if strings.Contains(path, "/localqueues/") {
+				uid = "queue-uid"
+				kind = "LocalQueue"
+				apiVersion = "kueue.x-k8s.io/v1beta2"
+				name = "e2e-stack-queue"
+			}
+			writeJSONResponse(w, http.StatusOK, fmt.Sprintf(`{"kind":%q,"apiVersion":%q,"metadata":{"name":%q,"uid":%q}}`, kind, apiVersion, name, uid))
+		case http.MethodDelete:
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"propagationPolicy":"Foreground"`) {
+				t.Errorf("DELETE %s did not request Foreground propagation: %s", path, body)
+			}
+			wantUID := "namespace-uid"
+			if strings.Contains(path, "/localqueues/") {
+				wantUID = "queue-uid"
+			}
+			if !strings.Contains(string(body), `"uid":"`+wantUID+`"`) {
+				t.Errorf("DELETE %s did not require UID %s: %s", path, wantUID, body)
+			}
+			deletes = append(deletes, path)
+			deleted[path] = true
+			writeJSONResponse(w, http.StatusOK, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, path)
+			writeJSONResponse(w, http.StatusMethodNotAllowed, `{}`)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatalf("create dynamic client: %v", err)
+	}
+
+	if err := deleteYAMLWithClientAndWait(context.Background(), client, manifest, 100*time.Millisecond); err != nil {
+		t.Fatalf("delete fixture and wait: %v", err)
+	}
+	want := []string{
+		"/apis/kueue.x-k8s.io/v1beta2/namespaces/e2e-stack/localqueues/e2e-stack-queue",
+		"/api/v1/namespaces/e2e-stack",
+	}
+	if fmt.Sprint(deletes) != fmt.Sprint(want) {
+		t.Fatalf("delete order = %v, want %v", deletes, want)
+	}
+}
+
+func TestDeleteYAMLWithClientAndWaitAcceptsUIDConflict(t *testing.T) {
+	manifest := []byte(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-stack
+`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSONResponse(w, http.StatusOK, `{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"e2e-stack","uid":"old-uid"}}`)
+		case http.MethodDelete:
+			writeJSONResponse(w, http.StatusConflict, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Conflict","code":409}`)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatalf("create dynamic client: %v", err)
+	}
+
+	if err := deleteYAMLWithClientAndWait(context.Background(), client, manifest, 100*time.Millisecond); err != nil {
+		t.Fatalf("UID conflict should leave the replacement object alone: %v", err)
+	}
+}
+
+func TestDeleteYAMLWithClientAndWaitAcceptsRecreatedObject(t *testing.T) {
+	manifest := []byte(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-stack
+`)
+	gets := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			gets++
+			uid := "old-uid"
+			if gets > 1 {
+				uid = "new-uid"
+			}
+			writeJSONResponse(w, http.StatusOK, fmt.Sprintf(`{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"e2e-stack","uid":%q}}`, uid))
+		case http.MethodDelete:
+			writeJSONResponse(w, http.StatusOK, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatalf("create dynamic client: %v", err)
+	}
+
+	if err := deleteYAMLWithClientAndWait(context.Background(), client, manifest, 100*time.Millisecond); err != nil {
+		t.Fatalf("recreated object should satisfy deletion wait: %v", err)
+	}
+}
+
+func TestDeleteYAMLWithClientAndWaitTimesOut(t *testing.T) {
+	manifest := []byte(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-stack
+`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSONResponse(w, http.StatusOK, `{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"e2e-stack","uid":"same-uid"}}`)
+		case http.MethodDelete:
+			writeJSONResponse(w, http.StatusOK, `{"kind":"Status","apiVersion":"v1","status":"Success"}`)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatalf("create dynamic client: %v", err)
+	}
+
+	err = deleteYAMLWithClientAndWait(context.Background(), client, manifest, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected deletion timeout, got %v", err)
 	}
 }
 
