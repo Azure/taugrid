@@ -2,8 +2,8 @@
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS builder
 # TODO: change default to v0.2.0 once adx-mon team tags a release
 ARG ADX_MON_VERSION=main
-ARG TARGETARCH
 ARG TARGETOS
+ARG TARGETARCH
 
 # Install build deps: libsystemd-dev for journald CGO bindings, git for clone
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,7 +18,7 @@ WORKDIR /code
 # GOEXPERIMENT=systemcrypto: routes TLS/crypto through system OpenSSL (FIPS 140-2/3)
 # CGO_ENABLED=1: required for libsystemd (sdjournal/dlopen) and systemcrypto
 RUN test -n "${TARGETOS}" && test -n "${TARGETARCH}" && \
-    CGO_ENABLED=1 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" GOEXPERIMENT=systemcrypto \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
     go build -buildvcs=false \
     -ldflags="-X 'github.com/Azure/adx-mon/pkg/version.Version=${ADX_MON_VERSION}' \
               -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(git rev-parse HEAD)' \

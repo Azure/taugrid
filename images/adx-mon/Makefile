@@ -16,7 +16,7 @@ TAG              ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev
 ADX_MON_VERSION  ?= main
 COMPONENTS       := collector ingestor alerter operator
 SINGLE_PLATFORM_COMPONENTS := ingestor alerter operator
-COLLECTOR_PLATFORMS ?= linux/amd64,linux/arm64
+PLATFORMS ?= linux/amd64,linux/arm64
 
 .PHONY: docker-build push docker-build-collector docker-push-collector docker-build-ingestor docker-build-alerter docker-build-operator
 
@@ -32,7 +32,7 @@ docker-push-collector:
 	@test -n "$(PUBLISH_REGISTRY)" || { echo "PUBLISH_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	docker buildx build -f Dockerfile.collector \
 	  --build-arg ADX_MON_VERSION=$(ADX_MON_VERSION) \
-	  --platform $(COLLECTOR_PLATFORMS) \
+	  --platform $(PLATFORMS) \
 	  --tag $(PUBLISH_REGISTRY)/collector:$(TAG) \
 	  --push \
 	  .
@@ -61,7 +61,7 @@ push: $(addprefix docker-build-,$(SINGLE_PLATFORM_COMPONENTS))
 	  PUBLISH_REGISTRY=$(PUBLISH_REGISTRY) \
 	  TAG=$(TAG) \
 	  ADX_MON_VERSION=$(ADX_MON_VERSION) \
-	  COLLECTOR_PLATFORMS=$(COLLECTOR_PLATFORMS)
+	  PLATFORMS=$(PLATFORMS)
 	@for comp in $(SINGLE_PLATFORM_COMPONENTS); do \
 	  echo "Pushing $(PUBLISH_REGISTRY)/$$comp:$(TAG)"; \
 	  docker tag $(REGISTRY)/$$comp:$(TAG) $(PUBLISH_REGISTRY)/$$comp:$(TAG); \
