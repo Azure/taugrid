@@ -2,6 +2,8 @@
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS builder
 # TODO: change default to v0.2.0 once adx-mon team tags a release
 ARG ADX_MON_VERSION=main
+ARG TARGETOS
+ARG TARGETARCH
 
 # Install build deps: libsystemd-dev for journald CGO bindings, git for clone
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -15,7 +17,8 @@ WORKDIR /code
 # Build collector with FIPS crypto
 # GOEXPERIMENT=systemcrypto: routes TLS/crypto through system OpenSSL (FIPS 140-2/3)
 # CGO_ENABLED=1: required for libsystemd (sdjournal/dlopen) and systemcrypto
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOEXPERIMENT=systemcrypto \
+RUN test -n "${TARGETOS}" && test -n "${TARGETARCH}" && \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
     go build -buildvcs=false \
     -ldflags="-X 'github.com/Azure/adx-mon/pkg/version.Version=${ADX_MON_VERSION}' \
               -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(git rev-parse HEAD)' \
@@ -26,6 +29,21 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOEXPERIMENT=systemcrypto \
 # The distroless final image has no package manager; copy .so files from here.
 FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS systemd-source
 RUN tdnf install -y systemd-libs xz-libs zstd-libs lz4 libcap-ng libgcrypt libgpg-error && tdnf clean all
+RUN mkdir /runtime-libs && \
+    for library in \
+      libsystemd.so.0 \
+      liblzma.so.5 \
+      libzstd.so.1 \
+      liblz4.so.1 \
+      libcap.so.2 \
+      libgcrypt.so.20 \
+      libgpg-error.so.0; do \
+        source=""; \
+        for directory in /usr/lib /usr/lib64; do \
+          if [ -e "${directory}/${library}" ]; then source="${directory}/${library}"; break; fi; \
+        done; \
+        test -n "${source}" && cp -L "${source}" "/runtime-libs/${library}"; \
+    done
 
 # Stage 3: Distroless runtime image
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
@@ -40,16 +58,9 @@ COPY --from=builder /code/bin/collector /collector
 # Copy libsystemd and its full transitive dependency closure.
 # collector uses dlopen("libsystemd.so.0", RTLD_LAZY) at runtime via go-systemd/sdjournal.
 # Without these .so files present, dlopen fails silently and journal collection is disabled.
-# Derived from upstream Azure/adx-mon Dockerfile.collector (LD_DEBUG=libs analysis):
+# Derived from upstream Azure/adx-mon Dockerfile.collector (LD_DEBUG=libs analysis).
+# The source stage normalizes Azure Linux's architecture-specific library layout.
 # libsystemd.so.0 depends on: liblzma, libzstd, liblz4, libcap, libgcrypt, libgpg-error
-COPY --from=systemd-source \
-    /usr/lib/libsystemd.so.0 \
-    /usr/lib/liblzma.so.5 \
-    /usr/lib/libzstd.so.1 \
-    /usr/lib/liblz4.so.1 \
-    /usr/lib/libcap.so.2 \
-    /usr/lib/libgcrypt.so.20 \
-    /usr/lib/libgpg-error.so.0 \
-    /usr/lib/
+COPY --from=systemd-source /runtime-libs/ /usr/lib/
 
 ENTRYPOINT ["/collector"]
