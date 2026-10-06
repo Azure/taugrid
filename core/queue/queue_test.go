@@ -108,6 +108,7 @@ func TestBuildSnapshotFiltersNormalizeInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(snap.Groups) != 1 {
 		t.Fatalf("groups=%d want 1: %#v", len(snap.Groups), snap.Groups)
 	}
@@ -116,6 +117,44 @@ func TestBuildSnapshotFiltersNormalizeInput(t *testing.T) {
 	}
 	if len(snap.Hints) != 0 {
 		t.Fatalf("filtered H200-only view should not emit A100 hint: %#v", snap.Hints)
+	}
+}
+
+func TestBuildSnapshotUsesWorkspaceDerivedClusterQueue(t *testing.T) {
+	localQueues := `{"items":[{
+		"metadata":{"name":"research-training","namespace":"ray"},
+		"spec":{"clusterQueue":"tau-ws-vision"},
+		"status":{"pendingWorkloads":1}
+	}]}`
+	clusterQueues := `{"items":[
+		{
+			"metadata":{"name":"team-research-reserved-cq"},
+			"spec":{"resourceGroups":[{"flavors":[{"name":"gpu-a100-80gb-dra","resources":[{"name":"nvidia.com/gpu","nominalQuota":"64"}]}]}]}
+		},
+		{
+			"metadata":{"name":"tau-ws-vision","labels":{"tau.azure.com/workspace":"vision","tau.azure.com/team":"research"}},
+			"spec":{"cohortName":"tau-team-research","resourceGroups":[{"flavors":[{"name":"gpu-a100-80gb-dra","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}]}]},
+			"status":{"flavorsReservation":[{"name":"gpu-a100-80gb-dra","resources":[{"name":"nvidia.com/gpu","total":"3"}]}]}
+		}
+	]}`
+	snap, err := BuildSnapshot(
+		"ray",
+		testPolicy(),
+		[]byte(localQueues),
+		[]byte(clusterQueues),
+		[]byte(`{"items":[]}`),
+		Options{Team: "research"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a100 := findGroup(t, snap, "a100-80gb")
+	if a100.ClusterQueue != "tau-ws-vision" || a100.Workspace != "vision" ||
+		a100.Cohort != "tau-team-research" || a100.QuotaScope != "workspace" {
+		t.Fatalf("workspace hierarchy = %#v", a100)
+	}
+	if a100.GPUNominal != 8 || a100.GPUReserved != 3 || a100.GPUHeadroom != 5 {
+		t.Fatalf("workspace quota conflated with legacy cluster queue: %#v", a100)
 	}
 }
 

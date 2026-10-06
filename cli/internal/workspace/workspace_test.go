@@ -15,6 +15,8 @@ func TestParseAndRenderStatus(t *testing.T) {
 	  "kind": "TauWorkspace",
 	  "metadata": {"name": "sample", "namespace": "tau-system", "generation": 7},
 	  "spec": {
+	    "teamRef": {"name": "research"},
+	    "quota": [{"flavor": "h200", "resource": "nvidia.com/gpu", "nominalQuota": "8", "borrowingLimit": "4"}],
 	    "queue": "sample",
 	    "defaults": {"outputRoot": "/data/projects/sample/runs"}
 	  },
@@ -29,6 +31,10 @@ func TestParseAndRenderStatus(t *testing.T) {
 	}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
+	}
+	if w.Spec.TeamRef == nil || w.Spec.TeamRef.Name != "research" ||
+		len(w.Spec.Quota) != 1 || w.Spec.Quota[0].NominalQuota != "8" {
+		t.Fatalf("workspace quota hierarchy not parsed: %#v", w.Spec)
 	}
 	out := RenderStatus(w)
 	for _, want := range []string{"Workspace: sample", "phase:      Ready", "serviceAccount: default", "clusterQ:   sample-cq", "RBACReady", "gpu", "h200"} {

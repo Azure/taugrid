@@ -19,13 +19,16 @@ func newWorkspaceQuotaShowCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "show <workspace>",
 		Short: "Show the Kueue quota and node placement backing a workspace",
-		Long: `Report the quota a workspace can actually draw on.
+		Long: `Report the administrative quota hierarchy backing a workspace.
 
 For the workspace's ClusterQueue this prints, per ResourceFlavor and per
 resource (cpu, memory, and GPU alike), the nominal quota, what is currently
 reserved and used, what remains, and the borrowing limit. It also prints each
 flavor's nodeLabels and tolerations, so it is clear which node pool a request
 will land on, plus the workspace LocalQueue's admitted/pending/reserving counts.
+For a team-backed workspace it separately prints the TauTeam Cohort's shared
+quota. Workspace and team quota are scheduling allocations, not physical node
+or GPU capacity.
 
 This is read-only reporting. Kueue is a queueing system: a request larger than
 the remaining quota is not an error, it simply waits for capacity.`,

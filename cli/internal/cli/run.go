@@ -99,6 +99,7 @@ See: tau run explain-config`,
 			if err != nil {
 				return err
 			}
+			configWorkspace := strings.TrimSpace(targetOptions.workspace)
 			name := ""
 			if input.ExplicitConfig {
 				name = requestedTarget
@@ -111,8 +112,23 @@ See: tau run explain-config`,
 				targetOptions.namespace = namespace
 			}
 			if cmd.Flags().Changed("workspace") {
+				if err := validateWorkspaceSelection(
+					resolution.Connection,
+					configWorkspace,
+					strings.TrimSpace(workspace),
+				); err != nil {
+					return err
+				}
 				targetOptions.workspace = workspace
 				targetOptions.workspaceExplicit = strings.TrimSpace(workspace) != ""
+			} else if err := validateWorkspaceSelection(
+				resolution.Connection,
+				configWorkspace,
+				"",
+			); err != nil {
+				return err
+			} else if catalogWorkspace := strings.TrimSpace(resolution.Connection.Workspace); catalogWorkspace != "" {
+				targetOptions.workspace = catalogWorkspace
 			}
 			if runContextExplicit(cmd) {
 				targetOptions.kubeContext = kubeContext

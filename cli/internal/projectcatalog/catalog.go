@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/Azure/taugrid/cli/internal/repository"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
@@ -35,6 +36,7 @@ var (
 type ProjectSpec struct {
 	Path       string `yaml:"path"`
 	Connection string `yaml:"connection"`
+	Workspace  string `yaml:"workspace,omitempty"`
 }
 
 type Spec struct {
@@ -58,6 +60,7 @@ type Catalog struct {
 type Project struct {
 	Name               string
 	Path               string
+	Workspace          string
 	LexicalRoot        string
 	Root               string
 	ConnectionPath     string
@@ -103,6 +106,14 @@ func Parse(raw []byte) (Spec, error) {
 		}
 		if err := validateRelativePath(project.Connection); err != nil {
 			return Spec{}, fmt.Errorf("project %q connection: %w", name, err)
+		}
+		if workspace := strings.TrimSpace(project.Workspace); workspace != "" {
+			if workspace != project.Workspace {
+				return Spec{}, fmt.Errorf("project %q workspace must not contain leading or trailing whitespace", name)
+			}
+			if problems := validation.IsDNS1123Subdomain(workspace); len(problems) > 0 {
+				return Spec{}, fmt.Errorf("project %q workspace %q is invalid: %s", name, workspace, strings.Join(problems, "; "))
+			}
 		}
 	}
 	return spec, nil
@@ -466,6 +477,7 @@ func loadProject(
 	project := &Project{
 		Name:           name,
 		Path:           spec.Path,
+		Workspace:      spec.Workspace,
 		LexicalRoot:    lexicalRoot,
 		Root:           realRoot,
 		ConnectionPath: connectionReal,

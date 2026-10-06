@@ -273,7 +273,7 @@ func TestCatalogConnectionRejectsConflictingConfigWorkspaceBeforeActivation(t *t
 	_, _, err = applyAutomaticRunConnection(
 		context.Background(),
 		options,
-		runConnectionSource{Catalog: true, Project: "alpha", Discovery: &discovery},
+		runConnectionSource{Catalog: true, Project: "alpha", Workspace: "alpha-workspace", Discovery: &discovery},
 		false,
 		ensurer,
 	)
@@ -282,8 +282,61 @@ func TestCatalogConnectionRejectsConflictingConfigWorkspaceBeforeActivation(t *t
 		!strings.Contains(err.Error(), `project "alpha"`) {
 		t.Fatalf("expected catalog workspace conflict, got %v", err)
 	}
+
 	if ensurer.calls != 0 {
 		t.Fatalf("workspace conflict activated connection %d times", ensurer.calls)
+	}
+}
+
+func TestCatalogWorkspaceUsesExistingConnectionForClusterAccess(t *testing.T) {
+	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery := workspaceconnection.Discovery{Descriptor: descriptor}
+	options := defaultRunDispatchOptions()
+	options.workspace = "alpha-workspace"
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace: "sample", ContextName: "catalog-context",
+	}}
+	got, connection, err := applyAutomaticRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{
+			Catalog: true, Project: "alpha", Workspace: "alpha-workspace", Discovery: &discovery,
+		},
+		false,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 1 || got.workspace != "alpha-workspace" || got.kubeContext != "catalog-context" {
+		t.Fatalf("calls=%d options=%#v", ensurer.calls, got)
+	}
+	if connection.Workspace != "sample" {
+		t.Fatalf("connection descriptor workspace changed: %#v", connection)
+	}
+}
+
+func TestValidateWorkspaceSelectionRejectsConflicts(t *testing.T) {
+	source := runConnectionSource{Catalog: true, Project: "alpha", Workspace: "alpha-workspace"}
+	for _, tc := range []struct {
+		name, policy, flag, want string
+	}{
+		{"policy and flag", "policy-workspace", "flag-workspace", "--workspace"},
+		{"catalog policy", "other", "", "catalog workspace"},
+		{"catalog flag", "", "other", "catalog workspace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWorkspaceSelection(source, tc.policy, tc.flag)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	if err := validateWorkspaceSelection(source, "alpha-workspace", "alpha-workspace"); err != nil {
+		t.Fatalf("matching workspace rejected: %v", err)
 	}
 }
 

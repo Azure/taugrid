@@ -25,18 +25,30 @@ import (
 )
 
 // SchemaVersion identifies the JSON shape emitted by `tau workspace quota show`.
-const SchemaVersion = "tau.workspace.quota.v1"
+const SchemaVersion = "tau.workspace.quota.v2"
+
+const teamLabel = "tau.azure.com/team"
 
 // Report is the machine-readable quota view for one workspace.
 type Report struct {
-	Schema       string    `json:"schema"`
-	Workspace    string    `json:"workspace,omitempty"`
-	Namespace    string    `json:"namespace,omitempty"`
-	LocalQueue   string    `json:"localQueue,omitempty"`
-	ClusterQueue string    `json:"clusterQueue"`
-	Workloads    Workloads `json:"workloads"`
-	Flavors      []Flavor  `json:"flavors"`
-	Warnings     []string  `json:"warnings,omitempty"`
+	Schema       string     `json:"schema"`
+	Workspace    string     `json:"workspace,omitempty"`
+	Namespace    string     `json:"namespace,omitempty"`
+	LocalQueue   string     `json:"localQueue,omitempty"`
+	ClusterQueue string     `json:"clusterQueue"`
+	Team         string     `json:"team,omitempty"`
+	Cohort       string     `json:"cohort,omitempty"`
+	Workloads    Workloads  `json:"workloads"`
+	Flavors      []Flavor   `json:"flavors"`
+	TeamShared   *QuotaPool `json:"teamShared,omitempty"`
+	Warnings     []string   `json:"warnings,omitempty"`
+}
+
+// QuotaPool is an administrative quota level. It is deliberately not named
+// capacity: neither a ClusterQueue nor a Cohort describes physical node supply.
+type QuotaPool struct {
+	Name    string   `json:"name"`
+	Flavors []Flavor `json:"flavors"`
 }
 
 // Workloads is the LocalQueue's workload census. Counts are only meaningful
@@ -101,6 +113,9 @@ type Input struct {
 	// FlavorsRaw maps ResourceFlavor name to its JSON. Flavors named by the
 	// ClusterQueue but absent here are reported as not found.
 	FlavorsRaw map[string][]byte
+	// CohortRaw is optional. Workspace ClusterQueues created for a TauTeam name
+	// a Cohort that holds the team's unguaranteed shared administrative quota.
+	CohortRaw []byte
 }
 
 // Build parses Kueue objects into a Report. It never fails on missing optional
@@ -124,6 +139,8 @@ func Build(in Input) (Report, error) {
 		ClusterQueue: name,
 		Flavors:      []Flavor{},
 	}
+	report.Team = strings.TrimSpace(cq.Metadata.Labels[teamLabel])
+	report.Cohort = strings.TrimSpace(cq.cohortName())
 
 	if len(in.LocalQueueRaw) > 0 {
 		var lq localQueueDoc
@@ -145,33 +162,79 @@ func Build(in Input) (Report, error) {
 	used := indexFlavorStatus(cq.Status.FlavorsUsage)
 
 	for _, flavorName := range cq.flavorNames() {
-		flavor := Flavor{Name: flavorName, Resources: []ResourceQuota{}}
-		raw, ok := in.FlavorsRaw[flavorName]
-		if ok && len(raw) > 0 {
-			var doc resourceFlavorDoc
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				return Report{}, fmt.Errorf("parse ResourceFlavor %s: %w", flavorName, err)
-			}
-			flavor.FlavorFound = true
-			flavor.NodeLabels = doc.Spec.NodeLabels
-			for _, t := range doc.Spec.Tolerations {
-				flavor.Tolerations = append(flavor.Tolerations, Toleration(t))
-			}
-		} else {
-			report.Warnings = append(report.Warnings, fmt.Sprintf(
-				"ResourceFlavor %q was not readable; its node labels and tolerations are unavailable", flavorName))
+		flavor, warnings, err := buildFlavor(
+			flavorName, cq.quotasFor(flavorName), reserved, used, in.FlavorsRaw,
+		)
+		if err != nil {
+			return Report{}, err
 		}
-
-		for _, rq := range cq.quotasFor(flavorName) {
-			flavor.Resources = append(flavor.Resources, buildResourceQuota(
-				rq,
-				reserved[flavorResourceKey{flavorName, rq.Name}],
-				used[flavorResourceKey{flavorName, rq.Name}],
-			))
-		}
+		report.Warnings = append(report.Warnings, warnings...)
 		report.Flavors = append(report.Flavors, flavor)
 	}
+	if report.Cohort != "" {
+		if len(in.CohortRaw) == 0 {
+			report.Warnings = append(report.Warnings, fmt.Sprintf(
+				"Cohort %q was not readable; team shared quota is unavailable", report.Cohort))
+		} else {
+			var cohort cohortDoc
+			if err := json.Unmarshal(in.CohortRaw, &cohort); err != nil {
+				return Report{}, fmt.Errorf("parse Cohort %s: %w", report.Cohort, err)
+			}
+			if report.Team == "" {
+				report.Team = strings.TrimSpace(cohort.Metadata.Labels[teamLabel])
+			}
+			pool := &QuotaPool{Name: firstNonEmpty(cohort.Metadata.Name, report.Cohort), Flavors: []Flavor{}}
+			for _, flavorName := range cohort.flavorNames() {
+				flavor, warnings, err := buildFlavor(
+					flavorName,
+					cohort.quotasFor(flavorName),
+					nil,
+					nil,
+					in.FlavorsRaw,
+				)
+				if err != nil {
+					return Report{}, err
+				}
+				report.Warnings = append(report.Warnings, warnings...)
+				pool.Flavors = append(pool.Flavors, flavor)
+			}
+			report.TeamShared = pool
+		}
+	}
 	return report, nil
+}
+
+func buildFlavor(
+	flavorName string,
+	quotas []flavorResourceQuota,
+	reserved, used map[flavorResourceKey]string,
+	flavorsRaw map[string][]byte,
+) (Flavor, []string, error) {
+	flavor := Flavor{Name: flavorName, Resources: []ResourceQuota{}}
+	var warnings []string
+	raw, ok := flavorsRaw[flavorName]
+	if ok && len(raw) > 0 {
+		var doc resourceFlavorDoc
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			return Flavor{}, nil, fmt.Errorf("parse ResourceFlavor %s: %w", flavorName, err)
+		}
+		flavor.FlavorFound = true
+		flavor.NodeLabels = doc.Spec.NodeLabels
+		for _, t := range doc.Spec.Tolerations {
+			flavor.Tolerations = append(flavor.Tolerations, Toleration(t))
+		}
+	} else {
+		warnings = append(warnings, fmt.Sprintf(
+			"ResourceFlavor %q was not readable; its node labels and tolerations are unavailable", flavorName))
+	}
+	for _, rq := range quotas {
+		flavor.Resources = append(flavor.Resources, buildResourceQuota(
+			rq,
+			reserved[flavorResourceKey{flavorName, rq.Name}],
+			used[flavorResourceKey{flavorName, rq.Name}],
+		))
+	}
+	return flavor, warnings, nil
 }
 
 func buildResourceQuota(rq flavorResourceQuota, reserved, used string) ResourceQuota {
@@ -259,6 +322,8 @@ func RenderTable(r Report) string {
 	fmt.Fprintf(&b, "Namespace:     %s\n", dash(r.Namespace))
 	fmt.Fprintf(&b, "LocalQueue:    %s\n", dash(r.LocalQueue))
 	fmt.Fprintf(&b, "ClusterQueue:  %s\n", dash(r.ClusterQueue))
+	fmt.Fprintf(&b, "Team:          %s\n", dash(r.Team))
+	fmt.Fprintf(&b, "Cohort:        %s\n", dash(r.Cohort))
 	if r.Workloads.Found {
 		fmt.Fprintf(&b, "Workloads:     %d admitted, %d pending, %d reserving\n",
 			r.Workloads.Admitted, r.Workloads.Pending, r.Workloads.Reserving)
@@ -266,15 +331,42 @@ func RenderTable(r Report) string {
 		fmt.Fprintf(&b, "Workloads:     -\n")
 	}
 
-	if len(r.Flavors) == 0 {
+	if len(r.Flavors) == 0 && (r.TeamShared == nil || len(r.TeamShared.Flavors) == 0) {
 		b.WriteString("\nClusterQueue declares no resource flavors.\n")
 		return b.String()
 	}
 
-	b.WriteString("\nQuota by flavor:\n")
-	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	if len(r.Flavors) == 0 {
+		b.WriteString("\nWorkspace allocation: no guaranteed resource flavors.\n")
+	} else {
+		b.WriteString("\nWorkspace allocation by flavor (administrative quota, not physical capacity):\n")
+		renderQuotaTable(&b, r.Flavors)
+	}
+
+	if r.TeamShared != nil {
+		fmt.Fprintf(&b, "\nTeam shared allocation %s (administrative quota, not physical capacity):\n", r.TeamShared.Name)
+		renderQuotaTable(&b, r.TeamShared.Flavors)
+	}
+
+	b.WriteString("\nFlavor placement:\n")
+	renderFlavorPlacement(&b, r.Flavors)
+	if r.TeamShared != nil {
+		renderFlavorPlacement(&b, r.TeamShared.Flavors)
+	}
+
+	if len(r.Warnings) > 0 {
+		b.WriteString("\nWarnings:\n")
+		for _, w := range r.Warnings {
+			fmt.Fprintf(&b, "  %s\n", w)
+		}
+	}
+	return b.String()
+}
+
+func renderQuotaTable(b *strings.Builder, flavors []Flavor) {
+	tw := tabwriter.NewWriter(b, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "FLAVOR\tRESOURCE\tNOMINAL\tRESERVED\tUSED\tREMAINING\tBORROWING_LIMIT")
-	for _, f := range r.Flavors {
+	for _, f := range flavors {
 		if len(f.Resources) == 0 {
 			fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t-\t-\n", f.Name)
 			continue
@@ -287,10 +379,11 @@ func RenderTable(r Report) string {
 		}
 	}
 	tw.Flush()
+}
 
-	b.WriteString("\nFlavor placement:\n")
-	for _, f := range r.Flavors {
-		fmt.Fprintf(&b, "  %s\n", f.Name)
+func renderFlavorPlacement(b *strings.Builder, flavors []Flavor) {
+	for _, f := range flavors {
+		fmt.Fprintf(b, "  %s\n", f.Name)
 		if !f.FlavorFound {
 			b.WriteString("    (ResourceFlavor not readable)\n")
 			continue
@@ -298,7 +391,7 @@ func RenderTable(r Report) string {
 		if len(f.NodeLabels) == 0 {
 			b.WriteString("    nodeLabels:  (none)\n")
 		} else {
-			fmt.Fprintf(&b, "    nodeLabels:  %s\n", strings.Join(sortedLabels(f.NodeLabels), ", "))
+			fmt.Fprintf(b, "    nodeLabels:  %s\n", strings.Join(sortedLabels(f.NodeLabels), ", "))
 		}
 		if len(f.Tolerations) == 0 {
 			b.WriteString("    tolerations: (none)\n")
@@ -308,18 +401,19 @@ func RenderTable(r Report) string {
 				if i > 0 {
 					label = "            "
 				}
-				fmt.Fprintf(&b, "    %s %s\n", label, formatToleration(t))
+				fmt.Fprintf(b, "    %s %s\n", label, formatToleration(t))
 			}
 		}
 	}
+}
 
-	if len(r.Warnings) > 0 {
-		b.WriteString("\nWarnings:\n")
-		for _, w := range r.Warnings {
-			fmt.Fprintf(&b, "  %s\n", w)
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
 		}
 	}
-	return b.String()
+	return ""
 }
 
 func formatToleration(t Toleration) string {
