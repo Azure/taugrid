@@ -182,7 +182,7 @@ rules:
     verbs: ["get", "list", "watch"]
   # Jobs / Queue board: read Kueue queue depth and admitted/pending workloads.
   - apiGroups: ["kueue.x-k8s.io"]
-    resources: ["localqueues", "clusterqueues", "workloads"]
+    resources: ["localqueues", "clusterqueues", "cohorts", "workloads"]
     verbs: ["get", "list", "watch"]
   # Workload profile readiness: singleton TauCluster status only.
   - apiGroups: ["tau.azure.com"]

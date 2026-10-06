@@ -1,0 +1,22 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+suite: Portal quota RBAC
+templates:
+  - templates/portal.yaml
+tests:
+  - it: allows the Portal to read workspace and team Kueue quota
+    set:
+      portal.enabled: true
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kueue.x-k8s.io"]
+            resources: ["localqueues", "clusterqueues", "cohorts", "workloads"]
+            verbs: ["get", "list", "watch"]

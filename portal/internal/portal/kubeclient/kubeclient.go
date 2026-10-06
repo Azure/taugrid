@@ -40,6 +40,9 @@ var (
 	clusterQueueGVR = schema.GroupVersionResource{
 		Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "clusterqueues",
 	}
+	cohortGVR = schema.GroupVersionResource{
+		Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "cohorts",
+	}
 	workloadGVR = schema.GroupVersionResource{
 		Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads",
 	}
@@ -144,6 +147,21 @@ func (c *Client) ListLocalQueues(ctx context.Context, namespace string) ([]byte,
 // ListClusterQueues returns the cluster-scoped clusterqueues list as raw JSON.
 func (c *Client) ListClusterQueues(ctx context.Context) ([]byte, error) {
 	return c.listRaw(ctx, clusterQueueGVR, "")
+}
+
+// GetLocalQueue returns one namespaced LocalQueue as raw JSON.
+func (c *Client) GetLocalQueue(ctx context.Context, namespace, name string) ([]byte, error) {
+	return c.getRaw(ctx, localQueueGVR, namespace, name)
+}
+
+// GetClusterQueue returns one cluster-scoped ClusterQueue as raw JSON.
+func (c *Client) GetClusterQueue(ctx context.Context, name string) ([]byte, error) {
+	return c.getRaw(ctx, clusterQueueGVR, "", name)
+}
+
+// GetCohort returns one cluster-scoped Cohort as raw JSON.
+func (c *Client) GetCohort(ctx context.Context, name string) ([]byte, error) {
+	return c.getRaw(ctx, cohortGVR, "", name)
 }
 
 // ListWorkloads returns the namespaced workloads list as raw JSON.

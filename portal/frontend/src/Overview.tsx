@@ -4,7 +4,7 @@
 import { memo, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { BoardResult, Empty, PageTitle, ScopedLink, TrackingLink, n1, utilizationSummary } from './components';
 import { fleetBoardPaths, useBoard, useBoardPrefetch } from './data';
-import type { Cluster, Nodes, Overview as OverviewData } from './types';
+import type { Cluster, Nodes, Overview as OverviewData, Quota } from './types';
 
 const overviewRefreshMs = 15_000;
 
@@ -178,7 +178,50 @@ function PoolDetails({ site, prefetchFleet }: { site?: SiteGroup; prefetchFleet:
   </div>;
 }
 
-const QueueBridge = memo(function QueueBridge({ data }: { data: OverviewData }) {
+function QuotaSummary({ quota, error, loading }: { quota?: Quota; error?: Error | null; loading: boolean }) {
+  const workspace = quota?.workspace;
+  const workspaceResources = workspace?.resources ?? [];
+  const teamResources = quota?.team?.resources ?? [];
+  const rows = (items: typeof workspaceResources, usage: boolean, quotaLabel: string) => items.map(item =>
+    <div className="overview-quota-row" key={`${item.flavor}/${item.resource}`}>
+      <span><strong>{item.flavor}</strong><small>{item.resource}</small></span>
+      <span><b>{usage ? item.used ?? '—' : item.nominal}</b><small>{usage ? `used of ${item.nominal}` : quotaLabel}</small></span>
+    </div>);
+  return <section className="overview-quota" aria-label="Workspace and team quota">
+    <div className="overview-workload-group-head"><strong>Workspace quota</strong>
+      {quota?.legacy && <span>Legacy</span>}
+    </div>
+    {loading && !quota ? <p className="overview-workload-empty">Loading live quota…</p>
+      : error && !quota ? <div className="overview-unavailable">Live quota unavailable: {error.message}</div>
+        : quota && !workspace ? <div className="overview-unavailable">Live quota response did not include workspace quota.</div>
+          : quota && workspace && <>
+          <div className="overview-quota-scope">
+            <span><b>{workspace.name}</b><small>{workspace.cohort || 'No team Cohort'}</small></span>
+            <span><b>{workspace.admittedWorkloads}</b><small>admitted workloads</small></span>
+          </div>
+          {workspaceResources.length ? <div className="overview-quota-rows">
+            {rows(workspaceResources, workspace.usageAvailable, 'workspace quota')}
+          </div> : <p className="overview-workload-empty">No resource quota is configured on this workspace queue.</p>}
+          {quota.team ? <div className="overview-team-quota">
+            <div className="overview-workload-group-head"><strong>Team shared quota</strong>
+              {quota.team.weightedShare && <span>share {quota.team.weightedShare}</span>}
+            </div>
+            {teamResources.length ? <div className="overview-quota-rows">
+              {rows(teamResources, quota.team.usageAvailable, 'shared quota')}
+            </div> : <p className="overview-workload-empty">No shared resource quota is configured for this team.</p>}
+            {!quota.team.usageAvailable && <p className="overview-stage-note">{quota.team.usageUnavailable}</p>}
+          </div> : quota.teamUnavailable
+            ? <div className="overview-unavailable">{quota.teamUnavailable}</div>
+            : <p className="overview-stage-note">{quota.legacy
+              ? 'This workspace does not use a TauTeam Cohort; workspace quota remains available.'
+              : 'No team shared quota is configured.'}</p>}
+        </>}
+  </section>;
+}
+
+const QueueBridge = memo(function QueueBridge({ data, quota, quotaError, quotaLoading }: {
+  data: OverviewData; quota?: Quota; quotaError?: Error | null; quotaLoading: boolean;
+}) {
   const queue = data.cards.queue;
   const lanes = queue?.queues?.filter(lane => lane.admitted > 0 || lane.pending > 0) ?? [];
   const unavailable = data.cards.queueUnavailable || (!queue ? 'Queue data unavailable' : '');
@@ -186,6 +229,7 @@ const QueueBridge = memo(function QueueBridge({ data }: { data: OverviewData }) 
   const pressure = queue && capacity > 0 ? queue.gpuUsed / capacity : 0;
   return <div className="overview-queue">
     <div className="overview-stage-title"><span>Scheduler</span><strong>Kueue admission</strong></div>
+    <QuotaSummary quota={quota} error={quotaError} loading={quotaLoading}/>
     {unavailable ? <div className="overview-unavailable">{unavailable}</div> : <>
       <div className="overview-queue-dial">
         <span>GPU reservation</span><strong>{queue!.gpuUsed}<small> / {capacity}</small></strong>
@@ -302,8 +346,9 @@ const FleetTopology = memo(function FleetTopology({ sites, nodeError }: {
   </div>;
 });
 
-function Atlas({ platform, data, nodes, cluster, nodeError }: {
-  platform: boolean; data: OverviewData; nodes?: Nodes; cluster?: Cluster; nodeError?: Error | null;
+function Atlas({ platform, data, nodes, cluster, quota, nodeError, quotaError, quotaLoading }: {
+  platform: boolean; data: OverviewData; nodes?: Nodes; cluster?: Cluster; quota?: Quota;
+  nodeError?: Error | null; quotaError?: Error | null; quotaLoading: boolean;
 }) {
   const sites = useMemo(() => groupSites(nodes), [nodes]);
   const fleetSummary = useMemo(() => {
@@ -340,7 +385,7 @@ function Atlas({ platform, data, nodes, cluster, nodeError }: {
         </header>
         <div className="overview-flow">
           <FleetTopology sites={sites} nodeError={nodeError}/>
-          <QueueBridge data={data}/>
+          <QueueBridge data={data} quota={quota} quotaError={quotaError} quotaLoading={quotaLoading}/>
           <WorkloadFlow data={data}/>
         </div>
       </section>
@@ -358,6 +403,7 @@ export function Overview({ persona }: { persona: string }) {
   );
   const nodes = useBoard<Nodes>('/api/portal/nodes', true, undefined, overviewRefreshMs);
   const cluster = useBoard<Cluster>('/api/portal/cluster', true, undefined, overviewRefreshMs);
+  const quota = useBoard<Quota>('/api/portal/quota', true, undefined, overviewRefreshMs);
   return <><PageTitle title="Overview">{platform
     ? 'See how fleet capacity, scheduler pressure, and active workloads connect.'
     : 'See where your workloads are admitted, what capacity they consume, and where to investigate next.'}</PageTitle>
@@ -365,11 +411,12 @@ export function Overview({ persona }: { persona: string }) {
       sources={[
         { label: 'Fleet capacity', query: nodes },
         { label: 'GPU telemetry', query: cluster },
+        { label: 'Workspace quota', query: quota },
       ]}
       autoRefreshMs={overviewRefreshMs}
       partial={!!overview.data && !!(overview.data.cards.queueUnavailable || overview.data.activeUnavailable || overview.data.runningUnavailable)}>
-      {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data}
-        nodeError={nodes.data ? null : nodes.error}/>}
+      {data => <Atlas platform={platform} data={data} nodes={nodes.data} cluster={cluster.data} quota={quota.data}
+        nodeError={nodes.data ? null : nodes.error} quotaError={quota.data ? null : quota.error} quotaLoading={quota.isLoading}/>}
     </BoardResult>
   </>;
 }

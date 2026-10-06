@@ -102,14 +102,16 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			// then return 503 until access is configured.
 			rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions(namespace)
 			var nodesOpts portalapi.NodesOptions
+			var quotaOpts portalapi.QuotaOptions
 			if client, err := kubeclient.New(kubeconfig); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, and Runs boards disabled (no Kubernetes access): %v\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, Runs, and Quota boards disabled (no Kubernetes access): %v\n", err)
 			} else {
 				jobsOpts.Reader = client
 				jobsOpts.Profiles = client
 				rayOpts.Reader = client
 				nodesOpts.Reader = client
 				runsOpts.Reader = client
+				quotaOpts.Reader = client
 			}
 			// The Kusto-backed boards (Cluster Health, Cost, Node Utilization)
 			// reuse Stellar's shell-out contract (--kusto-query-command). Without
@@ -172,6 +174,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				Nodes:              nodesOpts,
 				Runs:               runsOpts,
 				NodeUtil:           nodeUtilOpts,
+				Quota:              quotaOpts,
 				WorkspaceDirectory: workspaceDirectory,
 				Identity: portalapi.IdentityOptions{
 					UserHeader:   userHeader,

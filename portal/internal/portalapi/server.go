@@ -37,6 +37,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/links"
 	"github.com/Azure/taugrid/portal/internal/portal/nodes"
 	"github.com/Azure/taugrid/portal/internal/portal/nodeutil"
+	portalquota "github.com/Azure/taugrid/portal/internal/portal/quota"
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
 	"github.com/Azure/taugrid/portal/internal/portal/workloadlogs"
 )
@@ -88,6 +89,9 @@ type Options struct {
 	// returns 503; it reuses the same Kusto querier as Cluster/Cost, so the
 	// Kusto-backed boards light up (or not) together.
 	NodeUtil NodeUtilOptions
+	// Quota configures the live workspace/team quota endpoint. It reuses the
+	// same Kubernetes client as the other read-only cluster boards.
+	Quota QuotaOptions
 	// WorkspaceDirectory enables authenticated, server-resolved multi-workspace
 	// mode. When it is unset, Stellar.Workspace configures the single workspace.
 	WorkspaceDirectory WorkspaceDirectory
@@ -175,6 +179,11 @@ type NodeUtilOptions struct {
 	Cluster string
 }
 
+// QuotaOptions configures exact Kueue reads for workspace and team quota.
+type QuotaOptions struct {
+	Reader portalquota.Reader
+}
+
 // Server is the portal HTTP handler. It composes its own routes with a mounted
 // Stellar handler.
 type Server struct {
@@ -190,6 +199,7 @@ type Server struct {
 	nodes                 NodesOptions
 	runs                  RunsOptions
 	nodeUtil              NodeUtilOptions
+	quota                 QuotaOptions
 	workspaceDirectory    WorkspaceDirectory
 	identity              IdentityOptions
 	singleWorkspaceScope  WorkspaceScope
@@ -257,6 +267,7 @@ func NewServer(opts Options) (*Server, error) {
 		nodes:                 opts.Nodes,
 		runs:                  opts.Runs,
 		nodeUtil:              opts.NodeUtil,
+		quota:                 opts.Quota,
 		workspaceDirectory:    opts.WorkspaceDirectory,
 		identity:              normalizeIdentityOptions(opts.Identity),
 		kueueViz:              opts.KueueViz,
@@ -543,6 +554,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/api/portal/workspaces", s.handleWorkspaces)
 	s.mux.HandleFunc("/api/portal/overview", s.handleOverview)
+	s.mux.HandleFunc("/api/portal/quota", s.handleQuota)
 	s.mux.HandleFunc("/api/portal/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/portal/cluster", s.handleCluster)
 	s.mux.HandleFunc("/api/portal/cost", s.handleCost)
