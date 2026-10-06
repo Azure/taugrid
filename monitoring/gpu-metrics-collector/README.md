@@ -81,11 +81,13 @@ monitoring/gpu-metrics-collector/
 │   └── config/
 │       ├── config.go              # YAML config loader with validation
 │       └── config_test.go
-├── Dockerfile                     # Multi-stage: Microsoft Go 1.26.7 → distroless/static
 ├── Makefile
 ├── go.mod
 └── go.sum
 ```
+
+The container definition and image targets live in
+`images/gpu-metrics-collector/`.
 
 ## Building
 
@@ -97,7 +99,8 @@ Production images are published from merged Azure/TauGrid `main` by external,
 approved automation rather than by a workflow in this repository. Merging a
 change here therefore does not by itself alter any deployed cluster: a chart
 must additionally pin an image digest built from that merged source before new
-collector behavior takes effect.
+collector behavior takes effect. The publisher must push one immutable tag as
+a manifest list containing both `linux/amd64` and `linux/arm64`.
 
 ```bash
 # Local build (native arch)
@@ -106,16 +109,47 @@ make build
 # Run tests
 make test
 
-# Build container for ARM64 (stretch nodes)
+# Build and load a container for the developer machine's native architecture
+make -C images/gpu-metrics-collector docker-build TAG=dev
+docker run --rm gpu-metrics-collector:dev --help
+
+# Validate ARM64 (FlexNodes such as DGX Spark)
 docker buildx build --platform linux/arm64 \
   -f images/gpu-metrics-collector/Dockerfile \
   -t gpu-metrics-collector:dev --load .
+docker run --rm --platform linux/arm64 gpu-metrics-collector:dev --help
 
-# Build container for AMD64
+# Validate AMD64
 docker buildx build --platform linux/amd64 \
   -f images/gpu-metrics-collector/Dockerfile \
   -t gpu-metrics-collector:dev --load .
+docker run --rm --platform linux/amd64 gpu-metrics-collector:dev --help
 ```
+
+An authorized publisher creates one multi-platform manifest without changing
+the native developer build:
+
+```bash
+make -C images/gpu-metrics-collector docker-push \
+  ACR_REGISTRY=<backing-registry> \
+  TAG=<immutable-release-or-source-tag>
+
+docker buildx imagetools inspect \
+  <backing-registry>/unlisted/aks/ai-runtime/gpu-metrics-collector:<tag>
+```
+
+Do not overwrite a published tag. Verify that the inspection output contains
+both `Platform: linux/amd64` and `Platform: linux/arm64` before syndicating the
+tag to MCR or updating a deployment digest.
+
+The chart's current default
+`mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector@sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef`
+was inspected on 2026-10-05. It is an OCI image index containing
+`linux/amd64` (`sha256:fb31225fb88d4b6bc2cf8e0c70c5836b2c643aa37625745b10bcd8ec920396f6`)
+and
+`linux/arm64` (`sha256:7c27ba29e8f0f86ed9cfe02360847aa80e9a4bda183cbb2d0c6d1098fa05623b`).
+This evidence applies only to that immutable digest; it is not a claim about
+other or future MCR tags.
 
 ## Configuration
 
@@ -371,15 +405,18 @@ used as health conditions because portable failure thresholds are not defined.
 
 ## Deployment
 
-The collector runs as a sidecar in the NPD DaemonSet. Enable it per-SKU via overlay values:
+The collector runs as a sidecar in each GPU monitoring DaemonSet alongside
+NPD. TauGrid owns this deployment in `charts/gpu-monitoring`; it has no
+separate `applications/npd` overlay. Deployment repositories may override the
+chart values, but should consume an inspected immutable digest:
 
 ```yaml
-# applications/npd/overlays/cx/values-spark.yaml
 metricsCollector:
   enabled: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
-    tag: 5e606678
+    tag: ""
+    digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
 ```
 
 ### Adding Custom Rules
