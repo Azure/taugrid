@@ -12,6 +12,7 @@ import (
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -55,6 +56,31 @@ func TestTauWorkspaceRoundTrip(t *testing.T) {
 	}
 	if got.Namespace != SystemNamespace {
 		t.Fatalf("namespace = %q, want %q", got.Namespace, SystemNamespace)
+	}
+}
+
+func TestTauTeamRoundTrip(t *testing.T) {
+	borrowing := resource.MustParse("4")
+	team := TauTeam{
+		TypeMeta:   metav1.TypeMeta{APIVersion: GroupVersion.String(), Kind: KindTauTeam},
+		ObjectMeta: metav1.ObjectMeta{Name: "vision", Namespace: SystemNamespace},
+		Spec: TauTeamSpec{Quota: []TauResourceQuota{{
+			Flavor:         "taugrid-gpu-h200",
+			Resource:       "nvidia.com/gpu",
+			NominalQuota:   resource.MustParse("32"),
+			BorrowingLimit: &borrowing,
+		}}},
+	}
+	data, err := json.Marshal(team)
+	if err != nil {
+		t.Fatalf("Marshal TauTeam: %v", err)
+	}
+	var got TauTeam
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal TauTeam: %v", err)
+	}
+	if got.Spec.Quota[0].NominalQuota.String() != "32" || got.Spec.Quota[0].BorrowingLimit.String() != "4" {
+		t.Fatalf("TauTeam quota = %#v", got.Spec.Quota)
 	}
 }
 
@@ -185,7 +211,7 @@ func TestCRDManifestsPinWorkspaceContract(t *testing.T) {
 
 	version := ws.Spec.Versions[0]
 	props := version.Schema.OpenAPIV3Schema.Properties["spec"].Properties
-	for _, field := range []string{"authorization", "principalRef", "kubernetesSubject", "target", "queue", "defaults"} {
+	for _, field := range []string{"teamRef", "quota", "authorization", "principalRef", "kubernetesSubject", "target", "queue", "defaults"} {
 		if _, ok := props[field]; !ok {
 			t.Fatalf("TauWorkspace spec schema missing %q", field)
 		}
@@ -207,6 +233,20 @@ func TestCRDManifestsPinWorkspaceContract(t *testing.T) {
 	}
 	if _, ok := statusProps["conditions"]; !ok {
 		t.Fatalf("TauWorkspace status schema missing conditions")
+	}
+
+	team := readCRD(t, "tau.azure.com_teams.yaml")
+	assertCRD(t, team, "teams.tau.azure.com", KindTauTeam, apiextensionsv1.NamespaceScoped)
+	teamVersion := team.Spec.Versions[0]
+	teamSpecProps := teamVersion.Schema.OpenAPIV3Schema.Properties["spec"].Properties
+	if _, ok := teamSpecProps["quota"]; !ok {
+		t.Fatal("TauTeam spec schema missing quota")
+	}
+	teamStatusProps := teamVersion.Schema.OpenAPIV3Schema.Properties["status"].Properties
+	for _, field := range []string{"phase", "cohort", "cohortUID", "conditions"} {
+		if _, ok := teamStatusProps[field]; !ok {
+			t.Fatalf("TauTeam status schema missing %q", field)
+		}
 	}
 
 	qr := readCRD(t, "tau.azure.com_quotarequests.yaml")

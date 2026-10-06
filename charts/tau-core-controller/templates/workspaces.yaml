@@ -1,0 +1,12 @@
+{{- range .Values.workspaces }}
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: {{ required "workspaces[].name is required" .name | quote }}
+  namespace: {{ include "tau-core-controller.namespace" $ }}
+  labels:
+    {{- include "tau-core-controller.labels" $ | nindent 4 }}
+spec:
+  {{- toYaml (default dict .spec) | nindent 2 }}
+{{- end }}

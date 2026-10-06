@@ -13,6 +13,36 @@ image:
   tag: "0.4.3"
   pullPolicy: IfNotPresent
 
+# Optional operator-owned quota hierarchy. These resources are deliberately
+# empty by default so upgrades preserve the legacy taugrid-default workspace
+# and externally managed jobqueue until an operator opts into multi-workspace
+# quota management.
+teams: []
+# - name: vision
+#   spec:
+#     quota:
+#       - flavor: taugrid-gpu-h200-141gb
+#         resource: nvidia.com/gpu
+#         nominalQuota: "32"
+
+workspaces: []
+# - name: vision-training
+#   spec:
+#     teamRef:
+#       name: vision
+#     target:
+#       namespace: vision-training
+#       createNamespace: true
+#     queue: default
+#     quota:
+#       - flavor: taugrid-gpu-h200-141gb
+#         resource: nvidia.com/gpu
+#         nominalQuota: "8"
+#         borrowingLimit: "4"
+#         lendingLimit: "0"
+#     authorization:
+#       mode: cluster-wide
+
 resources:
   requests:
     cpu: 50m

@@ -15,6 +15,7 @@ const Domain = "tau.azure.com/"
 // Controller-owned namespace, helper-object, and quota keys.
 const (
 	LabelWorkspace          = "tau.azure.com/workspace"
+	LabelTeam               = "tau.azure.com/team"
 	LabelLocalQueue         = "tau.azure.com/local-queue"
 	LabelGPUClass           = "tau.azure.com/gpu-class"
 	LabelSite               = "tau.azure.com/site"
@@ -28,7 +29,9 @@ const (
 	AnnotationRejected    = "tau.azure.com/rejected"
 	AnnotationReviewedBy  = "tau.azure.com/reviewed-by"
 	AnnotationResultScope = "tau.azure.com/result-scope"
+	AnnotationOwnerUID    = "tau.azure.com/owner-uid"
 	AnnotationV0Primary   = "tau.azure.com/v0-primary-workspace"
 
 	FinalizerWorkspaceCleanup = "tau.azure.com/workspace-cleanup"
+	FinalizerTeamCleanup      = "tau.azure.com/team-cleanup"
 )

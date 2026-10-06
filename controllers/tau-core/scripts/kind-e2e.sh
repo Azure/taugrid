@@ -59,6 +59,7 @@ ROLLOUT_WAIT_SECONDS="${TAU_CORE_KIND_ROLLOUT_WAIT_SECONDS:-180}"
 DELETE_CLUSTER="${TAU_CORE_KIND_DELETE_CLUSTER:-}"
 RECREATE_CLUSTER="${TAU_CORE_KIND_RECREATE:-0}"
 LOCAL_IMAGE="${TAU_CORE_KIND_LOCAL_IMAGE:-tau-core-controller:kind-e2e}"
+BUILD_NETWORK="${TAU_CORE_KIND_BUILD_NETWORK:-}"
 WORKLOAD_IMAGE="${TAU_CORE_KIND_WORKLOAD_IMAGE:-mcr.microsoft.com/azurelinux/base/core:3.0}"
 STATIC_ONLY="${TAU_CORE_KIND_STATIC_ONLY:-0}"
 CONTAINER_ENGINE="$(tau_kind_select_engine "${TAU_CORE_KIND_CONTAINER_ENGINE:-}" docker)"
@@ -271,6 +272,27 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  name: cohorts.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: Cohort
+    listKind: CohortList
+    plural: cohorts
+    singular: cohort
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
   name: resourceflavors.kueue.x-k8s.io
 spec:
   group: kueue.x-k8s.io
@@ -414,10 +436,14 @@ kubectl apply -k "${APP_BASE_DIR}"
 # --- Build and load the controller plus the pinned workload fixture. Loading
 # both makes the live assertions deterministic even when Kind nodes have no
 # registry egress.
-"${CONTAINER_ENGINE}" build \
-  --file "${IMAGE_DOCKERFILE}" \
-  --tag "${LOCAL_IMAGE}" \
-  "${REPO_ROOT}"
+build_args=(
+  --file "${IMAGE_DOCKERFILE}"
+  --tag "${LOCAL_IMAGE}"
+)
+if [[ -n "${BUILD_NETWORK}" ]]; then
+  build_args+=(--network "${BUILD_NETWORK}")
+fi
+"${CONTAINER_ENGINE}" build "${build_args[@]}" "${REPO_ROOT}"
 load_local_image
 "${CONTAINER_ENGINE}" pull "${WORKLOAD_IMAGE}"
 tau_kind_load_image "${CONTAINER_ENGINE}" "${CLUSTER_NAME}" "${WORKLOAD_IMAGE}"
@@ -714,6 +740,94 @@ if grep -qx StorageReady <<<"${workspace_conditions}"; then
 fi
 kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{.metadata.finalizers}' | grep -q "tau.azure.com/workspace-cleanup"
+
+echo "== reconciling one team with two concurrent workspaces =="
+cat >"${SCRATCH_DIR}/multi-workspace.yaml" <<YAML
+apiVersion: tau.azure.com/v1alpha1
+kind: TauTeam
+metadata:
+  name: kind-research
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  quota:
+    - flavor: h200
+      resource: nvidia.com/gpu
+      nominalQuota: "8"
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: kind-training
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  authorization:
+    mode: cluster-wide
+  teamRef:
+    name: kind-research
+  target:
+    namespace: kind-training
+    createNamespace: true
+  queue: default
+  quota:
+    - flavor: h200
+      resource: nvidia.com/gpu
+      nominalQuota: "4"
+      borrowingLimit: "2"
+      lendingLimit: "0"
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: kind-evaluation
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  authorization:
+    mode: cluster-wide
+  teamRef:
+    name: kind-research
+  target:
+    namespace: kind-evaluation
+    createNamespace: true
+  queue: default
+  quota:
+    - flavor: h200
+      resource: nvidia.com/gpu
+      nominalQuota: "2"
+      borrowingLimit: "0"
+      lendingLimit: "0"
+YAML
+kubectl apply --server-side --field-manager=tau-kind-e2e -f "${SCRATCH_DIR}/multi-workspace.yaml"
+
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  team_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get teams.tau.azure.com/kind-research -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  training_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-training -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  evaluation_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-evaluation -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  [[ "${team_phase}" == "Ready" && "${training_phase}" == "Ready" && "${evaluation_phase}" == "Ready" ]] && break
+  sleep 1
+done
+[[ "${team_phase:-}" == "Ready" ]]
+[[ "${training_phase:-}" == "Ready" ]]
+[[ "${evaluation_phase:-}" == "Ready" ]]
+kubectl get cohort.kueue.x-k8s.io/tau-team-kind-research \
+  -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources[0].nominalQuota}' | grep -qx 2
+kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training \
+  -o jsonpath='{.spec.cohortName}' | grep -qx tau-team-kind-research
+kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training \
+  -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources[0].borrowingLimit}' | grep -qx 2
+kubectl -n kind-training get localqueue.kueue.x-k8s.io/default \
+  -o jsonpath='{.spec.clusterQueue}' | grep -qx tau-ws-kind-training
+kubectl -n kind-evaluation get localqueue.kueue.x-k8s.io/default \
+  -o jsonpath='{.spec.clusterQueue}' | grep -qx tau-ws-kind-evaluation
+kubectl get namespace kind-training -o jsonpath='{.metadata.labels.tau\.azure\.com/team}' | grep -qx kind-research
+kubectl get namespace kind-evaluation -o jsonpath='{.metadata.labels.tau\.azure\.com/team}' | grep -qx kind-research
+
+kubectl -n "${SYSTEM_NAMESPACE}" delete workspace.tau.azure.com kind-training --wait=true --timeout="${WAIT_SECONDS}s"
+kubectl get namespace kind-training >/dev/null
+if kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training >/dev/null 2>&1; then
+  echo "workspace ClusterQueue survived workspace finalization" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # RBAC boundary: researcher can read their own workspace and work in their

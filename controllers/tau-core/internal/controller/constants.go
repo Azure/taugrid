@@ -8,6 +8,7 @@ import "github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 const (
 	labelManagedBy              = "app.kubernetes.io/managed-by"
 	labelManagedByValue         = "tau-core-controller"
+	labelTeam                   = labelkeys.LabelTeam
 	labelWorkspace              = labelkeys.LabelWorkspace
 	labelWorkspaceLocalQueue    = labelkeys.LabelLocalQueue
 	labelKueueDefaultLocalQueue = "kueue.x-k8s.io/default-local-queue"
@@ -36,8 +37,10 @@ const (
 	annotationAzureWIClientID = "azure.workload.identity/client-id"
 	annotationResultScope     = labelkeys.AnnotationResultScope
 	annotationV0Primary       = labelkeys.AnnotationV0Primary
+	annotationOwnerUID        = labelkeys.AnnotationOwnerUID
 
 	workspaceFinalizer = labelkeys.FinalizerWorkspaceCleanup
+	teamFinalizer      = labelkeys.FinalizerTeamCleanup
 
 	defaultRoleName            = "tau-researcher-v1"
 	clusterQueueReaderRoleName = "tau-clusterqueue-reader-v1"
