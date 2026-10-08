@@ -62,6 +62,9 @@ jobs:
       - bash: scripts/ci/tests/taugrid-flex-nightly-contract_test.sh
         displayName: Validate nightly pipeline contract
 
+      - bash: scripts/ci/tests/taugrid-flex-nightly-report_test.sh
+        displayName: Validate nightly report generation
+
       - task: AzureCLI@2
         displayName: Inventory Flex hardware matrix
         inputs:
@@ -188,6 +191,10 @@ jobs:
               rc=$?
               trap - EXIT
               set +e
+              cleanup_status=passed
+              cleanup_reason=""
+              capability_status=not-run
+              capability_reason=""
               postflight_contract="${bundle_dir}/postflight-hardware-contract.json"
               kubectl get rayjobs,rayclusters,workloads,localqueues,pods,jobs \
                 -n "${namespace}" -o wide >"${bundle_dir}/resources.txt" 2>&1
@@ -203,21 +210,42 @@ jobs:
                   accelerator_domain: .metadata.labels["tau.azure.com/accelerator-domain"],
                   gpu: .status.allocatable["nvidia.com/gpu"]
                 }]' >"${bundle_dir}/nodes.json" 2>&1
-              kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m
+              if ! kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m; then
+                cleanup_status=failed
+                cleanup_reason="namespace deletion command failed"
+                rc=1
+              fi
               if kubectl get namespace "${namespace}" >/dev/null 2>&1; then
                 echo "##vso[task.logissue type=error]Nightly namespace ${namespace} still exists after cleanup"
+                cleanup_status=failed
+                cleanup_reason="nightly namespace still exists after cleanup"
                 rc=1
               elif FLEX_NIGHTLY_CONTRACT_FILE="${postflight_contract}" \
                 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" cluster; then
-                if ! "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" \
+                if "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" \
                   compare-capability "${contract}" "${postflight_contract}"; then
+                  capability_status=passed
+                else
                   echo "##vso[task.logissue type=error]Flex node capability did not return to its preflight contract"
+                  capability_status=failed
+                  capability_reason="capability differed from the preflight contract"
                   rc=1
                 fi
               else
                 echo "##vso[task.logissue type=error]Postflight Flex capability inventory failed"
+                capability_status=failed
+                capability_reason="postflight capability inventory failed"
                 rc=1
               fi
+              jq -n \
+                --arg cleanupStatus "${cleanup_status}" \
+                --arg cleanupReason "${cleanup_reason}" \
+                --arg capabilityStatus "${capability_status}" \
+                --arg capabilityReason "${capability_reason}" \
+                '{
+                  cleanup: {status: $cleanupStatus, reason: $cleanupReason},
+                  capability: {status: $capabilityStatus, reason: $capabilityReason}
+                }' >"${bundle_dir}/postflight-status.json"
               exit "${rc}"
             }
             trap cleanup EXIT
@@ -278,12 +306,25 @@ jobs:
               fi
 
               if [[ "${shape_available}" != "true" ]]; then
-                jq -cn \
-                  --arg target "${target}" \
-                  --argjson workers "${workers}" \
-                  --arg status "skipped" \
-                  --arg reason "target=${status}; insufficient free GPUs for ${hosts}x${per_host}" \
-                  '{target:$target,workers:$workers,status:$status,reason:$reason}' >>"${summary}"
+                for workload in serve train; do
+                  jq -cn \
+                    --arg target "${target}" \
+                    --arg workload "${workload}" \
+                    --arg topology "${topology}" \
+                    --arg status "skipped" \
+                    --arg reason "target=${status}; insufficient free GPUs for ${hosts}x${per_host}" \
+                    --argjson workers "${workers}" \
+                    --argjson expected_hosts "${hosts}" \
+                    '{
+                      target:$target,
+                      workload:$workload,
+                      workers:$workers,
+                      expected_hosts:$expected_hosts,
+                      required_topology:$topology,
+                      status:$status,
+                      reason:$reason
+                    }' >>"${summary}"
+                done
                 echo "Skipping ${target} ${workers}-GPU shape: ${status} or insufficient free capacity"
                 return 0
               fi
@@ -320,10 +361,20 @@ jobs:
                   --arg workload "${workload}" \
                   --arg topology "${topology}" \
                   --arg status "${outcome}" \
+                  --arg reason "$([[ "${outcome}" == "failed" ]] && echo "go test exited non-zero")" \
                   --arg started_at "${started}" \
                   --argjson workers "${workers}" \
                   --argjson expected_hosts "${hosts}" \
-                  '{target:$target,workload:$workload,workers:$workers,expected_hosts:$expected_hosts,required_topology:$topology,status:$status,started_at:$started_at}' \
+                  '{
+                    target:$target,
+                    workload:$workload,
+                    workers:$workers,
+                    expected_hosts:$expected_hosts,
+                    required_topology:$topology,
+                    status:$status,
+                    reason:$reason,
+                    started_at:$started_at
+                  }' \
                   >>"${summary}"
                 kubectl delete rayjobs.ray.io \
                   -n "${namespace}" \
@@ -350,17 +401,30 @@ jobs:
                   run_case "${target}" 16 2 8 tau.azure.com/site
                 fi
               fi
-            done < <(jq -c '.targets[] | select(.status != "disabled")' "${contract}")
+            done < <(jq -c '.targets[]' "${contract}")
 
             available_targets="$(jq -c '[.targets[] | select(.status == "available") | {name,selector,site:.expected_site}]' "${contract}")"
             if [[ "$(jq 'length' <<<"${available_targets}")" -ge 2 ]]; then
               export E2E_MULTISITE_NAMESPACE="${namespace}"
               export E2E_MULTISITE_QUEUE_PREFIX=matrix
               export E2E_MULTISITE_TARGETS_JSON="${available_targets}"
-              if ! go test -v -count=1 -timeout 25m \
+              cross_site_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              if go test -v -count=1 -timeout 25m \
                 -run '^TestConcurrentGPUWorkloadsAcrossHardwareSites$' ./multisite/; then
+                cross_site_status=passed
+                cross_site_reason=""
+              else
+                cross_site_status=failed
+                cross_site_reason="go test exited non-zero"
                 matrix_rc=1
               fi
+              jq -cn \
+                --arg workload cross-site \
+                --arg status "${cross_site_status}" \
+                --arg reason "${cross_site_reason}" \
+                --arg started_at "${cross_site_started}" \
+                '{workload:$workload,status:$status,reason:$reason,started_at:$started_at}' \
+                >>"${summary}"
             else
               jq -cn \
                 --arg status skipped \
@@ -493,3 +557,49 @@ jobs:
         inputs:
           targetPath: $(Build.ArtifactStagingDirectory)
           artifact: taugrid-flex-h200-rdma-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: nightly_report
+    displayName: Publish human-readable nightly report
+    dependsOn:
+      - preflight
+      - hardware_matrix
+      - h200_rdma
+    condition: always()
+    variables:
+      PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]
+      MATRIX_JOB_RESULT: $[ dependencies.hardware_matrix.result ]
+      RDMA_JOB_RESULT: $[ dependencies.h200_rdma.result ]
+    steps:
+      - checkout: self
+
+      - task: DownloadPipelineArtifact@2
+        displayName: Download available nightly artifacts
+        condition: always()
+        continueOnError: true
+        inputs:
+          buildType: current
+          targetPath: $(Build.ArtifactStagingDirectory)/nightly-report/input
+
+      - bash: |
+          set -euo pipefail
+          report_dir="$(Build.ArtifactStagingDirectory)/nightly-report"
+          mkdir -p "${report_dir}/input"
+          scripts/ci/taugrid-flex-nightly-report.sh \
+            "${report_dir}/input" \
+            "${report_dir}/taugrid-flex-nightly-report.md"
+          echo "##vso[task.uploadsummary]${report_dir}/taugrid-flex-nightly-report.md"
+        displayName: Generate and upload nightly summary
+        condition: always()
+        env:
+          FLEX_NIGHTLY_PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_RDMA_ENABLED: ${{ parameters.rdmaConformance }}
+          PREFLIGHT_JOB_RESULT: $(PREFLIGHT_JOB_RESULT)
+          MATRIX_JOB_RESULT: $(MATRIX_JOB_RESULT)
+          RDMA_JOB_RESULT: $(RDMA_JOB_RESULT)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish nightly report bundle
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/nightly-report
+          artifact: taugrid-flex-nightly-report-$(Build.BuildId)-$(System.JobAttempt)
