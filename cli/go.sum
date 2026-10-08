@@ -12,14 +12,8 @@ github.com/Azure/azure-sdk-for-go/sdk/data/aztables v1.4.1 h1:j0hhYS006eJ54vusoa
 github.com/Azure/azure-sdk-for-go/sdk/data/aztables v1.4.1/go.mod h1:AdtInaXmK8eYmbjezRWgLz+Qs46nc9Up9GWGwteWNfw=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 h1:fhqpLE3UEXi9lPaBRpQ6XuRW0nU7hgg4zlmZZa+a9q4=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0/go.mod h1:7dCRMLwisfRH3dBupKeNCioWYUZ4SS09Z14H+7i8ZoY=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.5.0 h1:XdZ0KWSeVojbp/Nnni8bxWdsU/xfVBJ5921Iyg5Nhzs=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.5.0/go.mod h1:mgRLGUGj7Cu8rdmSKJYyZLu714jNaUXzBmUihZ3MFgg=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/internal/v3 v3.2.0 h1:+lnLQhKh3cgSOIOVH61UZ3s/l9d+bAZp5d/spt1+7UI=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/internal/v3 v3.2.0/go.mod h1:tStOHrivWUrcBolspvKV70Us1ckESYGYSHdG4LX8zyY=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armdeployments v1.0.0 h1:67nFqWXpo0x5Nz0XEb1yI7s8D+EHy8NsTinYw9sZnLk=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armdeployments v1.0.0/go.mod h1:fewgRjNVE84QVVh798sIMFb7gPXPp7NmnekGnboSnXk=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources/v3 v3.0.1 h1:guyQA4b8XB2sbJZXzUnOF9mn0WDBv/ZT7me9wTipKtE=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources/v3 v3.0.1/go.mod h1:8h8yhzh9o+0HeSIhUxYny+rEQajScrfIpNktvgYG3Q8=
+github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.6.0 h1:+7o2AeuWzcNWcZ0JQZLO0lyqKX66y9PrQinemzNJW4o=
+github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.6.0/go.mod h1:I4yxwhTCS5r5YRXp9dCc6gaiG0JcsxeCt0FChqR+GQ8=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage v1.8.1 h1:/Zt+cDPnpC3OVDm/JKLOs7M2DKmLRIIp3XIx9pHHiig=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage v1.8.1/go.mod h1:Ng3urmn6dYe8gnbCMoHHVl5APYz2txho3koEkV2o2HA=
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2 h1:tQJdgQjbKKffEiMOKJmcQPkY01eFHRqWIZVefqP44nI=
