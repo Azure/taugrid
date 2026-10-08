@@ -10,6 +10,7 @@ Choose an example by the question you want to answer:
 
 | Goal | Example | Interface | Compute | Start here |
 |---|---|---|---|---|
+| Stay in JupyterLab, submit the open notebook, and watch status, logs and the loss curve | Notebook plugin | TauGrid-first, in JupyterLab | CPU or GPU | [Run a notebook from JupyterLab](notebook-plugin/) |
 | Run repository-first GPU HPO and verify six Tune trials | Ray Tune smoke on AKS | TauGrid-first | One or more NVIDIA GPUs | [Run GPU Ray Tune HPO](gpu-ray-tune/) |
 | Publish live loss and accuracy evidence, retrieve durable files, and open Stellar | Experiment evidence | TauGrid-first | One NVIDIA GPU | [Run live experiment evidence](experiment-evidence/) |
 | See queue admission and borrowing using CPU-only quota | CPU queueing | Raw KubeRay and Kueue YAML | CPU | [Explore CPU queueing](cpu-queueing/) |

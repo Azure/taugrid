@@ -16,6 +16,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+widgets = [
+    "kubernetes>=30.1.0",
+    "ipywidgets>=8.1.0",
+    "ipython>=8.0.0",
+    "jupyter_server>=2.0.0",
+    # Imported directly by tau.jupyter.server and tau.jupyter.metrics. Both
+    # arrive transitively (via jupyter_server and kubernetes), but a direct
+    # import must be a direct dependency so the extra stands on its own.
+    "tornado>=6.2",
+    # The final 1.26 release. 1.26.0 cannot be imported on Python 3.12+
+    # ("urllib3.packages.six.moves" is gone), and the whole 1.26 line has no
+    # HTTPResponse.read1, so it is the floor that exercises the legacy reader
+    # path in tau._kube_io. Both are covered by the SDK floors CI job.
+    "urllib3>=1.26.20",
+]
 dev = [
     "pytest>=9.1.1",
     "ruff==0.16.8",
@@ -24,8 +39,17 @@ lightning = [
     "lightning>=2.6.6",
 ]
 
+[project.entry-points."ipython.extensions"]
+taugrid = "tau.widgets.ipython:load_ipython_extension"
+
+[project.entry-points."jupyter_server.extension"]
+taugrid = "tau.jupyter"
+
 [tool.setuptools.packages.find]
 include = ["tau*"]
+
+[tool.setuptools.package-data]
+tau = ["labextension/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "tau.__version__" }

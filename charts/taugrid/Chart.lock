@@ -1,0 +1,18 @@
+dependencies:
+- name: kueue
+  repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
+  version: 0.19.2
+- name: kuberay-operator
+  repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
+  version: 1.6.2
+- name: tau-core-controller
+  repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
+  version: 0.4.3
+- name: taugrid-core
+  repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
+  version: 0.4.3
+- name: gpu-monitoring
+  repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
+  version: 0.1.8
+digest: sha256:0bab13fd42edbd747e5d5f1050f00c63bf7662a76726c34a78c3d9e5c7aca8f9
+generated: "2026-10-08T16:34:55.1944882+08:00"
