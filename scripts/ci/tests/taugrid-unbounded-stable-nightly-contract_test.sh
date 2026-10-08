@@ -23,6 +23,8 @@ grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
   fail "pipeline must use the approved 1ES pool"
 grep -Fq "azureSubscription: \$(imageServiceConnection)" "$PIPELINE" ||
   fail "image publication must use the approved registry service connection"
+grep -Fq "value: aks ai runtime - corp" "$PIPELINE" ||
+  fail "image publication must use the service connection that owns aksairuntime"
 grep -Fq "azureSubscription: \$(TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION)" "$PIPELINE" ||
   fail "cluster deployment must use an environment-specific protected service connection"
 grep -Fq "deployment: deploy_unbounded_stable" "$PIPELINE" ||

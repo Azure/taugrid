@@ -17,7 +17,7 @@ pool:
 
 variables:
   - name: imageServiceConnection
-    value: aks ai runtime - prod
+    value: aks ai runtime - corp
   - name: GOFLAGS
     value: -mod=readonly
   - name: GOTOOLCHAIN
