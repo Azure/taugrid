@@ -346,11 +346,11 @@ jobs:
                     --kube-context unbounded-stable \
                     --output json | jq -r '.version | tostring')"
                   write_result passed "" "${previous_revision}" "${current_revision}"
-                env:
-                  UNBOUNDED_STABLE_RESOURCE_GROUP: $(TAUGRID_UNBOUNDED_STABLE_RESOURCE_GROUP)
-                  UNBOUNDED_STABLE_CLUSTER_NAME: $(TAUGRID_UNBOUNDED_STABLE_CLUSTER_NAME)
-                  TAUGRID_RELEASE: $(TAUGRID_RELEASE)
-                  TAUGRID_SYSTEM_NAMESPACE: $(TAUGRID_SYSTEM_NAMESPACE)
+              env:
+                UNBOUNDED_STABLE_RESOURCE_GROUP: $(TAUGRID_UNBOUNDED_STABLE_RESOURCE_GROUP)
+                UNBOUNDED_STABLE_CLUSTER_NAME: $(TAUGRID_UNBOUNDED_STABLE_CLUSTER_NAME)
+                TAUGRID_RELEASE: $(TAUGRID_RELEASE)
+                TAUGRID_SYSTEM_NAMESPACE: $(TAUGRID_SYSTEM_NAMESPACE)
 
             - task: PublishPipelineArtifact@1
               displayName: Publish deployment diagnostics
