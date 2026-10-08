@@ -195,16 +195,12 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.7.0 ./...
 
       - name: Run golangci-lint
-        if: matrix.linter == 'golangci-lint' && matrix.module != 'monitoring/gpu-health-checker'
+        if: matrix.linter == 'golangci-lint'
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: v2.12.2
+          # The health checker needs the release built with Go 1.27.
+          version: ${{ matrix.module == 'monitoring/gpu-health-checker' && 'v2.14.0' || 'v2.12.2' }}
           working-directory: ${{ matrix.module }}
-
-      - name: Run health-checker golangci-lint with its Go toolchain
-        if: matrix.module == 'monitoring/gpu-health-checker'
-        # The release binary uses an older Go version than this module.
-        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --path-mode=abs
 
       - name: Test
         if: matrix.race == false
