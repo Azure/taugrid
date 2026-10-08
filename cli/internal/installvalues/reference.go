@@ -40,7 +40,7 @@ var catalog = []struct {
 	{"baselineQueue.gpu.flavors", fieldInfo{"list", "[]", "Optional externally configured GPU ResourceFlavors"}},
 
 	{"kueue.*", fieldInfo{"", "", "Pass-through to the embedded Kueue chart (v0.18)"}},
-	{"kuberay-operator.*", fieldInfo{"", "", "Pass-through to the embedded KubeRay chart (v1.6)"}},
+	{"kuberay-operator.*", fieldInfo{"", "", "Pass-through to the embedded KubeRay chart (v1.7)"}},
 	{"tau-core-controller.image.repository", fieldInfo{"string", "mcr.microsoft.com/aks/ai-runtime/tau-core-controller", "Controller image repository"}},
 	{"tau-core-controller.tauCluster.nodeLabelRules", fieldInfo{"list", "reviewed AKS GPU catalog", "VM-size rules that reconcile gpu-class and gpu-series Node labels"}},
 	{"tau-core-controller.tauCluster.extraNodeLabelRules", fieldInfo{"list", "[]", "Additional cluster-specific GPU label reconciliation rules"}},

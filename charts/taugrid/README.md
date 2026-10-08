@@ -5,7 +5,7 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 ## Install
 
 ```bash
-tau cluster install --version 0.4.3 --values taugrid-values.yaml
+tau cluster install --version 0.4.4 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -13,7 +13,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.3 \
+  --version 0.4.4 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -309,7 +309,7 @@ Pass-through values for the embedded KubeRay chart:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `kuberay-operator.image.repository` | string | `mcr.microsoft.com/oss/v2/kuberay/operator` | KubeRay operator image |
-| `kuberay-operator.image.tag` | string | `v1.6.2` | KubeRay operator image tag |
+| `kuberay-operator.image.tag` | string | `v1.7.0` | KubeRay operator image tag |
 | `kuberay-operator.configuration.enabled` | bool | `true` | Enable RayCluster default container env injection |
 
 Refer to the [upstream KubeRay chart values](https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/raycluster-quick-start.html)

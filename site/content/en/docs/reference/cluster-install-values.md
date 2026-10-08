@@ -149,7 +149,7 @@ The remaining top-level keys pass values directly to embedded sub-charts:
 | Prefix | Sub-chart | Common overrides |
 | --- | --- | --- |
 | `kueue.*` | Kueue v0.18 | `controllerManager.manager.image`, `managerConfig` |
-| `kuberay-operator.*` | KubeRay v1.6 | `image`, `configuration`, `podAnnotations` |
+| `kuberay-operator.*` | KubeRay v1.7 | `image`, `configuration`, `podAnnotations` |
 | `tau-core-controller.*` | Tau controller | `image`, `tauCluster.nodeLabelRules` |
 | `taugrid-core.*` | Services chart | `prewarm.enabled`, `stellar.enabled`, `portal.enabled` |
 | `gpu-monitoring.*` | GPU monitoring | `gpuSkus`, `daemonset`, `metricsCollector`, `namespace` |

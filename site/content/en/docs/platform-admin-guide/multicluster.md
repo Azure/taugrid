@@ -23,7 +23,7 @@ routing.
 | TauGrid | Chart and images `0.4.x` from the same release |
 | Kubernetes | `1.30` or newer, matching the TauGrid chart constraint |
 | Kueue | TauGrid-pinned AKS chart and controller `0.19.2` |
-| KubeRay | TauGrid-pinned operator `1.6.2` for RayJob dispatch |
+| KubeRay | TauGrid-pinned operator `1.7.0` for RayJob dispatch |
 | Platform | AKS manager and workers with operator-managed identities, networking, storage, GPU drivers, and compatible CRDs |
 
 Use the same Kubernetes, Kueue, KubeRay, and workload CRD minor versions on the
@@ -39,7 +39,7 @@ prerequisites:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.3 \
+  --version 0.4.4 \
   --namespace tau-system --create-namespace \
   --wait --atomic
 ```
