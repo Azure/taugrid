@@ -433,6 +433,42 @@ func TestCatalogProjectWithoutConnectionUsesLocalAssignment(t *testing.T) {
 		resolution.Connection.Discovery.Descriptor.Workspace != "sample" {
 		t.Fatalf("resolution = %#v", resolution)
 	}
+
+	checkedIn := strings.Replace(testWorkspaceConnectionDescriptor, "workspace: sample", "workspace: portable", 1)
+	checkedIn = strings.Replace(checkedIn, "contextName: aks-flex", "contextName: checked-in", 1)
+	if err := os.WriteFile(
+		filepath.Join(projectRoot, "tau", "workspace.connection.yaml"),
+		[]byte(checkedIn),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	resolution, err = resolveRunRequest(projectRoot, "", "", "train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Connection.Discovery == nil ||
+		resolution.Connection.Discovery.Descriptor.Workspace != "portable" {
+		t.Fatalf("checked-in connection did not replace local assignment: %#v", resolution.Connection)
+	}
+
+	inspect := newWorkspaceConnectionCmd()
+	var out bytes.Buffer
+	inspect.SetOut(&out)
+	inspect.SetErr(&bytes.Buffer{})
+	inspect.SetArgs([]string{"inspect", "--path", projectRoot, "--output", "json"})
+	if err := inspect.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var inspection workspaceConnectionInspection
+	if err := json.Unmarshal(out.Bytes(), &inspection); err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Source != "checked-in" ||
+		inspection.Workspace != "portable" ||
+		!inspection.LocalShadowed {
+		t.Fatalf("checked-in inspection = %#v", inspection)
+	}
 }
 
 func mustWorkspaceConnectionDescriptor(t *testing.T, raw string) workspaceconnection.Descriptor {

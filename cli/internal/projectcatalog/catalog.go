@@ -68,6 +68,60 @@ type Project struct {
 	defaultConfigCount   int
 }
 
+// ResolveProjectConnection returns the checked-in connection that governs one
+// catalog project. An explicit catalog connection wins; otherwise the project
+// may use its conventional tau/workspace.connection.yaml before callers fall
+// back to machine-local assignment state.
+func (c *Catalog) ResolveProjectConnection(project *Project) (workspaceconnection.Discovery, bool, error) {
+	if project == nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf("Tau project is required")
+	}
+	if project.ConnectionConfigured {
+		return project.Connection, true, nil
+	}
+	path := filepath.Join(
+		project.LexicalRoot,
+		filepath.FromSlash(workspaceconnection.DescriptorRelativePath),
+	)
+	_, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return workspaceconnection.Discovery{}, false, nil
+	}
+	if err != nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"inspect project %q conventional workspace connection %s: %w",
+			project.Name,
+			path,
+			err,
+		)
+	}
+	discovery, err := workspaceconnection.LoadFile(path, c.LexicalRoot)
+	if err != nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection: %w",
+			project.Name,
+			err,
+		)
+	}
+	physicalContained, err := repository.PathContains(project.Root, discovery.RealPath)
+	if err != nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection containment: %w",
+			project.Name,
+			err,
+		)
+	}
+	if !repository.Contains(project.LexicalRoot, discovery.Path) || !physicalContained {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection %s escapes project root %s",
+			project.Name,
+			discovery.Path,
+			project.LexicalRoot,
+		)
+	}
+	return discovery, true, nil
+}
+
 // Parse decodes the strict, versioned catalog schema.
 func Parse(raw []byte) (Spec, error) {
 	if err := validateYAMLStructure(raw); err != nil {

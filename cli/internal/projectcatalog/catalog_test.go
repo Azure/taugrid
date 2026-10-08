@@ -166,6 +166,39 @@ projects:
 	}
 }
 
+func TestCatalogResolvesProjectConventionalConnectionWithoutInheritingRoot(t *testing.T) {
+	root := newGitRepo(t)
+	projectRoot := filepath.Join(root, "projects", "alpha")
+	writeFile(t, filepath.Join(projectRoot, "tau", "train.yaml"), "name: train\nengine: job\n")
+	writeFile(t, filepath.Join(root, Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: projects/alpha
+`)
+	writeFile(t, filepath.Join(root, "tau", "workspace.connection.yaml"), testDescriptor)
+
+	repository, err := Discover(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := repository.Catalog.Projects["alpha"]
+	if _, found, err := repository.Catalog.ResolveProjectConnection(project); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("catalog project inherited repository-root conventional connection")
+	}
+
+	projectDescriptor := strings.Replace(testDescriptor, "workspace: sample", "workspace: alpha", 1)
+	writeFile(t, filepath.Join(projectRoot, "tau", "workspace.connection.yaml"), projectDescriptor)
+	discovery, found, err := repository.Catalog.ResolveProjectConnection(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || discovery.Descriptor.Workspace != "alpha" {
+		t.Fatalf("project conventional connection found=%v discovery=%#v", found, discovery)
+	}
+}
+
 func TestDiscoverLexicalConfigIgnoresNestedCatalogMarker(t *testing.T) {
 	root := newGitRepo(t)
 	config := filepath.Join(root, "scratch", "experiment", "tau.yaml")

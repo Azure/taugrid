@@ -97,8 +97,9 @@ func resolveWorkspaceConnectionTarget(start, projectName string) (workspaceConne
 			RealProjectRoot:    project.Root,
 		},
 	}
-	if project.ConnectionConfigured {
-		discovery := project.Connection
+	if discovery, found, err := repository.Catalog.ResolveProjectConnection(project); err != nil {
+		return workspaceConnectionTarget{}, err
+	} else if found {
 		target.CheckedIn = &discovery
 	}
 	return target, nil
@@ -145,8 +146,9 @@ func assignedCatalogProjectConnection(
 	catalog *projectcatalog.Catalog,
 	project *projectcatalog.Project,
 ) (*workspaceconnection.Discovery, error) {
-	if project.ConnectionConfigured {
-		discovery := project.Connection
+	if discovery, found, err := catalog.ResolveProjectConnection(project); err != nil {
+		return nil, err
+	} else if found {
 		return &discovery, nil
 	}
 	configDir, err := workspaceConnectionConfigDir()
