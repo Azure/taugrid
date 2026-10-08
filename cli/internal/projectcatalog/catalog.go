@@ -83,7 +83,29 @@ func (c *Catalog) ResolveProjectConnection(project *Project) (workspaceconnectio
 		project.LexicalRoot,
 		filepath.FromSlash(workspaceconnection.DescriptorRelativePath),
 	)
-	_, err := os.Stat(path)
+	relativePath, err := filepath.Rel(c.LexicalRoot, path)
+	if err != nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection path: %w",
+			project.Name,
+			err,
+		)
+	}
+	if gitlink, found, err := c.gitlinks.AtOrAbove(relativePath); err != nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection: %w",
+			project.Name,
+			err,
+		)
+	} else if found {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection %q is at or beneath Git submodule %q",
+			project.Name,
+			filepath.ToSlash(relativePath),
+			gitlink,
+		)
+	}
+	_, err = os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return workspaceconnection.Discovery{}, false, nil
 	}
@@ -117,6 +139,34 @@ func (c *Catalog) ResolveProjectConnection(project *Project) (workspaceconnectio
 			project.Name,
 			discovery.Path,
 			project.LexicalRoot,
+		)
+	}
+	connectionBoundary, err := repository.Resolve(discovery.RealPath)
+	if err != nil {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection: %w",
+			project.Name,
+			err,
+		)
+	}
+	sameConnectionRoot := false
+	if connectionBoundary.Git {
+		sameConnectionRoot, err = repository.SamePath(connectionBoundary.Root, c.Root)
+		if err != nil {
+			return workspaceconnection.Discovery{}, false, fmt.Errorf(
+				"project %q conventional workspace connection: compare Git worktree: %w",
+				project.Name,
+				err,
+			)
+		}
+	}
+	if !connectionBoundary.Git || !sameConnectionRoot {
+		return workspaceconnection.Discovery{}, false, fmt.Errorf(
+			"project %q conventional workspace connection %s belongs to Git worktree %s, not catalog worktree %s",
+			project.Name,
+			discovery.Path,
+			connectionBoundary.Root,
+			c.Root,
 		)
 	}
 	return discovery, true, nil

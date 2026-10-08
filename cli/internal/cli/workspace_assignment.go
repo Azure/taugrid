@@ -219,6 +219,7 @@ func newWorkspaceConnectionAssignCmd() *cobra.Command {
 				strings.TrimSpace(systemNamespace),
 				current,
 				cmd.Flags().Changed("context"),
+				cmd.Flags().Changed("system-namespace"),
 			)
 			if err != nil {
 				return err
@@ -261,6 +262,7 @@ func selectWorkspaceAssignmentCandidate(
 	configDir, workspaceName, kubeContext, systemNamespace string,
 	current bool,
 	contextExplicit bool,
+	systemNamespaceExplicit bool,
 ) (workspaceAssignmentCandidate, error) {
 	cached, err := listWorkspaceAssignmentCandidates(configDir)
 	if err != nil {
@@ -281,7 +283,13 @@ func selectWorkspaceAssignmentCandidate(
 		}
 		return currentWorkspaceAssignmentCandidate(configDir, candidates)
 	}
-	matches := filterWorkspaceAssignmentCandidates(candidates, workspaceName, kubeContext)
+	matches := filterWorkspaceAssignmentCandidates(
+		candidates,
+		workspaceName,
+		kubeContext,
+		systemNamespace,
+		systemNamespaceExplicit,
+	)
 	if len(matches) == 0 {
 		live, liveErr := discoverLiveWorkspaceAssignmentCandidates(
 			cmd.Context(),
@@ -295,7 +303,13 @@ func selectWorkspaceAssignmentCandidate(
 			}
 		} else {
 			candidates = append(candidates, live...)
-			matches = filterWorkspaceAssignmentCandidates(candidates, workspaceName, kubeContext)
+			matches = filterWorkspaceAssignmentCandidates(
+				candidates,
+				workspaceName,
+				kubeContext,
+				systemNamespace,
+				systemNamespaceExplicit,
+			)
 		}
 	}
 	if len(matches) == 1 {
@@ -324,7 +338,8 @@ func selectWorkspaceAssignmentCandidate(
 
 func filterWorkspaceAssignmentCandidates(
 	candidates []workspaceAssignmentCandidate,
-	workspaceName, kubeContext string,
+	workspaceName, kubeContext, systemNamespace string,
+	systemNamespaceExplicit bool,
 ) []workspaceAssignmentCandidate {
 	var matches []workspaceAssignmentCandidate
 	seen := map[string]bool{}
@@ -333,6 +348,10 @@ func filterWorkspaceAssignmentCandidates(
 			continue
 		}
 		if kubeContext != "" && candidate.Descriptor.Cluster.ContextName != kubeContext {
+			continue
+		}
+		if systemNamespaceExplicit &&
+			candidate.Descriptor.ResolvedSystemNamespace() != systemNamespace {
 			continue
 		}
 		digest, err := workspaceconnection.Digest(candidate.Descriptor)

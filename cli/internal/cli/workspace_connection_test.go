@@ -319,7 +319,9 @@ func TestWorkspaceConnectionAssignRequiresReplace(t *testing.T) {
 }
 
 func TestWorkspaceConnectionAssignCurrentAndAmbiguity(t *testing.T) {
-	root := initWorkspaceConnectionRepo(t)
+	sourceRoot := initWorkspaceConnectionRepo(t)
+	writeWorkspaceConnectionDescriptor(t, sourceRoot)
+	targetRoot := initWorkspaceConnectionRepo(t)
 	configDir := t.TempDir()
 	t.Setenv("TAU_CONFIG_DIR", configDir)
 	t.Setenv("TAU_CONTEXT", "")
@@ -346,29 +348,101 @@ func TestWorkspaceConnectionAssignCurrentAndAmbiguity(t *testing.T) {
 	ambiguous := newWorkspaceConnectionCmd()
 	ambiguous.SetOut(&bytes.Buffer{})
 	ambiguous.SetErr(&bytes.Buffer{})
-	ambiguous.SetArgs([]string{"assign", "sample", "--path", root})
+	ambiguous.SetArgs([]string{"assign", "sample", "--path", targetRoot})
 	if err := ambiguous.Execute(); err == nil || !strings.Contains(err.Error(), "ambiguous") {
 		t.Fatalf("ambiguity error = %v", err)
 	}
 
-	active := activeWorkspaceCache{
-		Schema:       activeWorkspaceCacheSchema,
-		Workspace:    "sample",
-		WorkspaceUID: "uid-west",
-		ContextName:  "west",
-	}
-	raw, err := json.Marshal(active)
-	if err != nil {
+	activatedDescriptor := strings.Replace(testWorkspaceConnectionDescriptor, "contextName: aks-flex", "contextName: west", 1)
+	if err := os.WriteFile(
+		filepath.Join(sourceRoot, "tau", "workspace.connection.yaml"),
+		[]byte(activatedDescriptor),
+		0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, activeWorkspaceCacheFilename), raw, 0o600); err != nil {
+	ensurer := &cachingRunConnectionEnsurer{
+		fakeRunConnectionEnsurer: &fakeRunConnectionEnsurer{
+			connection: workspaceconnection.ActiveConnection{
+				Workspace:         "sample",
+				WorkspaceUID:      "uid-west",
+				AuthorizationMode: workspaceconnection.AuthorizationModeClusterWide,
+				ContextName:       "west",
+				SystemNamespace:   "tau-system",
+				Namespace:         "sample",
+				Queue:             "jobqueue",
+			},
+		},
+		configDir: configDir,
+	}
+	connect := newWorkspaceConnectionCmdWithEnsurer(ensurer)
+	connect.SetOut(&bytes.Buffer{})
+	connect.SetErr(&bytes.Buffer{})
+	connect.SetArgs([]string{sourceRoot})
+	if err := connect.Execute(); err != nil {
 		t.Fatal(err)
 	}
+
 	current := newWorkspaceConnectionCmd()
 	current.SetOut(&bytes.Buffer{})
 	current.SetErr(&bytes.Buffer{})
-	current.SetArgs([]string{"assign", "--current", "--path", root})
+	current.SetArgs([]string{"assign", "--current", "--path", targetRoot})
 	if err := current.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	inspect := newWorkspaceConnectionCmd()
+	var out bytes.Buffer
+	inspect.SetOut(&out)
+	inspect.SetErr(&bytes.Buffer{})
+	inspect.SetArgs([]string{"inspect", "--path", targetRoot, "--output", "json"})
+	if err := inspect.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var got workspaceConnectionInspection
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Context != "west" || got.WorkspaceUID != "uid-west" {
+		t.Fatalf("current assignment = %#v", got)
+	}
+}
+
+func TestWorkspaceConnectionAssignFiltersCachedSystemNamespace(t *testing.T) {
+	root := initWorkspaceConnectionRepo(t)
+	t.Setenv("TAU_CONFIG_DIR", t.TempDir())
+	t.Setenv("TAU_CONTEXT", "")
+	originalList := listWorkspaceAssignmentCandidates
+	defaultNamespace := assignmentCommandDescriptor("sample", "east")
+	customNamespace := assignmentCommandDescriptor("sample", "east")
+	customNamespace.Cluster.SystemNamespace = "custom-system"
+	listWorkspaceAssignmentCandidates = func(string) ([]workspaceconnection.AssignableConnection, error) {
+		return []workspaceconnection.AssignableConnection{
+			{
+				ActiveConnection: workspaceconnection.ActiveConnection{
+					Workspace: "sample", WorkspaceUID: "uid-default", ContextName: "east",
+				},
+				Descriptor: defaultNamespace,
+			},
+			{
+				ActiveConnection: workspaceconnection.ActiveConnection{
+					Workspace: "sample", WorkspaceUID: "uid-custom", ContextName: "east",
+				},
+				Descriptor: customNamespace,
+			},
+		}, nil
+	}
+	t.Cleanup(func() { listWorkspaceAssignmentCandidates = originalList })
+
+	assign := newWorkspaceConnectionCmd()
+	assign.SetOut(&bytes.Buffer{})
+	assign.SetErr(&bytes.Buffer{})
+	assign.SetArgs([]string{
+		"assign", "sample",
+		"--path", root,
+		"--context", "east",
+		"--system-namespace", "custom-system",
+	})
+	if err := assign.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	inspect := newWorkspaceConnectionCmd()
@@ -383,8 +457,8 @@ func TestWorkspaceConnectionAssignCurrentAndAmbiguity(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Context != "west" || got.WorkspaceUID != "uid-west" {
-		t.Fatalf("current assignment = %#v", got)
+	if got.SystemNamespace != "custom-system" || got.WorkspaceUID != "uid-custom" {
+		t.Fatalf("system namespace assignment = %#v", got)
 	}
 }
 

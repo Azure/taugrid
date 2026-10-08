@@ -199,6 +199,58 @@ projects:
 	}
 }
 
+func TestCatalogRejectsConventionalConnectionInNestedGitRepository(t *testing.T) {
+	root := newGitRepo(t)
+	projectRoot := filepath.Join(root, "alpha")
+	mkdir(t, projectRoot)
+	writeFile(t, filepath.Join(root, Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: alpha
+`)
+	nestedRoot := filepath.Join(projectRoot, "tau")
+	mkdir(t, nestedRoot)
+	runGit(t, nestedRoot, "init")
+	writeFile(t, filepath.Join(nestedRoot, "workspace.connection.yaml"), testDescriptor)
+
+	repository, err := Discover(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = repository.Catalog.ResolveProjectConnection(repository.Catalog.Projects["alpha"])
+	if err == nil || !strings.Contains(err.Error(), "belongs to Git worktree") {
+		t.Fatalf("nested Git conventional connection error = %v", err)
+	}
+}
+
+func TestCatalogRejectsConventionalConnectionInUninitializedSubmodule(t *testing.T) {
+	parent := newGitRepo(t)
+	mkdir(t, filepath.Join(parent, "alpha"))
+	source := newGitRepo(t)
+	writeFile(t, filepath.Join(source, "README.md"), "submodule\n")
+	runGit(t, source, "add", "README.md")
+	runGit(t, source, "commit", "-m", "submodule")
+	runGit(t, parent, "-c", "protocol.file.allow=always", "submodule", "add", source, "alpha/tau")
+	if err := os.RemoveAll(filepath.Join(parent, "alpha", "tau")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(parent, "alpha", "tau", "workspace.connection.yaml"), testDescriptor)
+	writeFile(t, filepath.Join(parent, Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: alpha
+`)
+
+	repository, err := Discover(filepath.Join(parent, "alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = repository.Catalog.ResolveProjectConnection(repository.Catalog.Projects["alpha"])
+	if err == nil || !strings.Contains(err.Error(), "Git submodule") {
+		t.Fatalf("uninitialized submodule conventional connection error = %v", err)
+	}
+}
+
 func TestDiscoverLexicalConfigIgnoresNestedCatalogMarker(t *testing.T) {
 	root := newGitRepo(t)
 	config := filepath.Join(root, "scratch", "experiment", "tau.yaml")

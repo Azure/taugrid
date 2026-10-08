@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -55,6 +56,24 @@ from an interactive terminal before Tau accesses credentials or the cluster.`,
 			})
 			if err != nil {
 				return onboarding.Explain(err)
+			}
+			if provider, ok := activeEnsurer.(workspaceConfigDirectoryProvider); ok {
+				configDir, configErr := provider.ConfigDirectory()
+				if configErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not update current workspace connection: %v\n", configErr)
+				} else if cacheErr := persistActiveWorkspaceCache(
+					configDir,
+					&discovery,
+					connection,
+					workspacePlacement{
+						Workspace:  connection.Workspace,
+						Namespace:  connection.Namespace,
+						LocalQueue: connection.Queue,
+					},
+					time.Now(),
+				); cacheErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not update current workspace connection: %v\n", cacheErr)
+				}
 			}
 			printActiveConnection(cmd, target.Project, displayConnectionPath(discovery), connection)
 			return nil
