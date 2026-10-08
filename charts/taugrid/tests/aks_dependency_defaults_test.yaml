@@ -2,6 +2,7 @@ suite: TauGrid AKS dependency defaults
 templates:
   - charts/kueue/templates/manager/manager-config.yaml
   - charts/kueue/templates/manager/manager.yaml
+  - charts/kueue/templates/extension-controller-deployment.yaml
   - charts/kuberay-operator/templates/configmap.yaml
   - charts/kuberay-operator/templates/deployment.yaml
 tests:
@@ -18,12 +19,18 @@ tests:
           path: data["controller_manager_config.yaml"]
           pattern: "gpu.nvidia.com"
 
+  - it: preserves TauGrid ownership instead of enabling AKS objects automation
+    template: charts/kueue/templates/extension-controller-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
   - it: uses the pinned MCR Kueue image
     template: charts/kueue/templates/manager/manager.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/oss/v2/kueue/kueue:v0.19.2
+          value: mcr.microsoft.com/oss/v2/kueue/kueue:v0.19.6
 
   - it: configures the AKS KubeRay container defaults
     template: charts/kuberay-operator/templates/configmap.yaml

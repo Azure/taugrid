@@ -71,11 +71,13 @@ kueue:
   # own worker credentials, routing objects, and multi-cluster queue policy.
   aksExtension:
     enableMultiKueue: true
+    # TauGrid owns flavors/topology; keep the previous extension-off behavior.
+    enableKueueObjectsAutomation: false
   controllerManager:
     manager:
       image:
         repository: mcr.microsoft.com/oss/v2/kueue/kueue
-        tag: v0.19.2
+        tag: v0.19.6
         pullPolicy: IfNotPresent
   # Keep the active upstream configuration when replacing this embedded YAML
   # string, and include the AKS DRA device-class mapping used by the published
