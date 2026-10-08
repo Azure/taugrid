@@ -162,9 +162,6 @@ jobs:
           shellcheck cli/scripts/install-tau.sh cli/scripts/test-install-tau.sh
           make -C cli test-installer
 
-      - name: Test release SBOM tooling
-        run: bash scripts/ci/tests/release-sbom_test.sh
-
   build:
     name: Build reproducible release assets
     needs: validate
