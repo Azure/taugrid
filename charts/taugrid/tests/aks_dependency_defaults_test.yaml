@@ -32,6 +32,12 @@ tests:
           path: spec.template.spec.containers[0].image
           value: mcr.microsoft.com/oss/v2/kueue/kueue:v0.19.6
 
+  - it: preserves portable Kueue controller placement
+    template: charts/kueue/templates/manager/manager.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.nodeSelector
+
   - it: configures the AKS KubeRay container defaults
     template: charts/kuberay-operator/templates/configmap.yaml
     asserts:
