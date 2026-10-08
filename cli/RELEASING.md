@@ -76,7 +76,7 @@ wheel with the CLI assets.
    release tags. Pushing the tag does not start **Release TauGrid**.
 2. Run the public Azure DevOps image publication pipelines for every coordinated
    first-party image using the tag's full source commit SHA and release tag
-   without the `v` prefix. For TauGrid 0.4.3, the required images are `tau`,
+   without the `v` prefix. For TauGrid 0.4.4, the required images are `tau`,
    `taugrid-portal`, `tau-core-controller`, and
    `taugrid-metrics-collector`.
 3. Verify the expected immutable image tags and coordinated chart versions are
