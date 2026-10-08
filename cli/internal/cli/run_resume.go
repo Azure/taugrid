@@ -186,15 +186,40 @@ func resolveResumeRouting(
 	}
 	resolvedContext := firstNonEmpty(resolvedOptions.kubeContext, kubeContext)
 	resolvedNamespace := namespace
-	if !namespaceExplicit && connection.Namespace != "" {
+	restore, err := useKubeconfig(connection.KubeconfigPath)
+	if err != nil {
+		return resumeRouting{}, nil, err
+	}
+	if workspaceName := strings.TrimSpace(resolution.Connection.Workspace); workspaceName != "" {
+		placement, placementErr := fetchLifecycleWorkspacePlacement(
+			cmd,
+			resolvedContext,
+			systemNamespaceForConnection(cmd, connection),
+			workspaceName,
+			connectionForWorkspaceSelection(connection, workspaceName),
+		)
+		if placementErr != nil {
+			restore()
+			return resumeRouting{}, nil, placementErr
+		}
+		if explicitNamespace := strings.TrimSpace(namespace); namespaceExplicit &&
+			explicitNamespace != "" &&
+			explicitNamespace != placement.Namespace {
+			restore()
+			return resumeRouting{}, nil, fmt.Errorf(
+				"namespace %q conflicts with TauWorkspace %q target namespace %q",
+				explicitNamespace,
+				placement.Workspace,
+				placement.Namespace,
+			)
+		}
+		resolvedNamespace = placement.Namespace
+	} else if !namespaceExplicit && connection.Namespace != "" {
 		resolvedNamespace = connection.Namespace
 	}
 	resolvedNamespace, err = requireWorkloadNamespace(resolvedNamespace)
 	if err != nil {
-		return resumeRouting{}, nil, err
-	}
-	restore, err := useKubeconfig(connection.KubeconfigPath)
-	if err != nil {
+		restore()
 		return resumeRouting{}, nil, err
 	}
 	return resumeRouting{

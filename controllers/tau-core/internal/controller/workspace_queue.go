@@ -176,19 +176,45 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if err := r.Get(ctx, client.ObjectKey{Name: workspace.Spec.TeamRef.Name, Namespace: workspace.Namespace}, &team); err != nil {
 		return "", fmt.Errorf("team %q is not ready: %w", workspace.Spec.TeamRef.Name, err)
 	}
-	if team.Status.Phase != tauv1alpha1.TeamPhaseReady || team.Status.ObservedGeneration != team.Generation {
-		return "", fmt.Errorf("team %q is not Ready", workspace.Spec.TeamRef.Name)
-	}
 	teamReconciler := &TauTeamReconciler{Client: r.Client, SystemNamespace: r.SystemNamespace}
 	if err := teamReconciler.validateTeamCapacity(ctx, &team); err != nil {
 		return "", err
 	}
-	sharedQuota, err := teamReconciler.sharedTeamQuota(ctx, &team)
+	if err := validateQuotaFlavors(ctx, r.Client, workspace.Spec.Quota); err != nil {
+		return "", err
+	}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	teamReady := team.Status.Phase == tauv1alpha1.TeamPhaseReady &&
+		team.Status.ObservedGeneration == team.Generation
+	reductionOnly, err := r.workspaceQueueReductionOnly(ctx, workspace, queue)
 	if err != nil {
 		return "", err
 	}
-	if err := validateQuotaFlavors(ctx, r.Client, workspace.Spec.Quota); err != nil {
+	if !teamReady && !reductionOnly {
+		return "", fmt.Errorf("team %q is not Ready", workspace.Spec.TeamRef.Name)
+	}
+	sharedQuota, err := teamReconciler.sharedTeamQuota(ctx, &team)
+	if err != nil && !reductionOnly {
 		return "", err
+	}
+	if reductionOnly && (!teamReady || err != nil) {
+		if err := reconcileManagedUnstructured(ctx, r.Client, queue, labelWorkspace, workspace.Name); err != nil {
+			return "", fmt.Errorf("reconcile workspace ClusterQueue reduction: %w", err)
+		}
+		sharedQuota, err = teamReconciler.sharedTeamQuota(ctx, &team)
+		if err != nil {
+			return "", err
+		}
+		if err := reconcileManagedUnstructured(
+			ctx,
+			r.Client,
+			desiredTeamCohort(&team, sharedQuota),
+			labelTeam,
+			team.Name,
+		); err != nil {
+			return "", fmt.Errorf("reconcile team Cohort after workspace quota reduction: %w", err)
+		}
+		return queue.GetName(), nil
 	}
 	if err := reconcileManagedUnstructured(
 		ctx,
@@ -199,7 +225,6 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	); err != nil {
 		return "", fmt.Errorf("reconcile team Cohort before workspace quota: %w", err)
 	}
-	queue := desiredWorkspaceClusterQueue(workspace)
 	if err := reconcileManagedUnstructured(ctx, r.Client, queue, labelWorkspace, workspace.Name); err != nil {
 		return "", fmt.Errorf("reconcile workspace ClusterQueue: %w", err)
 	}
@@ -217,6 +242,47 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		return "", fmt.Errorf("reconcile team Cohort after workspace quota: %w", err)
 	}
 	return queue.GetName(), nil
+}
+
+func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	desired *unstructured.Unstructured,
+) (bool, error) {
+	existing := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: desired.GetName()}, existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	cohort, _, err := unstructured.NestedString(existing.Object, "spec", "cohortName")
+	if err != nil {
+		return false, fmt.Errorf("read ClusterQueue %q cohortName: %w", existing.GetName(), err)
+	}
+	if strings.TrimSpace(cohort) != teamCohortName(workspace.Spec.TeamRef.Name) {
+		return false, nil
+	}
+	existingMaximums, err := clusterQueueMaximumQuota(existing)
+	if err != nil {
+		return false, err
+	}
+	desiredMaximums, err := clusterQueueMaximumQuota(desired)
+	if err != nil {
+		return false, err
+	}
+	for key, desiredMaximum := range desiredMaximums {
+		existingMaximum, ok := existingMaximums[key]
+		if !ok || desiredMaximum.Cmp(existingMaximum) > 0 {
+			return false, nil
+		}
+	}
+	for key, existingMaximum := range existingMaximums {
+		if _, ok := desiredMaximums[key]; !ok && existingMaximum.Sign() != 0 {
+			return true, nil
+		}
+	}
+	return true, nil
 }
 
 func newQueueObject(gvk schema.GroupVersionKind) *unstructured.Unstructured {

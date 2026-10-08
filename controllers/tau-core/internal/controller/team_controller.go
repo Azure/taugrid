@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -122,14 +123,24 @@ func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alph
 	}
 	for i := range workspaces.Items {
 		workspace := &workspaces.Items[i]
-		if workspace.Spec.TeamRef == nil || workspace.Spec.TeamRef.Name != team.Name {
-			continue
+		effective := map[string]resource.Quantity{}
+		if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
+			for _, quota := range workspace.Spec.Quota {
+				effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+			}
 		}
-		guarantees, err := r.effectiveWorkspaceGuarantees(ctx, workspace)
+		appliedCohort, applied, err := r.appliedWorkspaceGuarantees(ctx, workspace)
 		if err != nil {
 			return nil, err
 		}
-		for key, guarantee := range guarantees {
+		if appliedCohort == teamCohortName(team.Name) {
+			for key, quantity := range applied {
+				if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
+					effective[key] = quantity.DeepCopy()
+				}
+			}
+		}
+		for key, guarantee := range effective {
 			available, ok := remaining[key]
 			if !ok {
 				resourceName, flavor, _ := strings.Cut(key, "\x00")
@@ -155,39 +166,33 @@ func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alph
 	return out, nil
 }
 
-func (r *TauTeamReconciler) effectiveWorkspaceGuarantees(
+func (r *TauTeamReconciler) appliedWorkspaceGuarantees(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) (map[string]resource.Quantity, error) {
-	effective := make(map[string]resource.Quantity, len(workspace.Spec.Quota))
-	for _, quota := range workspace.Spec.Quota {
-		effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
-	}
-
+) (string, map[string]resource.Quantity, error) {
 	queue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
 		if apierrors.IsNotFound(err) {
-			return effective, nil
+			return "", nil, nil
 		}
-		return nil, err
+		return "", nil, err
 	}
 	labels := queue.GetLabels()
 	if labels[labelManagedBy] != labelManagedByValue || labels[labelWorkspace] != workspace.Name {
-		return nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
+		return "", nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
 	}
 	if ownerUID := queue.GetAnnotations()[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
-		return nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
+		return "", nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
 	}
 	applied, err := clusterQueueNominalQuota(queue)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	for key, quantity := range applied {
-		if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
-			effective[key] = quantity.DeepCopy()
-		}
+	cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
+	if err != nil {
+		return "", nil, fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
 	}
-	return effective, nil
+	return strings.TrimSpace(cohort), applied, nil
 }
 
 func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.TauTeam) (ctrl.Result, error) {

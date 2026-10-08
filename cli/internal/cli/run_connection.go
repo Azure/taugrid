@@ -543,13 +543,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	projectName string,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
-	if contextExplicit && kubeContext != "" {
-		// The lifecycle verbs return here without activating a connection, so
-		// this is the only place they can notice that the caller's context
-		// disagrees with the repository's descriptor. Skipping it made a
-		// forgotten TAU_CONTEXT silently read state from a different cluster
-		// than `tau run` would submit to, and refusing the submit while quietly
-		// answering the status query is worse than either alone.
+	if contextExplicit && kubeContext != "" && strings.TrimSpace(projectName) == "" {
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorForStartDir()); err != nil {
 			return "", "", nil, err
 		}
@@ -559,29 +553,9 @@ func resolveRunLifecycleConnectionWithEnsurer(
 		}
 		return kubeContext, ns, func() {}, nil
 	}
-	startDir, err := os.Getwd()
+	source, err := discoverRunLifecycleConnectionSource(projectName)
 	if err != nil {
 		return "", "", nil, err
-	}
-	repository, err := projectcatalog.Discover(startDir)
-	if err != nil {
-		return "", "", nil, err
-	}
-	source := runConnectionSource{
-		StartDir: startDir,
-		Git:      repository.Boundary.Git,
-	}
-	if repository.Catalog != nil {
-		project, err := repository.Catalog.SelectLifecycleProject(projectName, startDir)
-		if err != nil {
-			return "", "", nil, err
-		}
-		source.Catalog = true
-		source.Project = project.Name
-		source.Workspace = project.Workspace
-		source.Discovery = &project.Connection
-	} else if strings.TrimSpace(projectName) != "" {
-		return "", "", nil, fmt.Errorf("--project requires %s at the Git worktree root", projectcatalog.Filename)
 	}
 	return resolveRunLifecycleConnectionFromSource(
 		cmd,
@@ -594,6 +568,34 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	)
 }
 
+func discoverRunLifecycleConnectionSource(projectName string) (runConnectionSource, error) {
+	startDir, err := os.Getwd()
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	repository, err := projectcatalog.Discover(startDir)
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	source := runConnectionSource{
+		StartDir: startDir,
+		Git:      repository.Boundary.Git,
+	}
+	if repository.Catalog != nil {
+		project, err := repository.Catalog.SelectLifecycleProject(projectName, startDir)
+		if err != nil {
+			return runConnectionSource{}, err
+		}
+		source.Catalog = true
+		source.Project = project.Name
+		source.Workspace = project.Workspace
+		source.Discovery = &project.Connection
+	} else if strings.TrimSpace(projectName) != "" {
+		return runConnectionSource{}, fmt.Errorf("--project requires %s at the Git worktree root", projectcatalog.Filename)
+	}
+	return source, nil
+}
+
 func resolveRunLifecycleConnectionFromSource(
 	cmd *cobra.Command,
 	kubeContext, namespace string,
@@ -603,10 +605,31 @@ func resolveRunLifecycleConnectionFromSource(
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	if contextExplicit && kubeContext != "" {
-		// Same early return as the caller above, reached when the source was
-		// already built; compare against its descriptor for the same reason.
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorFor(source)); err != nil {
 			return "", "", nil, err
+		}
+		if workspaceName := strings.TrimSpace(source.Workspace); workspaceName != "" {
+			placement, err := fetchLifecycleWorkspacePlacement(
+				cmd,
+				kubeContext,
+				systemNamespaceFromCommand(cmd),
+				workspaceName,
+				workspaceconnection.ActiveConnection{Workspace: workspaceName, ContextName: kubeContext},
+			)
+			if err != nil {
+				return "", "", nil, err
+			}
+			if explicitNamespace := strings.TrimSpace(namespace); namespaceExplicit &&
+				explicitNamespace != "" &&
+				explicitNamespace != placement.Namespace {
+				return "", "", nil, fmt.Errorf(
+					"namespace %q conflicts with TauWorkspace %q target namespace %q",
+					explicitNamespace,
+					placement.Workspace,
+					placement.Namespace,
+				)
+			}
+			return kubeContext, placement.Namespace, func() {}, nil
 		}
 		ns, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
 		if err != nil {
@@ -640,22 +663,14 @@ func resolveRunLifecycleConnectionFromSource(
 		return "", "", nil, err
 	}
 	if workspaceName := strings.TrimSpace(source.Workspace); workspaceName != "" {
-		fetch := fetchWorkspace
-		if runLifecycleWorkspaceFetcherOverride != nil {
-			fetch = runLifecycleWorkspaceFetcherOverride
-		}
 		selectedConnection := connectionForWorkspaceSelection(connection, workspaceName)
-		workspaceStatus, fetchErr := fetch(
+		placement, placementErr := fetchLifecycleWorkspacePlacement(
 			cmd,
 			connection.ContextName,
 			systemNamespaceForConnection(cmd, connection),
 			workspaceName,
+			selectedConnection,
 		)
-		if fetchErr != nil {
-			restore()
-			return "", "", nil, fetchErr
-		}
-		placement, placementErr := resolveWorkspacePlacement(workspaceStatus, selectedConnection)
 		if placementErr != nil {
 			restore()
 			return "", "", nil, placementErr
@@ -685,6 +700,22 @@ func resolveRunLifecycleConnectionFromSource(
 
 var runLifecycleWorkspaceFetcherOverride runLifecycleWorkspaceFetcher
 
+func fetchLifecycleWorkspacePlacement(
+	cmd *cobra.Command,
+	kubeContext, systemNamespace, workspaceName string,
+	connection workspaceconnection.ActiveConnection,
+) (workspacePlacement, error) {
+	fetch := fetchWorkspace
+	if runLifecycleWorkspaceFetcherOverride != nil {
+		fetch = runLifecycleWorkspaceFetcherOverride
+	}
+	workspaceStatus, err := fetch(cmd, kubeContext, systemNamespace, workspaceName)
+	if err != nil {
+		return workspacePlacement{}, err
+	}
+	return resolveWorkspacePlacement(workspaceStatus, connection)
+}
+
 // resolveWorkspaceControlPlaneConnection gives the `tau workspace` read verbs
 // the same descriptor-first cluster resolution the `tau run` lifecycle verbs
 // already have. Without it they silently query whatever kubectl's ambient
@@ -712,19 +743,36 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 	kubeContext, namespace string,
 	ensurer runConnectionEnsurer,
 ) (string, func(), error) {
-	resolvedContext, _, restore, err := resolveRunLifecycleConnectionWithEnsurer(
-		cmd,
-		kubeContext,
-		namespace,
-		runContextExplicit(cmd),
-		true,
-		"",
-		ensurer,
-	)
+	_ = namespace
+	source, err := discoverRunLifecycleConnectionSource("")
 	if err != nil {
 		return "", nil, err
 	}
-	return resolvedContext, restore, nil
+	if runContextExplicit(cmd) && strings.TrimSpace(kubeContext) != "" {
+		if err := checkDescriptorContextConflict(
+			kubeContext,
+			cmd.Flags().Changed("context"),
+			descriptorFor(source),
+		); err != nil {
+			return "", nil, err
+		}
+		return kubeContext, func() {}, nil
+	}
+	if !source.Git {
+		return kubeContext, func() {}, nil
+	}
+	connection, err := ensureRunConnection(cmd.Context(), ensurer, source)
+	if err != nil {
+		if !source.Catalog && errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
+			return kubeContext, func() {}, nil
+		}
+		return "", nil, err
+	}
+	restore, err := useKubeconfig(connection.KubeconfigPath)
+	if err != nil {
+		return "", nil, err
+	}
+	return connection.ContextName, restore, nil
 }
 
 // resolveWorkloadDataConnection gives the registry-reading `tau data` verbs the

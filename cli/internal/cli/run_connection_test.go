@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
@@ -691,6 +692,100 @@ func TestLifecycleExplicitContextBypassesCatalogAmbiguity(t *testing.T) {
 	defer restore()
 	if gotContext != "explicit-context" || gotNamespace != "explicit-namespace" || ensurer.calls != 0 {
 		t.Fatalf("context=%q namespace=%q calls=%d", gotContext, gotNamespace, ensurer.calls)
+	}
+}
+
+func TestLifecycleExplicitContextStillResolvesProjectWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "beta-workspace"},
+	})
+	withRunRoutingCWD(t, root)
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().String("context", "", "")
+	if err := command.Flags().Set("context", "explicit-context"); err != nil {
+		t.Fatal(err)
+	}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "explicit-context" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithEnsurer(
+		command,
+		"explicit-context",
+		"",
+		true,
+		false,
+		"alpha",
+		&fakeRunConnectionEnsurer{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "explicit-context" || gotNamespace != "alpha-namespace" {
+		t.Fatalf("context=%q namespace=%q", gotContext, gotNamespace)
+	}
+}
+
+func TestWorkspaceControlPlaneResolutionDoesNotFetchWorkloadPlacement(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	withRunRoutingCWD(t, filepath.Join(root, "alpha"))
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	runLifecycleWorkspaceFetcherOverride = func(
+		*cobra.Command, string, string, string,
+	) (tauworkspace.Workspace, error) {
+		t.Fatal("control-plane resolution fetched TauWorkspace workload placement")
+		return tauworkspace.Workspace{}, nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		ContextName: "catalog-context", KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig"),
+	}}
+
+	gotContext, restore, err := resolveWorkspaceControlPlaneConnectionWithEnsurer(
+		command,
+		"",
+		defaultSystemNamespace(),
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "catalog-context" || ensurer.calls != 1 {
+		t.Fatalf("context=%q calls=%d", gotContext, ensurer.calls)
+	}
+}
+
+func readyTestWorkspace(name, uid, namespace, queue string) tauworkspace.Workspace {
+	return tauworkspace.Workspace{
+		Metadata: tauworkspace.ObjectMeta{Name: name, UID: uid, Generation: 1},
+		Spec: tauworkspace.WorkspaceSpec{
+			Queue:  queue,
+			Target: tauworkspace.WorkspaceTarget{Namespace: namespace},
+		},
+		Status: tauworkspace.WorkspaceStatus{
+			Phase:              "Ready",
+			ObservedGeneration: 1,
+			Target:             tauworkspace.WorkspaceTargetStatus{ResolvedNamespace: namespace},
+			Queue: tauworkspace.WorkspaceQueueStatus{
+				LocalQueue: queue, ClusterQueue: queue + "-cq",
+			},
+		},
 	}
 }
 
