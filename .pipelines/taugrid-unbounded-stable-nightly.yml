@@ -16,7 +16,7 @@ pool:
   name: 1es-aks-ai-runtime-ado-eastus2
 
 variables:
-  - name: azureServiceConnection
+  - name: imageServiceConnection
     value: aks ai runtime - prod
   - name: GOFLAGS
     value: -mod=readonly
@@ -52,7 +52,7 @@ jobs:
       - task: AzureCLI@2
         displayName: Build, publish, and verify deployment images
         inputs:
-          azureSubscription: $(azureServiceConnection)
+          azureSubscription: $(imageServiceConnection)
           scriptType: bash
           scriptLocation: inlineScript
           inlineScript: |
@@ -163,7 +163,7 @@ jobs:
             - task: AzureCLI@2
               displayName: Upgrade and validate TauGrid
               inputs:
-                azureSubscription: $(azureServiceConnection)
+                azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION)
                 scriptType: bash
                 scriptLocation: inlineScript
                 inlineScript: |
@@ -273,31 +273,31 @@ jobs:
                     --name "${UNBOUNDED_STABLE_CLUSTER_NAME}" \
                     --acr "${acr_name}"
 
-                  if ! helm status "${TAUGRID_RELEASE}" \
+                  previous_revision="0"
+                  if helm status "${TAUGRID_RELEASE}" \
                     --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                     --kube-context unbounded-stable >/dev/null 2>&1; then
-                    echo "##vso[task.logissue type=error]unbounded-stable must already contain the managed ${TAUGRID_RELEASE} Helm release"
-                    exit 1
-                  fi
+                    previous_revision="$(helm status "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --output json | jq -r '.version | tostring')"
+                    helm get values "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --output yaml >"${values_file}"
 
-                  previous_revision="$(helm status "${TAUGRID_RELEASE}" \
-                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                    --kube-context unbounded-stable \
-                    --output json | jq -r '.version | tostring')"
-                  helm get values "${TAUGRID_RELEASE}" \
-                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                    --kube-context unbounded-stable \
-                    --output yaml >"${values_file}"
-
-                  live_values="$(helm get values "${TAUGRID_RELEASE}" \
-                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                    --kube-context unbounded-stable \
-                    --all \
-                    --output json)"
-                  if jq -e '.["taugrid-core"].lifecycleRecorder.enabled == true' \
-                    <<<"${live_values}" >/dev/null; then
-                    echo "##vso[task.logissue type=error]The nightly cannot replace the lifecycle recorder with an unpublished image; use a released MCR image or disable the recorder before enabling this deployment"
-                    exit 1
+                    live_values="$(helm get values "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --all \
+                      --output json)"
+                    if jq -e '.["taugrid-core"].lifecycleRecorder.enabled == true' \
+                      <<<"${live_values}" >/dev/null; then
+                      echo "##vso[task.logissue type=error]The nightly cannot replace the lifecycle recorder with an unpublished image; use a released MCR image or disable the recorder before enabling this deployment"
+                      exit 1
+                    fi
+                  else
+                    printf '{}\n' >"${values_file}"
                   fi
 
                   make -C cli build

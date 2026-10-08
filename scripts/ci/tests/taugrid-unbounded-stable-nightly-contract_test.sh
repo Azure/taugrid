@@ -21,8 +21,10 @@ grep -Fq 'cron: "45 7 * * *"' "$PIPELINE" ||
   fail "pipeline must run nightly"
 grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
   fail "pipeline must use the approved 1ES pool"
-grep -Fq "azureSubscription: \$(azureServiceConnection)" "$PIPELINE" ||
-  fail "Azure operations must use the approved service connection"
+grep -Fq "azureSubscription: \$(imageServiceConnection)" "$PIPELINE" ||
+  fail "image publication must use the approved registry service connection"
+grep -Fq "azureSubscription: \$(TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION)" "$PIPELINE" ||
+  fail "cluster deployment must use an environment-specific protected service connection"
 grep -Fq "deployment: deploy_unbounded_stable" "$PIPELINE" ||
   fail "deployment must use an Azure DevOps deployment job"
 grep -Fq "environment: unbounded-stable" "$PIPELINE" ||
@@ -35,7 +37,8 @@ fi
 for variable in \
   TAUGRID_UNBOUNDED_STABLE_ACR_NAME \
   TAUGRID_UNBOUNDED_STABLE_RESOURCE_GROUP \
-  TAUGRID_UNBOUNDED_STABLE_CLUSTER_NAME; do
+  TAUGRID_UNBOUNDED_STABLE_CLUSTER_NAME \
+  TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION; do
   grep -Fq "\$(${variable})" "$PIPELINE" ||
     fail "${variable} must be supplied by Azure DevOps"
 done
@@ -55,6 +58,10 @@ grep -Fq "az aks check-acr" "$PIPELINE" ||
 
 grep -Fq 'helm get values "${TAUGRID_RELEASE}"' "$PIPELINE" ||
   fail "deployment must preserve live operator-supplied values"
+grep -Fq 'previous_revision="0"' "$PIPELINE" ||
+  fail "deployment must support the first managed installation"
+grep -Fq "printf '{}" "$PIPELINE" ||
+  fail "first installation must start from reviewed chart defaults"
 grep -Fq "scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid" "$PIPELINE" ||
   fail "deployment must vendor the reviewed umbrella dependencies"
 grep -Fq "cli/bin/tau \"\${install_args[@]}\" --dry-run" "$PIPELINE" ||
