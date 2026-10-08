@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -47,7 +48,7 @@ func TestAssignmentRoundTripAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("assignment mode = %o, want 600", info.Mode().Perm())
 	}
 	discovery, loaded, loadedPath, err := AssignmentDiscovery(configDir, scope)
