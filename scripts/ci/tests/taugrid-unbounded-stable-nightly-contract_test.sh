@@ -75,11 +75,25 @@ grep -Fq -- "--atomic" "$PIPELINE" ||
   fail "deployment must request rollback after Helm failure"
 grep -Fq "tau cluster validate installation" "$PIPELINE" ||
   fail "deployment must run the TauGrid readiness gate"
+grep -Fq 'helm rollback "${TAUGRID_RELEASE}" "${previous_revision}"' "$PIPELINE" ||
+  fail "readiness failures must restore the previous Helm revision"
+grep -Fq 'helm uninstall "${TAUGRID_RELEASE}"' "$PIPELINE" ||
+  fail "a failed first installation must be removed"
+grep -Fq 'recovery-validation.txt' "$PIPELINE" ||
+  fail "a restored release must pass the TauGrid readiness gate"
 grep -Fq "lifecycleRecorder.enabled == true" "$PIPELINE" ||
   fail "deployment must fail closed for an unpublished lifecycle recorder image"
 
 grep -Fq "helm history" "$PIPELINE" ||
   fail "failure diagnostics must retain Helm history"
+grep -Fq "helm-status.json" "$PIPELINE" ||
+  fail "diagnostics must include allowlisted Helm status metadata"
+if grep -Fq 'helm-status.yaml' "$PIPELINE" ||
+  grep -Eq 'helm status .*--output yaml' "$PIPELINE"; then
+  fail "published diagnostics must not include Helm release values, manifests, or hooks"
+fi
+grep -Fq "render_file=\"\$(Agent.TempDirectory)/unbounded-stable-render.txt\"" "$PIPELINE" ||
+  fail "rendered manifests must remain in temporary storage"
 grep -Fq "get events --sort-by=.lastTimestamp" "$PIPELINE" ||
   fail "failure diagnostics must retain Kubernetes events"
 grep -Fq "condition: always()" "$PIPELINE" ||

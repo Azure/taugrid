@@ -195,6 +195,7 @@ jobs:
                   diagnostics_dir="${artifact_dir}/diagnostics"
                   result_file="${artifact_dir}/deployment-result.json"
                   values_file="$(Agent.TempDirectory)/unbounded-stable-values.yaml"
+                  render_file="$(Agent.TempDirectory)/unbounded-stable-render.txt"
                   mkdir -p "${diagnostics_dir}"
 
                   export KUBECONFIG="$(Agent.TempDirectory)/unbounded-stable-kubeconfig"
@@ -238,7 +239,17 @@ jobs:
                     helm status "${TAUGRID_RELEASE}" \
                       --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                       --kube-context unbounded-stable \
-                      --output yaml >"${diagnostics_dir}/helm-status.yaml" 2>&1
+                      --output json 2>"${diagnostics_dir}/helm-status-error.txt" |
+                      jq '{
+                        name: .name,
+                        namespace: .namespace,
+                        revision: .version,
+                        status: .info.status,
+                        description: .info.description,
+                        first_deployed: .info.first_deployed,
+                        last_deployed: .info.last_deployed,
+                        deleted: .info.deleted
+                      }' >"${diagnostics_dir}/helm-status.json"
                     helm history "${TAUGRID_RELEASE}" \
                       --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                       --kube-context unbounded-stable \
@@ -254,7 +265,7 @@ jobs:
                     if [[ ! -s "${result_file}" ]]; then
                       write_result failed "deployment command failed; Helm atomic rollback was requested"
                     fi
-                    rm -f "${values_file}" "${KUBECONFIG}"
+                    rm -f "${values_file}" "${render_file}" "${KUBECONFIG}"
                     exit "${rc}"
                   }
                   trap cleanup EXIT
@@ -326,20 +337,86 @@ jobs:
                   )
 
                   cli/bin/tau "${install_args[@]}" --dry-run \
-                    >"${diagnostics_dir}/render-summary.txt" 2>&1
-                  cli/bin/tau "${install_args[@]}" \
-                    >"${diagnostics_dir}/install-output.txt" 2>&1
-                  cli/bin/tau cluster validate installation \
-                    --context unbounded-stable \
-                    --release "${TAUGRID_RELEASE}" \
-                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                    --timeout 10m \
-                    >"${diagnostics_dir}/validation.txt" 2>&1
+                    >"${render_file}" 2>&1
+                  printf 'Dry-run rendering completed successfully for source %s.\n' \
+                    "${source_version}" >"${diagnostics_dir}/render-summary.txt"
+                  if ! cli/bin/tau "${install_args[@]}" \
+                    >"${diagnostics_dir}/install-output.txt" 2>&1; then
+                    write_result failed \
+                      "installation failed; Helm atomic rollback was requested" \
+                      "${previous_revision}"
+                    exit 1
+                  fi
 
                   current_revision="$(helm status "${TAUGRID_RELEASE}" \
                     --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                     --kube-context unbounded-stable \
                     --output json | jq -r '.version | tostring')"
+                  if ! cli/bin/tau cluster validate installation \
+                    --context unbounded-stable \
+                    --release "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --timeout 10m \
+                    >"${diagnostics_dir}/validation.txt" 2>&1; then
+                    if [[ "${previous_revision}" == "0" ]]; then
+                      if ! helm uninstall "${TAUGRID_RELEASE}" \
+                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                        --kube-context unbounded-stable \
+                        --wait \
+                        --timeout 20m \
+                        >"${diagnostics_dir}/recovery.txt" 2>&1; then
+                        write_result failed \
+                          "readiness validation failed and removal of the first installation failed" \
+                          "${previous_revision}" \
+                          "${current_revision}"
+                        exit 1
+                      fi
+                      if helm status "${TAUGRID_RELEASE}" \
+                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                        --kube-context unbounded-stable >/dev/null 2>&1; then
+                        write_result failed \
+                          "readiness validation failed and the first installation still exists after removal" \
+                          "${previous_revision}" \
+                          "${current_revision}"
+                        exit 1
+                      fi
+                      write_result failed \
+                        "readiness validation failed; removed the first installation" \
+                        "${previous_revision}" \
+                        "${current_revision}"
+                    else
+                      if ! helm rollback "${TAUGRID_RELEASE}" "${previous_revision}" \
+                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                        --kube-context unbounded-stable \
+                        --wait \
+                        --timeout 20m \
+                        >"${diagnostics_dir}/recovery.txt" 2>&1; then
+                        write_result failed \
+                          "readiness validation failed and rollback to revision ${previous_revision} failed" \
+                          "${previous_revision}" \
+                          "${current_revision}"
+                        exit 1
+                      fi
+                      if ! cli/bin/tau cluster validate installation \
+                        --context unbounded-stable \
+                        --release "${TAUGRID_RELEASE}" \
+                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                        --timeout 10m \
+                        >"${diagnostics_dir}/recovery-validation.txt" 2>&1; then
+                        write_result failed \
+                          "readiness validation failed; rollback to revision ${previous_revision} completed but recovery validation failed" \
+                          "${previous_revision}" \
+                          "${current_revision}"
+                        exit 1
+                      fi
+                      write_result failed \
+                        "readiness validation failed; restored and validated revision ${previous_revision}" \
+                        "${previous_revision}" \
+                        "${current_revision}"
+                    fi
+                    exit 1
+                  fi
+
                   write_result passed "" "${previous_revision}" "${current_revision}"
               env:
                 UNBOUNDED_STABLE_RESOURCE_GROUP: $(TAUGRID_UNBOUNDED_STABLE_RESOURCE_GROUP)
