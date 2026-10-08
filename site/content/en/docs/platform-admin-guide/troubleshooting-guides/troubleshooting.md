@@ -86,7 +86,7 @@ permissions are absent.
 
 | # | Layer | Primary command | Owner if it fails |
 |---|---|---|---|
-| 1 | Repository/connection resolution and cluster access | `tau workspace connection` (`--offline` for local configuration only) | Researcher (descriptor) or platform (access) |
+| 1 | Repository/connection resolution and cluster access | `tau workspace connection inspect` (local routing) then `tau workspace connection` (live access) | Researcher (descriptor or assignment) or platform (access) |
 | 2 | [TauWorkspace](../../reference/glossary/#tauworkspace) readiness and handoff validity | `tau workspace status <name>` | Platform operator |
 | 3 | Client-side config validation and rendering | `tau run validate --config tau/train.yaml` | Researcher |
 | 4 | [Queue](../../reference/glossary/#queue) admission and quota | `tau run status <run-name>` (Kueue admission phase) | Platform/queue owner |
@@ -114,19 +114,20 @@ resolved credentials, reached Kubernetes, and verified the TauWorkspace,
 LocalQueue, and authorization contract. Add `--offline` to prove only local
 project and descriptor resolution.
 
-**What failure means:** No descriptor found, more than one candidate found, or
-the descriptor failed schema validation. This is a repository configuration
-problem rather than a workload problem, and every later layer stays
-unreachable until it is fixed.
+**What failure means:** No checked-in descriptor or local assignment was found,
+more than one candidate was found, or the effective descriptor failed schema
+validation. This is a repository configuration problem rather than a workload
+problem, and every later layer stays unreachable until it is fixed.
 
 `tau run` discovers the descriptor automatically, so this command is a
 preflight rather than an activation prerequisite. If live connection fails but
-`tau workspace connection --offline` succeeds, the problem is credential
+`tau workspace connection inspect` succeeds, the problem is credential
 resolution, VPN/DNS reachability, Kubernetes availability, or RBAC rather than
 descriptor parsing.
 
-**Next owner/action:** Missing or invalid descriptor -- researcher action
-required; get a valid descriptor from the platform operator who owns the
+**Next owner/action:** Missing or invalid routing -- researcher action required;
+run `tau workspace connection assign`, or get a valid portable descriptor from
+the platform operator who owns the
 [TauWorkspace](../../reference/glossary/#tauworkspace). Reachability or
 permission failure on the first live call -- platform action required
 (cluster access/RBAC), or a transient network condition if it clears on
