@@ -576,6 +576,21 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, 2*time.Minute)
 	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
 
+	if recoveryNode := strings.TrimSpace(os.Getenv("FINEWEB_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
+		err = tc.RecoverSingleSchedulerBlockedGPUWorker(e2e.SchedulerRecoveryOptions{
+			Namespace:       stackNamespace,
+			WorkerSelector:  "e2e-test=fineweb-16xh200-ib",
+			TargetNode:      recoveryNode,
+			ExpectedWorkers: workers,
+			Timeout:         15 * time.Minute,
+			Eligible: func(observation e2e.SchedulerRecoveryObservation) bool {
+				return eligibleForFineWebSchedulerRecovery(workers, observation)
+			},
+			Description: "FineWeb worker",
+		})
+		require.NoError(t, err, "recover the single scheduler-blocked FineWeb worker")
+	}
+
 	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running and ready")
 	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=head", envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
@@ -690,6 +705,22 @@ func requireWorkersSplitEvenlyAcrossNodes(t *testing.T, tc *e2e.TestContext, pod
 	for node, count := range perNodeCount {
 		require.Equal(t, perNode, count, "node %s should run exactly %d FineWeb workers, got %d", node, perNode, count)
 	}
+}
+
+func eligibleForFineWebSchedulerRecovery(workers int, state e2e.SchedulerRecoveryObservation) bool {
+	if workers <= 0 || workers%2 != 0 {
+		return false
+	}
+	perNode := workers / 2
+	return state.TotalWorkers == workers &&
+		state.RunningWorkers == workers-1 &&
+		state.PendingWorkers == 1 &&
+		state.RunningOnTarget == perNode-1 &&
+		state.RunningOnOtherNodes == perNode &&
+		state.RequestedGPUsOnTarget == int64(perNode-1) &&
+		state.PendingGPURequest == 1 &&
+		state.TargetAllocatableGPUs == int64(perNode) &&
+		state.HasInsufficientEvent
 }
 
 // availableGPUsOnSelectedNodes computes how many nvidia.com/gpu are free on the

@@ -94,6 +94,7 @@ AI_RUNTIME_E2E=0 go test -count=1 ./...
 | `managedgpu/` | 1 | Warm-cluster GPU smoke jobs on selected A10/A100 nodes |
 | `scheduler/` | 2 | Kubernetes scheduler honors Tau's GPU bin-packing preferred pod affinity and packs single-device plus 2-4 GPU same-node pods onto already-occupied nodes |
 | `stack/` | 7 | Full-stack Kueue → KubeRay → Ray Data **inference** pipeline, GPU variants, **training** SGD loop, Tau Python SDK CPU/GPU entrypoint submit tests, and manual 16-GPU Ray Train nanoGPT conformance |
+| `multisite/` | 1 | Two independently queued GPU Jobs are Running concurrently on Nodes carrying two distinct authoritative `tau.azure.com/site` labels |
 
 The Tau Python SDK entrypoint smoke submits a CPU RayJob through
 `tau.train(entrypoint=...)` and verifies a staged pure-Python/PyTorch-shaped
@@ -271,6 +272,92 @@ NCCL, or model-quality benchmark.
 
 The PR-gated chart integration workflow triggers on PRs touching `charts/**`,
 `tests/e2e/**`, or the workflow file itself.
+
+## Flex Nightly Qualification
+
+The `.pipelines/taugrid-flex-nightly.yml` Azure DevOps pipeline runs nightly
+against the persistent `aks-ai-runtime-flex` cluster on the
+`1es-aks-ai-runtime-ado-eastus2` pool. Its first job is deliberately
+non-mutating: `scripts/ci/taugrid-flex-nightly-preflight.sh` inventories DGX
+Spark, A100, and H200 nodes; subtracts active GPU requests; validates each
+target's site, ResourceFlavor, ClusterQueue, and `taugrid-gpu-topology`
+contract; and emits a machine-readable hardware matrix. Topology or queue drift
+is a configuration failure. Missing or busy hardware is represented as an
+explicit skipped matrix row.
+
+For each enabled hardware class, preflight also enforces the existing Flex node
+capability contract: minimum node count, architecture, Linux/containerd,
+per-node GPU count, schedulability, Ready and pressure conditions, fresh node
+leases, required GPU taints, authoritative site, and non-empty network and
+accelerator topology domains. After workload cleanup, the pipeline inventories
+the cluster again and requires the node capability signature to match the
+preflight snapshot. Active GPU requests are not compared because the cluster is
+shared and unrelated workloads may start or finish during the matrix run.
+
+The workload job creates one run-scoped namespace and one LocalQueue per
+hardware target. Every available target runs:
+
+| Target | Single GPU | Native multi-GPU | Cross-node |
+|--------|------------|------------------|------------|
+| DGX Spark | 1 worker | 2 workers across two one-GPU hosts | n/a |
+| A100 | 1 worker | 8 workers on one host | 16 workers split 8+8 |
+| H200 | 1 worker | 8 workers on one host | 16 workers split 8+8 |
+
+Each shape runs Ray Serve online inference and Ray Train synthetic distributed
+training. Serve requires every expected replica to handle CUDA inference
+requests and report its hostname/device. Train requires every rank to initialize
+the collective, execute optimizer steps on CUDA, and report rank-zero evidence
+that a non-empty checkpoint was serialized. Durable remote checkpoint upload is
+covered only by storage-backed extended workloads.
+Kueue TAS assignments and observed pod placement must match the requested
+same-host or same-site/spread contract. A separate test requires available
+hardware targets to be Running concurrently on distinct authoritative sites.
+DGX Spark is temporarily disabled by default because the nodes are shared with
+another active test effort. Set the manual `includeDGXSpark=true` parameter only
+after coordinating exclusive capacity; disabled targets are recorded rather
+than silently omitted.
+
+The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
+profile adds all native and cross-node shapes. `rdmaConformance=true` adds the
+existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
+it is not part of the default hardware matrix.
+
+The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
+variable enables a narrowly guarded recovery for the current managed-scheduler
+defect on the replacement H200 node. The 16-GPU H200 tests bind one pending worker only
+after proving an exact 15/1 worker state, an 8/7 node split, one requested GPU,
+eight advertised target GPUs, seven API-visible target requests, and an
+`Insufficient nvidia.com/gpu` scheduler event. Leave the variable unset on
+healthy clusters; any different state fails rather than force-binding a pod.
+
+Nightly currently uses `FLEX_NIGHTLY_DEPLOY_MODE=shared-cluster-controllers`.
+It never mutates cluster-scoped queue or topology objects. Before enabling the
+pipeline, apply the topology-aware v2 flavors and `tau-gpu-cq` contract from
+`cluster-overlays/queues/shared-gpu-queue.yaml` using its documented
+HoldAndDrain migration procedure. The legacy A100 and H200 flavors use
+hostname-only topology and intentionally fail preflight. DGX opt-in additionally
+requires an externally managed topology-aware flavor and quota; the checked-in
+overlay deliberately does not publish the environment-specific DGX selector.
+
+Create the pipeline in the AKS AI Runtime Azure DevOps project from
+`.pipelines/taugrid-flex-nightly.yml`. It uses the existing
+`aks ai runtime - prod` Azure service connection. The selected Ray image must
+include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
+require `linux/arm64` because DGX Spark is arm64.
+Configure:
+
+| Name | Secret | Purpose |
+|------|--------|---------|
+| `AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP`, `AKS_AI_RUNTIME_FLEX_CLUSTER_NAME` | no | Persistent Flex target |
+| `AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE` | no | Environment-specific authoritative site-label values for the default targets |
+| `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE` | no | Environment-specific DGX selector and site; required only when `includeDGXSpark=true` |
+| `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` | no | Temporary exact node name for the guarded single-worker scheduler recovery; leave unset once the managed scheduler defect is fixed |
+| `AKS_AI_RUNTIME_RAY_E2E_IMAGE` | no | Multi-architecture Ray/CUDA image used on amd64 A100/H200 and arm64 DGX Spark; the matrix installs its pinned PyTorch wheel through Ray runtime environments |
+
+The Ray image must be version 2.56.1 or newer because older Ray Serve releases
+are incompatible with the protobuf runtime in current images. The verified
+default is
+`mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0@sha256:e9a329eef15e5a13d50c3186c2b8036cd3728c6e218da860de23e8494b99ddd3`.
 
 ## Adding New Tests
 

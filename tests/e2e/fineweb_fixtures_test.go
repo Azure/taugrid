@@ -23,13 +23,13 @@ func readFineWebFixture(t *testing.T) string {
 	return string(data)
 }
 
-// TestFineWebFixtureRequestsInfiniBand asserts the worker uses network-domain
-// TAS, adds IPC_LOCK, and provides a real 16Gi /dev/shm.
+// TestFineWebFixtureRequestsInfiniBand asserts the worker exposes the
+// configurable TAS block, adds IPC_LOCK, and provides a real 16Gi /dev/shm.
 func TestFineWebFixtureRequestsInfiniBand(t *testing.T) {
 	text := readFineWebFixture(t)
 
-	if !strings.Contains(text, "kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain") {
-		t.Fatal("expected worker podset to require the Tau network domain through Kueue TAS")
+	if !strings.Contains(text, "{{FINEWEB_TAS_ANNOTATIONS}}") {
+		t.Fatal("expected worker podset to expose the configurable FineWeb TAS annotations block")
 	}
 	if !strings.Contains(text, "IPC_LOCK") {
 		t.Fatal("expected worker securityContext to add the IPC_LOCK capability for RDMA")
