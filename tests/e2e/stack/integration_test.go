@@ -577,7 +577,17 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
 
 	if recoveryNode := strings.TrimSpace(os.Getenv("FINEWEB_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
-		err = recoverSingleSchedulerBlockedFineWebWorker(t, tc, recoveryNode, workers, 15*time.Minute)
+		err = tc.RecoverSingleSchedulerBlockedGPUWorker(e2e.SchedulerRecoveryOptions{
+			Namespace:       stackNamespace,
+			WorkerSelector:  "e2e-test=fineweb-16xh200-ib",
+			TargetNode:      recoveryNode,
+			ExpectedWorkers: workers,
+			Timeout:         15 * time.Minute,
+			Eligible: func(observation e2e.SchedulerRecoveryObservation) bool {
+				return eligibleForFineWebSchedulerRecovery(workers, observation)
+			},
+			Description: "FineWeb worker",
+		})
 		require.NoError(t, err, "recover the single scheduler-blocked FineWeb worker")
 	}
 
@@ -697,154 +707,20 @@ func requireWorkersSplitEvenlyAcrossNodes(t *testing.T, tc *e2e.TestContext, pod
 	}
 }
 
-type fineWebSchedulerRecoveryState struct {
-	totalWorkers          int
-	runningWorkers        int
-	pendingWorkers        int
-	runningOnTarget       int
-	runningOnOtherNode    int
-	requestedGPUsOnTarget int64
-	pendingGPURequest     int64
-	targetAllocatableGPUs int64
-	hasInsufficientEvent  bool
-}
-
-func eligibleForFineWebSchedulerRecovery(workers int, state fineWebSchedulerRecoveryState) bool {
+func eligibleForFineWebSchedulerRecovery(workers int, state e2e.SchedulerRecoveryObservation) bool {
 	if workers <= 0 || workers%2 != 0 {
 		return false
 	}
 	perNode := workers / 2
-	return state.totalWorkers == workers &&
-		state.runningWorkers == workers-1 &&
-		state.pendingWorkers == 1 &&
-		state.runningOnTarget == perNode-1 &&
-		state.runningOnOtherNode == perNode &&
-		state.requestedGPUsOnTarget == int64(perNode-1) &&
-		state.pendingGPURequest == 1 &&
-		state.targetAllocatableGPUs == int64(perNode) &&
-		state.hasInsufficientEvent
-}
-
-func recoverSingleSchedulerBlockedFineWebWorker(t *testing.T, tc *e2e.TestContext, targetNode string, workers int, timeout time.Duration) error {
-	t.Helper()
-	client := tc.KubeClient()
-	gpuName := corev1.ResourceName("nvidia.com/gpu")
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		pods, err := client.CoreV1().Pods(stackNamespace).List(tc.Ctx(), metav1.ListOptions{
-			LabelSelector: "e2e-test=fineweb-16xh200-ib",
-		})
-		if err != nil {
-			return fmt.Errorf("list FineWeb workers for scheduler recovery: %w", err)
-		}
-
-		state := fineWebSchedulerRecoveryState{totalWorkers: len(pods.Items)}
-		var pendingPod *corev1.Pod
-		runningByNode := map[string]int{}
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			switch pod.Status.Phase {
-			case corev1.PodRunning:
-				state.runningWorkers++
-				runningByNode[pod.Spec.NodeName]++
-			case corev1.PodPending:
-				state.pendingWorkers++
-				pendingPod = pod
-			}
-		}
-
-		if state.runningWorkers == workers {
-			return nil
-		}
-		if pendingPod == nil || state.pendingWorkers != 1 {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		state.runningOnTarget = runningByNode[targetNode]
-		for node, count := range runningByNode {
-			if node != targetNode {
-				state.runningOnOtherNode += count
-			}
-		}
-		state.pendingGPURequest = podGPURequest(pendingPod, gpuName)
-
-		node, err := client.CoreV1().Nodes().Get(tc.Ctx(), targetNode, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("get scheduler recovery node %s: %w", targetNode, err)
-		}
-		allocatable := node.Status.Allocatable[gpuName]
-		state.targetAllocatableGPUs = allocatable.Value()
-
-		nodePods, err := client.CoreV1().Pods("").List(tc.Ctx(), metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("spec.nodeName=%s", targetNode),
-		})
-		if err != nil {
-			return fmt.Errorf("list pods on scheduler recovery node %s: %w", targetNode, err)
-		}
-		for i := range nodePods.Items {
-			pod := &nodePods.Items[i]
-			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-				continue
-			}
-			state.requestedGPUsOnTarget += podGPURequest(pod, gpuName)
-		}
-
-		events, err := client.CoreV1().Events(stackNamespace).List(tc.Ctx(), metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("involvedObject.name=%s", pendingPod.Name),
-		})
-		if err != nil {
-			return fmt.Errorf("list events for pending FineWeb worker %s: %w", pendingPod.Name, err)
-		}
-		for i := range events.Items {
-			if strings.Contains(events.Items[i].Message, "Insufficient nvidia.com/gpu") {
-				state.hasInsufficientEvent = true
-				break
-			}
-		}
-
-		if !eligibleForFineWebSchedulerRecovery(workers, state) {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		err = client.CoreV1().Pods(stackNamespace).Bind(tc.Ctx(), &corev1.Binding{
-			ObjectMeta: metav1.ObjectMeta{Name: pendingPod.Name, Namespace: stackNamespace},
-			Target: corev1.ObjectReference{
-				APIVersion: "v1",
-				Kind:       "Node",
-				Name:       targetNode,
-			},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("bind scheduler-blocked FineWeb worker %s to %s: %w", pendingPod.Name, targetNode, err)
-		}
-		t.Logf("bound scheduler-blocked FineWeb worker %s to verified recovery node %s", pendingPod.Name, targetNode)
-		return nil
-	}
-
-	return fmt.Errorf("scheduler recovery condition did not become eligible within %s", timeout)
-}
-
-func podGPURequest(pod *corev1.Pod, gpuName corev1.ResourceName) int64 {
-	var regular int64
-	for i := range pod.Spec.Containers {
-		request := pod.Spec.Containers[i].Resources.Requests[gpuName]
-		regular += request.Value()
-	}
-	var maxInit int64
-	for i := range pod.Spec.InitContainers {
-		quantity := pod.Spec.InitContainers[i].Resources.Requests[gpuName]
-		request := quantity.Value()
-		if request > maxInit {
-			maxInit = request
-		}
-	}
-	if maxInit > regular {
-		return maxInit
-	}
-	return regular
+	return state.TotalWorkers == workers &&
+		state.RunningWorkers == workers-1 &&
+		state.PendingWorkers == 1 &&
+		state.RunningOnTarget == perNode-1 &&
+		state.RunningOnOtherNodes == perNode &&
+		state.RequestedGPUsOnTarget == int64(perNode-1) &&
+		state.PendingGPURequest == 1 &&
+		state.TargetAllocatableGPUs == int64(perNode) &&
+		state.HasInsufficientEvent
 }
 
 // availableGPUsOnSelectedNodes computes how many nvidia.com/gpu are free on the

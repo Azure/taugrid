@@ -79,6 +79,12 @@ grep -Fq "TestConcurrentGPUWorkloadsAcrossHardwareSites" \
   fail "full profile must include concurrent hardware-site validation"
 grep -Fq "TestFineWebRayTrain16xH200IB" "$PIPELINE" ||
   fail "optional H200 RDMA/NCCL conformance must remain available"
+grep -Fq 'name: FINEWEB_CHECKPOINT_INTERVAL' "$PIPELINE" ||
+  fail "short RDMA qualification must explicitly configure its checkpoint interval"
+grep -Fq 'value: "1"' "$PIPELINE" ||
+  fail "two-step RDMA qualification must checkpoint within the run"
+grep -Fq 'FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)' "$PIPELINE" ||
+  fail "RDMA qualification must forward its checkpoint interval to the fixture"
 grep -Fq "export FINEWEB_TAS_MODE=site" "$PIPELINE" ||
   fail "H200 RDMA extension must use site-level topology for its two-node shape"
 grep -Fq "trap cleanup EXIT" "$PIPELINE" ||

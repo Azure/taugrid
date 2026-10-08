@@ -116,7 +116,17 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	if recoveryNode := strings.TrimSpace(os.Getenv("MATRIX_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
 		require.Equal(t, "h200", cfg.target, "scheduler recovery is restricted to the verified H200 target")
 		require.Equal(t, 16, cfg.workers, "scheduler recovery is restricted to the verified 16-GPU shape")
-		err = recoverSinglePhantomGPUReservation(t, tc, cfg, workload, recoveryNode, 10*time.Minute)
+		err = tc.RecoverSingleSchedulerBlockedGPUWorker(e2e.SchedulerRecoveryOptions{
+			Namespace:       cfg.namespace,
+			WorkerSelector:  matrixWorkerSelector(cfg, workload),
+			TargetNode:      recoveryNode,
+			ExpectedWorkers: cfg.workers,
+			Timeout:         10 * time.Minute,
+			Eligible: func(observation e2e.SchedulerRecoveryObservation) bool {
+				return eligibleForSchedulerRecovery(cfg.workers, cfg.expectedPerHost, observation)
+			},
+			Description: "matrix worker",
+		})
 		require.NoError(t, err)
 	}
 
@@ -391,160 +401,18 @@ func requirePlacement(t *testing.T, tc *e2e.TestContext, cfg matrixConfig, workl
 	}
 }
 
-type schedulerRecoveryState struct {
-	totalWorkers          int
-	runningWorkers        int
-	pendingWorkers        int
-	runningOnTarget       int
-	runningOnOtherNodes   int
-	requestedGPUsOnTarget int64
-	pendingGPURequest     int64
-	targetAllocatableGPUs int64
-	hasInsufficientEvent  bool
-}
-
-func eligibleForSchedulerRecovery(workers, expectedPerHost int, state schedulerRecoveryState) bool {
+func eligibleForSchedulerRecovery(workers, expectedPerHost int, state e2e.SchedulerRecoveryObservation) bool {
 	return workers == 16 &&
 		expectedPerHost == 8 &&
-		state.totalWorkers == workers &&
-		state.runningWorkers == workers-1 &&
-		state.pendingWorkers == 1 &&
-		state.runningOnTarget == expectedPerHost-1 &&
-		state.runningOnOtherNodes == workers-expectedPerHost &&
-		state.requestedGPUsOnTarget == int64(expectedPerHost-1) &&
-		state.pendingGPURequest == 1 &&
-		state.targetAllocatableGPUs == int64(expectedPerHost) &&
-		state.hasInsufficientEvent
-}
-
-func recoverSinglePhantomGPUReservation(
-	t *testing.T,
-	tc *e2e.TestContext,
-	cfg matrixConfig,
-	workload string,
-	targetNode string,
-	timeout time.Duration,
-) error {
-	t.Helper()
-	client := tc.KubeClient()
-	gpuName := corev1.ResourceName("nvidia.com/gpu")
-	deadline := time.Now().Add(timeout)
-	labelSelector := matrixWorkerSelector(cfg, workload)
-
-	for time.Now().Before(deadline) {
-		pods, err := client.CoreV1().Pods(cfg.namespace).List(tc.Ctx(), metav1.ListOptions{
-			LabelSelector: labelSelector,
-		})
-		if err != nil {
-			return fmt.Errorf("list matrix workers for scheduler recovery: %w", err)
-		}
-
-		state := schedulerRecoveryState{totalWorkers: len(pods.Items)}
-		runningByNode := map[string]int{}
-		var pendingPod *corev1.Pod
-		for i := range pods.Items {
-			pod := &pods.Items[i]
-			switch pod.Status.Phase {
-			case corev1.PodRunning:
-				state.runningWorkers++
-				runningByNode[pod.Spec.NodeName]++
-			case corev1.PodPending:
-				state.pendingWorkers++
-				pendingPod = pod
-			}
-		}
-		if state.runningWorkers == cfg.workers {
-			return nil
-		}
-		if pendingPod == nil || state.pendingWorkers != 1 {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		state.runningOnTarget = runningByNode[targetNode]
-		for node, count := range runningByNode {
-			if node != targetNode {
-				state.runningOnOtherNodes += count
-			}
-		}
-		state.pendingGPURequest = podGPURequest(pendingPod, gpuName)
-
-		node, err := client.CoreV1().Nodes().Get(tc.Ctx(), targetNode, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("get scheduler recovery node %s: %w", targetNode, err)
-		}
-		allocatable := node.Status.Allocatable[gpuName]
-		state.targetAllocatableGPUs = allocatable.Value()
-
-		nodePods, err := client.CoreV1().Pods("").List(tc.Ctx(), metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("spec.nodeName=%s", targetNode),
-		})
-		if err != nil {
-			return fmt.Errorf("list pods on scheduler recovery node %s: %w", targetNode, err)
-		}
-		for i := range nodePods.Items {
-			pod := &nodePods.Items[i]
-			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-				continue
-			}
-			state.requestedGPUsOnTarget += podGPURequest(pod, gpuName)
-		}
-
-		events, err := client.CoreV1().Events(cfg.namespace).List(tc.Ctx(), metav1.ListOptions{
-			FieldSelector: fmt.Sprintf("involvedObject.name=%s", pendingPod.Name),
-		})
-		if err != nil {
-			return fmt.Errorf("list events for pending matrix worker %s: %w", pendingPod.Name, err)
-		}
-		for i := range events.Items {
-			if strings.Contains(events.Items[i].Message, "Insufficient nvidia.com/gpu") {
-				state.hasInsufficientEvent = true
-				break
-			}
-		}
-
-		if !eligibleForSchedulerRecovery(cfg.workers, cfg.expectedPerHost, state) {
-			time.Sleep(2 * time.Second)
-			continue
-		}
-
-		err = client.CoreV1().Pods(cfg.namespace).Bind(tc.Ctx(), &corev1.Binding{
-			ObjectMeta: metav1.ObjectMeta{Name: pendingPod.Name, Namespace: cfg.namespace},
-			Target: corev1.ObjectReference{
-				APIVersion: "v1",
-				Kind:       "Node",
-				Name:       targetNode,
-			},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("bind scheduler-blocked matrix worker %s to %s: %w",
-				pendingPod.Name, targetNode, err)
-		}
-		t.Logf("bound scheduler-blocked matrix worker %s to verified recovery node %s",
-			pendingPod.Name, targetNode)
-		return nil
-	}
-
-	return fmt.Errorf("scheduler recovery condition did not become eligible within %s", timeout)
-}
-
-func podGPURequest(pod *corev1.Pod, gpuName corev1.ResourceName) int64 {
-	var regular int64
-	for i := range pod.Spec.Containers {
-		request := pod.Spec.Containers[i].Resources.Requests[gpuName]
-		regular += request.Value()
-	}
-	var maxInit int64
-	for i := range pod.Spec.InitContainers {
-		request := pod.Spec.InitContainers[i].Resources.Requests[gpuName]
-		if value := request.Value(); value > maxInit {
-			maxInit = value
-		}
-	}
-	if maxInit > regular {
-		return maxInit
-	}
-	return regular
+		state.TotalWorkers == workers &&
+		state.RunningWorkers == workers-1 &&
+		state.PendingWorkers == 1 &&
+		state.RunningOnTarget == expectedPerHost-1 &&
+		state.RunningOnOtherNodes == workers-expectedPerHost &&
+		state.RequestedGPUsOnTarget == int64(expectedPerHost-1) &&
+		state.PendingGPURequest == 1 &&
+		state.TargetAllocatableGPUs == int64(expectedPerHost) &&
+		state.HasInsufficientEvent
 }
 
 func cleanupMatrixResources(t *testing.T, tc *e2e.TestContext, namespace, rayJobName string) {
@@ -665,20 +533,20 @@ func TestRayVersion(t *testing.T) {
 }
 
 func TestEligibleForSchedulerRecovery(t *testing.T) {
-	eligible := schedulerRecoveryState{
-		totalWorkers:          16,
-		runningWorkers:        15,
-		pendingWorkers:        1,
-		runningOnTarget:       7,
-		runningOnOtherNodes:   8,
-		requestedGPUsOnTarget: 7,
-		pendingGPURequest:     1,
-		targetAllocatableGPUs: 8,
-		hasInsufficientEvent:  true,
+	eligible := e2e.SchedulerRecoveryObservation{
+		TotalWorkers:          16,
+		RunningWorkers:        15,
+		PendingWorkers:        1,
+		RunningOnTarget:       7,
+		RunningOnOtherNodes:   8,
+		RequestedGPUsOnTarget: 7,
+		PendingGPURequest:     1,
+		TargetAllocatableGPUs: 8,
+		HasInsufficientEvent:  true,
 	}
 	require.True(t, eligibleForSchedulerRecovery(16, 8, eligible))
 
-	eligible.pendingGPURequest = 2
+	eligible.PendingGPURequest = 2
 	require.False(t, eligibleForSchedulerRecovery(16, 8, eligible))
 }
 

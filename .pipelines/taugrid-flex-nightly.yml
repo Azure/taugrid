@@ -47,6 +47,8 @@ variables:
     value: "2"
   - name: FINEWEB_TRAIN_STEPS
     value: "2"
+  - name: FINEWEB_CHECKPOINT_INTERVAL
+    value: "1"
   - name: FINEWEB_RAYJOB_TIMEOUT_MINUTES
     value: "60"
 
@@ -467,6 +469,7 @@ jobs:
             export FINEWEB_TAS_MODE=site
             export FINEWEB_TRAIN_WORKERS=16
             export FINEWEB_TRAIN_STEPS
+            export FINEWEB_CHECKPOINT_INTERVAL
             export FINEWEB_RAYJOB_TIMEOUT_MINUTES
             export RAY_E2E_IMAGE
             if [[ -n "${H200_SCHEDULER_RECOVERY_NODE:-}" &&
@@ -481,6 +484,7 @@ jobs:
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
           H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
           FINEWEB_TRAIN_STEPS: $(FINEWEB_TRAIN_STEPS)
+          FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)
           FINEWEB_RAYJOB_TIMEOUT_MINUTES: $(FINEWEB_RAYJOB_TIMEOUT_MINUTES)
 
       - task: PublishPipelineArtifact@1

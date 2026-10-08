@@ -185,25 +185,25 @@ func TestFineWebSiteTopologyFixture(t *testing.T) {
 }
 
 func TestFineWebSchedulerRecoveryEligibility(t *testing.T) {
-	valid := fineWebSchedulerRecoveryState{
-		totalWorkers:          16,
-		runningWorkers:        15,
-		pendingWorkers:        1,
-		runningOnTarget:       7,
-		runningOnOtherNode:    8,
-		requestedGPUsOnTarget: 7,
-		pendingGPURequest:     1,
-		targetAllocatableGPUs: 8,
-		hasInsufficientEvent:  true,
+	valid := e2e.SchedulerRecoveryObservation{
+		TotalWorkers:          16,
+		RunningWorkers:        15,
+		PendingWorkers:        1,
+		RunningOnTarget:       7,
+		RunningOnOtherNodes:   8,
+		RequestedGPUsOnTarget: 7,
+		PendingGPURequest:     1,
+		TargetAllocatableGPUs: 8,
+		HasInsufficientEvent:  true,
 	}
 	require.True(t, eligibleForFineWebSchedulerRecovery(16, valid))
 
-	cases := map[string]func(*fineWebSchedulerRecoveryState){
-		"all workers already running": func(state *fineWebSchedulerRecoveryState) { state.runningWorkers = 16 },
-		"extra target request":        func(state *fineWebSchedulerRecoveryState) { state.requestedGPUsOnTarget = 8 },
-		"wrong placement":             func(state *fineWebSchedulerRecoveryState) { state.runningOnTarget = 6 },
-		"missing scheduler evidence":  func(state *fineWebSchedulerRecoveryState) { state.hasInsufficientEvent = false },
-		"multi-gpu pending pod":       func(state *fineWebSchedulerRecoveryState) { state.pendingGPURequest = 2 },
+	cases := map[string]func(*e2e.SchedulerRecoveryObservation){
+		"all workers already running": func(state *e2e.SchedulerRecoveryObservation) { state.RunningWorkers = 16 },
+		"extra target request":        func(state *e2e.SchedulerRecoveryObservation) { state.RequestedGPUsOnTarget = 8 },
+		"wrong placement":             func(state *e2e.SchedulerRecoveryObservation) { state.RunningOnTarget = 6 },
+		"missing scheduler evidence":  func(state *e2e.SchedulerRecoveryObservation) { state.HasInsufficientEvent = false },
+		"multi-gpu pending pod":       func(state *e2e.SchedulerRecoveryObservation) { state.PendingGPURequest = 2 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
