@@ -162,6 +162,9 @@ jobs:
           shellcheck cli/scripts/install-tau.sh cli/scripts/test-install-tau.sh
           make -C cli test-installer
 
+      - name: Test release SBOM tooling
+        run: bash scripts/ci/tests/release-sbom_test.sh
+
   build:
     name: Build reproducible release assets
     needs: validate
@@ -199,7 +202,8 @@ jobs:
           wheel_first_dir="$RUNNER_TEMP/tau-python-wheel-a"
           wheel_second_dir="$RUNNER_TEMP/tau-python-wheel-b"
 
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           python -m build --wheel --outdir "$wheel_first_dir" ./sdk/python/python
           python -m build --wheel --outdir "$wheel_second_dir" ./sdk/python/python
 
@@ -267,6 +271,82 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  sbom:
+    name: Generate and validate release SBOMs
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
+
+      - name: Download reproducible release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tau-release-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/tau-release
+
+      - name: Install pinned Syft
+        env:
+          SYFT_VERSION: 1.54.1
+          SYFT_SHA256: c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+        run: |
+          set -euo pipefail
+
+          archive="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          base_url="https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}"
+          curl --fail --location --silent --show-error \
+            --output "$RUNNER_TEMP/$archive" "$base_url/$archive"
+          (
+            cd "$RUNNER_TEMP"
+            printf '%s  %s\n' "$SYFT_SHA256" "$archive" > syft.checksum
+            sha256sum --check syft.checksum
+            mkdir -p syft-bin
+            tar -xzf "$archive" -C syft-bin syft
+          )
+          "$RUNNER_TEMP/syft-bin/syft" version
+
+      - name: Resolve immutable images and generate SPDX SBOMs
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+
+          release_dir="$RUNNER_TEMP/tau-release"
+          commit="$(git rev-parse HEAD)"
+          generated_at="$(
+            date -u -d "@$(git show -s --format=%ct HEAD)" '+%Y-%m-%dT%H:%M:%SZ'
+          )"
+          python3 scripts/ci/release_sbom.py image-specs \
+            --repo-root . \
+            --output "$RUNNER_TEMP/tagged-images.json"
+          python3 scripts/ci/release_sbom.py resolve-images \
+            --input "$RUNNER_TEMP/tagged-images.json" \
+            --output "$RUNNER_TEMP/resolved-images.json" \
+            --attempts 20 \
+            --delay 30
+          python3 scripts/ci/release_sbom.py generate \
+            --syft "$RUNNER_TEMP/syft-bin/syft" \
+            --release-dir "$release_dir" \
+            --images "$RUNNER_TEMP/resolved-images.json" \
+            --release-tag "$RELEASE_TAG" \
+            --source-commit "$commit" \
+            --generated-at "$generated_at"
+          python3 scripts/ci/release_sbom.py validate --release-dir "$release_dir"
+          (cd "$release_dir" && sha256sum --check SHA256SUMS)
+
+      - name: Upload SBOM-enriched release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tau-release-sbom-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/tau-release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   validate-windows-assets:
     name: Validate Windows release assets
     needs: build
@@ -305,6 +385,7 @@ jobs:
       - validate
       - gates
       - build
+      - sbom
       - validate-windows-assets
     runs-on: ubuntu-latest
     permissions:
@@ -318,7 +399,7 @@ jobs:
       - name: Download validated release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: tau-release-${{ env.RELEASE_TAG }}
+          name: tau-release-sbom-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release
 
       - name: Download validated release notes
@@ -369,6 +450,7 @@ jobs:
           }
 
           release_dir="$RUNNER_TEMP/tau-release"
+          python3 scripts/ci/release_sbom.py validate --release-dir "$release_dir"
           (cd "$release_dir" && shasum -a 256 --check SHA256SUMS)
 
           shopt -s nullglob
@@ -377,26 +459,9 @@ jobs:
             echo "expected exactly one Tau SDK wheel" >&2
             exit 1
           fi
-          wheel_asset="$(basename "${wheel_assets[0]}")"
 
-          expected=(
-            LICENSE
-            SHA256SUMS
-            install.sh
-            install.ps1
-            tau-darwin-amd64
-            tau-darwin-arm64
-            tau-gen-darwin-amd64
-            tau-gen-darwin-arm64
-            tau-gen-linux-amd64
-            tau-gen-linux-arm64
-            tau-linux-amd64
-            tau-linux-arm64
-            tau-windows-amd64.exe
-            tau-gen-windows-amd64.exe
-            "$wheel_asset"
-          )
-          printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
+          python3 scripts/ci/release_sbom.py expected-assets \
+            --release-dir "$release_dir" > "$RUNNER_TEMP/expected-assets"
           find "$release_dir" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/local-assets"
           diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/local-assets"
 
@@ -481,6 +546,7 @@ jobs:
               > "$verify_dir/$asset_name"
             cmp "$release_dir/$asset_name" "$verify_dir/$asset_name"
           done < "$RUNNER_TEMP/github-assets.tsv"
+          python3 scripts/ci/release_sbom.py validate --release-dir "$verify_dir"
           (cd "$verify_dir" && shasum -a 256 --check SHA256SUMS)
 
           verify_remote_tag

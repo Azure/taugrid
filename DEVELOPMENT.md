@@ -128,8 +128,13 @@ Container builds must be reproducible from a clean checkout and use public,
 pinned base images. Build the changed image using its Makefile or documented
 BuildKit command, then run its unit and smoke tests.
 
-Do not publish from a contributor pull request. Release workflows own signing,
-SBOM generation, vulnerability scanning, and promotion to MCR.
+Do not publish from a contributor pull request. External Azure DevOps release
+pipelines publish images to the backing registry and syndicate them to MCR.
+The GitHub release workflow waits for the coordinated public image tags,
+resolves their immutable OCI image-index and Linux amd64/arm64 platform
+manifest digests, and generates platform-specific SPDX JSON SBOM release
+assets. It does not build or push release images, publish OCI referrers, or
+sign them.
 
 ## Portable Integration Tests
 
