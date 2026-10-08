@@ -14,6 +14,7 @@ import (
 
 type workspacePlacement struct {
 	Workspace    string
+	WorkspaceUID string
 	Namespace    string
 	LocalQueue   string
 	ClusterQueue string
@@ -37,6 +38,7 @@ func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspacecon
 
 	placement := workspacePlacement{
 		Workspace:    strings.TrimSpace(w.Metadata.Name),
+		WorkspaceUID: strings.TrimSpace(w.Metadata.UID),
 		Namespace:    firstNonEmpty(w.Status.Target.ResolvedNamespace, w.Spec.Target.Namespace, w.Metadata.Name),
 		LocalQueue:   firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue),
 		ClusterQueue: strings.TrimSpace(w.Status.Queue.ClusterQueue),

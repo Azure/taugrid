@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
@@ -124,15 +125,25 @@ func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alph
 		if workspace.Spec.TeamRef == nil || workspace.Spec.TeamRef.Name != team.Name {
 			continue
 		}
-		for _, quota := range workspace.Spec.Quota {
-			key := quotaKey(quota)
+		guarantees, err := r.effectiveWorkspaceGuarantees(ctx, workspace)
+		if err != nil {
+			return nil, err
+		}
+		for key, guarantee := range guarantees {
 			available, ok := remaining[key]
 			if !ok {
-				return nil, fmt.Errorf("workspace %q requests flavor %q resource %q outside team quota", workspace.Name, quota.Flavor, quota.Resource)
+				resourceName, flavor, _ := strings.Cut(key, "\x00")
+				return nil, fmt.Errorf(
+					"workspace %q has an applied or requested guarantee for flavor %q resource %q outside team quota",
+					workspace.Name,
+					flavor,
+					resourceName,
+				)
 			}
-			available.NominalQuota.Sub(quota.NominalQuota)
+			available.NominalQuota.Sub(guarantee)
 			if available.NominalQuota.Sign() < 0 {
-				return nil, fmt.Errorf("workspace guarantees exceed team quota for flavor %q resource %q", quota.Flavor, quota.Resource)
+				resourceName, flavor, _ := strings.Cut(key, "\x00")
+				return nil, fmt.Errorf("workspace guarantees exceed team quota for flavor %q resource %q", flavor, resourceName)
 			}
 			remaining[key] = available
 		}
@@ -142,6 +153,41 @@ func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alph
 		out = append(out, quota)
 	}
 	return out, nil
+}
+
+func (r *TauTeamReconciler) effectiveWorkspaceGuarantees(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) (map[string]resource.Quantity, error) {
+	effective := make(map[string]resource.Quantity, len(workspace.Spec.Quota))
+	for _, quota := range workspace.Spec.Quota {
+		effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+	}
+
+	queue := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return effective, nil
+		}
+		return nil, err
+	}
+	labels := queue.GetLabels()
+	if labels[labelManagedBy] != labelManagedByValue || labels[labelWorkspace] != workspace.Name {
+		return nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
+	}
+	if ownerUID := queue.GetAnnotations()[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
+		return nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
+	}
+	applied, err := clusterQueueNominalQuota(queue)
+	if err != nil {
+		return nil, err
+	}
+	for key, quantity := range applied {
+		if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
+			effective[key] = quantity.DeepCopy()
+		}
+	}
+	return effective, nil
 }
 
 func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.TauTeam) (ctrl.Result, error) {

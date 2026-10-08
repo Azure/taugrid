@@ -272,6 +272,14 @@ func validateClusterQueueQuotaReduction(existing, desired *unstructured.Unstruct
 }
 
 func clusterQueueMaximumQuota(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	return clusterQueueQuota(queue, true)
+}
+
+func clusterQueueNominalQuota(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	return clusterQueueQuota(queue, false)
+}
+
+func clusterQueueQuota(queue *unstructured.Unstructured, includeBorrowing bool) (map[string]resource.Quantity, error) {
 	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
 	if err != nil || !found {
 		return nil, fmt.Errorf("ClusterQueue %q has no readable resourceGroups", queue.GetName())
@@ -306,7 +314,12 @@ func clusterQueueMaximumQuota(queue *unstructured.Unstructured) (map[string]reso
 				if err != nil {
 					return nil, fmt.Errorf("ClusterQueue %q has invalid nominal quota: %w", queue.GetName(), err)
 				}
-				if borrowing := strings.TrimSpace(fmt.Sprint(quota["borrowingLimit"])); borrowing != "" && borrowing != "<nil>" {
+				if includeBorrowing {
+					borrowing := strings.TrimSpace(fmt.Sprint(quota["borrowingLimit"]))
+					if borrowing == "" || borrowing == "<nil>" {
+						maximums[resourceName+"\x00"+flavorName] = nominal
+						continue
+					}
 					limit, err := resource.ParseQuantity(borrowing)
 					if err != nil {
 						return nil, fmt.Errorf("ClusterQueue %q has invalid borrowing limit: %w", queue.GetName(), err)

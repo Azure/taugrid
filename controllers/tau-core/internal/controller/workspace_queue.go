@@ -145,6 +145,18 @@ func (r *TauWorkspaceReconciler) reconcileQueue(ctx context.Context, workspace *
 		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue}, false,
 			fmt.Sprintf("LocalQueue %q does not reference a ClusterQueue", workspace.Spec.Queue)
 	}
+	if workspace.Spec.TeamRef != nil && clusterQueueName != desiredClusterQueue {
+		return tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName,
+			}, false,
+			fmt.Sprintf(
+				"LocalQueue %q targets ClusterQueue %q, but team-backed TauWorkspace %q requires %q; update or remove the LocalQueue before migration",
+				workspace.Spec.Queue,
+				clusterQueueName,
+				workspace.Name,
+				desiredClusterQueue,
+			)
+	}
 	clusterQueue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
 		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName}, false,
@@ -171,15 +183,38 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if err := teamReconciler.validateTeamCapacity(ctx, &team); err != nil {
 		return "", err
 	}
-	if _, err := teamReconciler.sharedTeamQuota(ctx, &team); err != nil {
+	sharedQuota, err := teamReconciler.sharedTeamQuota(ctx, &team)
+	if err != nil {
 		return "", err
 	}
 	if err := validateQuotaFlavors(ctx, r.Client, workspace.Spec.Quota); err != nil {
 		return "", err
 	}
+	if err := reconcileManagedUnstructured(
+		ctx,
+		r.Client,
+		desiredTeamCohort(&team, sharedQuota),
+		labelTeam,
+		team.Name,
+	); err != nil {
+		return "", fmt.Errorf("reconcile team Cohort before workspace quota: %w", err)
+	}
 	queue := desiredWorkspaceClusterQueue(workspace)
 	if err := reconcileManagedUnstructured(ctx, r.Client, queue, labelWorkspace, workspace.Name); err != nil {
 		return "", fmt.Errorf("reconcile workspace ClusterQueue: %w", err)
+	}
+	sharedQuota, err = teamReconciler.sharedTeamQuota(ctx, &team)
+	if err != nil {
+		return "", err
+	}
+	if err := reconcileManagedUnstructured(
+		ctx,
+		r.Client,
+		desiredTeamCohort(&team, sharedQuota),
+		labelTeam,
+		team.Name,
+	); err != nil {
+		return "", fmt.Errorf("reconcile team Cohort after workspace quota: %w", err)
 	}
 	return queue.GetName(), nil
 }

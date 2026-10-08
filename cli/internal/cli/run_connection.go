@@ -274,9 +274,25 @@ func applyLiveRunConnection(
 			connected,
 		)
 	}
+	connection = connectionForWorkspaceSelection(connection, expectedWorkspace)
 	options.workspace = expectedWorkspace
 	options.kubeContext = connection.ContextName
 	return options, connection, nil
+}
+
+func connectionForWorkspaceSelection(
+	connection workspaceconnection.ActiveConnection,
+	workspace string,
+) workspaceconnection.ActiveConnection {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" || workspace == strings.TrimSpace(connection.Workspace) {
+		return connection
+	}
+	connection.Workspace = workspace
+	connection.WorkspaceUID = ""
+	connection.Namespace = ""
+	connection.Queue = ""
+	return connection
 }
 
 func applyActivatedRunConnection(
@@ -562,6 +578,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 		}
 		source.Catalog = true
 		source.Project = project.Name
+		source.Workspace = project.Workspace
 		source.Discovery = &project.Connection
 	} else if strings.TrimSpace(projectName) != "" {
 		return "", "", nil, fmt.Errorf("--project requires %s at the Git worktree root", projectcatalog.Filename)
@@ -618,19 +635,55 @@ func resolveRunLifecycleConnectionFromSource(
 		}
 		return "", "", nil, err
 	}
-	if !namespaceExplicit {
-		namespace = connection.Namespace
-	}
-	resolvedNamespace, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
-	if err != nil {
-		return "", "", nil, err
-	}
 	restore, err := useKubeconfig(connection.KubeconfigPath)
 	if err != nil {
 		return "", "", nil, err
 	}
+	if workspaceName := strings.TrimSpace(source.Workspace); workspaceName != "" {
+		fetch := fetchWorkspace
+		if runLifecycleWorkspaceFetcherOverride != nil {
+			fetch = runLifecycleWorkspaceFetcherOverride
+		}
+		selectedConnection := connectionForWorkspaceSelection(connection, workspaceName)
+		workspaceStatus, fetchErr := fetch(
+			cmd,
+			connection.ContextName,
+			systemNamespaceForConnection(cmd, connection),
+			workspaceName,
+		)
+		if fetchErr != nil {
+			restore()
+			return "", "", nil, fetchErr
+		}
+		placement, placementErr := resolveWorkspacePlacement(workspaceStatus, selectedConnection)
+		if placementErr != nil {
+			restore()
+			return "", "", nil, placementErr
+		}
+		if explicitNamespace := strings.TrimSpace(namespace); namespaceExplicit &&
+			explicitNamespace != "" &&
+			explicitNamespace != placement.Namespace {
+			restore()
+			return "", "", nil, fmt.Errorf(
+				"namespace %q conflicts with TauWorkspace %q target namespace %q",
+				explicitNamespace,
+				placement.Workspace,
+				placement.Namespace,
+			)
+		}
+		namespace = placement.Namespace
+	} else if !namespaceExplicit {
+		namespace = connection.Namespace
+	}
+	resolvedNamespace, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
+	if err != nil {
+		restore()
+		return "", "", nil, err
+	}
 	return connection.ContextName, resolvedNamespace, restore, nil
 }
+
+var runLifecycleWorkspaceFetcherOverride runLifecycleWorkspaceFetcher
 
 // resolveWorkspaceControlPlaneConnection gives the `tau workspace` read verbs
 // the same descriptor-first cluster resolution the `tau run` lifecycle verbs

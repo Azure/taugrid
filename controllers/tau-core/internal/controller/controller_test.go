@@ -1391,9 +1391,42 @@ func TestWorkspaceReconcileRestoresOwnedLocalQueueClusterQueue(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: "aurora"}, got); err != nil {
 		t.Fatalf("Get LocalQueue: %v", err)
 	}
+
 	clusterQueue, _, _ := unstructured.NestedString(got.Object, "spec", "clusterQueue")
 	if clusterQueue != "aurora" {
 		t.Fatalf("owned LocalQueue clusterQueue = %q, want restored to aurora", clusterQueue)
+	}
+}
+
+func TestTeamWorkspaceRejectsExternalLocalQueueUsingDifferentClusterQueue(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	localQueue := testLocalQueue("aurora", "aurora", "external-cq")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, team, flavor, localQueue, testClusterQueue("external-cq")).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	status, ready, message := reconciler.reconcileQueue(ctx, workspace, "aurora")
+	if ready {
+		t.Fatalf("queue unexpectedly Ready: %#v", status)
+	}
+	if !strings.Contains(message, `requires "tau-ws-aurora"`) {
+		t.Fatalf("queue message = %q, want managed ClusterQueue requirement", message)
+	}
+	if status.ClusterQueue != "external-cq" {
+		t.Fatalf("reported ClusterQueue = %q, want external-cq", status.ClusterQueue)
 	}
 }
 
