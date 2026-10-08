@@ -11,22 +11,24 @@ aliases:
 Prerequisites:
 
 - The Tau CLI is installed.
-- The repository contains a
-  [workspace connection](../../reference/glossary/#workspace-connection) and a
-  checked-in [target](../../reference/glossary/#target), such as
-  `tau/train.yaml`.
+- The repository contains a checked-in
+  [target](../../reference/glossary/#target), such as `tau/train.yaml`, and
+  either a portable
+  [workspace connection](../../reference/glossary/#workspace-connection) or a
+  local assignment created with `tau workspace connection assign`.
 - The platform workspace reports Ready.
 
 `tau run` is the config-first entry point. Its optional positional `TARGET`
 argument resolves to a checked-in `tau/<target>.yaml` file. See the
 [direct run config reference](../../reference/run-config/) for the full
-`tau.yaml` field set. `tau run` automatically discovers the checked-in
-workspace connection.
+`tau.yaml` field set. `tau run` automatically discovers the checked-in descriptor or exact local
+project assignment.
 
 Validate before submitting a real workload:
 
 ```bash
 cd <research-repository>
+tau workspace connection inspect
 tau workspace connection
 tau run validate --config tau/train.yaml
 tau run train --dry-run=client
@@ -35,6 +37,10 @@ tau run train
 
 `tau workspace connection` verifies the repository's configured workspace,
 credentials, LocalQueue, and authorization without submitting a workload.
+If `inspect` reports that no connection is configured, run
+`tau workspace connection assign` to select interactively, or use
+`tau workspace connection assign <workspace> --context <context>` in
+automation. The assignment contains no credentials and stays outside Git.
 `tau run validate` is the offline schema check. In a connected repository,
 `--dry-run=client` activates the workspace connection and reads the cluster's
 workload-profile catalog, but does not submit the rendered workload. Use

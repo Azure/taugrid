@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Azure/taugrid/cli/internal/onboarding"
-	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
 
@@ -21,16 +20,18 @@ func newWorkspaceConnectionCmd() *cobra.Command {
 }
 
 func newWorkspaceConnectionCmdWithEnsurer(ensurer runConnectionEnsurer) *cobra.Command {
+	var projectName string
 	cmd := &cobra.Command{
 		Use:   "connection [PATH]",
 		Short: "Connect this project to its configured Tau workspace",
-		Long: `Resolve this project's checked-in workspace connection and verify it.
+		Long: `Resolve this project's effective workspace connection and verify it.
 
-By default Tau resolves credentials, contacts Kubernetes, verifies the
-TauWorkspace, LocalQueue, and authorization contract, and stores an isolated
-connection for later commands. A repository's first connection must be reviewed
-and trusted from an interactive terminal before Tau accesses credentials or the
-cluster.`,
+The effective connection is a checked-in descriptor when present, otherwise
+the exact machine-local project assignment created by the assign subcommand.
+Tau resolves credentials, contacts Kubernetes, verifies the TauWorkspace,
+LocalQueue, and authorization contract, and stores an isolated connection for
+later commands. A repository's first connection must be reviewed and trusted
+from an interactive terminal before Tau accesses credentials or the cluster.`,
 		Example: `  tau workspace connection
   tau workspace connection ./my-project`,
 		Args: cobra.MaximumNArgs(1),
@@ -39,7 +40,7 @@ cluster.`,
 			if err != nil {
 				return err
 			}
-			project, discovery, err := resolveProjectConnection(start)
+			target, discovery, _, err := effectiveWorkspaceConnection(start, projectName)
 			if err != nil {
 				return err
 			}
@@ -50,15 +51,21 @@ cluster.`,
 			connection, err := ensureRunConnection(cmd.Context(), activeEnsurer, runConnectionSource{
 				StartDir:  start,
 				Discovery: &discovery,
-				Project:   project,
+				Project:   target.Project,
 			})
 			if err != nil {
 				return onboarding.Explain(err)
 			}
-			printActiveConnection(cmd, project, displayConnectionPath(discovery), connection)
+			printActiveConnection(cmd, target.Project, displayConnectionPath(discovery), connection)
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&projectName, "project", "", "Tau project name in tau.projects.yaml")
+	cmd.AddCommand(
+		newWorkspaceConnectionAssignCmd(),
+		newWorkspaceConnectionInspectCmd(),
+		newWorkspaceConnectionClearCmd(),
+	)
 	return cmd
 }
 
@@ -67,22 +74,6 @@ func connectionStartPath(args []string) (string, error) {
 		return args[0], nil
 	}
 	return os.Getwd()
-}
-
-func resolveProjectConnection(start string) (string, workspaceconnection.Discovery, error) {
-	repository, err := projectcatalog.Discover(start)
-	if err != nil {
-		return "", workspaceconnection.Discovery{}, err
-	}
-	if repository.Catalog == nil {
-		discovery, err := workspaceconnection.Discover(start)
-		return "", discovery, err
-	}
-	project, err := repository.Catalog.SelectLifecycleProject("", start)
-	if err != nil {
-		return "", workspaceconnection.Discovery{}, fmt.Errorf("%w; pass a path inside the intended project", err)
-	}
-	return project.Name, project.Connection, nil
 }
 
 func printActiveConnection(cmd *cobra.Command, project, descriptorPath string, connection workspaceconnection.ActiveConnection) {

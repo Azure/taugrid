@@ -136,12 +136,6 @@ projects:
 		),
 		"backslash path": strings.Replace(valid, "projects/alpha", `projects\alpha`, 1),
 		"missing path":   strings.Replace(valid, "    path: projects/alpha\n", "", 1),
-		"missing connection": strings.Replace(
-			valid,
-			"    connection: connections/alpha.yaml\n",
-			"",
-			1,
-		),
 	}
 
 	names := make([]string, 0, len(tests))
@@ -155,6 +149,20 @@ projects:
 				t.Fatalf("expected strict parse failure for:\n%s", tests[name])
 			}
 		})
+	}
+}
+
+func TestCatalogAllowsProjectWithoutCheckedInConnection(t *testing.T) {
+	spec, err := Parse([]byte(`schema: tau.projects.v1
+projects:
+  alpha:
+    path: projects/alpha
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Projects["alpha"].Connection != "" {
+		t.Fatalf("connection = %q", spec.Projects["alpha"].Connection)
 	}
 }
 

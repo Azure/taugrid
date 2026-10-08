@@ -56,15 +56,16 @@ type Catalog struct {
 }
 
 type Project struct {
-	Name               string
-	Path               string
-	LexicalRoot        string
-	Root               string
-	ConnectionPath     string
-	Connection         workspaceconnection.Discovery
-	Targets            map[string]string
-	DefaultConfigPath  string
-	defaultConfigCount int
+	Name                 string
+	Path                 string
+	LexicalRoot          string
+	Root                 string
+	ConnectionPath       string
+	Connection           workspaceconnection.Discovery
+	ConnectionConfigured bool
+	Targets              map[string]string
+	DefaultConfigPath    string
+	defaultConfigCount   int
 }
 
 // Parse decodes the strict, versioned catalog schema.
@@ -101,8 +102,10 @@ func Parse(raw []byte) (Spec, error) {
 		if err := validateRelativePath(project.Path); err != nil {
 			return Spec{}, fmt.Errorf("project %q path: %w", name, err)
 		}
-		if err := validateRelativePath(project.Connection); err != nil {
-			return Spec{}, fmt.Errorf("project %q connection: %w", name, err)
+		if strings.TrimSpace(project.Connection) != "" {
+			if err := validateRelativePath(project.Connection); err != nil {
+				return Spec{}, fmt.Errorf("project %q connection: %w", name, err)
+			}
 		}
 	}
 	return spec, nil
@@ -426,51 +429,53 @@ func loadProject(
 		)
 	}
 
-	if gitlink, found, gitlinkErr := gitlinks.AtOrAbove(spec.Connection); gitlinkErr != nil {
-		return nil, fmt.Errorf("project %q connection: %w", name, gitlinkErr)
-	} else if found {
-		return nil, fmt.Errorf("project %q connection %q is at or beneath Git submodule %q", name, spec.Connection, gitlink)
-	}
-	connectionLexical, connectionReal, connectionInfo, err := resolveCatalogPath(worktreeLexicalRoot, worktreeRoot, spec.Connection)
-	if err != nil {
-		return nil, fmt.Errorf("project %q connection: %w", name, err)
-	}
-	if !connectionInfo.Mode().IsRegular() {
-		return nil, fmt.Errorf("project %q connection %s is not a regular file", name, connectionLexical)
-	}
-	connectionBoundary, err := repository.Resolve(connectionReal)
-	if err != nil {
-		return nil, fmt.Errorf("project %q connection: %w", name, err)
-	}
-	sameConnectionRoot := false
-	if connectionBoundary.Git {
-		sameConnectionRoot, err = repository.SamePath(connectionBoundary.Root, worktreeRoot)
-		if err != nil {
-			return nil, fmt.Errorf("project %q connection: compare Git worktree: %w", name, err)
-		}
-	}
-	if !connectionBoundary.Git || !sameConnectionRoot {
-		return nil, fmt.Errorf(
-			"project %q connection %s belongs to Git worktree %s, not catalog worktree %s",
-			name,
-			connectionLexical,
-			connectionBoundary.Root,
-			worktreeRoot,
-		)
-	}
-	connection, err := workspaceconnection.LoadFile(connectionLexical, worktreeLexicalRoot)
-	if err != nil {
-		return nil, fmt.Errorf("project %q connection: %w", name, err)
-	}
-
 	project := &Project{
-		Name:           name,
-		Path:           spec.Path,
-		LexicalRoot:    lexicalRoot,
-		Root:           realRoot,
-		ConnectionPath: connectionReal,
-		Connection:     connection,
-		Targets:        map[string]string{},
+		Name:        name,
+		Path:        spec.Path,
+		LexicalRoot: lexicalRoot,
+		Root:        realRoot,
+		Targets:     map[string]string{},
+	}
+	if strings.TrimSpace(spec.Connection) != "" {
+		if gitlink, found, gitlinkErr := gitlinks.AtOrAbove(spec.Connection); gitlinkErr != nil {
+			return nil, fmt.Errorf("project %q connection: %w", name, gitlinkErr)
+		} else if found {
+			return nil, fmt.Errorf("project %q connection %q is at or beneath Git submodule %q", name, spec.Connection, gitlink)
+		}
+		connectionLexical, connectionReal, connectionInfo, err := resolveCatalogPath(worktreeLexicalRoot, worktreeRoot, spec.Connection)
+		if err != nil {
+			return nil, fmt.Errorf("project %q connection: %w", name, err)
+		}
+		if !connectionInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("project %q connection %s is not a regular file", name, connectionLexical)
+		}
+		connectionBoundary, err := repository.Resolve(connectionReal)
+		if err != nil {
+			return nil, fmt.Errorf("project %q connection: %w", name, err)
+		}
+		sameConnectionRoot := false
+		if connectionBoundary.Git {
+			sameConnectionRoot, err = repository.SamePath(connectionBoundary.Root, worktreeRoot)
+			if err != nil {
+				return nil, fmt.Errorf("project %q connection: compare Git worktree: %w", name, err)
+			}
+		}
+		if !connectionBoundary.Git || !sameConnectionRoot {
+			return nil, fmt.Errorf(
+				"project %q connection %s belongs to Git worktree %s, not catalog worktree %s",
+				name,
+				connectionLexical,
+				connectionBoundary.Root,
+				worktreeRoot,
+			)
+		}
+		connection, err := workspaceconnection.LoadFile(connectionLexical, worktreeLexicalRoot)
+		if err != nil {
+			return nil, fmt.Errorf("project %q connection: %w", name, err)
+		}
+		project.ConnectionPath = connectionReal
+		project.Connection = connection
+		project.ConnectionConfigured = true
 	}
 	if err := project.loadTargets(worktreeLexicalRoot, worktreeRoot, gitlinks); err != nil {
 		return nil, err
