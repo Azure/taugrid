@@ -4,9 +4,11 @@
 
 set -euo pipefail
 
-readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly REPO_ROOT
 readonly PIPELINE="${REPO_ROOT}/.pipelines/taugrid-flex-nightly.yml"
 readonly PREFLIGHT="${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-preflight.sh"
+readonly REPORTER="${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-report.sh"
 readonly QUEUE_OVERLAY="${REPO_ROOT}/cluster-overlays/queues/shared-gpu-queue.yaml"
 
 fail() {
@@ -18,6 +20,7 @@ fail() {
 [ ! -e "${REPO_ROOT}/.github/workflows/taugrid-flex-nightly.yml" ] ||
   fail "nightly execution must not retain a GitHub Actions workflow"
 [ -x "$PREFLIGHT" ] || fail "preflight must be executable"
+[ -x "$REPORTER" ] || fail "nightly report generator must be executable"
 [ -f "$QUEUE_OVERLAY" ] || fail "shared GPU queue overlay is missing"
 
 grep -Fq 'readonly A100_SITE="${FLEX_NIGHTLY_A100_SITE:-}"' "$PREFLIGHT" ||
@@ -91,6 +94,22 @@ grep -Fq "trap cleanup EXIT" "$PIPELINE" ||
   fail "pipeline must retain fail-safe cleanup traps"
 grep -Fq "condition: always()" "$PIPELINE" ||
   fail "pipeline must publish diagnostics after failures"
+grep -Fq '##vso[task.uploadsummary]' "$PIPELINE" ||
+  fail "pipeline must upload the Markdown report to the Azure DevOps run summary"
+grep -Fq 'taugrid-flex-nightly-report.md' "$PIPELINE" ||
+  fail "pipeline must publish a human-readable nightly report"
+grep -Fq 'artifact: taugrid-flex-nightly-report-' "$PIPELINE" ||
+  fail "pipeline must publish the Markdown report in a pipeline artifact"
+grep -Fq 'PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]' "$PIPELINE" ||
+  fail "nightly report must retain preflight outcome after failures"
+grep -Fq 'MATRIX_JOB_RESULT: $[ dependencies.hardware_matrix.result ]' "$PIPELINE" ||
+  fail "nightly report must retain matrix outcome after failures"
+grep -Fq 'RDMA_JOB_RESULT: $[ dependencies.h200_rdma.result ]' "$PIPELINE" ||
+  fail "nightly report must retain optional RDMA outcome"
+grep -Fq 'postflight-status.json' "$PIPELINE" ||
+  fail "hardware matrix cleanup must record postflight status"
+[ "$(grep -Fc "done < <(jq -c '.targets[]' \"\${contract}\")" "$PIPELINE")" -eq 1 ] ||
+  fail "disabled hardware targets must produce explicit skipped matrix cases"
 if grep -Eq 'helm (upgrade|install).*(kueue|kuberay|tau-core-controller)' "$PIPELINE"; then
   fail "pipeline must not install colliding cluster-scoped controllers"
 fi
