@@ -55,8 +55,9 @@ grep -Fq "gpu-metrics-collector docker-push" "$PIPELINE" ||
   fail "pipeline must publish the GPU collector from current main"
 grep -Fq "az acr repository show" "$PIPELINE" ||
   fail "pipeline must verify published image digests"
-grep -Fq "az aks check-acr" "$PIPELINE" ||
-  fail "deployment must verify that the cluster can pull nightly images"
+if grep -Fq "az aks check-acr" "$PIPELINE"; then
+  fail "the TME deployment identity must not query a cross-tenant corporate ACR"
+fi
 
 grep -Fq 'helm get values "${TAUGRID_RELEASE}"' "$PIPELINE" ||
   fail "deployment must preserve live operator-supplied values"

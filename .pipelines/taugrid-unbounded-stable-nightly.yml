@@ -186,7 +186,6 @@ jobs:
                   image_contract="$(Pipeline.Workspace)/taugrid-unbounded-stable-images/images.json"
                   test -s "${image_contract}"
                   registry="$(jq -r '.registry' "${image_contract}")"
-                  acr_name="${registry%.azurecr.io}"
                   repository_prefix="$(jq -r '.repository_prefix' "${image_contract}")"
                   image_tag="$(jq -r '.tag' "${image_contract}")"
                   source_version="$(jq -r '.source_version' "${image_contract}")"
@@ -268,10 +267,6 @@ jobs:
                     --overwrite-existing
                   kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
                   kubectl --context unbounded-stable version
-                  az aks check-acr \
-                    --resource-group "${UNBOUNDED_STABLE_RESOURCE_GROUP}" \
-                    --name "${UNBOUNDED_STABLE_CLUSTER_NAME}" \
-                    --acr "${acr_name}"
 
                   previous_revision="0"
                   if helm status "${TAUGRID_RELEASE}" \
