@@ -168,7 +168,7 @@ var fieldCatalog = map[string]FieldInfo{
 	"execution":                       {Status: statusSupported, Description: "Typed execution topology for the workload."},
 	"execution.launcher":              {Status: statusSupported, Description: "Process launcher, scoped per workload kind. engine: job accepts python | torchrun (default: python). engine: rayjob accepts ray-train | ray-tune (default: ray-train).", Values: []string{"python", "torchrun", "ray-train", "ray-tune"}, Notes: "Cross-engine combinations are rejected: torchrun requires engine: job, ray-train/ray-tune require engine: rayjob."},
 	"execution.processes_per_node":    {Status: statusSupported, Description: "Processes per node (torchrun --nproc_per_node). Requires launcher: torchrun. Validated against resolved GPU count."},
-	"execution.nodes":                 {Status: statusSupported, Description: "Number of nodes for multi-node torchrun (engine: job only). Each node runs as one pod in a Kubernetes Indexed Job.", Default: "1"},
+	"execution.nodes":                 {Status: statusSupported, Description: "Number of nodes for multi-node torchrun (engine: job only). Each node runs as one pod in a Kubernetes Indexed Job on a distinct Kubernetes host.", Default: "1"},
 	"execution.metric":                {Status: statusSupported, Description: "Optimization metric name for Ray Tune. Requires launcher: ray-tune."},
 	"execution.mode":                  {Status: statusSupported, Description: "Optimization direction for the metric.", Values: []string{"min", "max"}, Default: "min"},
 	"execution.num_samples":           {Status: statusSupported, Description: "Number of sampled configurations to try. Each list value in configs generates one sample per grid point.", Default: "1"},

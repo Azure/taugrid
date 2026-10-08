@@ -84,16 +84,19 @@ Provider-declared domains may span hosts. The placement does not add
 anti-affinity or guarantee distinct hosts, and insufficient capacity remains
 pending rather than falling back to a network domain or site.
 
-`same-network-domain` requires one shared fabric but does not require one worker
-per host. Full-node GPU requests naturally separate workers when a Node cannot
-fit two of them; smaller workers may co-locate.
+`same-network-domain` requires one shared fabric but does not generally require
+one worker per host. Generic smaller workers may co-locate. Direct Job torchrun
+workloads with `execution.nodes > 1` add required hostname anti-affinity, so
+their rank pods run on distinct Kubernetes hosts within the selected fabric
+domain.
 
 Tau emits a warning when this placement is selected. The request does not
 independently require `tau.azure.com/infiniband=true`: Nodes without
 authoritative shared-fabric metadata receive singleton network domains. A
 multi-host workload remains pending when no one domain has sufficient eligible
-capacity, while workers that all fit on one Node may still run in that Node's
-singleton domain. TauGrid never falls back automatically to `same-site` or
+capacity. Generic workers that all fit on one Node may still run in that Node's
+singleton domain; multi-node direct Job torchrun remains pending until distinct
+hosts are available. TauGrid never falls back automatically to `same-site` or
 `unconstrained`.
 
 ## Current cluster contract

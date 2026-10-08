@@ -1013,6 +1013,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	if o.Nodes > 1 {
 		pod["subdomain"] = o.Name + HeadlessSuffix
+		pod["affinity"] = multiNodeTorchrunAffinity(o.Name)
 	}
 
 	jobSpec := map[string]any{
@@ -1090,6 +1091,24 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"metadata":   metadata,
 		"spec":       jobSpec,
 	}, nil
+}
+
+func multiNodeTorchrunAffinity(jobName string) map[string]any {
+	return map[string]any{
+		"podAntiAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": []any{
+				map[string]any{
+					"labelSelector": map[string]any{
+						"matchLabels": map[string]any{
+							"batch.kubernetes.io/job-name": jobName,
+							workloadmeta.LabelManagedBy:    workloadmeta.ManagedByValue,
+						},
+					},
+					"topologyKey": "kubernetes.io/hostname",
+				},
+			},
+		},
+	}
 }
 
 type storagePlan struct {
