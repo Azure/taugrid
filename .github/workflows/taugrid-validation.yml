@@ -140,7 +140,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: .go-version
+          # go-dcgm requires a newer toolchain only for the health checker.
+          go-version-file: ${{ matrix.module == 'monitoring/gpu-health-checker' && 'monitoring/gpu-health-checker/go.mod' || '.go-version' }}
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: Set up Python
