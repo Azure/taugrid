@@ -3,6 +3,8 @@
 
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS builder
 
+ENV GOTOOLCHAIN=go1.26.9
+
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
 

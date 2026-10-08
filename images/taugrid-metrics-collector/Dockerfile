@@ -3,6 +3,8 @@
 
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1-azurelinux3.0 AS builder
 
+ENV GOTOOLCHAIN=go1.26.9
+
 ARG TARGETOS
 ARG TARGETARCH
 
