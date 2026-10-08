@@ -388,7 +388,56 @@ func TestUnreadyTeamAllowsWorkspaceQuotaReductionToConverge(t *testing.T) {
 	}
 }
 
+func TestUnreadyTeamRejectsNominalIncreaseExchangedForBorrowing(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseDegraded
+	team.Status.ObservedGeneration = team.Generation
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "12", "0", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	setClusterQueueQuotaField(t, queue, "nominalQuota", "4")
+	setClusterQueueQuotaField(t, queue, "borrowingLimit", "8")
+	cohort := desiredTeamCohort(
+		team,
+		[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+	)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flavor, team, workspace, queue, cohort).
+		Build()
+	_, err := newTestWorkspaceReconciler(c).reconcileWorkspaceClusterQueue(ctx, workspace)
+	if err == nil || !strings.Contains(err.Error(), `team "vision" is not Ready`) {
+		t.Fatalf("reconcile error = %v, want unready Team refusal", err)
+	}
+	gotQueue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, gotQueue); err != nil {
+		t.Fatalf("Get ClusterQueue: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotQueue, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "4" {
+		t.Fatalf("workspace nominal quota after refusal = %q, want 4", got)
+	}
+	if got := quotaFromResourceGroups(t, gotQueue, "taugrid-gpu-h200", nvidiaGPUResourceName, "borrowingLimit"); got != "8" {
+		t.Fatalf("workspace borrowing limit after refusal = %q, want 8", got)
+	}
+}
+
 func setClusterQueueNominalQuota(t *testing.T, queue *unstructured.Unstructured, value string) {
+	setClusterQueueQuotaField(t, queue, "nominalQuota", value)
+}
+
+func setClusterQueueQuotaField(
+	t *testing.T,
+	queue *unstructured.Unstructured,
+	field, value string,
+) {
 	t.Helper()
 	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
 	if err != nil || !found {
@@ -399,7 +448,7 @@ func setClusterQueueNominalQuota(t *testing.T, queue *unstructured.Unstructured,
 	flavor := flavors[0].(map[string]any)
 	resources := flavor["resources"].([]any)
 	resourceQuota := resources[0].(map[string]any)
-	resourceQuota["nominalQuota"] = value
+	resourceQuota[field] = value
 	if err := unstructured.SetNestedSlice(queue.Object, groups, "spec", "resourceGroups"); err != nil {
 		t.Fatalf("write ClusterQueue resourceGroups: %v", err)
 	}

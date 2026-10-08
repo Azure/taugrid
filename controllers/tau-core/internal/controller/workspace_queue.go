@@ -10,6 +10,7 @@ import (
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -263,6 +264,17 @@ func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(
 	if strings.TrimSpace(cohort) != teamCohortName(workspace.Spec.TeamRef.Name) {
 		return false, nil
 	}
+	existingNominals, err := clusterQueueNominalQuota(existing)
+	if err != nil {
+		return false, err
+	}
+	desiredNominals, err := clusterQueueNominalQuota(desired)
+	if err != nil {
+		return false, err
+	}
+	if !quotaValuesNonIncreasing(existingNominals, desiredNominals) {
+		return false, nil
+	}
 	existingMaximums, err := clusterQueueMaximumQuota(existing)
 	if err != nil {
 		return false, err
@@ -271,18 +283,19 @@ func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(
 	if err != nil {
 		return false, err
 	}
-	for key, desiredMaximum := range desiredMaximums {
-		existingMaximum, ok := existingMaximums[key]
-		if !ok || desiredMaximum.Cmp(existingMaximum) > 0 {
-			return false, nil
+	return quotaValuesNonIncreasing(existingMaximums, desiredMaximums), nil
+}
+
+func quotaValuesNonIncreasing(
+	existing, desired map[string]resource.Quantity,
+) bool {
+	for key, desiredValue := range desired {
+		existingValue, ok := existing[key]
+		if !ok || desiredValue.Cmp(existingValue) > 0 {
+			return false
 		}
 	}
-	for key, existingMaximum := range existingMaximums {
-		if _, ok := desiredMaximums[key]; !ok && existingMaximum.Sign() != 0 {
-			return true, nil
-		}
-	}
-	return true, nil
+	return true
 }
 
 func newQueueObject(gvk schema.GroupVersionKind) *unstructured.Unstructured {
