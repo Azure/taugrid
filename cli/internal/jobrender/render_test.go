@@ -2807,37 +2807,11 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	if got := templateAnnotations[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
 		t.Errorf("required topology=%v, want tau.azure.com/network-domain", got)
 	}
-	if got := templateAnnotations[runtopology.PodSetSliceRequiredTopologyAnnotation]; got != runtopology.HostnameTopology {
-		t.Errorf("slice topology=%v, want %s", got, runtopology.HostnameTopology)
-	}
-	if got := templateAnnotations[runtopology.PodSetSliceSizeAnnotation]; got != "1" {
-		t.Errorf("slice size=%v, want 1", got)
-	}
 
-	// Verify pod subdomain and distinct-host scheduling contract.
+	// Verify pod subdomain.
 	pod := template["spec"].(map[string]any)
 	if pod["subdomain"] != "ddp-multi-headless" {
 		t.Errorf("subdomain=%v, want ddp-multi-headless", pod["subdomain"])
-	}
-	affinity := pod["affinity"].(map[string]any)
-	podAntiAffinity := affinity["podAntiAffinity"].(map[string]any)
-	required := podAntiAffinity["requiredDuringSchedulingIgnoredDuringExecution"].([]any)
-	if len(required) != 1 {
-		t.Fatalf("required pod anti-affinity terms=%d, want 1", len(required))
-	}
-	term := required[0].(map[string]any)
-	if term["topologyKey"] != "kubernetes.io/hostname" {
-		t.Errorf("anti-affinity topologyKey=%v, want kubernetes.io/hostname", term["topologyKey"])
-	}
-	matchLabels := term["labelSelector"].(map[string]any)["matchLabels"].(map[string]any)
-	if got := matchLabels["batch.kubernetes.io/job-name"]; got != "ddp-multi" {
-		t.Errorf("anti-affinity job selector=%v, want ddp-multi", got)
-	}
-	if got := matchLabels[workloadmeta.LabelManagedBy]; got != workloadmeta.ManagedByValue {
-		t.Errorf("anti-affinity managed-by selector=%v, want %s", got, workloadmeta.ManagedByValue)
-	}
-	if len(matchLabels) != 2 {
-		t.Errorf("anti-affinity selector=%v, want only same Tau Job labels", matchLabels)
 	}
 
 	// Verify torchrun command args.
@@ -2874,45 +2848,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	}
 	if env["OMP_NUM_THREADS"] != "1" {
 		t.Errorf("OMP_NUM_THREADS=%q, want 1", env["OMP_NUM_THREADS"])
-	}
-}
-
-func TestRender_MultiNode_SmallRanksRequestDistinctHostsAtAdmission(t *testing.T) {
-	script := torchrunScript(t)
-	p := multiGPUProfile(1)
-	p.Topology = profile.Topology{
-		Mode:      "fixed",
-		Placement: profile.PlacementSameNetworkDomain,
-	}
-	out, err := Render(p, Options{
-		Name:             "ddp-small-ranks",
-		Namespace:        "tau",
-		ScriptPath:       script,
-		Launcher:         "torchrun",
-		ProcessesPerNode: 1,
-		Nodes:            2,
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-
-	job := parseMultiDocYAML(t, out)[1]
-	template := job["spec"].(map[string]any)["template"].(map[string]any)
-	annotations := template["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if got := annotations[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
-		t.Errorf("required topology=%v, want tau.azure.com/network-domain", got)
-	}
-	if got := annotations[runtopology.PodSetSliceRequiredTopologyAnnotation]; got != runtopology.HostnameTopology {
-		t.Errorf("slice topology=%v, want %s", got, runtopology.HostnameTopology)
-	}
-	if got := annotations[runtopology.PodSetSliceSizeAnnotation]; got != "1" {
-		t.Errorf("slice size=%v, want 1", got)
-	}
-
-	container := template["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
-	requests := container["resources"].(map[string]any)["requests"].(map[string]any)
-	if got := fmt.Sprint(requests["nvidia.com/gpu"]); got != "1" {
-		t.Errorf("GPU request=%v, want one GPU per rank pod", got)
 	}
 }
 
@@ -2999,43 +2934,9 @@ func TestRender_MultiNode_SingleNode_NoIndexedJob(t *testing.T) {
 	if _, ok := jobSpec["completionMode"]; ok {
 		t.Errorf("Nodes=1 should not set completionMode")
 	}
-	pod := jobSpec["template"].(map[string]any)["spec"].(map[string]any)
-	if _, ok := pod["affinity"]; ok {
-		t.Errorf("Nodes=1 should not set affinity")
-	}
-	templateAnnotations, _ := jobSpec["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if _, ok := templateAnnotations[runtopology.PodSetSliceRequiredTopologyAnnotation]; ok {
-		t.Errorf("Nodes=1 should not set pod-set slice topology")
-	}
-	if _, ok := templateAnnotations[runtopology.PodSetSliceSizeAnnotation]; ok {
-		t.Errorf("Nodes=1 should not set pod-set slice size")
-	}
 	s := string(out)
 	if !strings.Contains(s, "--standalone") {
 		t.Errorf("Nodes=1 should use --standalone:\n%s", s)
-	}
-}
-
-func TestRender_PythonJob_NoMultiNodeAffinity(t *testing.T) {
-	out, err := Render(trainProfile(), Options{
-		Name:      "python-job",
-		Namespace: "tau",
-		Command:   []string{"python", "train.py"},
-	})
-	if err != nil {
-		t.Fatalf("render: %v", err)
-	}
-	job := parseYAML(t, out)
-	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
-	if _, ok := pod["affinity"]; ok {
-		t.Errorf("ordinary Python Job should not set affinity")
-	}
-	templateAnnotations, _ := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if _, ok := templateAnnotations[runtopology.PodSetSliceRequiredTopologyAnnotation]; ok {
-		t.Errorf("ordinary Python Job should not set pod-set slice topology")
-	}
-	if _, ok := templateAnnotations[runtopology.PodSetSliceSizeAnnotation]; ok {
-		t.Errorf("ordinary Python Job should not set pod-set slice size")
 	}
 }
 

@@ -992,7 +992,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"labels": podLabels,
 	}
 	correlationAnnotations := workloadmeta.PodCorrelationAnnotations(o.Annotations)
-	if len(correlationAnnotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 || o.Nodes > 1 {
+	if len(correlationAnnotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 {
 		podAnnotations := map[string]any{}
 		for k, v := range correlationAnnotations {
 			podAnnotations[k] = v
@@ -1007,19 +1007,12 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 				podAnnotations[k] = v
 			}
 		}
-		if o.Nodes > 1 {
-			// TAS must account for the distinct-host requirement during
-			// admission; pod anti-affinity alone is applied after assignment.
-			podAnnotations[topology.PodSetSliceRequiredTopologyAnnotation] = topology.HostnameTopology
-			podAnnotations[topology.PodSetSliceSizeAnnotation] = "1"
-		}
 		if len(podAnnotations) > 0 {
 			podMetadata["annotations"] = podAnnotations
 		}
 	}
 	if o.Nodes > 1 {
 		pod["subdomain"] = o.Name + HeadlessSuffix
-		pod["affinity"] = multiNodeTorchrunAffinity(o.Name)
 	}
 
 	jobSpec := map[string]any{
@@ -1097,24 +1090,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"metadata":   metadata,
 		"spec":       jobSpec,
 	}, nil
-}
-
-func multiNodeTorchrunAffinity(jobName string) map[string]any {
-	return map[string]any{
-		"podAntiAffinity": map[string]any{
-			"requiredDuringSchedulingIgnoredDuringExecution": []any{
-				map[string]any{
-					"labelSelector": map[string]any{
-						"matchLabels": map[string]any{
-							"batch.kubernetes.io/job-name": jobName,
-							workloadmeta.LabelManagedBy:    workloadmeta.ManagedByValue,
-						},
-					},
-					"topologyKey": "kubernetes.io/hostname",
-				},
-			},
-		},
-	}
 }
 
 type storagePlan struct {

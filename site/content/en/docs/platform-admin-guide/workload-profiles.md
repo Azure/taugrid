@@ -53,12 +53,8 @@ checked-in Helm, Kustomize, and controller sample declarations identical.
 Accelerator-domain placement selects one provider-declared NVLink/NVL72 island;
 network-domain placement selects one scale-out InfiniBand or RoCE fabric and
 may span accelerator domains. Matching GPU models never imply a shared island.
-Neither placement alone guarantees distinct hosts, and an unavailable shared
-domain remains pending instead of falling back. Direct Job torchrun workloads
-with `execution.nodes > 1` additionally request one-pod hostname slices from
-Kueue TAS and retain hostname anti-affinity, placing each rank pod on a distinct
-Kubernetes host while `same-network-domain` keeps those hosts within one fabric
-domain.
+Neither placement guarantees distinct hosts, and an unavailable shared domain
+remains pending instead of falling back.
 
 Delete old policy ConfigMaps, volume mounts, environment variables, and files
 only after every submitter uses a ready TauCluster profile. There is no
