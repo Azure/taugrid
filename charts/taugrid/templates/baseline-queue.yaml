@@ -53,7 +53,9 @@
 {{- range $resource := $gpuFlavor.resources }}
 {{- $resourceNames = append $resourceNames $resource.name }}
 {{- end }}
-{{- if not (deepEqual (sortAlpha $resourceNames) (sortAlpha $.Values.baselineQueue.gpu.coveredResources)) }}
+{{- $coveredResources := $.Values.baselineQueue.gpu.coveredResources }}
+{{- $coveredWithoutHostSlot := without $coveredResources "tau.azure.com/torchrun-host-slot" }}
+{{- if and (not (deepEqual (sortAlpha $resourceNames) (sortAlpha $coveredResources))) (not (deepEqual (sortAlpha $resourceNames) (sortAlpha $coveredWithoutHostSlot))) }}
 {{- fail (printf "baselineQueue.gpu.flavors[%s].resource names must match baselineQueue.gpu.coveredResources" $gpuFlavor.name) }}
 {{- end }}
 {{- end }}
@@ -150,6 +152,14 @@ spec:
             {{- range $gpuFlavor.resources }}
             - name: {{ .name }}
               nominalQuota: {{ .nominalQuota | quote }}
+            {{- end }}
+            {{- $resourceNames := list }}
+            {{- range $resource := $gpuFlavor.resources }}
+            {{- $resourceNames = append $resourceNames $resource.name }}
+            {{- end }}
+            {{- if and (has "tau.azure.com/torchrun-host-slot" $.Values.baselineQueue.gpu.coveredResources) (not (has "tau.azure.com/torchrun-host-slot" $resourceNames)) }}
+            - name: tau.azure.com/torchrun-host-slot
+              nominalQuota: "0"
             {{- end }}
         {{- end }}
         {{- end }}

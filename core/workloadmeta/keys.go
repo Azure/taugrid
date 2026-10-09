@@ -91,6 +91,11 @@ const (
 	NodeLabelGPUClass = "tau.azure.com/gpu-class"
 )
 
+// Extended resources managed by TauGrid.
+const (
+	ResourceTorchrunHostSlot = "tau.azure.com/torchrun-host-slot"
+)
+
 // GPU resource contract.
 const (
 	LabelGPUCount = "tau.azure.com/gpu-count"

@@ -1,0 +1,213 @@
+/*
+Copyright The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package scheduler
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	testingclock "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	qcache "sigs.k8s.io/kueue/pkg/cache/queue"
+	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
+	tasindexer "sigs.k8s.io/kueue/pkg/controller/tas/indexer"
+	preemptexpectations "sigs.k8s.io/kueue/pkg/scheduler/preemption/expectations"
+	"sigs.k8s.io/kueue/pkg/util/routine"
+	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
+	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
+	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
+	testingnode "sigs.k8s.io/kueue/pkg/util/testingjobs/node"
+)
+
+func TestTauGridHostSlotAssignment(t *testing.T) {
+	const networkLabel = "tau.azure.com/network-domain"
+	gpu := corev1.ResourceName("nvidia.com/gpu")
+	hostSlot := corev1.ResourceName("tau.azure.com/torchrun-host-slot")
+
+	for _, tc := range []struct {
+		name       string
+		enableSlot bool
+		want       string
+	}{
+		{name: "without-host-slot-packs-ranks", want: "ranks=host-a:2"},
+		{name: "capacity-one-host-slot-separates-ranks", enableSlot: true, want: "ranks=host-a:1,host-b:1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			podSet := utiltestingapi.MakePodSet("ranks", 2).
+				RequiredTopologyRequest(networkLabel).
+				Request(gpu, "1")
+			if tc.enableSlot {
+				podSet.Request(hostSlot, "1")
+			}
+			got := runTauGridHostSlotScheduler(t, networkLabel, gpu, hostSlot, tc.enableSlot, []kueue.PodSet{*podSet.Obj()})
+			if got != tc.want {
+				t.Fatalf("topology assignment = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func runTauGridHostSlotScheduler(
+	t *testing.T,
+	networkLabel string,
+	gpu, hostSlot corev1.ResourceName,
+	enableSlot bool,
+	podSets []kueue.PodSet,
+) string {
+	t.Helper()
+	now := time.Now().Truncate(time.Second)
+	ctx, log := utiltesting.ContextWithLog(t)
+
+	topology := utiltestingapi.MakeTopology("taugrid").
+		Levels(networkLabel, corev1.LabelHostname).
+		Obj()
+	flavor := utiltestingapi.MakeResourceFlavor("gpu").
+		NodeLabel("tas-node", "true").
+		TopologyName(topology.Name).
+		Obj()
+	flavorQuotas := utiltestingapi.MakeFlavorQuotas("gpu").Resource(gpu, "10")
+	if enableSlot {
+		flavorQuotas.Resource(hostSlot, "2")
+	}
+	clusterQueue := utiltestingapi.MakeClusterQueue("gpu").
+		ResourceGroup(*flavorQuotas.Obj()).
+		Obj()
+	localQueue := utiltestingapi.MakeLocalQueue("gpu", metav1.NamespaceDefault).
+		ClusterQueue(clusterQueue.Name).
+		Obj()
+	workload := utiltestingapi.MakeWorkload("taugrid-host-slot", metav1.NamespaceDefault).
+		Queue(kueue.LocalQueueName(localQueue.Name)).
+		PodSets(podSets...).
+		Obj()
+
+	makeNode := func(name string) corev1.Node {
+		allocatable := corev1.ResourceList{
+			gpu:                   resource.MustParse("2"),
+			corev1.ResourcePods:   resource.MustParse("10"),
+			corev1.ResourceCPU:    resource.MustParse("8"),
+			corev1.ResourceMemory: resource.MustParse("32Gi"),
+		}
+		if enableSlot {
+			allocatable[hostSlot] = resource.MustParse("1")
+		}
+		return *testingnode.MakeNode(name).
+			Label("tas-node", "true").
+			Label(networkLabel, "net-a").
+			Label(corev1.LabelHostname, name).
+			StatusAllocatable(allocatable).
+			Ready().
+			Obj()
+	}
+	nodes := []corev1.Node{makeNode("host-a"), makeNode("host-b")}
+
+	clientBuilder := utiltesting.NewClientBuilder().
+		WithLists(
+			&kueue.WorkloadList{Items: []kueue.Workload{*workload}},
+			&kueue.TopologyList{Items: []kueue.Topology{*topology}},
+			&corev1.NodeList{Items: nodes},
+			&kueue.LocalQueueList{Items: []kueue.LocalQueue{*localQueue}}).
+		WithObjects(utiltesting.MakeNamespace(metav1.NamespaceDefault)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				ctx context.Context,
+				c client.Client,
+				subResourceName string,
+				obj client.Object,
+				patch client.Patch,
+				opts ...client.SubResourcePatchOption,
+			) error {
+				return utiltesting.TreatSSAAsStrategicMerge(ctx, c, subResourceName, obj, patch, opts...)
+			},
+		}).
+		WithStatusSubresource(&kueue.Workload{}, &kueue.ClusterQueue{}, &kueue.LocalQueue{})
+	_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
+	cl := clientBuilder.Build()
+
+	schedulerCache := schdcache.New(cl)
+	queueManager := qcache.NewManagerForUnitTests(cl, schedulerCache, qcache.WithClock(testingclock.NewFakeClock(now)))
+	for i := range nodes {
+		schedulerCache.TASCache().SyncNode(&nodes[i])
+	}
+	schedulerCache.AddOrUpdateResourceFlavor(log, flavor)
+	schedulerCache.AddOrUpdateTopology(log, topology)
+	if err := schedulerCache.AddClusterQueue(ctx, clusterQueue); err != nil {
+		t.Fatalf("add ClusterQueue to scheduler cache: %v", err)
+	}
+	if err := queueManager.AddClusterQueue(ctx, clusterQueue); err != nil {
+		t.Fatalf("add ClusterQueue to queue manager: %v", err)
+	}
+	if err := cl.Create(ctx, clusterQueue); err != nil {
+		t.Fatalf("create ClusterQueue: %v", err)
+	}
+	if err := queueManager.AddLocalQueue(ctx, localQueue); err != nil {
+		t.Fatalf("add LocalQueue: %v", err)
+	}
+
+	scheduler := New(
+		queueManager,
+		schedulerCache,
+		cl,
+		&utiltesting.EventRecorder{},
+		WithPreemptionExpectations(preemptexpectations.New()),
+	)
+	var wg sync.WaitGroup
+	scheduler.setAdmissionRoutineWrapper(routine.NewWrapper(
+		func() { wg.Add(1) },
+		func() { wg.Done() },
+	))
+
+	scheduleCtx, cancel := context.WithTimeout(ctx, queueingTimeout)
+	defer cancel()
+	go queueManager.CleanUpOnContext(scheduleCtx)
+	scheduler.schedule(scheduleCtx)
+	wg.Wait()
+
+	var got kueue.Workload
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(workload), &got); err != nil {
+		t.Fatalf("get scheduled Workload: %v", err)
+	}
+	if got.Status.Admission == nil {
+		t.Fatal("workload was not admitted")
+	}
+
+	assignments := make([]string, 0, len(got.Status.Admission.PodSetAssignments))
+	for _, assignment := range got.Status.Admission.PodSetAssignments {
+		if assignment.TopologyAssignment == nil {
+			t.Fatalf("PodSet %s has no topology assignment", assignment.Name)
+		}
+		internalAssignment := utiltas.InternalFrom(assignment.TopologyAssignment)
+		domains := make([]string, 0, len(internalAssignment.Domains))
+		for _, domain := range internalAssignment.Domains {
+			domains = append(domains, fmt.Sprintf("%s:%d", strings.Join(domain.Values, "/"), domain.Count))
+		}
+		sort.Strings(domains)
+		assignments = append(assignments, fmt.Sprintf("%s=%s", assignment.Name, strings.Join(domains, ",")))
+	}
+	sort.Strings(assignments)
+	return strings.Join(assignments, ";")
+}

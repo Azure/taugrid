@@ -97,6 +97,59 @@ func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
 	}
 }
 
+func TestTauClusterReconcilesTorchrunHostSlotCapacity(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	gpuNode := topologyTestNode("gpu-node", map[string]string{
+		labelRegion:       "centralus",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
+	}, "azure:///subscriptions/test/resourceGroups/nodes/providers/Microsoft.Compute/virtualMachines/gpu-node")
+	gpuNode.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName): resource.MustParse("8"),
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, gpuNode).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}, &corev1.Node{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	var got corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, &got); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	resourceName := corev1.ResourceName(torchrunHostSlotResource)
+	if quantity := got.Status.Capacity[resourceName]; quantity.Cmp(resource.MustParse("1")) != 0 {
+		t.Fatalf("host-slot capacity = %s, want 1", quantity.String())
+	}
+	if quantity := got.Status.Allocatable[resourceName]; !quantity.IsZero() {
+		t.Fatalf("host-slot allocatable = %s before kubelet update, want 0", quantity.String())
+	}
+
+	got.Status.Allocatable = corev1.ResourceList{
+		resourceName: resource.MustParse("1"),
+	}
+	if err := c.Status().Update(ctx, &got); err != nil {
+		t.Fatalf("remove GPU allocatable capacity: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after GPU removal error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, &got); err != nil {
+		t.Fatalf("Get Node after GPU removal: %v", err)
+	}
+	if quantity := got.Status.Capacity[resourceName]; !quantity.IsZero() {
+		t.Fatalf("host-slot capacity after GPU removal = %s, want 0", quantity.String())
+	}
+}
+
 func TestTauClusterDiscoversMinimalGPUFlavorsAndCapacity(t *testing.T) {
 	ctx := context.Background()
 	cluster := topologyTestCluster()
@@ -161,6 +214,13 @@ func TestTauClusterDiscoversMinimalGPUFlavorsAndCapacity(t *testing.T) {
 		if got := clusterQueueGPUQuota(t, c, "jobqueue", name); got != wantCapacity {
 			t.Fatalf("ClusterQueue flavor %q GPU quota = %q, want %q", name, got, wantCapacity)
 		}
+		wantSlots := map[string]string{"a100-80gb": "1", "h200-141gb": "2"}[gpuClass]
+		if got := clusterQueueResourceQuota(t, c, "jobqueue", name, torchrunHostSlotResource); got != wantSlots {
+			t.Fatalf("ClusterQueue flavor %q host-slot quota = %q, want %q", name, got, wantSlots)
+		}
+	}
+	if got := clusterQueueResourceQuota(t, c, "jobqueue", "taugrid-default-cpu", torchrunHostSlotResource); got != "0" {
+		t.Fatalf("CPU flavor host-slot quota = %q, want 0", got)
 	}
 
 	var flavors unstructured.UnstructuredList
@@ -1057,8 +1117,13 @@ func topologyTestNode(name string, labels map[string]string, providerID string) 
 }
 
 func setNodeGPUCapacity(node *corev1.Node, count string) {
+	node.Status.Capacity = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName):    resource.MustParse(count),
+		corev1.ResourceName(torchrunHostSlotResource): resource.MustParse("1"),
+	}
 	node.Status.Allocatable = corev1.ResourceList{
-		corev1.ResourceName(nvidiaGPUResourceName): resource.MustParse(count),
+		corev1.ResourceName(nvidiaGPUResourceName):    resource.MustParse(count),
+		corev1.ResourceName(torchrunHostSlotResource): resource.MustParse("1"),
 	}
 }
 
@@ -1092,6 +1157,16 @@ func clusterQueueGPUQuota(
 	queueName string,
 	flavorName string,
 ) string {
+	return clusterQueueResourceQuota(t, c, queueName, flavorName, nvidiaGPUResourceName)
+}
+
+func clusterQueueResourceQuota(
+	t *testing.T,
+	c client.Client,
+	queueName string,
+	flavorName string,
+	resourceName string,
+) string {
 	t.Helper()
 	queue := newQueueObject(clusterQueueGVK)
 	if err := c.Get(context.Background(), client.ObjectKey{Name: queueName}, queue); err != nil {
@@ -1109,12 +1184,12 @@ func clusterQueueGPUQuota(
 			resources, _, _ := unstructured.NestedSlice(flavor, "resources")
 			for _, rawResource := range resources {
 				resourceQuota, _ := rawResource.(map[string]any)
-				if resourceQuota["name"] == nvidiaGPUResourceName {
+				if resourceQuota["name"] == resourceName {
 					return fmt.Sprint(resourceQuota["nominalQuota"])
 				}
 			}
 		}
 	}
-	t.Fatalf("ClusterQueue %q has no GPU quota for flavor %q", queueName, flavorName)
+	t.Fatalf("ClusterQueue %q has no %s quota for flavor %q", queueName, resourceName, flavorName)
 	return ""
 }

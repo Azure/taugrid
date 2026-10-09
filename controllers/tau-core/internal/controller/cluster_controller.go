@@ -62,6 +62,7 @@ type topologyReconcileState struct {
 // +kubebuilder:rbac:groups=tau.azure.com,resources=clusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=tau.azure.com,resources=clusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups="",resources=nodes/status,verbs=get;patch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues;workloadpriorityclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=clusterqueues,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch;create
@@ -168,7 +169,15 @@ func nodeLabelChangePredicate() predicate.Predicate {
 			}
 			oldGPU := oldNode.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
 			newGPU := newNode.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
-			return oldGPU.Cmp(newGPU) != 0
+			if oldGPU.Cmp(newGPU) != 0 {
+				return true
+			}
+			resourceName := corev1.ResourceName(torchrunHostSlotResource)
+			oldCapacity := oldNode.Status.Capacity[resourceName]
+			newCapacity := newNode.Status.Capacity[resourceName]
+			oldAllocatable := oldNode.Status.Allocatable[resourceName]
+			newAllocatable := newNode.Status.Allocatable[resourceName]
+			return oldCapacity.Cmp(newCapacity) != 0 || oldAllocatable.Cmp(newAllocatable) != 0
 		},
 		GenericFunc: func(event.GenericEvent) bool {
 			return false

@@ -59,6 +59,7 @@ baselineQueue:
     enabled: true
     coveredResources:
       - nvidia.com/gpu
+      - tau.azure.com/torchrun-host-slot
     # When GPU admission, topology, and tau-core-controller are enabled, the
     # controller discovers one topology-aware ResourceFlavor per GPU class and
     # grows its quota from live allocatable capacity. Existing discovered
