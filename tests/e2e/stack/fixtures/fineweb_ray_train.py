@@ -272,6 +272,26 @@ def get_batch(
     return torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
 
 
+def get_synthetic_batch(
+    batch_size: int,
+    block_size: int,
+    vocab_size: int,
+    rank: int,
+    step: int,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    generator = torch.Generator(device=device)
+    generator.manual_seed(1337 + rank * 1_000_000 + step)
+    tokens = torch.randint(
+        0,
+        vocab_size,
+        (batch_size, block_size + 1),
+        device=device,
+        generator=generator,
+    )
+    return tokens[:, :-1], tokens[:, 1:]
+
+
 def build_fsdp_model(config: GPTConfig, device: torch.device) -> tuple[FSDP, int]:
     """Construct the GPT on CPU, count its (deduplicated, tie-aware) parameters,
     then wrap it with FSDP FULL_SHARD + bf16 mixed precision, sharding each
@@ -349,13 +369,7 @@ def train_loop(config: dict) -> None:
         raise RuntimeError(f"rank={rank} expected CUDA device, got {device}")
     torch.cuda.set_device(device)
 
-    dataset_uris = config["dataset_uris"]
-    dataset_sha256s = config["dataset_sha256s"]
-    shard_index = rank % len(dataset_uris)
-    time.sleep((rank % 8) * 2)
-    shard_path = download_shard(dataset_uris[shard_index], dataset_sha256s[shard_index], rank)
-    tokens = np.memmap(shard_path, dtype=np.uint16, mode="r")
-
+    data_mode = config["data_mode"]
     block_size = int(config["block_size"])
     batch_size = int(config["batch_size"])
     vocab_size = int(config["vocab_size"])
@@ -368,9 +382,20 @@ def train_loop(config: dict) -> None:
         raise RuntimeError(
             f"steps={steps} must be >= checkpoint_interval={checkpoint_interval} so the first checkpoint is reached"
         )
-    min_needed = block_size + batch_size * steps + 1
-    if len(tokens) < min_needed:
-        raise RuntimeError(f"rank={rank} shard has {len(tokens)} tokens, below minimum needed {min_needed}")
+    tokens = None
+    shard_index = -1
+    if data_mode == "dataset":
+        dataset_uris = config["dataset_uris"]
+        dataset_sha256s = config["dataset_sha256s"]
+        shard_index = rank % len(dataset_uris)
+        time.sleep((rank % 8) * 2)
+        shard_path = download_shard(dataset_uris[shard_index], dataset_sha256s[shard_index], rank)
+        tokens = np.memmap(shard_path, dtype=np.uint16, mode="r")
+        min_needed = block_size + batch_size * steps + 1
+        if len(tokens) < min_needed:
+            raise RuntimeError(f"rank={rank} shard has {len(tokens)} tokens, below minimum needed {min_needed}")
+    elif data_mode != "synthetic":
+        raise RuntimeError(f"FINEWEB_DATA_MODE must be dataset or synthetic, got {data_mode!r}")
 
     np.random.seed(int(config["seed"]) + rank)
     torch.manual_seed(int(config["seed"]) + rank)
@@ -396,8 +421,9 @@ def train_loop(config: dict) -> None:
                 "device=cuda",
                 f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '')}",
                 f"gpu_name={torch.cuda.get_device_name(device)}",
+                f"data_mode={data_mode}",
                 f"shard_index={shard_index}",
-                f"tokens={len(tokens)}",
+                f"tokens={len(tokens) if tokens is not None else 0}",
                 f"vocab_size={vocab_size}",
                 f"params={param_count}",
             ]
@@ -407,7 +433,10 @@ def train_loop(config: dict) -> None:
 
     first_checkpoint_done = False
     for step in range(1, steps + 1):
-        xb, yb = get_batch(tokens, batch_size, block_size, vocab_size, rank, step, device)
+        if data_mode == "synthetic":
+            xb, yb = get_synthetic_batch(batch_size, block_size, vocab_size, rank, step, device)
+        else:
+            xb, yb = get_batch(tokens, batch_size, block_size, vocab_size, rank, step, device)
         _, loss = model(xb, yb)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -450,7 +479,13 @@ def final_metrics_from_result(result) -> dict:
 
 
 def main() -> None:
-    dataset_uris, dataset_sha256s, token_counts = parse_dataset_contract()
+    data_mode = os.environ.get("FINEWEB_DATA_MODE", "dataset").strip().lower()
+    if data_mode == "dataset":
+        dataset_uris, dataset_sha256s, token_counts = parse_dataset_contract()
+    elif data_mode == "synthetic":
+        dataset_uris, dataset_sha256s, token_counts = [], [], []
+    else:
+        raise RuntimeError(f"FINEWEB_DATA_MODE must be dataset or synthetic, got {data_mode!r}")
     workers = env_int("FINEWEB_TRAIN_WORKERS", 16)
     steps = env_int("FINEWEB_TRAIN_STEPS", 60)
     checkpoint_interval = env_int("FINEWEB_CHECKPOINT_INTERVAL", 50)
@@ -479,6 +514,7 @@ def main() -> None:
     trainer = TorchTrainer(
         train_loop_per_worker=train_loop,
         train_loop_config={
+            "data_mode": data_mode,
             "dataset_uris": dataset_uris,
             "dataset_sha256s": dataset_sha256s,
             "dataset_token_counts": token_counts,
@@ -517,7 +553,7 @@ def main() -> None:
     print(
         f"FINEWEB_RAY_TRAIN_SUCCESS step={final_step} world_size={world_size} "
         f"workers={workers} params={params} final_loss={final_loss_text} "
-        f"dataset_tokens={sum(token_counts)}",
+        f"data_mode={data_mode} dataset_tokens={sum(token_counts)}",
         flush=True,
     )
 

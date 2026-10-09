@@ -155,12 +155,6 @@ projects:
 		),
 		"backslash path": strings.Replace(valid, "projects/alpha", `projects\alpha`, 1),
 		"missing path":   strings.Replace(valid, "    path: projects/alpha\n", "", 1),
-		"missing connection": strings.Replace(
-			valid,
-			"    connection: connections/alpha.yaml\n",
-			"",
-			1,
-		),
 	}
 
 	names := make([]string, 0, len(tests))
@@ -174,6 +168,105 @@ projects:
 				t.Fatalf("expected strict parse failure for:\n%s", tests[name])
 			}
 		})
+	}
+}
+
+func TestCatalogAllowsProjectWithoutCheckedInConnection(t *testing.T) {
+	spec, err := Parse([]byte(`schema: tau.projects.v1
+projects:
+  alpha:
+    path: projects/alpha
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Projects["alpha"].Connection != "" {
+		t.Fatalf("connection = %q", spec.Projects["alpha"].Connection)
+	}
+}
+
+func TestCatalogResolvesProjectConventionalConnectionWithoutInheritingRoot(t *testing.T) {
+	root := newGitRepo(t)
+	projectRoot := filepath.Join(root, "projects", "alpha")
+	writeFile(t, filepath.Join(projectRoot, "tau", "train.yaml"), "name: train\nengine: job\n")
+	writeFile(t, filepath.Join(root, Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: projects/alpha
+`)
+	writeFile(t, filepath.Join(root, "tau", "workspace.connection.yaml"), testDescriptor)
+
+	repository, err := Discover(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := repository.Catalog.Projects["alpha"]
+	if _, found, err := repository.Catalog.ResolveProjectConnection(project); err != nil {
+		t.Fatal(err)
+	} else if found {
+		t.Fatal("catalog project inherited repository-root conventional connection")
+	}
+
+	projectDescriptor := strings.Replace(testDescriptor, "workspace: sample", "workspace: alpha", 1)
+	writeFile(t, filepath.Join(projectRoot, "tau", "workspace.connection.yaml"), projectDescriptor)
+	discovery, found, err := repository.Catalog.ResolveProjectConnection(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || discovery.Descriptor.Workspace != "alpha" {
+		t.Fatalf("project conventional connection found=%v discovery=%#v", found, discovery)
+	}
+}
+
+func TestCatalogRejectsConventionalConnectionInNestedGitRepository(t *testing.T) {
+	root := newGitRepo(t)
+	projectRoot := filepath.Join(root, "alpha")
+	mkdir(t, projectRoot)
+	writeFile(t, filepath.Join(root, Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: alpha
+`)
+	nestedRoot := filepath.Join(projectRoot, "tau")
+	mkdir(t, nestedRoot)
+	runGit(t, nestedRoot, "init")
+	writeFile(t, filepath.Join(nestedRoot, "workspace.connection.yaml"), testDescriptor)
+
+	repository, err := Discover(projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = repository.Catalog.ResolveProjectConnection(repository.Catalog.Projects["alpha"])
+	if err == nil || !strings.Contains(err.Error(), "belongs to Git worktree") {
+		t.Fatalf("nested Git conventional connection error = %v", err)
+	}
+}
+
+func TestCatalogRejectsConventionalConnectionInUninitializedSubmodule(t *testing.T) {
+	parent := newGitRepo(t)
+	mkdir(t, filepath.Join(parent, "alpha"))
+	source := newGitRepo(t)
+	writeFile(t, filepath.Join(source, "README.md"), "submodule\n")
+	runGit(t, source, "add", "README.md")
+	runGit(t, source, "commit", "-m", "submodule")
+	runGit(t, parent, "-c", "protocol.file.allow=always", "submodule", "add", source, "alpha/tau")
+	if err := os.RemoveAll(filepath.Join(parent, "alpha", "tau")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(parent, "alpha", "tau", "workspace.connection.yaml"), testDescriptor)
+	writeFile(t, filepath.Join(parent, Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: alpha
+`)
+
+	repository, err := Discover(filepath.Join(parent, "alpha"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = repository.Catalog.ResolveProjectConnection(repository.Catalog.Projects["alpha"])
+	if err == nil || !strings.Contains(err.Error(), "Git submodule") {
+		t.Fatalf("uninitialized submodule conventional connection error = %v", err)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/Azure/taugrid/cli/internal/repository"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/core/fileutil"
 )
@@ -69,6 +70,13 @@ type ActiveConnection struct {
 	Queue             string
 }
 
+type AssignableConnection struct {
+	ActiveConnection
+	Descriptor     Descriptor
+	DescriptorPath string
+	VerifiedAt     time.Time
+}
+
 type connectionState struct {
 	Schema            string       `json:"schema"`
 	Workspace         string       `json:"workspace"`
@@ -86,6 +94,7 @@ type connectionState struct {
 	RepositoryRoot    string       `json:"repository_root,omitempty"`
 	DescriptorPath    string       `json:"descriptor_path"`
 	DescriptorDigest  string       `json:"descriptor_digest"`
+	Descriptor        *Descriptor  `json:"descriptor,omitempty"`
 	WorkspaceUID      string       `json:"workspace_uid,omitempty"`
 	ConfiguredAt      time.Time    `json:"configured_at,omitempty"`
 	VerifiedAt        time.Time    `json:"verified_at"`
@@ -125,6 +134,41 @@ func DefaultConfigDir() (string, error) {
 // ListCachedConnections returns the verified workspace routes Tau has already
 // configured locally. It does not refresh credentials or contact a cluster.
 func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
+	states, err := listConnectionStates(configDir)
+	if err != nil {
+		return nil, err
+	}
+	connections := make([]ActiveConnection, 0, len(states))
+	for _, state := range states {
+		connections = append(connections, state.active())
+	}
+	return connections, nil
+}
+
+// ListAssignableConnections returns locally verified connections whose complete
+// non-secret descriptor can be reproduced safely for a repository assignment.
+func ListAssignableConnections(configDir string) ([]AssignableConnection, error) {
+	states, err := listConnectionStates(configDir)
+	if err != nil {
+		return nil, err
+	}
+	connections := make([]AssignableConnection, 0, len(states))
+	for _, state := range states {
+		descriptor, path, err := state.assignableDescriptor()
+		if err != nil {
+			continue
+		}
+		connections = append(connections, AssignableConnection{
+			ActiveConnection: state.active(),
+			Descriptor:       descriptor,
+			DescriptorPath:   path,
+			VerifiedAt:       state.VerifiedAt,
+		})
+	}
+	return connections, nil
+}
+
+func listConnectionStates(configDir string) ([]connectionState, error) {
 	if strings.TrimSpace(configDir) == "" {
 		var err error
 		configDir, err = DefaultConfigDir()
@@ -189,17 +233,37 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 		}
 		return left.KubeconfigPath < right.KubeconfigPath
 	})
-	connections := make([]ActiveConnection, 0, len(states))
-	for _, state := range states {
-		connections = append(connections, state.active())
-	}
-	return connections, nil
+	return states, nil
 }
 
 func (m Manager) Ensure(ctx context.Context, startDir string) (ActiveConnection, error) {
 	discovery, err := Discover(startDir)
 	if err != nil {
-		return ActiveConnection{}, err
+		if !errors.Is(err, ErrDescriptorNotFound) {
+			return ActiveConnection{}, err
+		}
+		boundary, boundaryErr := repository.Resolve(startDir)
+		if boundaryErr != nil {
+			return ActiveConnection{}, boundaryErr
+		}
+		configDir, configErr := m.configDir()
+		if configErr != nil {
+			return ActiveConnection{}, configErr
+		}
+		scope := AssignmentScope{
+			RepositoryRoot:     boundary.LexicalRoot,
+			RealRepositoryRoot: boundary.Root,
+			ProjectRoot:        boundary.LexicalRoot,
+			RealProjectRoot:    boundary.Root,
+		}
+		assigned, _, _, assignmentErr := AssignmentDiscovery(configDir, scope)
+		if assignmentErr != nil {
+			if errors.Is(assignmentErr, ErrAssignmentNotFound) {
+				return ActiveConnection{}, err
+			}
+			return ActiveConnection{}, assignmentErr
+		}
+		discovery = assigned
 	}
 	return m.EnsureDiscovery(ctx, discovery)
 }
@@ -444,7 +508,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 	previousKubeconfigPath := state.KubeconfigPath
 	now := m.now()
 	state = connectionState{
-		Schema:            connectionStateSchema,
+		Schema:            connectionStateSchemaV2,
 		Workspace:         discovery.Descriptor.Workspace,
 		AccessMethod:      discovery.Descriptor.Access.Method,
 		AccessIdentity:    discovery.Descriptor.AccessIdentity(),
@@ -456,6 +520,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		RepositoryRoot:    discoveryTrustRoot(discovery),
 		DescriptorPath:    discoveryTrustPath(discovery),
 		DescriptorDigest:  discovery.Digest,
+		Descriptor:        &discovery.Descriptor,
 		ConfiguredAt:      now,
 	}
 	state.applyVerification(discovery.Descriptor, verification, now)
@@ -757,7 +822,7 @@ func loadConnectionStateForDiscovery(statePath string, discovery Discovery) (con
 }
 
 func (s connectionState) configures(discovery Discovery) bool {
-	supportedSchema := s.Schema == connectionStateSchema
+	supportedSchema := s.Schema == connectionStateSchema || s.Schema == connectionStateSchemaV2
 	hasConfiguration := !s.ConfiguredAt.IsZero()
 	hasStableWorkspaceIdentity := strings.TrimSpace(s.WorkspaceUID) != ""
 	hasTrustIdentity := s.AccessMethod == discovery.Descriptor.Access.Method &&
@@ -772,6 +837,45 @@ func (s connectionState) configures(discovery Discovery) bool {
 		s.ContextName == discovery.Descriptor.Cluster.ContextName &&
 		s.trusts(discovery) &&
 		s.DescriptorDigest == discovery.Digest
+}
+
+func (s connectionState) assignableDescriptor() (Descriptor, string, error) {
+	if s.Schema != connectionStateSchema && s.Schema != connectionStateSchemaV2 {
+		return Descriptor{}, "", fmt.Errorf("unsupported connection state schema %q", s.Schema)
+	}
+	if s.ConfiguredAt.IsZero() || strings.TrimSpace(s.WorkspaceUID) == "" {
+		return Descriptor{}, "", fmt.Errorf("connection state is not configured")
+	}
+	if s.Descriptor != nil {
+		if err := s.Descriptor.Validate(); err != nil {
+			return Descriptor{}, "", err
+		}
+		digest, err := Digest(*s.Descriptor)
+		if err != nil {
+			return Descriptor{}, "", err
+		}
+		if digest != s.DescriptorDigest {
+			return Descriptor{}, "", fmt.Errorf("cached descriptor digest does not match connection state")
+		}
+		if s.Descriptor.Workspace != s.Workspace ||
+			s.Descriptor.Cluster.ContextName != s.ContextName {
+			return Descriptor{}, "", fmt.Errorf("cached descriptor identity does not match connection state")
+		}
+		return *s.Descriptor, s.DescriptorPath, nil
+	}
+	if strings.TrimSpace(s.DescriptorPath) == "" || strings.TrimSpace(s.RepositoryRoot) == "" {
+		return Descriptor{}, "", fmt.Errorf("legacy connection state has no descriptor source")
+	}
+	discovery, err := LoadFile(s.DescriptorPath, s.RepositoryRoot)
+	if err != nil {
+		return Descriptor{}, "", err
+	}
+	if discovery.Digest != s.DescriptorDigest ||
+		discovery.Descriptor.Workspace != s.Workspace ||
+		discovery.Descriptor.Cluster.ContextName != s.ContextName {
+		return Descriptor{}, "", fmt.Errorf("legacy connection descriptor no longer matches connection state")
+	}
+	return discovery.Descriptor, discovery.Path, nil
 }
 
 func (s connectionState) trusts(discovery Discovery) bool {
@@ -794,7 +898,7 @@ func (s connectionState) canMigrateTo(discovery Discovery) bool {
 
 func (s connectionState) configurationChanges(discovery Discovery) []string {
 	var changes []string
-	if s.Schema != connectionStateSchema {
+	if s.Schema != connectionStateSchema && s.Schema != connectionStateSchemaV2 {
 		changes = append(changes, fmt.Sprintf("state schema %q is unsupported", s.Schema))
 	}
 	if s.Workspace != discovery.Descriptor.Workspace {
@@ -827,10 +931,10 @@ func (s connectionState) configurationChanges(discovery Discovery) []string {
 	if s.DescriptorDigest != discovery.Digest {
 		changes = append(changes, fmt.Sprintf("descriptor digest %q -> %q", s.DescriptorDigest, discovery.Digest))
 	}
-	if s.Schema == connectionStateSchema && s.ConfiguredAt.IsZero() {
+	if (s.Schema == connectionStateSchema || s.Schema == connectionStateSchemaV2) && s.ConfiguredAt.IsZero() {
 		changes = append(changes, "configuration timestamp is missing")
 	}
-	if s.Schema == connectionStateSchema && strings.TrimSpace(s.WorkspaceUID) == "" {
+	if (s.Schema == connectionStateSchema || s.Schema == connectionStateSchemaV2) && strings.TrimSpace(s.WorkspaceUID) == "" {
 		changes = append(changes, "workspace UID pin is missing")
 	}
 	return changes

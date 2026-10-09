@@ -446,7 +446,7 @@ func descriptorFor(source runConnectionSource) *workspaceconnection.Discovery {
 	if startDir == "" {
 		return nil
 	}
-	discovery, err := workspaceconnection.Discover(startDir)
+	_, discovery, _, err := effectiveWorkspaceConnection(startDir, source.Project)
 	if err != nil {
 		return nil
 	}
@@ -595,7 +595,11 @@ func discoverRunLifecycleConnectionSource(projectName string) (runConnectionSour
 		source.Catalog = true
 		source.Project = project.Name
 		source.Workspace = project.Workspace
-		source.Discovery = &project.Connection
+		discovery, err := assignedCatalogProjectConnection(repository.Catalog, project)
+		if err != nil {
+			return runConnectionSource{}, err
+		}
+		source.Discovery = discovery
 	} else if strings.TrimSpace(projectName) != "" {
 		return runConnectionSource{}, fmt.Errorf("--project requires %s at the Git worktree root", projectcatalog.Filename)
 	}

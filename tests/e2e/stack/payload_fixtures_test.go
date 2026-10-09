@@ -154,6 +154,66 @@ func renderPayloadFixture(t *testing.T, tc payloadFixtureCase) []byte {
 	return data
 }
 
+func TestFineWebSyntheticFixtureDoesNotRequireDatasetContract(t *testing.T) {
+	t.Setenv("RAY_E2E_IMAGE", "example.azurecr.io/aks/ai-runtime/ray:test")
+	t.Setenv("GPU_NODE_SELECTOR_KEY", "kueue.azure.com/gpu-series")
+	t.Setenv("GPU_NODE_SELECTOR_VALUE", "nd-h200-v5")
+	t.Setenv("FINEWEB_DATA_MODE", "synthetic")
+	t.Setenv("FINEWEB_TAS_MODE", "disabled")
+	t.Setenv("FINEWEB_DATASET_URIS", "")
+	t.Setenv("FINEWEB_DATASET_SHA256S", "")
+	t.Setenv("FINEWEB_DATASET_TOKEN_COUNTS", "")
+
+	data, err := e2e.ReadFixtureWithSubstitutions("fineweb-rayjob-16xh200-ib.yaml")
+	require.NoError(t, err)
+	require.Contains(t, string(data), `FINEWEB_DATA_MODE: "synthetic"`)
+	require.NotContains(t, string(data), "podset-required-topology")
+	require.Contains(t, string(data), "hostname spread enforces the 8+8 worker placement")
+}
+
+func TestFineWebSiteTopologyFixture(t *testing.T) {
+	t.Setenv("RAY_E2E_IMAGE", "example.azurecr.io/aks/ai-runtime/ray:test")
+	t.Setenv("GPU_NODE_SELECTOR_KEY", "kueue.azure.com/gpu-series")
+	t.Setenv("GPU_NODE_SELECTOR_VALUE", "nd-h200-v5")
+	t.Setenv("FINEWEB_DATA_MODE", "synthetic")
+	t.Setenv("FINEWEB_TAS_MODE", "site")
+
+	data, err := e2e.ReadFixtureWithSubstitutions("fineweb-rayjob-16xh200-ib.yaml")
+	require.NoError(t, err)
+	require.Contains(t, string(data),
+		"kueue.x-k8s.io/podset-required-topology: tau.azure.com/site")
+}
+
+func TestFineWebSchedulerRecoveryEligibility(t *testing.T) {
+	valid := e2e.SchedulerRecoveryObservation{
+		TotalWorkers:          16,
+		RunningWorkers:        15,
+		PendingWorkers:        1,
+		RunningOnTarget:       7,
+		RunningOnOtherNodes:   8,
+		RequestedGPUsOnTarget: 7,
+		PendingGPURequest:     1,
+		TargetAllocatableGPUs: 8,
+		HasInsufficientEvent:  true,
+	}
+	require.True(t, eligibleForFineWebSchedulerRecovery(16, valid))
+
+	cases := map[string]func(*e2e.SchedulerRecoveryObservation){
+		"all workers already running": func(state *e2e.SchedulerRecoveryObservation) { state.RunningWorkers = 16 },
+		"extra target request":        func(state *e2e.SchedulerRecoveryObservation) { state.RequestedGPUsOnTarget = 8 },
+		"wrong placement":             func(state *e2e.SchedulerRecoveryObservation) { state.RunningOnTarget = 6 },
+		"missing scheduler evidence":  func(state *e2e.SchedulerRecoveryObservation) { state.HasInsufficientEvent = false },
+		"multi-gpu pending pod":       func(state *e2e.SchedulerRecoveryObservation) { state.PendingGPURequest = 2 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			state := valid
+			mutate(&state)
+			require.False(t, eligibleForFineWebSchedulerRecovery(16, state))
+		})
+	}
+}
+
 // rayJobDoc is a minimal typed view over the fields these tests need from a
 // rendered RayJob manifest; it deliberately does not model the full
 // ray.io/v1 RayJob schema.

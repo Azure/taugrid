@@ -48,14 +48,28 @@ This split is intentional:
 
 ## First run
 
-A Tau-enabled repository checks in a non-secret
-`tau/workspace.connection.yaml` and one or more run configs:
+A Tau-enabled repository contains one or more run configs and resolves a
+workspace through either a portable checked-in descriptor or a machine-local
+assignment:
 
 ```text
 tau/
-  workspace.connection.yaml
+  workspace.connection.yaml  # optional when using a local assignment
   train.yaml
 ```
+
+For a workspace Tau has already connected on this machine:
+
+```bash
+tau workspace connection assign
+tau workspace connection inspect
+tau workspace connection
+```
+
+`assign` stores only non-secret routing metadata under the user's Tau config
+directory, scoped to this exact worktree/project. It never writes credentials
+or `tau/workspace.connection.yaml`, and it never changes unrelated
+repositories. A checked-in descriptor remains authoritative and portable.
 
 See [`examples/kind-smoke`](../examples/kind-smoke/) for the Kind cluster config,
 CPU-only lane manifest, and checked-in `tau.yaml`.
@@ -178,9 +192,8 @@ This is the Day 2 researcher workflow, entered only after a platform operator
 has completed Day 0 onboarding above and the workspace controller reports the
 workspace `Ready`.
 
-A Tau-enabled research repository checks in a non-secret
-`tau/workspace.connection.yaml`. After Tau is installed, the researcher path
-is:
+A Tau-enabled research repository can check in a non-secret
+`tau/workspace.connection.yaml`. When it does, the researcher path is:
 
 ```bash
 git clone <research-repository>
@@ -194,6 +207,22 @@ live workspace contract, pins local configuration state, resolves
 `tau/train.yaml`, and submits the declared workload. It does not require a
 pre-existing kube context, `TAU_CONTEXT`, namespace, queue, or explicit
 `--config`.
+
+When the repository intentionally leaves the connection machine-local, assign a
+known workspace once before the same run flow:
+
+```bash
+git clone <research-repository>
+cd <research-repository>
+tau workspace connection assign research
+tau workspace connection
+tau run train
+```
+
+Use `tau workspace connection assign --current` to reuse the last repository
+connection Tau activated, `--context <name>` to disambiguate duplicate
+workspace names, `inspect --output json` for automation, and `clear --yes` to
+remove only the local assignment.
 
 `cluster-wide` connections can supply shared cluster access, while
 `workspace-rbac` connections enforce namespace-scoped authorization. In either

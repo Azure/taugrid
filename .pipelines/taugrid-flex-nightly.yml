@@ -1,0 +1,605 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+trigger: none
+pr: none
+
+schedules:
+  - cron: "15 8 * * *"
+    displayName: Daily TauGrid Flex hardware matrix
+    branches:
+      include:
+        - main
+    always: true
+
+parameters:
+  - name: profile
+    displayName: Workload profile
+    type: string
+    default: full
+    values:
+      - smoke
+      - full
+  - name: rdmaConformance
+    displayName: Run extended H200 RDMA/NCCL conformance
+    type: boolean
+    default: false
+  - name: includeDGXSpark
+    displayName: Include DGX Spark targets
+    type: boolean
+    default: false
+
+pool:
+  name: 1es-aks-ai-runtime-ado-eastus2
+
+variables:
+  - name: azureServiceConnection
+    value: aks ai runtime - prod
+  - name: GOFLAGS
+    value: -mod=readonly
+  - name: GOTOOLCHAIN
+    value: local
+  - name: FLEX_NIGHTLY_DEPLOY_MODE
+    value: shared-cluster-controllers
+  - name: FLEX_NIGHTLY_GPU_TOPOLOGY
+    value: taugrid-gpu-topology
+  - name: AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES
+    value: "2"
+  - name: FINEWEB_TRAIN_STEPS
+    value: "2"
+  - name: FINEWEB_CHECKPOINT_INTERVAL
+    value: "1"
+  - name: FINEWEB_RAYJOB_TIMEOUT_MINUTES
+    value: "60"
+
+jobs:
+  - job: preflight
+    displayName: Hardware and topology contract
+    timeoutInMinutes: 15
+    steps:
+      - checkout: self
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-contract_test.sh
+        displayName: Validate nightly pipeline contract
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-report_test.sh
+        displayName: Validate nightly report generation
+
+      - task: AzureCLI@2
+        displayName: Inventory Flex hardware matrix
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            artifact_dir="$(Build.ArtifactStagingDirectory)/preflight"
+            mkdir -p "${artifact_dir}"
+            image_platforms="$(docker manifest inspect "${RAY_E2E_IMAGE}" |
+              jq -r 'if .manifests then [.manifests[].platform | (.os + "/" + .architecture)] | unique[] else (.os + "/" + .architecture) end')"
+            if [[ "${RAY_E2E_IMAGE}" =~ ray([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+              ray_version="${BASH_REMATCH[1]}"
+            else
+              echo "##vso[task.logissue type=error]Ray image must contain a rayX.Y.Z version"
+              exit 1
+            fi
+            if [[ "$(printf '%s\n' 2.56.1 "${ray_version}" | sort -V | head -n1)" != "2.56.1" ]]; then
+              echo "##vso[task.logissue type=error]Ray ${ray_version} predates the Ray Serve protobuf compatibility fix; use 2.56.1 or newer"
+              exit 1
+            fi
+            grep -Fxq linux/amd64 <<<"${image_platforms}"
+            if [[ "${INCLUDE_DGX}" == "true" || "${INCLUDE_DGX}" == "True" ]]; then
+              grep -Fxq linux/arm64 <<<"${image_platforms}"
+            fi
+            printf '%s\n' "${image_platforms}" >"${artifact_dir}/ray-image-platforms.txt"
+            printf '%s\n' "${ray_version}" >"${artifact_dir}/ray-version.txt"
+            export FLEX_NIGHTLY_CONTRACT_FILE="${artifact_dir}/hardware-matrix.json"
+            scripts/ci/taugrid-flex-nightly-preflight.sh cluster
+        env:
+          FLEX_NIGHTLY_DEPLOY_MODE: $(FLEX_NIGHTLY_DEPLOY_MODE)
+          FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_MIN_RDMA_NODES: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES)
+          FLEX_NIGHTLY_INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
+          FLEX_NIGHTLY_DGX_SELECTOR: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR)
+          FLEX_NIGHTLY_DGX_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE)
+          FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
+          FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
+          INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish hardware contract
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/preflight
+          artifact: taugrid-flex-hardware-contract
+
+  - job: hardware_matrix
+    displayName: Ray Serve and Ray Train hardware matrix
+    dependsOn: preflight
+    timeoutInMinutes: 300
+    steps:
+      - checkout: self
+
+      - task: GoTool@0
+        displayName: Use Go 1.26.7
+        inputs:
+          version: 1.26.7
+
+      - task: DownloadPipelineArtifact@2
+        displayName: Download hardware contract
+        inputs:
+          artifact: taugrid-flex-hardware-contract
+          path: $(Pipeline.Workspace)/taugrid-flex-hardware-contract
+
+      - task: AzureCLI@2
+        displayName: Run topology-aware hardware matrix
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            contract="$(Pipeline.Workspace)/taugrid-flex-hardware-contract/hardware-matrix.json"
+            test -s "${contract}"
+            namespace="taugrid-nightly-matrix-$(Build.BuildId)-$(System.JobAttempt)"
+            artifact_dir="$(Build.ArtifactStagingDirectory)/hardware-matrix"
+            bundle_dir="${artifact_dir}/diagnostics"
+            summary="${artifact_dir}/matrix-results.jsonl"
+            mkdir -p "${bundle_dir}"
+            : >"${summary}"
+
+            cleanup() {
+              rc=$?
+              trap - EXIT
+              set +e
+              cleanup_status=passed
+              cleanup_reason=""
+              capability_status=not-run
+              capability_reason=""
+              postflight_contract="${bundle_dir}/postflight-hardware-contract.json"
+              kubectl get rayjobs,rayclusters,workloads,localqueues,pods,jobs \
+                -n "${namespace}" -o wide >"${bundle_dir}/resources.txt" 2>&1
+              kubectl get events -n "${namespace}" --sort-by=.lastTimestamp \
+                >"${bundle_dir}/events.txt" 2>&1
+              kubectl get nodes -l 'tau.azure.com/site' -o json |
+                jq '[.items[] | {
+                  name: .metadata.name,
+                  site: .metadata.labels["tau.azure.com/site"],
+                  gpu_class: .metadata.labels["tau.azure.com/gpu-class"],
+                  gpu_series: .metadata.labels["kueue.azure.com/gpu-series"],
+                  network_domain: .metadata.labels["tau.azure.com/network-domain"],
+                  accelerator_domain: .metadata.labels["tau.azure.com/accelerator-domain"],
+                  gpu: .status.allocatable["nvidia.com/gpu"]
+                }]' >"${bundle_dir}/nodes.json" 2>&1
+              if ! kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m; then
+                cleanup_status=failed
+                cleanup_reason="namespace deletion command failed"
+                rc=1
+              fi
+              if kubectl get namespace "${namespace}" >/dev/null 2>&1; then
+                echo "##vso[task.logissue type=error]Nightly namespace ${namespace} still exists after cleanup"
+                cleanup_status=failed
+                cleanup_reason="nightly namespace still exists after cleanup"
+                rc=1
+              elif FLEX_NIGHTLY_CONTRACT_FILE="${postflight_contract}" \
+                "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" cluster; then
+                if "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" \
+                  compare-capability "${contract}" "${postflight_contract}"; then
+                  capability_status=passed
+                else
+                  echo "##vso[task.logissue type=error]Flex node capability did not return to its preflight contract"
+                  capability_status=failed
+                  capability_reason="capability differed from the preflight contract"
+                  rc=1
+                fi
+              else
+                echo "##vso[task.logissue type=error]Postflight Flex capability inventory failed"
+                capability_status=failed
+                capability_reason="postflight capability inventory failed"
+                rc=1
+              fi
+              jq -n \
+                --arg cleanupStatus "${cleanup_status}" \
+                --arg cleanupReason "${cleanup_reason}" \
+                --arg capabilityStatus "${capability_status}" \
+                --arg capabilityReason "${capability_reason}" \
+                '{
+                  cleanup: {status: $cleanupStatus, reason: $cleanupReason},
+                  capability: {status: $capabilityStatus, reason: $capabilityReason}
+                }' >"${bundle_dir}/postflight-status.json"
+              exit "${rc}"
+            }
+            trap cleanup EXIT
+
+            kubectl create namespace "${namespace}"
+            kubectl label namespace "${namespace}" \
+              tau.azure.com/workspace=nightly \
+              tau.azure.com/gpu-queue=enabled \
+              "tau.azure.com/e2e-run=$(Build.BuildId)-$(System.JobAttempt)"
+
+            while IFS= read -r target; do
+              name="$(jq -r '.name' <<<"${target}")"
+              queue="matrix-${name}"
+              cluster_queue="$(jq -r '.cluster_queue' <<<"${target}")"
+              cat <<EOF | kubectl apply -f -
+            apiVersion: kueue.x-k8s.io/v1beta2
+            kind: LocalQueue
+            metadata:
+              name: ${queue}
+              namespace: ${namespace}
+              labels:
+                tau.azure.com/e2e-run: "$(Build.BuildId)-$(System.JobAttempt)"
+            spec:
+              clusterQueue: ${cluster_queue}
+            EOF
+            done < <(jq -c '.targets[] | select(.status != "disabled")' "${contract}")
+
+            cd "$(Build.SourcesDirectory)/tests/e2e"
+            export AI_RUNTIME_E2E=1
+            export E2E_HARDWARE_MATRIX=1
+            export MATRIX_NAMESPACE="${namespace}"
+            export RAY_E2E_IMAGE
+            export E2E_RESULT_FILE="${artifact_dir}/e2e-results.jsonl"
+
+            run_case() {
+              local target_json="$1"
+              local workers="$2"
+              local hosts="$3"
+              local per_host="$4"
+              local topology="$5"
+              local target selector site queue status shape_available
+
+              target="$(jq -r '.name' <<<"${target_json}")"
+              selector="$(jq -r '.selector' <<<"${target_json}")"
+              site="$(jq -r '.expected_site' <<<"${target_json}")"
+              queue="matrix-${target}"
+              status="$(jq -r '.status' <<<"${target_json}")"
+
+              shape_available=false
+              if [[ "${status}" == "available" ]]; then
+                if [[ "${hosts}" -eq 1 ]]; then
+                  if [[ "$(jq -r '.max_gpu_available_per_node' <<<"${target_json}")" -ge "${workers}" ]]; then
+                    shape_available=true
+                  fi
+                elif [[ "$(jq --argjson perHost "${per_host}" '[.nodes[] | select(.gpu_available >= $perHost)] | length' <<<"${target_json}")" -ge "${hosts}" ]]; then
+                  shape_available=true
+                fi
+              fi
+
+              if [[ "${shape_available}" != "true" ]]; then
+                for workload in serve train; do
+                  jq -cn \
+                    --arg target "${target}" \
+                    --arg workload "${workload}" \
+                    --arg topology "${topology}" \
+                    --arg status "skipped" \
+                    --arg reason "target=${status}; insufficient free GPUs for ${hosts}x${per_host}" \
+                    --argjson workers "${workers}" \
+                    --argjson expected_hosts "${hosts}" \
+                    '{
+                      target:$target,
+                      workload:$workload,
+                      workers:$workers,
+                      expected_hosts:$expected_hosts,
+                      required_topology:$topology,
+                      status:$status,
+                      reason:$reason
+                    }' >>"${summary}"
+                done
+                echo "Skipping ${target} ${workers}-GPU shape: ${status} or insufficient free capacity"
+                return 0
+              fi
+
+              export MATRIX_TARGET="${target}"
+              export MATRIX_GPU_SELECTOR="${selector}"
+              export MATRIX_SITE="${site}"
+              export MATRIX_QUEUE="${queue}"
+              export MATRIX_WORKERS="${workers}"
+              export MATRIX_EXPECTED_HOSTS="${hosts}"
+              export MATRIX_EXPECTED_GPUS_PER_HOST="${per_host}"
+              export MATRIX_REQUIRED_TOPOLOGY="${topology}"
+              if [[ "${target}" == "h200" && "${workers}" -eq 16 &&
+                    -n "${H200_SCHEDULER_RECOVERY_NODE:-}" &&
+                    "${H200_SCHEDULER_RECOVERY_NODE}" != '$('* ]]; then
+                export MATRIX_SCHEDULER_RECOVERY_NODE="${H200_SCHEDULER_RECOVERY_NODE}"
+              else
+                unset MATRIX_SCHEDULER_RECOVERY_NODE || true
+              fi
+
+              local workload test_name started outcome
+              for workload in serve train; do
+                test_name=TestRayServeGPU
+                [[ "${workload}" == "train" ]] && test_name=TestRayTrainGPU
+                started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                if go test -v -count=1 -timeout 50m -run "^${test_name}$" ./hardwarematrix/; then
+                  outcome=passed
+                else
+                  outcome=failed
+                  matrix_rc=1
+                fi
+                jq -cn \
+                  --arg target "${target}" \
+                  --arg workload "${workload}" \
+                  --arg topology "${topology}" \
+                  --arg status "${outcome}" \
+                  --arg reason "$([[ "${outcome}" == "failed" ]] && echo "go test exited non-zero")" \
+                  --arg started_at "${started}" \
+                  --argjson workers "${workers}" \
+                  --argjson expected_hosts "${hosts}" \
+                  '{
+                    target:$target,
+                    workload:$workload,
+                    workers:$workers,
+                    expected_hosts:$expected_hosts,
+                    required_topology:$topology,
+                    status:$status,
+                    reason:$reason,
+                    started_at:$started_at
+                  }' \
+                  >>"${summary}"
+                kubectl delete rayjobs.ray.io \
+                  -n "${namespace}" \
+                  -l "tau.azure.com/e2e-hardware-matrix=${target}" \
+                  --ignore-not-found \
+                  --wait=true \
+                  --timeout=10m || matrix_rc=1
+                kubectl wait --for=delete pod \
+                  -n "${namespace}" \
+                  -l "tau.azure.com/e2e-hardware-matrix=${target}" \
+                  --timeout=10m || matrix_rc=1
+              done
+            }
+
+            matrix_rc=0
+            while IFS= read -r target; do
+              run_case "${target}" 1 1 1 kubernetes.io/hostname
+              if [[ "${PROFILE}" == "full" ]]; then
+                name="$(jq -r '.name' <<<"${target}")"
+                if [[ "${name}" == "dgx-spark" ]]; then
+                  run_case "${target}" 2 2 1 tau.azure.com/site
+                else
+                  run_case "${target}" 8 1 8 kubernetes.io/hostname
+                  run_case "${target}" 16 2 8 tau.azure.com/site
+                fi
+              fi
+            done < <(jq -c '.targets[]' "${contract}")
+
+            available_targets="$(jq -c '[.targets[] | select(.status == "available") | {name,selector,site:.expected_site}]' "${contract}")"
+            if [[ "$(jq 'length' <<<"${available_targets}")" -ge 2 ]]; then
+              export E2E_MULTISITE_NAMESPACE="${namespace}"
+              export E2E_MULTISITE_QUEUE_PREFIX=matrix
+              export E2E_MULTISITE_TARGETS_JSON="${available_targets}"
+              cross_site_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              if go test -v -count=1 -timeout 25m \
+                -run '^TestConcurrentGPUWorkloadsAcrossHardwareSites$' ./multisite/; then
+                cross_site_status=passed
+                cross_site_reason=""
+              else
+                cross_site_status=failed
+                cross_site_reason="go test exited non-zero"
+                matrix_rc=1
+              fi
+              jq -cn \
+                --arg workload cross-site \
+                --arg status "${cross_site_status}" \
+                --arg reason "${cross_site_reason}" \
+                --arg started_at "${cross_site_started}" \
+                '{workload:$workload,status:$status,reason:$reason,started_at:$started_at}' \
+                >>"${summary}"
+            else
+              jq -cn \
+                --arg status skipped \
+                --arg reason "fewer than two hardware sites are available" \
+                '{workload:"cross-site",status:$status,reason:$reason}' >>"${summary}"
+            fi
+
+            exit "${matrix_rc}"
+        env:
+          PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
+          FLEX_NIGHTLY_MIN_RDMA_NODES: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES)
+          FLEX_NIGHTLY_INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
+          FLEX_NIGHTLY_DGX_SELECTOR: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR)
+          FLEX_NIGHTLY_DGX_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE)
+          FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
+          FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+          H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish hardware matrix results
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/hardware-matrix
+          artifact: taugrid-flex-hardware-matrix-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: h200_rdma
+    displayName: Optional H200 RDMA and NCCL extension
+    dependsOn: hardware_matrix
+    condition: and(succeeded(), ${{ eq(parameters.rdmaConformance, true) }})
+    timeoutInMinutes: 90
+    steps:
+      - checkout: self
+
+      - task: GoTool@0
+        displayName: Use Go 1.26.7
+        inputs:
+          version: 1.26.7
+
+      - task: AzureCLI@2
+        displayName: Run synthetic H200 InfiniBand conformance
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            namespace="taugrid-nightly-rdma-$(Build.BuildId)-$(System.JobAttempt)"
+            cleanup() {
+              rc=$?
+              trap - EXIT
+              set +e
+              kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" -o wide \
+                >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1
+              kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m
+              exit "${rc}"
+            }
+            trap cleanup EXIT
+
+            kubectl create namespace "${namespace}"
+            kubectl label namespace "${namespace}" tau.azure.com/gpu-queue=enabled
+            cat <<EOF | kubectl apply -f -
+            apiVersion: kueue.x-k8s.io/v1beta2
+            kind: LocalQueue
+            metadata:
+              name: h200
+              namespace: ${namespace}
+            spec:
+              clusterQueue: tau-gpu-cq
+            EOF
+
+            cd "$(Build.SourcesDirectory)/tests/e2e"
+            export AI_RUNTIME_E2E=1
+            export E2E_GPU=1
+            export E2E_FINEWEB=1
+            export E2E_STACK_USE_ARGOCD_QUEUE=1
+            export E2E_STACK_NAMESPACE="${namespace}"
+            export E2E_STACK_QUEUE=h200
+            export E2E_STACK_LARGE_GPU_QUEUE=h200
+            export GPU_NODE_SELECTOR_KEY=kueue.azure.com/gpu-series
+            export GPU_NODE_SELECTOR_VALUE=nd-h200-v5
+            export RAY_SUBMITTER_NODE_SELECTOR_KEY=kubernetes.azure.com/mode
+            export RAY_SUBMITTER_NODE_SELECTOR_VALUE=system
+            export FINEWEB_DATA_MODE=synthetic
+            export FINEWEB_TAS_MODE=site
+            export FINEWEB_TRAIN_WORKERS=16
+            export FINEWEB_TRAIN_STEPS
+            export FINEWEB_CHECKPOINT_INTERVAL
+            export FINEWEB_RAYJOB_TIMEOUT_MINUTES
+            export RAY_E2E_IMAGE
+            if [[ -n "${H200_SCHEDULER_RECOVERY_NODE:-}" &&
+                  "${H200_SCHEDULER_RECOVERY_NODE}" != '$('* ]]; then
+              export FINEWEB_SCHEDULER_RECOVERY_NODE="${H200_SCHEDULER_RECOVERY_NODE}"
+            fi
+            go test -v -count=1 -timeout 75m \
+              -run '^TestFineWebRayTrain16xH200IB$' ./stack/
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+          H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
+          FINEWEB_TRAIN_STEPS: $(FINEWEB_TRAIN_STEPS)
+          FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)
+          FINEWEB_RAYJOB_TIMEOUT_MINUTES: $(FINEWEB_RAYJOB_TIMEOUT_MINUTES)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish H200 RDMA diagnostics
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)
+          artifact: taugrid-flex-h200-rdma-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: nightly_report
+    displayName: Publish human-readable nightly report
+    dependsOn:
+      - preflight
+      - hardware_matrix
+      - h200_rdma
+    condition: always()
+    variables:
+      PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]
+      MATRIX_JOB_RESULT: $[ dependencies.hardware_matrix.result ]
+      RDMA_JOB_RESULT: $[ dependencies.h200_rdma.result ]
+    steps:
+      - checkout: self
+
+      - task: DownloadPipelineArtifact@2
+        displayName: Download available nightly artifacts
+        condition: always()
+        continueOnError: true
+        inputs:
+          buildType: current
+          targetPath: $(Build.ArtifactStagingDirectory)/nightly-report/input
+
+      - bash: |
+          set -euo pipefail
+          report_dir="$(Build.ArtifactStagingDirectory)/nightly-report"
+          mkdir -p "${report_dir}/input"
+          scripts/ci/taugrid-flex-nightly-report.sh \
+            "${report_dir}/input" \
+            "${report_dir}/taugrid-flex-nightly-report.md"
+          echo "##vso[task.uploadsummary]${report_dir}/taugrid-flex-nightly-report.md"
+        displayName: Generate and upload nightly summary
+        condition: always()
+        env:
+          FLEX_NIGHTLY_PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_RDMA_ENABLED: ${{ parameters.rdmaConformance }}
+          PREFLIGHT_JOB_RESULT: $(PREFLIGHT_JOB_RESULT)
+          MATRIX_JOB_RESULT: $(MATRIX_JOB_RESULT)
+          RDMA_JOB_RESULT: $(RDMA_JOB_RESULT)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish nightly report bundle
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/nightly-report
+          artifact: taugrid-flex-nightly-report-$(Build.BuildId)-$(System.JobAttempt)

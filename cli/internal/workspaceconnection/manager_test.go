@@ -230,6 +230,65 @@ func TestListCachedConnectionsOrdersMixedWorkspaceIdentitiesDeterministically(t 
 	}
 }
 
+func TestListAssignableConnectionsUsesSnapshotAndLegacyDescriptor(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	discovery, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDir := t.TempDir()
+	connectionsDir := filepath.Join(configDir, "connections")
+	if err := os.MkdirAll(connectionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	base := connectionState{
+		Workspace:         discovery.Descriptor.Workspace,
+		WorkspaceUID:      "workspace-uid",
+		AccessMethod:      discovery.Descriptor.Access.Method,
+		AccessIdentity:    discovery.Descriptor.AccessIdentity(),
+		AuthorizationMode: discovery.Descriptor.Authorization.Mode,
+		ContextName:       discovery.Descriptor.Cluster.ContextName,
+		SystemNamespace:   discovery.Descriptor.ResolvedSystemNamespace(),
+		KubeconfigPath:    "/tmp/kubeconfig",
+		Namespace:         "sample",
+		Queue:             "jobqueue",
+		RequiredRole:      discovery.Descriptor.Authorization.RequiredRole,
+		RepositoryRoot:    discoveryTrustRoot(discovery),
+		DescriptorPath:    discoveryTrustPath(discovery),
+		DescriptorDigest:  discovery.Digest,
+		ConfiguredAt:      now,
+		VerifiedAt:        now,
+	}
+	snapshot := base
+	snapshot.Schema = connectionStateSchemaV2
+	snapshot.Descriptor = &discovery.Descriptor
+	legacy := base
+	legacy.Schema = connectionStateSchema
+	legacy.VerifiedAt = now.Add(-time.Minute)
+	if err := fileutil.WriteJSONFileAtomic(filepath.Join(connectionsDir, "snapshot.json"), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := fileutil.WriteJSONFileAtomic(filepath.Join(connectionsDir, "legacy.json"), legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListAssignableConnections(configDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("assignable connections = %#v", got)
+	}
+	for _, connection := range got {
+		if connection.Descriptor.Workspace != "sample" ||
+			connection.WorkspaceUID != "workspace-uid" ||
+			connection.DescriptorPath != discoveryTrustPath(discovery) {
+			t.Fatalf("assignable connection = %#v", connection)
+		}
+	}
+}
+
 func testKubeconfig(server, token string) []byte {
 	return []byte(fmt.Sprintf(`apiVersion: v1
 kind: Config
@@ -327,12 +386,14 @@ func TestManagerConfiguresFirstConnectionAfterTrust(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Schema != connectionStateSchema ||
+	if state.Schema != connectionStateSchemaV2 ||
 		state.ConfiguredAt != now ||
 		state.VerifiedAt != now ||
 		state.AccessMethod != AccessMethodAKS ||
 		state.AccessIdentity != "aks:/subscriptions/00000000-0000-0000-0000-000000000000/resourcegroups/rg-ai/providers/microsoft.containerservice/managedclusters/taugrid-flex:11111111-1111-1111-1111-111111111111" ||
-		state.SystemNamespace != "tau-system" {
+		state.SystemNamespace != "tau-system" ||
+		state.Descriptor == nil ||
+		state.Descriptor.Workspace != "sample" {
 		t.Fatalf("persisted configuration/readiness state = %#v", state)
 	}
 }
