@@ -637,6 +637,64 @@ func TestAppliedQueueRemainsChargedToOldTeamDuringTeamMigration(t *testing.T) {
 	}
 }
 
+func TestWorkspaceMigrationRejectsReservationsAboveDestinationAllocation(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	sourceTeam := testTeam("vision", "16")
+	destinationTeam := testTeam("language", "8")
+	destinationTeam.UID = types.UID("destination-team-uid")
+	destinationTeam.Status.Phase = tauv1alpha1.TeamPhaseReady
+	destinationTeam.Status.ObservedGeneration = destinationTeam.Generation
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: destinationTeam.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "12", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	if err := unstructured.SetNestedField(queue.Object, teamCohortName(sourceTeam.Name), "spec", "cohortName"); err != nil {
+		t.Fatalf("set source Cohort: %v", err)
+	}
+	if err := unstructured.SetNestedSlice(queue.Object, []any{
+		map[string]any{
+			"name": "taugrid-gpu-h200",
+			"resources": []any{
+				map[string]any{"name": nvidiaGPUResourceName, "total": "12"},
+			},
+		},
+	}, "status", "flavorsReservation"); err != nil {
+		t.Fatalf("set reservation status: %v", err)
+	}
+	destinationCohort := desiredTeamCohort(destinationTeam, destinationTeam.Spec.Quota)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flavor, sourceTeam, destinationTeam, workspace, queue, destinationCohort).
+		Build()
+
+	_, err := newTestWorkspaceReconciler(c).reconcileWorkspaceClusterQueue(ctx, workspace)
+	if err == nil || !strings.Contains(err.Error(), "refusing workspace migration") ||
+		!strings.Contains(err.Error(), "below active reservations 12") {
+		t.Fatalf("workspace migration error = %v", err)
+	}
+	gotQueue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, gotQueue); err != nil {
+		t.Fatalf("Get ClusterQueue: %v", err)
+	}
+	if got, _, err := unstructured.NestedString(gotQueue.Object, "spec", "cohortName"); err != nil {
+		t.Fatalf("read ClusterQueue cohortName: %v", err)
+	} else if got != teamCohortName(sourceTeam.Name) {
+		t.Fatalf("ClusterQueue cohortName after rejected migration = %q, want %q", got, teamCohortName(sourceTeam.Name))
+	}
+	gotCohort := newQueueObject(cohortGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: destinationCohort.GetName()}, gotCohort); err != nil {
+		t.Fatalf("Get destination Cohort: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "8" {
+		t.Fatalf("destination Cohort quota after rejected migration = %q, want 8", got)
+	}
+}
+
 func TestUnreadyTeamAllowsWorkspaceQuotaReductionToConverge(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

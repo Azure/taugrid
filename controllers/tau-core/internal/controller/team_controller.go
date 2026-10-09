@@ -156,11 +156,22 @@ func (r *TauTeamReconciler) teamAllocationReductionOnly(
 }
 
 func (r *TauTeamReconciler) validateTeamReservations(ctx context.Context, team *tauv1alpha1.TauTeam) error {
+	return r.validateTeamReservationsWithAdditional(ctx, team, nil)
+}
+
+func (r *TauTeamReconciler) validateTeamReservationsWithAdditional(
+	ctx context.Context,
+	team *tauv1alpha1.TauTeam,
+	additional map[string]resource.Quantity,
+) error {
 	requested := make(map[string]resource.Quantity, len(team.Spec.Quota))
 	for _, quota := range team.Spec.Quota {
 		requested[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
 	}
 	reserved := map[string]resource.Quantity{}
+	for key, quantity := range additional {
+		reserved[key] = quantity.DeepCopy()
+	}
 	var workspaces tauv1alpha1.TauWorkspaceList
 	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
 		return err

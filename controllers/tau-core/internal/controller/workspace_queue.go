@@ -178,6 +178,15 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		return "", fmt.Errorf("team %q is not ready: %w", workspace.Spec.TeamRef.Name, err)
 	}
 	teamReconciler := &TauTeamReconciler{Client: r.Client, SystemNamespace: r.SystemNamespace}
+	appliedCohort, _, incomingReservations, err := teamReconciler.appliedWorkspaceQueue(ctx, workspace)
+	if err != nil {
+		return "", err
+	}
+	if appliedCohort != "" && appliedCohort != teamCohortName(team.Name) {
+		if err := teamReconciler.validateTeamReservationsWithAdditional(ctx, &team, incomingReservations); err != nil {
+			return "", fmt.Errorf("refusing workspace migration to team %q: %w", team.Name, err)
+		}
+	}
 	if err := teamReconciler.validateTeamCapacity(ctx, &team); err != nil {
 		return "", err
 	}
