@@ -291,3 +291,121 @@ per-run path - not just a per-run name - is required.
   the workspace lazily, so a headless run may never create one.
 - The harnesses pass `--no-proxy-server`; without it a system proxy can intercept
   `127.0.0.1` and the page never loads.
+
+## Stages
+
+Pick the stage by how far the change has travelled, not by how big it feels. Each
+stage is a superset of the one before it; do not skip to a later stage to appear
+thorough, and do not stop at an earlier one hoping CI covers the rest.
+
+### Stage 0 - while editing
+
+Fast, local, no cluster. Run the module you touched:
+
+```bash
+cd sdk/python/python && python -m pytest tests/test_<area>.py -q && python -m ruff check .
+cd cli && go build ./internal/<pkg>/ && gofmt -l ./internal/<pkg>/
+node --test tools/notebook-e2e-lifecycle.test.mjs
+```
+
+A syntax check belongs here and nowhere else. It cannot see an initialization-order
+fault, so anything with a lifecycle or a module top level must be executed.
+
+### Stage 1 - before every commit
+
+The same commands CI runs for the modules you changed, plus the two repo-wide gates:
+
+```bash
+python scripts/check-license-headers.py     # required for any source change
+cd cli && go vet ./... && go test ./...
+```
+
+Run the pre-push defect pass in AGENTS.md section "Review and Validation Discipline"
+over `git diff` at this point - that is what stage 1 is for.
+
+### Stage 2 - before opening or updating a PR
+
+Add the integration layers the change actually reaches:
+
+| If the change touches | Run |
+|---|---|
+| the notebook plugin, SDK surfaces | `cd sdk/python/python && python -m pytest` |
+| rendering, manifests, profiles | the offline e2e module (below) |
+| the browser UI | all three browser harnesses (see below) |
+| cluster behaviour | the live e2e module (below) |
+| docs only | `python scripts/check-docs-links.py` or the site build |
+
+### Stage 3 - live cluster
+
+```bash
+cd tests/e2e && AI_RUNTIME_E2E=0 go test -count=1 ./...   # offline half
+cd tests/e2e && AI_RUNTIME_E2E=1 go test -count=1 -timeout 15m ./...   # real cluster
+```
+
+Verify the kubeconfig first; the live half will happily run against whatever context
+is current.
+
+### Stage 4 - the actual job
+
+The job e2e is the notebook submission path: submit through the plugin's own API and
+watch the RayJob reach a terminal state in the cluster. This is the only stage that
+proves a user's notebook can run.
+
+```powershell
+# 1. cluster and profiles
+kubectl get clusters.tau.azure.com cluster -o jsonpath='{.status.workloadProfiles.ready}'
+# 2. submit through the plugin, not kubectl
+$body = @{ notebook=$nb; namespace="taugrid-default"; name="stage4-probe"; profile="azure.research.cpu.small"; queue="jobqueue" }
+$pv = Invoke-RestMethod -Uri "$base/preview?token=$tok" -Method Post -ContentType application/json -Body ($body | ConvertTo-Json -Compress)
+Invoke-RestMethod -Uri "$base/submit?token=$tok" -Method Post -ContentType application/json -Body ((@{...}) | ConvertTo-Json -Compress)
+# 3. confirm the run reached a terminal state AND the status explains it
+Invoke-RestMethod -Uri "$base/status?namespace=taugrid-default&name=stage4-probe&kind=RayJob&token=$tok"
+```
+
+A run that is merely `SUCCEEDED` is not sufficient evidence: read `reason`,
+`diagnostics` and whether the run's own log is reachable. The submitter-retry defect
+earlier in this project reported exactly that while the notebook had failed.
+
+## Windows: two environment failures that are not your change
+
+Both are recorded here so they are not re-debugged as regressions.
+
+1. **`exit status 9009` across python-invoking tests.** The suite shells out to
+   `python3`, which does not exist on a default Windows install (`python` does).
+   Observed in `sdk/python/python` (54 tests) and in `tests/e2e/stack`
+   (`TestPayloadFixturesEmbedCorrectDigestAndContent`). A shim restores progress:
+
+   ```powershell
+   $shim = "$env:TEMP\tau-shim"; New-Item -ItemType Directory -Force -Path $shim | Out-Null
+   Set-Content "$shim\python3.cmd" "@echo off`n$( (Get-Command python).Source ) %*"
+   $env:PATH = "$shim;$env:PATH"
+   ```
+
+   These pass on Linux CI. Establish the baseline with the same suite at `HEAD` in a
+   clean worktree before calling anything a regression.
+
+2. **Malformed temp paths in `tests/e2e/stack`.** With the shim in place the failure
+   moves to a real Windows portability bug in the test itself:
+
+   ```
+   ...\Temp\TestPayloadFixturesEmbedCorrectDigestAndContenttraining-rayjob-440928888\001\training_job.py
+   ```
+
+   The subtest name is concatenated onto the temp directory with no separator, which
+   is invisible on Linux where the joined string already contains `/`. Until this is
+   fixed the `tests/e2e/stack` package cannot pass on Windows, so treat a Windows run
+   of that package as untrusted rather than as evidence.
+
+3. **Toolchain drift makes `govulncheck` disagree with CI.** CI pins the toolchain
+   from `.go-version` (currently 1.26.9). A developer whose local Go is newer will
+   scan a *different standard library* and see findings that CI does not:
+
+   ```
+   GOTOOLCHAIN=local  go run .../govulncheck@v1.6.0 ./...   # local Go 1.27.0 -> stdlib findings fixed in 1.27.2
+   GOTOOLCHAIN=go1.26.9 go run .../govulncheck@v1.6.0 ./... # the CI toolchain -> 0 vulnerabilities
+   ```
+
+   Reproduce CI before concluding anything is wrong, and never use
+   `GOTOOLCHAIN=local` to judge a scan that CI runs with the pinned version. A
+   *newer* local toolchain is not automatically the safer one: go1.27.0 carries
+   advisories that go1.26.9 does not, and vice versa.
