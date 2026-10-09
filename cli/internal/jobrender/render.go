@@ -873,6 +873,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	applyContainerResourceOverrides(resources, o)
 	profile.AddGPUResources(resources, gpu.Count)
+	if o.Launcher == "torchrun" && o.Nodes > 1 {
+		addIntegerResource(resources, workloadmeta.ResourceTorchrunHostSlot, 1)
+	}
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
@@ -1013,6 +1016,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	if o.Nodes > 1 {
 		pod["subdomain"] = o.Name + HeadlessSuffix
+	}
+	if o.Launcher == "torchrun" && o.Nodes > 1 {
+		pod["affinity"] = torchrunHostAntiAffinity(o.Name)
 	}
 
 	jobSpec := map[string]any{
@@ -1233,6 +1239,31 @@ func applyContainerResourceOverrides(resources map[string]any, o Options) {
 	}
 	if len(limits) > 0 {
 		resources["limits"] = limits
+	}
+}
+
+func addIntegerResource(resources map[string]any, name string, value int) {
+	for _, key := range []string{"requests", "limits"} {
+		values := copyResourceQuantities(resources[key])
+		values[name] = value
+		resources[key] = values
+	}
+}
+
+func torchrunHostAntiAffinity(jobName string) map[string]any {
+	return map[string]any{
+		"podAntiAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": []any{
+				map[string]any{
+					"labelSelector": map[string]any{
+						"matchLabels": map[string]any{
+							"batch.kubernetes.io/job-name": jobName,
+						},
+					},
+					"topologyKey": "kubernetes.io/hostname",
+				},
+			},
+		},
 	}
 }
 

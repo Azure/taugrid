@@ -1,0 +1,438 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+trigger: none
+pr: none
+
+schedules:
+  - cron: "45 7 * * *"
+    displayName: Daily deployment to unbounded-stable
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  name: $(TAUGRID_UNBOUNDED_STABLE_POOL)
+
+variables:
+  - name: GOFLAGS
+    value: -mod=readonly
+  - name: GOTOOLCHAIN
+    value: local
+  - name: TAUGRID_RELEASE
+    value: taugrid
+  - name: TAUGRID_SYSTEM_NAMESPACE
+    value: tau-system
+
+jobs:
+  - job: preflight
+    displayName: Validate nightly deployment contract
+    timeoutInMinutes: 15
+    steps:
+      - checkout: self
+
+      - bash: scripts/ci/tests/taugrid-unbounded-stable-nightly-contract_test.sh
+        displayName: Validate pipeline contract
+
+      - bash: scripts/ci/tests/taugrid-unbounded-stable-nightly-report_test.sh
+        displayName: Validate nightly report
+
+  - job: build_images
+    displayName: Publish immutable nightly images
+    dependsOn: preflight
+    timeoutInMinutes: 180
+    steps:
+      - checkout: self
+
+      - task: AzureCLI@2
+        displayName: Build, publish, and verify deployment images
+        inputs:
+          azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            require_value() {
+              local name="$1"
+              local value="${!name:-}"
+              if [[ -z "${value}" || "${value}" == '$('* ]]; then
+                echo "##vso[task.logissue type=error]${name} must be configured in Azure DevOps"
+                exit 1
+              fi
+            }
+
+            require_value UNBOUNDED_STABLE_ACR_NAME
+            require_value NIGHTLY_IMAGE_REPOSITORY_PREFIX
+
+            registry="${UNBOUNDED_STABLE_ACR_NAME}.azurecr.io"
+            image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"
+            artifact_dir="$(Build.ArtifactStagingDirectory)/images"
+            mkdir -p "${artifact_dir}"
+
+            az acr login --name "${UNBOUNDED_STABLE_ACR_NAME}"
+            builder="taugrid-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
+            docker buildx create --name "${builder}" --driver docker-container --use
+            trap 'docker buildx rm "${builder}" >/dev/null 2>&1 || true' EXIT
+
+            controller_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}"
+            portal_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}"
+            collector_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"
+
+            make -C images/tau-core-controller docker-push \
+              IMG="${controller_image}" \
+              TAG="${image_tag}" \
+              PLATFORMS=linux/amd64,linux/arm64
+            make -C images/taugrid-portal docker-push \
+              IMG="${portal_image}" \
+              TAG="${image_tag}" \
+              VERSION="${image_tag}" \
+              COMMIT="${BUILD_SOURCEVERSION}" \
+              DATE="$(git show -s --format=%cI "${BUILD_SOURCEVERSION}")" \
+              PLATFORMS=linux/amd64,linux/arm64
+            make -C images/gpu-metrics-collector docker-push \
+              ACR_REGISTRY="${registry}" \
+              PUSH_IMG="${collector_image}" \
+              TAG="${image_tag}" \
+              PLATFORMS=linux/amd64,linux/arm64
+
+            for image in \
+              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}" \
+              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}" \
+              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"; do
+              digest="$(az acr repository show \
+                --name "${UNBOUNDED_STABLE_ACR_NAME}" \
+                --image "${image}" \
+                --query digest \
+                --output tsv)"
+              if [[ -z "${digest}" ]]; then
+                echo "##vso[task.logissue type=error]Published image ${image} has no registry digest"
+                exit 1
+              fi
+            done
+
+            jq -n \
+              --arg registry "${registry}" \
+              --arg repositoryPrefix "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}" \
+              --arg tag "${image_tag}" \
+              --arg sourceVersion "${BUILD_SOURCEVERSION}" \
+              '{
+                registry: $registry,
+                repository_prefix: $repositoryPrefix,
+                tag: $tag,
+                source_version: $sourceVersion
+              }' >"${artifact_dir}/images.json"
+        env:
+          UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
+          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish immutable image contract
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/images
+          artifact: taugrid-unbounded-stable-images
+
+  - deployment: deploy_unbounded_stable
+    displayName: Deploy TauGrid to unbounded-stable
+    environment: unbounded-stable
+    dependsOn: build_images
+    timeoutInMinutes: 90
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+
+            - task: GoTool@0
+              displayName: Use Go 1.26.9
+              inputs:
+                version: 1.26.9
+
+            - task: DownloadPipelineArtifact@2
+              displayName: Download immutable image contract
+              inputs:
+                artifact: taugrid-unbounded-stable-images
+                path: $(Pipeline.Workspace)/taugrid-unbounded-stable-images
+
+            - task: AzureCLI@2
+              displayName: Upgrade and validate TauGrid
+              inputs:
+                azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION)
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  set -euo pipefail
+
+                  require_value() {
+                    local name="$1"
+                    local value="${!name:-}"
+                    if [[ -z "${value}" || "${value}" == '$('* ]]; then
+                      echo "##vso[task.logissue type=error]${name} must be configured in Azure DevOps"
+                      exit 1
+                    fi
+                  }
+
+                  require_value UNBOUNDED_STABLE_RESOURCE_GROUP
+                  require_value UNBOUNDED_STABLE_CLUSTER_NAME
+                  require_value TAUGRID_RELEASE
+                  require_value TAUGRID_SYSTEM_NAMESPACE
+
+                  image_contract="$(Pipeline.Workspace)/taugrid-unbounded-stable-images/images.json"
+                  test -s "${image_contract}"
+                  registry="$(jq -r '.registry' "${image_contract}")"
+                  repository_prefix="$(jq -r '.repository_prefix' "${image_contract}")"
+                  image_tag="$(jq -r '.tag' "${image_contract}")"
+                  source_version="$(jq -r '.source_version' "${image_contract}")"
+                  [[ "${source_version}" == "${BUILD_SOURCEVERSION}" ]]
+
+                  artifact_dir="$(Build.ArtifactStagingDirectory)/deployment"
+                  diagnostics_dir="${artifact_dir}/diagnostics"
+                  result_file="${artifact_dir}/deployment-result.json"
+                  values_file="$(Agent.TempDirectory)/unbounded-stable-values.yaml"
+                  render_file="$(Agent.TempDirectory)/unbounded-stable-render.txt"
+                  mkdir -p "${diagnostics_dir}"
+
+                  export KUBECONFIG="$(Agent.TempDirectory)/unbounded-stable-kubeconfig"
+                  tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+                  mkdir -p "${tools_dir}"
+                  if ! command -v kubelogin >/dev/null 2>&1; then
+                    az aks install-cli \
+                      --install-location "${tools_dir}/kubectl" \
+                      --kubelogin-install-location "${tools_dir}/kubelogin"
+                    export PATH="${tools_dir}:${PATH}"
+                  fi
+
+                  write_result() {
+                    local status="$1"
+                    local reason="$2"
+                    local previous_revision="${3:-}"
+                    local current_revision="${4:-}"
+                    jq -n \
+                      --arg environment unbounded-stable \
+                      --arg status "${status}" \
+                      --arg reason "${reason}" \
+                      --arg sourceVersion "${source_version}" \
+                      --arg imageTag "${image_tag}" \
+                      --arg previousRevision "${previous_revision}" \
+                      --arg currentRevision "${current_revision}" \
+                      '{
+                        environment: $environment,
+                        status: $status,
+                        reason: $reason,
+                        source_version: $sourceVersion,
+                        image_tag: $imageTag,
+                        previous_revision: $previousRevision,
+                        current_revision: $currentRevision
+                      }' >"${result_file}"
+                  }
+
+                  cleanup() {
+                    rc=$?
+                    trap - EXIT
+                    set +e
+                    helm status "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --output json 2>"${diagnostics_dir}/helm-status-error.txt" |
+                      jq '{
+                        name: .name,
+                        namespace: .namespace,
+                        revision: .version,
+                        status: .info.status,
+                        description: .info.description,
+                        first_deployed: .info.first_deployed,
+                        last_deployed: .info.last_deployed,
+                        deleted: .info.deleted
+                      }' >"${diagnostics_dir}/helm-status.json"
+                    helm history "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --output yaml >"${diagnostics_dir}/helm-history.yaml" 2>&1
+                    kubectl --context unbounded-stable \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      get deployments,daemonsets,statefulsets,pods -o wide \
+                      >"${diagnostics_dir}/resources.txt" 2>&1
+                    kubectl --context unbounded-stable \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      get events --sort-by=.lastTimestamp \
+                      >"${diagnostics_dir}/events.txt" 2>&1
+                    if [[ ! -s "${result_file}" ]]; then
+                      write_result failed "deployment command failed; Helm atomic rollback was requested"
+                    fi
+                    rm -f "${values_file}" "${render_file}" "${KUBECONFIG}"
+                    exit "${rc}"
+                  }
+                  trap cleanup EXIT
+
+                  az aks get-credentials \
+                    --resource-group "${UNBOUNDED_STABLE_RESOURCE_GROUP}" \
+                    --name "${UNBOUNDED_STABLE_CLUSTER_NAME}" \
+                    --context unbounded-stable \
+                    --file "${KUBECONFIG}" \
+                    --overwrite-existing
+                  kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+                  kubectl --context unbounded-stable version
+
+                  release_state="$(
+                    TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
+                      TAUGRID_SYSTEM_NAMESPACE="${TAUGRID_SYSTEM_NAMESPACE}" \
+                      scripts/ci/taugrid-unbounded-stable-nightly-recover.sh inspect
+                  )"
+                  previous_revision="$(jq -r '.revision' <<<"${release_state}")"
+                  if [[ "$(jq -r '.exists' <<<"${release_state}")" == "true" ]]; then
+                    if [[ "$(jq -r '.status' <<<"${release_state}")" != "deployed" ]]; then
+                      echo "##vso[task.logissue type=error]Existing TauGrid release is not deployed; repair it before running the nightly"
+                      exit 1
+                    fi
+                    helm get values "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --output yaml >"${values_file}"
+
+                    live_values="$(helm get values "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context unbounded-stable \
+                      --all \
+                      --output json)"
+                    if jq -e '.["taugrid-core"].lifecycleRecorder.enabled == true' \
+                      <<<"${live_values}" >/dev/null; then
+                      echo "##vso[task.logissue type=error]The nightly cannot replace the lifecycle recorder with an unpublished image; use a released MCR image or disable the recorder before enabling this deployment"
+                      exit 1
+                    fi
+                  else
+                    printf '{}\n' >"${values_file}"
+                  fi
+
+                  make -C cli build
+                  scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid
+
+                  install_args=(
+                    cluster install
+                    --context unbounded-stable
+                    --release "${TAUGRID_RELEASE}"
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}"
+                    --chart charts/taugrid
+                    --version "$(awk '$1 == "version:" { print $2; exit }' charts/taugrid/Chart.yaml)"
+                    --values "${values_file}"
+                    --timeout 20m
+                    --wait
+                    --atomic
+                    --set-string "tau-core-controller.image.repository=${registry}/${repository_prefix}/tau-core-controller"
+                    --set-string "tau-core-controller.image.tag=${image_tag}"
+                    --set-string "tau-core-controller.image.digest="
+                    --set-string "tau-core-controller.image.pullPolicy=Always"
+                    --set-string "taugrid-core.portal.image.repository=${registry}/${repository_prefix}/taugrid-portal"
+                    --set-string "taugrid-core.portal.image.tag=${image_tag}"
+                    --set-string "taugrid-core.portal.image.digest="
+                    --set-string "taugrid-core.portal.image.pullPolicy=Always"
+                    --set-string "taugrid-core.stellar.image.repository=${registry}/${repository_prefix}/taugrid-portal"
+                    --set-string "taugrid-core.stellar.image.tag=${image_tag}"
+                    --set-string "taugrid-core.stellar.image.pullPolicy=Always"
+                    --set-string "gpu-monitoring.metricsCollector.image.repository=${registry}/${repository_prefix}/gpu-metrics-collector"
+                    --set-string "gpu-monitoring.metricsCollector.image.tag=${image_tag}"
+                    --set-string "gpu-monitoring.metricsCollector.image.digest="
+                  )
+
+                  cli/bin/tau "${install_args[@]}" --dry-run \
+                    >"${render_file}" 2>&1
+                  printf 'Dry-run rendering completed successfully for source %s.\n' \
+                    "${source_version}" >"${diagnostics_dir}/render-summary.txt"
+                  recover_failed_deployment() {
+                    local failure_reason="$1"
+                    local recovery_reason
+                    if recovery_reason="$(
+                      TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
+                        TAUGRID_SYSTEM_NAMESPACE="${TAUGRID_SYSTEM_NAMESPACE}" \
+                        TAUGRID_PREVIOUS_REVISION="${previous_revision}" \
+                        TAUGRID_DIAGNOSTICS_DIR="${diagnostics_dir}" \
+                        scripts/ci/taugrid-unbounded-stable-nightly-recover.sh recover
+                    )"; then
+                      write_result failed \
+                        "${failure_reason}; ${recovery_reason}" \
+                        "${previous_revision}"
+                    else
+                      write_result failed \
+                        "${failure_reason}; recovery failed" \
+                        "${previous_revision}"
+                    fi
+                  }
+                  if ! cli/bin/tau "${install_args[@]}" \
+                    >"${diagnostics_dir}/install-output.txt" 2>&1; then
+                    recover_failed_deployment \
+                      "installation or embedded readiness validation failed"
+                    exit 1
+                  fi
+
+                  current_revision="$(helm status "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --kube-context unbounded-stable \
+                    --output json | jq -r '.version | tostring')"
+                  if ! cli/bin/tau cluster validate installation \
+                    --context unbounded-stable \
+                    --release "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --timeout 10m \
+                    >"${diagnostics_dir}/validation.txt" 2>&1; then
+                    recover_failed_deployment "post-install readiness validation failed"
+                    exit 1
+                  fi
+
+                  write_result passed "" "${previous_revision}" "${current_revision}"
+              env:
+                UNBOUNDED_STABLE_RESOURCE_GROUP: $(TAUGRID_UNBOUNDED_STABLE_RESOURCE_GROUP)
+                UNBOUNDED_STABLE_CLUSTER_NAME: $(TAUGRID_UNBOUNDED_STABLE_CLUSTER_NAME)
+                TAUGRID_RELEASE: $(TAUGRID_RELEASE)
+                TAUGRID_SYSTEM_NAMESPACE: $(TAUGRID_SYSTEM_NAMESPACE)
+
+            - task: PublishPipelineArtifact@1
+              displayName: Publish deployment diagnostics
+              condition: always()
+              inputs:
+                targetPath: $(Build.ArtifactStagingDirectory)/deployment
+                artifact: taugrid-unbounded-stable-deployment-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: nightly_report
+    displayName: Publish unbounded-stable deployment report
+    dependsOn:
+      - preflight
+      - build_images
+      - deploy_unbounded_stable
+    condition: always()
+    variables:
+      PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]
+      BUILD_IMAGES_JOB_RESULT: $[ dependencies.build_images.result ]
+      DEPLOY_JOB_RESULT: $[ dependencies.deploy_unbounded_stable.result ]
+    steps:
+      - checkout: self
+
+      - task: DownloadPipelineArtifact@2
+        displayName: Download available nightly artifacts
+        condition: always()
+        continueOnError: true
+        inputs:
+          buildType: current
+          targetPath: $(Build.ArtifactStagingDirectory)/nightly-report/input
+
+      - bash: |
+          set -euo pipefail
+          report_dir="$(Build.ArtifactStagingDirectory)/nightly-report"
+          mkdir -p "${report_dir}/input"
+          scripts/ci/taugrid-unbounded-stable-nightly-report.sh \
+            "${report_dir}/input" \
+            "${report_dir}/taugrid-unbounded-stable-nightly-report.md"
+          echo "##vso[task.uploadsummary]${report_dir}/taugrid-unbounded-stable-nightly-report.md"
+        displayName: Generate and upload nightly summary
+        condition: always()
+        env:
+          PREFLIGHT_JOB_RESULT: $(PREFLIGHT_JOB_RESULT)
+          BUILD_IMAGES_JOB_RESULT: $(BUILD_IMAGES_JOB_RESULT)
+          DEPLOY_JOB_RESULT: $(DEPLOY_JOB_RESULT)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish nightly report bundle
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/nightly-report
+          artifact: taugrid-unbounded-stable-nightly-report-$(Build.BuildId)-$(System.JobAttempt)
