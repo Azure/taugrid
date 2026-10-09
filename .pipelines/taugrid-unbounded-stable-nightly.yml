@@ -13,17 +13,13 @@ schedules:
     always: true
 
 pool:
-  name: 1es-aks-ai-runtime-ado-eastus2
+  name: $(TAUGRID_UNBOUNDED_STABLE_POOL)
 
 variables:
-  - name: imageServiceConnection
-    value: aks ai runtime - corp
   - name: GOFLAGS
     value: -mod=readonly
   - name: GOTOOLCHAIN
     value: local
-  - name: NIGHTLY_IMAGE_REPOSITORY_PREFIX
-    value: unlisted/aks/ai-runtime
   - name: TAUGRID_RELEASE
     value: taugrid
   - name: TAUGRID_SYSTEM_NAMESPACE
@@ -52,7 +48,7 @@ jobs:
       - task: AzureCLI@2
         displayName: Build, publish, and verify deployment images
         inputs:
-          azureSubscription: $(imageServiceConnection)
+          azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
           scriptType: bash
           scriptLocation: inlineScript
           inlineScript: |
@@ -129,7 +125,7 @@ jobs:
               }' >"${artifact_dir}/images.json"
         env:
           UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
-          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(NIGHTLY_IMAGE_REPOSITORY_PREFIX)
+          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish immutable image contract

@@ -23,12 +23,10 @@ fail() {
 
 grep -Fq 'cron: "45 7 * * *"' "$PIPELINE" ||
   fail "pipeline must run nightly"
-grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
-  fail "pipeline must use the approved 1ES pool"
-grep -Fq "azureSubscription: \$(imageServiceConnection)" "$PIPELINE" ||
-  fail "image publication must use the approved registry service connection"
-grep -Fq "value: aks ai runtime - corp" "$PIPELINE" ||
-  fail "image publication must use the service connection that owns aksairuntime"
+grep -Fq "name: \$(TAUGRID_UNBOUNDED_STABLE_POOL)" "$PIPELINE" ||
+  fail "pipeline must use a protected environment-specific pool"
+grep -Fq "azureSubscription: \$(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)" "$PIPELINE" ||
+  fail "image publication must use a protected environment-specific service connection"
 grep -Fq "azureSubscription: \$(TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION)" "$PIPELINE" ||
   fail "cluster deployment must use an environment-specific protected service connection"
 grep -Fq "deployment: deploy_unbounded_stable" "$PIPELINE" ||
@@ -44,7 +42,10 @@ for variable in \
   TAUGRID_UNBOUNDED_STABLE_ACR_NAME \
   TAUGRID_UNBOUNDED_STABLE_RESOURCE_GROUP \
   TAUGRID_UNBOUNDED_STABLE_CLUSTER_NAME \
-  TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION; do
+  TAUGRID_UNBOUNDED_STABLE_SERVICE_CONNECTION \
+  TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION \
+  TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX \
+  TAUGRID_UNBOUNDED_STABLE_POOL; do
   grep -Fq "\$(${variable})" "$PIPELINE" ||
     fail "${variable} must be supplied by Azure DevOps"
 done
@@ -60,7 +61,7 @@ grep -Fq "gpu-metrics-collector docker-push" "$PIPELINE" ||
 grep -Fq "az acr repository show" "$PIPELINE" ||
   fail "pipeline must verify published image digests"
 if grep -Fq "az aks check-acr" "$PIPELINE"; then
-  fail "the TME deployment identity must not query a cross-tenant corporate ACR"
+  fail "the deployment identity must not query the image registry"
 fi
 
 grep -Fq 'helm get values "${TAUGRID_RELEASE}"' "$PIPELINE" ||
@@ -112,7 +113,7 @@ grep -Fq "taugrid-unbounded-stable-nightly-report.md" "$PIPELINE" ||
 if grep -Eqi \
   '(subscriptions/[0-9a-f-]{36}|https://[^[:space:]]*unbounded|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})' \
   "$PIPELINE"; then
-  fail "pipeline must not contain subscriptions, private endpoints, or GUIDs"
+  fail "pipeline must not contain internal infrastructure coordinates"
 fi
 
 echo "TauGrid unbounded-stable nightly contract tests passed"

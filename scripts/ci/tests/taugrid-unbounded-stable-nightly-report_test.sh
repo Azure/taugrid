@@ -22,7 +22,7 @@ mkdir -p "${fixture}/images" "${fixture}/deployment"
 cat >"${fixture}/images/images.json" <<'EOF'
 {
   "registry": "example.azurecr.io",
-  "repository_prefix": "unlisted/aks/ai-runtime",
+  "repository_prefix": "nightly/taugrid",
   "tag": "nightly-0123456789ab-42",
   "source_version": "0123456789abcdef"
 }
