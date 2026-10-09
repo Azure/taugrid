@@ -46,7 +46,10 @@ baselineQueue:
     name: taugrid-default-cpu
     # The baseline flavor covers CPU and memory only. Keep it free of GPU labels
     # and GPU taint tolerations so CPU-only workloads remain on general-purpose
-    # nodes when the cluster also has tainted GPU pools.
+    # nodes when the cluster also has tainted GPU pools. When topology is
+    # enabled, the chart attaches a hostname-only taugrid-cpu-topology so Tau's
+    # unconstrained CPU placement contract is accepted without requiring GPU
+    # site, network-domain, or accelerator-domain labels.
     nodeLabels:
       kubernetes.io/os: linux
     tolerations: []

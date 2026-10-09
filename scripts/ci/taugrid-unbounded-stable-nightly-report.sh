@@ -44,6 +44,7 @@ job_result() {
 
 image_file="$(find_first images.json)"
 deployment_file="$(find_first deployment-result.json)"
+smoke_file="$(find_first tau-native-smoke-result.json)"
 
 {
   echo "# TauGrid unbounded-stable nightly deployment"
@@ -85,6 +86,43 @@ deployment_file="$(find_first deployment-result.json)"
     fi
   else
     echo "- No deployment result was produced. Deployment job outcome: **$(job_result "${DEPLOY_JOB_RESULT:-Unknown}")**."
+  fi
+  echo
+
+  echo "## Tau-native workload smoke"
+  echo
+  if [[ -n "$smoke_file" ]]; then
+    smoke_status="$(jq -r '.status // "unknown"' "$smoke_file")"
+    smoke_reason="$(jq -r '.reason // ""' "$smoke_file")"
+    printf -- '- Outcome: **%s**' "$(markdown_cell "$smoke_status")"
+    [[ -z "$smoke_reason" ]] || printf ' - %s' "$(markdown_cell "$smoke_reason")"
+    echo
+    printf -- '- Run: `%s`\n' \
+      "$(markdown_cell "$(jq -r '.run_name // "unknown"' "$smoke_file")")"
+    printf -- '- Workspace/profile: `%s` / `%s`\n' \
+      "$(markdown_cell "$(jq -r '.workspace // "unknown"' "$smoke_file")")" \
+      "$(markdown_cell "$(jq -r '.profile // "unknown"' "$smoke_file")")"
+    printf -- '- Tau lifecycle state: `%s`\n' \
+      "$(markdown_cell "$(jq -r '.lifecycle_state // "unknown"' "$smoke_file")")"
+    printf -- '- Config SHA-256: `%s`\n' \
+      "$(markdown_cell "$(jq -r '.config_sha256 // "unknown"' "$smoke_file")")"
+    if jq -e '.topology != null' "$smoke_file" >/dev/null; then
+      printf -- '- Topology admission: workload `%s` PodSet `%s` admitted by `%s`; `%s` using `%s` for %s workers\n' \
+        "$(markdown_cell "$(jq -r '.topology.workload // "unknown"' "$smoke_file")")" \
+        "$(markdown_cell "$(jq -r '.topology.pod_set // "unknown"' "$smoke_file")")" \
+        "$(markdown_cell "$(jq -r '.topology.cluster_queue // "unknown"' "$smoke_file")")" \
+        "$(markdown_cell "$(jq -r '.topology.level // "unknown"' "$smoke_file")")" \
+        "$(markdown_cell "$(jq -r '.topology.flavor // "unknown"' "$smoke_file")")" \
+        "$(markdown_cell "$(jq -r '.topology.assigned_workers // 0' "$smoke_file")")"
+      printf -- '- Topology domains: `%s`\n' \
+        "$(markdown_cell "$(jq -r \
+          '.topology.domains | map((.values | join("/")) + "=" + (.count | tostring)) | join(", ")' \
+          "$smoke_file")")"
+      printf -- '- Ray worker nodes: `%s`\n' \
+        "$(markdown_cell "$(jq -r '.topology.pod_nodes | join(", ")' "$smoke_file")")"
+    fi
+  else
+    echo "- No Tau-native smoke result was produced. Deployment job outcome: **$(job_result "${DEPLOY_JOB_RESULT:-Unknown}")**."
   fi
   echo
 
