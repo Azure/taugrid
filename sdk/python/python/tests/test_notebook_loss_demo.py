@@ -2,9 +2,12 @@
 # Licensed under the MIT License.
 
 import importlib.util
+import io
 import json
 import math
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,3 +81,68 @@ def test_demo_notebook_is_deterministic_and_cpu_only(demo):
     assert "step=" in source and "loss=" in source and "flush=True" in source
     assert "import time" in source
     assert "random" not in source and "torch" not in source
+
+
+class LegacyHTTPResponse:
+    """urllib3 1.26 shape: no ``read1`` on the response itself, only on ``_fp``."""
+
+    def __init__(self, data, status=200):
+        self.status = status
+        self._body = io.BytesIO(data)
+        self.closed = False
+        self._fp = SimpleNamespace(read1=self._body.read1)
+
+    def set_read_timeout(self, timeout):
+        assert 0 < timeout
+
+    def close(self):
+        self.closed = True
+        self._body.close()
+
+
+class LegacyPoolManager:
+    """Transport double so the real ``call`` path runs, not a replaced stub."""
+
+    def __init__(self, response):
+        self.response = response
+        self.requests = []
+
+    def request(self, method, url, **kwargs):
+        self.requests.append((method, url, kwargs))
+        return self.response
+
+    def clear(self):
+        pass
+
+
+def _legacy_call(demo, monkeypatch, response):
+    manager = LegacyPoolManager(response)
+    monkeypatch.setattr(demo.urllib3, "PoolManager", lambda: manager)
+    result = demo.call("http://127.0.0.1:8888", "tok", "capabilities", deadline=time.monotonic() + 10)
+    return manager, result
+
+
+def test_call_decodes_a_legacy_response_without_response_read1(demo, monkeypatch):
+    """The demo must reuse the shared reader: its old local loop called
+    ``response.read1``, which urllib3 1.26 does not have, so the first API reply
+    raised AttributeError on the supported floor while the floor tests passed."""
+    response = LegacyHTTPResponse(json.dumps({"submissionEnabled": True}).encode())
+    assert not hasattr(response, "read1"), "the floor response has no read1 to fall back on"
+
+    manager, result = _legacy_call(demo, monkeypatch, response)
+
+    assert result == {"submissionEnabled": True}
+    assert response.closed
+    _, _, kwargs = manager.requests[0]
+    assert kwargs["preload_content"] is False
+    assert kwargs["retries"] is False
+
+
+def test_call_keeps_the_byte_ceiling_and_cleanup_on_the_shared_reader(demo, monkeypatch):
+    response = LegacyHTTPResponse(b"x" * (demo.API_LIMIT + 1))
+    monkeypatch.setattr(demo.urllib3, "PoolManager", lambda: LegacyPoolManager(response))
+
+    with pytest.raises(ValueError, match="exceeded 1 MiB"):
+        demo.call("http://127.0.0.1:8888", "tok", "capabilities", deadline=time.monotonic() + 10)
+
+    assert response.closed

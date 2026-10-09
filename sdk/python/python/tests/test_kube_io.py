@@ -16,7 +16,7 @@ These tests pin both generations: a response with ``read1``, and one with only
 import io
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
@@ -185,6 +185,80 @@ def test_slow_drip_response_cannot_outlive_the_deadline():
         assert elapsed < 3, f"slow-drip read outlived its deadline by {elapsed:.1f}s"
     finally:
         server.shutdown()
+
+
+def test_chunked_slow_drip_interrupts_framing_and_releases_workers():
+    """A chunked peer can drip framing bytes just under the socket inactivity
+    timeout. ``http.client`` reads chunk-size lines and chunk extensions with a
+    buffered ``readline`` inside ``read1``, so the per-chunk timeout never fires
+    and the deadline check between chunks is never reached. The watchdog must
+    break the framing read, and every reader must release its slot: four such
+    drips otherwise hold all four collection slots."""
+    step = 0.05
+
+    class Drip(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            try:
+                while True:
+                    # An unterminated chunk-extension line: no CRLF ever arrives,
+                    # so http.client keeps extending the same readline.
+                    self.wfile.write(b";drip")
+                    self.wfile.flush()
+                    time.sleep(step)
+            except OSError:
+                # Expected once the reader's watchdog hangs up at the deadline.
+                pass
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+
+    slots = threading.BoundedSemaphore(4)
+    outcomes: list[str] = []
+    started = time.monotonic()
+
+    def reader():
+        with slots:
+            manager = urllib3.PoolManager()
+            try:
+                response = manager.request("GET", url, preload_content=False, retries=False,
+                                           timeout=urllib3.Timeout(connect=2, read=30))
+                try:
+                    bounded_body(response, time.monotonic() + 1)
+                    outcomes.append("returned")
+                except TimeoutError:
+                    outcomes.append("deadline")
+                finally:
+                    response.close()
+            finally:
+                manager.clear()
+
+    workers = [threading.Thread(target=reader, daemon=True) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=8)
+    elapsed = time.monotonic() - started
+    try:
+        assert not any(worker.is_alive() for worker in workers), "a drip read held its worker past the deadline"
+        assert outcomes == ["deadline"] * 4, outcomes
+        # The deadline, not a fast failure, is what ended each read...
+        assert elapsed >= 1, f"chunked framing drip failed before its deadline ({elapsed:.2f}s)"
+        # ...and it ended near the deadline rather than after the peer's drip ran on.
+        assert elapsed < 4, f"chunked framing drip outlived its deadline by {elapsed:.1f}s"
+        assert all(slots.acquire(blocking=False) for _ in range(4)), "collection slots were not released"
+        for _ in range(4):
+            slots.release()
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_read_document_passes_decoded_doubles_through_unchanged():

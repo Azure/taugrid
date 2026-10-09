@@ -18,6 +18,8 @@ from pathlib import Path
 
 import urllib3
 
+from tau._kube_io import bounded_body
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOK = REPO_ROOT / "examples" / "notebook-loss-curve-demo.ipynb"
 API_LIMIT = 1024 * 1024
@@ -41,28 +43,17 @@ def call(server, token, path, *, deadline, body=None, params=None):
             timeout=urllib3.Timeout(connect=min(2, remaining), read=min(30, remaining)),
             preload_content=False, retries=False, redirect=False,
         )
-        data = bytearray()
-        while len(data) <= API_LIMIT:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Demo deadline expired")
-            raw = getattr(getattr(getattr(response, "_fp", None), "fp", None), "raw", None)
-            sock = getattr(raw, "_sock", None)
-            if sock is not None:
-                sock.settimeout(min(30, remaining))
-            elif not response.isclosed():
-                raise TimeoutError("Cannot enforce response read deadline")
-            chunk = response.read1(min(4096, API_LIMIT + 1 - len(data)))
-            if not chunk:
-                break
-            data.extend(chunk)
-        if time.monotonic() >= deadline:
-            raise TimeoutError("Demo deadline expired")
+        status = response.status
+        # Reuse the SDK's bounded reader instead of an HTTP-loop copy: it handles
+        # the urllib3 1.26 shape (no ``read1`` on the response, only on ``_fp``),
+        # enforces the absolute deadline including chunked framing, applies the
+        # byte ceiling, closes the response, and never retries.
+        data = bounded_body(response, deadline, API_LIMIT)
         if len(data) > API_LIMIT:
             raise ValueError("API response exceeded 1 MiB")
         result = json.loads(data or b"{}")
-        if response.status != 200:
-            raise ValueError(f"{path} returned HTTP {response.status}: {result.get('message', 'request failed')}")
+        if status != 200:
+            raise ValueError(f"{path} returned HTTP {status}: {result.get('message', 'request failed')}")
         return result
     finally:
         if response is not None:

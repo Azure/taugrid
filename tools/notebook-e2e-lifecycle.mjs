@@ -10,6 +10,7 @@
 // ids this run created.
 
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 
 import { createRequire } from "node:module";
@@ -129,15 +130,29 @@ export async function importPlaywright() {
   return await import("playwright");
 }
 
+// True only when this module is the process entry point. Entry-point harnesses
+// export the same code they run, so importing one for a tooling check does not
+// launch a browser or start a run. `node tools/run-x.mjs` keeps working because
+// argv[1] resolves to this file's own URL.
+export function isDirectRun(moduleUrl) {
+  return Boolean(process.argv[1]) && moduleUrl === pathToFileURL(process.argv[1]).href;
+}
+
 // Work profile: a persistent Microsoft Edge context (its own user-data dir that
 // keeps cookies and work logins across runs). Edge is driven via the msedge
 // channel, so no bundled Chromium is used.
-const PROFILE_DIR =
-  process.env.PLAYWRIGHT_PROFILE_DIR ||
-  path.join(process.env.LOCALAPPDATA || process.env.TEMP, "tau-jupyter-work-profile");
+// Resolve the directory lazily, not at module load: deriving it from LOCALAPPDATA
+// or TEMP at the top level threw a TypeError on an import in any environment
+// that defines neither, even for suites that never launch a browser. This is the
+// single implementation of the fallback; harnesses must call it rather than
+// repeating the expression, or the next caller re-introduces the same throw.
+export function workProfileDir() {
+  return process.env.PLAYWRIGHT_PROFILE_DIR
+    || path.join(process.env.LOCALAPPDATA || process.env.TEMP || os.tmpdir(), "tau-jupyter-work-profile");
+}
 
 export async function launchWorkProfileEdge(playwright, { height = 900 } = {}) {
-  return await playwright.chromium.launchPersistentContext(PROFILE_DIR, {
+  return await playwright.chromium.launchPersistentContext(workProfileDir(), {
     channel: "msedge",
     headless: process.env.HEADLESS === "1",
     viewport: { width: 1440, height },

@@ -12,9 +12,11 @@
 // Anchors come from docs/design/notebook-plugin.md ("Parent-owned e2e anchors").
 // Set KEEP_OPEN=1 to leave Edge open.
 
-import path from "node:path";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
+import {
+  importPlaywright,
+  isDirectRun,
+  workProfileDir,
+} from "./notebook-e2e-lifecycle.mjs";
 
 const SERVER = process.argv[2] || "http://127.0.0.1:8888";
 const TOKEN = process.argv[3] || "testplugin";
@@ -31,20 +33,12 @@ const LAB_URL = `${BASE}/lab/tree/${NOTEBOOK}?token=${TOKEN}`;
 const NAMESPACE = process.env.TAUGRID_E2E_NAMESPACE || "tau-notebook-e2e";
 const RUN_NAME = process.env.TAUGRID_E2E_RUN || "notebook-embed-demo";
 
-async function importPlaywright() {
-  const root = process.env.PLAYWRIGHT_PACKAGE_ROOT || "";
-  if (root) {
-    return createRequire(pathToFileURL(path.join(root, "package.json")))("playwright");
-  }
-  return await import("playwright");
-}
-
-const PROFILE_DIR =
-  process.env.PLAYWRIGHT_PROFILE_DIR ||
-  path.join(process.env.LOCALAPPDATA || process.env.TEMP, "tau-jupyter-work-profile");
-
 async function main() {
   const playwright = await importPlaywright();
+  // The Edge profile directory resolves lazily through the shared lifecycle
+  // helper. A local copy of that expression ran at module load and threw a
+  // TypeError wherever LOCALAPPDATA and TEMP were both unset.
+  const PROFILE_DIR = workProfileDir();
   const context = await playwright.chromium.launchPersistentContext(PROFILE_DIR, {
     channel: "msedge",
     headless: process.env.HEADLESS === "1",
@@ -213,7 +207,12 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-main().catch(async error => {
-  console.error(`labextension e2e failed: ${error.message}`);
-  process.exit(1);
-});
+// Run only when this file is the process entry point. Importing it (the
+// review-pattern checker does, with browser variables cleared) must not launch
+// a browser or start a run.
+if (isDirectRun(import.meta.url)) {
+  main().catch(async error => {
+    console.error(`labextension e2e failed: ${error.message}`);
+    process.exit(1);
+  });
+}

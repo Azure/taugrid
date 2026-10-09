@@ -165,7 +165,59 @@ mandatory for every change.
    output, `file:line`). Any claim about the repository must be verified against
    the target branch (`git show origin/main:<path>`, `git ls-tree origin/main`),
    never against whatever checkout happens to be current. A stale-checkout
-   search is not evidence about the branch under review.
+   search is not evidence about the branch under review. Cited paths and line
+   numbers must be verifiable with `git show origin/main:<path>`; a citation to
+   a file that does not exist on the target branch is a fabricated citation,
+   not a typo.
+
+### The mechanical half of the discipline
+
+Rules that are only written down get skipped, because a diff reads as correct
+when the same author checks it. `scripts/ci/check-review-patterns.py` runs in
+the `review-patterns` CI job and in `make test`, and it fails the build for the
+detectable subset of the classes above:
+
+- 2a — every `tools/*.mjs` harness is imported in a child `node` process with
+  `TEMP`, `LOCALAPPDATA` and the `PLAYWRIGHT_*` variables deleted from
+  `process.env`, and must import without throwing and without printing. This is
+  the TDZ and module-load-throw check; a syntax check cannot do it.
+- 2b — a dependency pin and the assertion about that pin, in one workflow file,
+  must agree; and every `go.mod` built by an image must not require a Go version
+  above that image's `golang:` tag. The `go` directive is a minimum language
+  version, not the CI toolchain pin (see `.go-version`).
+- 2c — the bounded reader has exactly one production implementation:
+  `read1(` may appear only in `sdk/python/python/tau/_kube_io.py`. Every
+  consumer routes through it.
+- 2d — every emitted KubeRay `submitterConfig` pins `backoffLimit` to 0, so a
+  retried submitter Job cannot report success after a failure.
+- 2e — the metric identity key folds full-precision `wall_time`, so same-tag
+  same-step points cannot collide in the dedup view.
+- 2f — a browser harness pass condition must key on evidence; a condition whose
+  only tokens are the product name fails.
+- A `file:line` citation in `docs/` that resolves to nothing fails the build.
+
+Run it locally before pushing:
+
+```bash
+python scripts/ci/check-review-patterns.py             # check this tree
+python scripts/ci/check-review-patterns.py --self-test # prove each check can fail
+```
+
+Every check ships with a fixture that reintroduces its defect and asserts the
+check fails; `--self-test` runs them. Adding a rule here without a check is a
+signal that the rule is advisory; add the check or say why it cannot be
+mechanical.
+
+**Still review-only.** Two classes cannot be made mechanical from the diff
+alone and stay a reviewer's job:
+
+- a client capability that is absent on the dependency floor (2c) needs the
+  floor job to install the lowest supported dependency and a test that drives
+  the code through it — the checker only proves there is one implementation, not
+  that it works on the floor;
+- a retry that reports success (2d) can only be proven where the retry actually
+  happens; the checker guards the renderer pin, and the live stage in
+  `docs/TESTING.md` is what proves KubeRay honours it.
 
 ## TauGrid Release Version Bump
 
@@ -236,7 +288,11 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 
 ## Conventions
 
-- Go toolchain: 1.26.7 (see `.go-version`); modules require Go 1.26.5
+- Go toolchain: 1.26.9 (see `.go-version`); module `go` directives are the
+  oldest language version the code needs (currently 1.26.5) and must stay at or
+  below the `golang:` tag used by `images/*/Dockerfile`, which build with
+  `GOTOOLCHAIN=local`. Raising a `go` directive above the image toolchain breaks
+  every image build; `.go-version` is the CI toolchain pin, not the same thing.
 - Linting: staticcheck v0.7.0 for cli/core/portal; golangci-lint for monitoring modules
 - `staticcheck.conf` at repo root disables specific style checks (ST1000, ST1003, ST1005, ST1016, ST1020-ST1023, S1016) — do not re-enable without fixing all findings
 - Python: requires 3.10+, lint with ruff

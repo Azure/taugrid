@@ -35,6 +35,30 @@ jobs:
       - name: Verify license headers
         run: python3 scripts/check-license-headers.py
 
+  review-patterns:
+    name: Review patterns and harness tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The rules in AGENTS.md and docs/TESTING.md are enforced mechanically
+      # here: harness modules must import with the browser env absent, version
+      # pins must agree with their assertions, go.mod must stay inside the image
+      # toolchain, bounded reads must have one implementation, submitter Jobs
+      # must not retry, identities must keep full precision, harness pass
+      # conditions must key on evidence, doc citations must resolve, and no
+      # harness screenshot or Jupyter checkpoint may be tracked.
+      - name: Check the mechanically detectable review patterns
+        run: python3 scripts/ci/check-review-patterns.py
+
+      - name: Prove every check fails on its own defect fixture
+        run: python3 scripts/ci/check-review-patterns.py --self-test
+
+      - name: Test the notebook harness lifecycle
+        run: node --test tools/notebook-e2e-lifecycle.test.mjs
+
   release-detect:
     name: Release / Detect preparation
     runs-on: ubuntu-latest
@@ -416,6 +440,7 @@ jobs:
       - release-detect
       - release-installer
       - release-windows-installer
+      - review-patterns
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
@@ -427,11 +452,13 @@ jobs:
           RELEASE_DETECT_RESULT: ${{ needs.release-detect.result }}
           RELEASE_INSTALLER_RESULT: ${{ needs.release-installer.result }}
           RELEASE_WINDOWS_INSTALLER_RESULT: ${{ needs.release-windows-installer.result }}
+          REVIEW_PATTERNS_RESULT: ${{ needs.review-patterns.result }}
           RELEASE_PREFLIGHT_ENABLED: ${{ needs.release-detect.outputs.enabled }}
         run: |
           set -euo pipefail
           test "${GO_RESULT}" = success
           test "${LICENSE_HEADERS_RESULT}" = success
+          test "${REVIEW_PATTERNS_RESULT}" = success
           test "${DEPENDENCY_REVIEW_RESULT}" = success || test "${DEPENDENCY_REVIEW_RESULT}" = skipped
           test "${RELEASE_DETECT_RESULT}" = success
           if [[ "${RELEASE_PREFLIGHT_ENABLED}" == "true" ]]; then

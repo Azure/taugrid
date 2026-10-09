@@ -6,10 +6,15 @@
 // paths, exact-id teardown) that the real harnesses rely on.
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   createRunIdentity,
+  launchWorkProfileEdge,
   seedAndStartKernel,
   seedNotebook,
   startKernelSession,
@@ -131,3 +136,69 @@ test("seedAndStartKernel seeds before it starts the session", async () => {
   assert.deepEqual(order, ["read", "copy", "session"]);
   assert.equal(handle.sessionId, "s");
 });
+
+test("work profile dir keeps override precedence and falls back to tmpdir", async () => {
+  const saved = { ...process.env };
+  const launched = [];
+  const playwright = {
+    chromium: {
+      launchPersistentContext: async (dir, options) => {
+        launched.push({ dir, options });
+        return { close: async () => {} };
+      },
+    },
+  };
+
+  try {
+    process.env.PLAYWRIGHT_PROFILE_DIR = "/override/profile";
+    process.env.LOCALAPPDATA = "/local/appdata";
+    await launchWorkProfileEdge(playwright);
+    assert.equal(launched.at(-1).dir, "/override/profile");
+
+    delete process.env.PLAYWRIGHT_PROFILE_DIR;
+    await launchWorkProfileEdge(playwright);
+    assert.equal(launched.at(-1).dir, path.join("/local/appdata", "tau-jupyter-work-profile"));
+
+    delete process.env.LOCALAPPDATA;
+    await launchWorkProfileEdge(playwright);
+    assert.equal(launched.at(-1).dir, path.join(os.tmpdir(), "tau-jupyter-work-profile"));
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in saved)) delete process.env[key];
+    }
+    Object.assign(process.env, saved);
+  }
+});
+
+// A module-load throw is only observable by importing in a fresh process. An
+// earlier version derived the Edge profile from LOCALAPPDATA/TEMP at top level,
+// so importing threw a TypeError on any host that defines neither -- before the
+// offline lifecycle tests, which never launch a browser, could run. The child
+// re-runs this file with those variables cleared; the marker keeps it from
+// spawning grandchildren and the five mocked-API lifecycle tests must still run
+// and pass there.
+const CHILD_MARKER = "TAUGRID_LIFECYCLE_IMPORT_CHILD";
+
+test("module imports and the mocked lifecycle passes with browser env cleared",
+  { skip: process.env[CHILD_MARKER] === "1" }, () => {
+    const env = { ...process.env };
+    for (const name of ["PLAYWRIGHT_PROFILE_DIR", "LOCALAPPDATA", "TEMP"]) delete env[name];
+    // The outer node:test runner marks its child files with NODE_TEST_CONTEXT;
+    // leaving it set makes the nested runner send results over the parent's IPC
+    // channel instead of stdout, hiding the counts asserted below.
+    delete env.NODE_TEST_CONTEXT;
+    env[CHILD_MARKER] = "1";
+
+    const result = spawnSync(process.execPath, [
+      "--test",
+      "--test-reporter=spec",
+      fileURLToPath(new URL("./notebook-e2e-lifecycle.test.mjs", import.meta.url)),
+    ], { env, encoding: "utf8" });
+
+    assert.equal(result.status, 0, `child import/lifecycle run failed\n${result.stdout}\n${result.stderr}`);
+    // The identity, profile-dir and five mocked-API lifecycle tests pass; only
+    // the child-import test above is skipped.
+    assert.match(result.stdout, /pass 7\b/);
+    assert.match(result.stdout, /fail 0\b/);
+    assert.match(result.stdout, /skipped 1\b/);
+  });

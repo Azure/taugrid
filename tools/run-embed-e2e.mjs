@@ -13,6 +13,7 @@
 import {
   createRunIdentity,
   importPlaywright,
+  isDirectRun,
   launchWorkProfileEdge,
   seedNotebook,
   startKernelSession,
@@ -104,8 +105,13 @@ if (!ok && unreachable.test(frameText)) {
   process.exit(ok ? 0 : 1);
 }
 
-main().catch(async (error) => {
-  console.error(`embed e2e failed: ${error.message}`);
-  await teardownRun(RUN, runHandle).catch(() => {});
-  process.exit(1);
-});
+// Run only when this file is the process entry point. Importing it (the
+// review-pattern checker does, with browser variables cleared) must not launch
+// a browser or start a run.
+if (isDirectRun(import.meta.url)) {
+  main().catch(async (error) => {
+    console.error(`embed e2e failed: ${error.message}`);
+    await teardownRun(RUN, runHandle).catch(() => {});
+    process.exit(1);
+  });
+}

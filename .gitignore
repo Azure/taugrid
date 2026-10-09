@@ -62,7 +62,11 @@ __pycache__/
 *.pyc
 
 # Jupyter checkpoints
-.ipynb_checkpoints/# Browser e2e artifacts: the harnesses write screenshots into the working
-# directory. They are evidence to look at, not source to commit.
-/*-e2e.png
-/*-e2e-viewport.png
+.ipynb_checkpoints/
+
+# Browser e2e artifacts: the harnesses write screenshots into the working
+# directory. They are evidence to look at, not source to commit. The globs are
+# deliberately broad: the harnesses derive extra names from their output prefix
+# (`-state`, `-viewport`, `<step>-failure`), so a pattern that only matched the
+# happy-path name let failure screenshots reach `git add -A`.
+/*-e2e*.png
