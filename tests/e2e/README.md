@@ -280,8 +280,11 @@ against the persistent `aks-ai-runtime-flex` cluster on the
 `1es-aks-ai-runtime-ado-eastus2` pool. Its first job reconciles the externally
 owned TauCluster singleton without taking ownership of shared queues: it merges
 the current chart's reviewed GPU VM-size catalog with cluster-specific rules,
-preserves existing workload profiles, appends `nightly.cpu.1x`, and requires
-the controller to discover A100, H100, and H200 capacity. The following
+defers workload-profile mutation while an older CRD/controller may still be
+serving, and requires the controller to discover A100, H100, and H200 capacity.
+After the current chart upgrades the Tau CRDs and controller, the deployment
+migrates legacy profile placements, preserves cluster-specific profiles, and
+appends `nightly.cpu.1x`. The following
 non-mutating `scripts/ci/taugrid-flex-nightly-preflight.sh` job inventories DGX
 Spark, A100, H100, and H200 nodes; subtracts active GPU requests; validates each
 target's site, ResourceFlavor, ClusterQueue, and `taugrid-gpu-topology`
@@ -351,10 +354,12 @@ explicitly leaves the shared Kueue and KubeRay installations and baseline queue
 policy disabled in the TauGrid release, so it does not take ownership of those
 platform-managed components. Because this installation keeps
 `tauCluster.create=false`, the dedicated reconciliation job updates the actual
-external TauCluster resource rather than relying on inert Helm values. It
-preserves the live profile catalog and appends the dedicated `nightly.cpu.1x`
-zero-GPU profile for the `ray/backfill` CLI lane, avoiding the shared GPU
-profiles for these inexpensive command checks.
+external TauCluster resource rather than relying on inert Helm values. Node
+labels are reconciled before preflight. Workload profiles are reconciled only
+after the CRD/controller upgrade so legacy `independent`,
+`single-node-nvlink`, and `multi-node-nccl` placements can be migrated to the
+current explicit topology model before appending the dedicated
+`nightly.cpu.1x` zero-GPU profile for the `ray/backfill` CLI lane.
 
 After the CPU CLI lifecycle, a dedicated `tau` routing gate submits one-GPU Jobs
 with explicit `policy.gpu_class` requests for `a100-80gb`, `h100-95gb`, and

@@ -107,6 +107,14 @@ grep -Fq "taugrid-flex-nightly-taucluster-reconcile.sh" "$PIPELINE" ||
   fail "nightly must invoke the checked-in TauCluster reconcile helper"
 grep -Fq "scripts/ci/tests/taugrid-flex-nightly-taucluster-reconcile_test.sh" "$PIPELINE" ||
   fail "nightly must validate TauCluster reconciliation before cluster mutation"
+grep -Fq 'FLEX_NIGHTLY_RECONCILE_WORKLOAD_PROFILES: "false"' "$PIPELINE" ||
+  fail "pre-deployment reconciliation must defer profiles until the CRD and controller upgrade"
+[[ "$(grep -Fc "scripts/ci/taugrid-flex-nightly-taucluster-reconcile.sh" "$PIPELINE")" -eq 2 ]] ||
+  fail "nightly must reconcile node labels before deployment and migrate profiles after deployment"
+grep -Fq 'workloadPriorityClassName:"tau-train-default"' "$PIPELINE" ||
+  fail "the nightly CPU profile must declare a workload priority class"
+grep -Fq 'podPriorityClassName:"tau-train-default"' "$PIPELINE" ||
+  fail "the nightly CPU profile must declare a Pod priority class"
 grep -Fq "environment: flex" "$PIPELINE" ||
   fail "deployment must be recorded against the Flex environment"
 grep -Fq 'image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"' "$PIPELINE" ||

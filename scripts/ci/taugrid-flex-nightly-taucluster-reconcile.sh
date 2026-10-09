@@ -15,6 +15,7 @@ readonly TAU_QUEUE="${FLEX_NIGHTLY_TAU_QUEUE:-backfill}"
 readonly ARTIFACT_DIR="${FLEX_NIGHTLY_TAUCLUSTER_ARTIFACT_DIR:-taucluster-reconcile}"
 readonly RECONCILE_TIMEOUT_SECONDS="${FLEX_NIGHTLY_TAUCLUSTER_TIMEOUT_SECONDS:-300}"
 readonly REQUIRED_GPU_CLASSES="${FLEX_NIGHTLY_REQUIRED_GPU_CLASSES:-a100-80gb,h100-95gb,h200-141gb}"
+readonly RECONCILE_WORKLOAD_PROFILES="${FLEX_NIGHTLY_RECONCILE_WORKLOAD_PROFILES:-true}"
 
 fail() {
   echo "::error::$*" >&2
@@ -97,9 +98,29 @@ nightly_profile() {
         mode: "fixed",
         placement: "unconstrained",
         defaultLocalQueue: $queue,
-        executionTarget: "singleCluster"
+        executionTarget: "singleCluster",
+        priorities: {
+          workloadPriorityClassName: "tau-train-default",
+          podPriorityClassName: "tau-train-default"
+        }
       }
     '
+}
+
+migrate_profiles() {
+  jq -c '
+    map(
+      if .placement == "independent" then
+        .placement = "unconstrained"
+      elif .placement == "single-node-nvlink" then
+        .placement = "same-host"
+      elif .placement == "multi-node-nccl" then
+        .placement = "same-network-domain"
+      else
+        .
+      end
+    )
+  '
 }
 
 wait_for_reconciliation() {
@@ -108,10 +129,14 @@ wait_for_reconciliation() {
   while ((SECONDS < deadline)); do
     cluster_json="$("$KUBECTL_BIN" --context "$KUBE_CONTEXT" \
       get clusters.tau.azure.com "$TAUCLUSTER_NAME" -o json)"
-    if jq -e '
+    if jq -e --argjson reconcileProfiles "$RECONCILE_WORKLOAD_PROFILES" '
       .status.observedGeneration == .metadata.generation
       and any(.status.conditions[]?; .type == "NodesReady" and .status == "True")
       and any(.status.conditions[]?; .type == "Ready" and .status == "True")
+      and (
+        ($reconcileProfiles | not)
+        or any(.status.conditions[]?; .type == "WorkloadProfilesReady" and .status == "True")
+      )
     ' <<<"$cluster_json" >/dev/null; then
       printf '%s\n' "$cluster_json" >"${ARTIFACT_DIR}/taucluster-after.json"
       return 0
@@ -173,6 +198,8 @@ main() {
   require_command jq
   [[ "$RECONCILE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] ||
     fail "FLEX_NIGHTLY_TAUCLUSTER_TIMEOUT_SECONDS must be a positive integer"
+  [[ "$RECONCILE_WORKLOAD_PROFILES" == "true" || "$RECONCILE_WORKLOAD_PROFILES" == "false" ]] ||
+    fail "FLEX_NIGHTLY_RECONCILE_WORKLOAD_PROFILES must be true or false"
   [ -d "$CONTROLLER_CHART" ] || fail "controller chart is missing: ${CONTROLLER_CHART}"
   mkdir -p "$ARTIFACT_DIR"
 
@@ -188,20 +215,9 @@ main() {
   live_rules="$(jq -c '.spec.nodes.labelRules // []' <<<"$live_cluster")"
   validate_rule_compatibility "$live_rules" "$reviewed_rules"
   merged_rules="$(merge_rules "$live_rules" "$reviewed_rules")"
-  profile="$(nightly_profile)"
-  updated_profiles="$(jq -c \
-    --argjson profile "$profile" '
-      (.spec.workloadProfiles // [])
-      | map(select(.name != $profile.name)) + [$profile]
-    ' <<<"$live_cluster")"
-
-  operation="replace"
-  jq -e '.spec.workloadProfiles != null' <<<"$live_cluster" >/dev/null || operation="add"
   patch="$(jq -cn \
     --arg resourceVersion "$(jq -r '.metadata.resourceVersion' <<<"$live_cluster")" \
-    --arg profileOperation "$operation" \
-    --argjson rules "$merged_rules" \
-    --argjson profiles "$updated_profiles" '
+    --argjson rules "$merged_rules" '
       [
         {
           op: "test",
@@ -212,14 +228,28 @@ main() {
           op: "replace",
           path: "/spec/nodes/labelRules",
           value: $rules
-        },
-        {
-          op: $profileOperation,
-          path: "/spec/workloadProfiles",
-          value: $profiles
         }
       ]
     ')"
+  if [[ "$RECONCILE_WORKLOAD_PROFILES" == "true" ]]; then
+    profile="$(nightly_profile)"
+    updated_profiles="$(jq -c \
+      --argjson profile "$profile" '
+        (.spec.workloadProfiles // [])
+        | map(select(.name != $profile.name)) + [$profile]
+      ' <<<"$live_cluster" | migrate_profiles)"
+    operation="replace"
+    jq -e '.spec.workloadProfiles != null' <<<"$live_cluster" >/dev/null || operation="add"
+    patch="$(jq -c \
+      --arg profileOperation "$operation" \
+      --argjson profiles "$updated_profiles" '
+        . + [{
+          op: $profileOperation,
+          path: "/spec/workloadProfiles",
+          value: $profiles
+        }]
+      ' <<<"$patch")"
+  fi
   printf '%s\n' "$patch" >"${ARTIFACT_DIR}/taucluster-patch.json"
   "$KUBECTL_BIN" --context "$KUBE_CONTEXT" patch \
     clusters.tau.azure.com "$TAUCLUSTER_NAME" \
@@ -229,7 +259,11 @@ main() {
 
   wait_for_reconciliation
   verify_gpu_classes
-  echo "TauCluster reviewed GPU catalog and nightly CPU profile reconciled"
+  if [[ "$RECONCILE_WORKLOAD_PROFILES" == "true" ]]; then
+    echo "TauCluster reviewed GPU catalog and nightly CPU profile reconciled"
+  else
+    echo "TauCluster reviewed GPU catalog reconciled; workload profiles deferred until after controller upgrade"
+  fi
 }
 
 main "$@"

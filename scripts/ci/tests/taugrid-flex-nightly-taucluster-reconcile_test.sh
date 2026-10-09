@@ -75,13 +75,20 @@ cat >"${fixture}/cluster.json" <<'JSON'
     },
     "queues": {"ownership": "External"},
     "workloadProfiles": [
-      {"name": "custom.profile", "gpusPerWorker": 1, "workerCount": 1}
+      {
+        "name": "custom.profile",
+        "gpusPerWorker": 1,
+        "workerCount": 2,
+        "placement": "multi-node-nccl",
+        "priorities": {"disableDefaultPriorities": true}
+      }
     ]
   },
   "status": {
     "observedGeneration": 4,
     "conditions": [
       {"type": "NodesReady", "status": "True"},
+      {"type": "WorkloadProfilesReady", "status": "True"},
       {"type": "Ready", "status": "True"}
     ]
   }
@@ -184,15 +191,29 @@ jq -e '
   fail "cluster-specific node label rules must be preserved"
 jq -e '
   map(select(.path == "/spec/workloadProfiles"))[0].value
-  | any(.[]; .name == "custom.profile")
-  and any(.[]; .name == "nightly.cpu.1x" and .gpusPerWorker == 0)
+  | any(.[]; .name == "custom.profile" and .placement == "same-network-domain")
+  and any(.[];
+    .name == "nightly.cpu.1x"
+    and .gpusPerWorker == 0
+    and .placement == "unconstrained"
+    and .priorities.workloadPriorityClassName == "tau-train-default"
+    and .priorities.podPriorityClassName == "tau-train-default"
+  )
 ' "${fixture}/artifacts/taucluster-patch.json" >/dev/null ||
-  fail "custom profiles and the nightly CPU profile must both be retained"
+  fail "legacy profiles must be migrated and the nightly CPU profile must use the current schema"
 jq -e '
   .required_gpu_classes == ["a100-80gb", "h100-95gb", "h200-141gb"]
   and (.nodes | length) == 3
 ' "${fixture}/artifacts/gpu-class-inventory.json" >/dev/null ||
   fail "GPU class inventory must prove A100, H100, and H200 discovery"
+
+mkdir -p "${fixture}/label-only-artifacts"
+export FLEX_NIGHTLY_TAUCLUSTER_ARTIFACT_DIR="${fixture}/label-only-artifacts"
+export FLEX_NIGHTLY_RECONCILE_WORKLOAD_PROFILES=false
+"$RECONCILER"
+jq -e 'all(.[]; .path != "/spec/workloadProfiles")' \
+  "${fixture}/label-only-artifacts/taucluster-patch.json" >/dev/null ||
+  fail "pre-deployment reconciliation must defer workload profile mutation"
 
 jq '
   .spec.nodes.labelRules += [{
@@ -204,6 +225,7 @@ jq '
   }]
 ' "${fixture}/cluster.json" >"${fixture}/conflicting-cluster.json"
 export FAKE_CLUSTER_JSON="${fixture}/conflicting-cluster.json"
+export FLEX_NIGHTLY_RECONCILE_WORKLOAD_PROFILES=true
 if "$RECONCILER" >/dev/null 2>&1; then
   fail "conflicting live rules must fail closed instead of overwriting platform policy"
 fi

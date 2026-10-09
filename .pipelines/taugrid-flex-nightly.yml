@@ -122,6 +122,7 @@ jobs:
           FLEX_NIGHTLY_TAU_PROFILE: $(FLEX_NIGHTLY_TAU_JOB_PROFILE)
           FLEX_NIGHTLY_TAU_NAMESPACE: $(FLEX_NIGHTLY_TAU_NAMESPACE)
           FLEX_NIGHTLY_TAU_QUEUE: $(FLEX_NIGHTLY_TAU_QUEUE)
+          FLEX_NIGHTLY_RECONCILE_WORKLOAD_PROFILES: "false"
 
       - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/taucluster-reconcile"
         displayName: Ensure TauCluster diagnostics directory exists
@@ -537,7 +538,11 @@ jobs:
                       mode:"fixed",
                       placement:"unconstrained",
                       defaultLocalQueue:$queue,
-                      executionTarget:"singleCluster"
+                      executionTarget:"singleCluster",
+                      priorities:{
+                        workloadPriorityClassName:"tau-train-default",
+                        podPriorityClassName:"tau-train-default"
+                      }
                     }')"
                   kubectl --context flex-nightly get clusters.tau.azure.com cluster \
                     -o json >"${diagnostics_dir}/taucluster-before-deploy.json"
@@ -623,6 +628,11 @@ jobs:
                     --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                     --kube-context flex-nightly \
                     --output json | jq -r '.version | tostring')"
+                  FLEX_NIGHTLY_TAUCLUSTER_ARTIFACT_DIR="${diagnostics_dir}/taucluster-reconcile" \
+                    FLEX_NIGHTLY_TAU_PROFILE="${TAU_PROFILE}" \
+                    FLEX_NIGHTLY_TAU_NAMESPACE="${TAU_NAMESPACE}" \
+                    FLEX_NIGHTLY_TAU_QUEUE="${TAU_QUEUE}" \
+                    scripts/ci/taugrid-flex-nightly-taucluster-reconcile.sh
                   if ! cli/bin/tau cluster validate installation \
                     --context flex-nightly \
                     --release "${TAUGRID_RELEASE}" \
