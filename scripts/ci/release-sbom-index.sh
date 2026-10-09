@@ -178,15 +178,29 @@ validate_release() {
   local release_dir="$1"
   local expected_file
   local actual_file
+  local checksummed_file
   expected_file="$(mktemp)"
   actual_file="$(mktemp)"
+  checksummed_file="$(mktemp)"
   validate_index "$release_dir"
   expected_assets "$release_dir" > "$expected_file"
   find "$release_dir" -maxdepth 1 -type f -exec basename {} \; |
     sort > "$actual_file"
   diff -u "$expected_file" "$actual_file" ||
     fail "release asset set does not match the SBOM index"
-  rm -f "$expected_file" "$actual_file"
+  awk '
+    NF != 2 || length($1) != 64 || $1 !~ /^[0-9a-f]+$/ || $2 ~ /\// {
+      exit 1
+    }
+    {
+      print $2
+    }
+  ' "$release_dir/SHA256SUMS" | sort > "$checksummed_file" ||
+    fail "SHA256SUMS must contain bare release asset names"
+  grep -v '^SHA256SUMS$' "$expected_file" > "$actual_file"
+  diff -u "$actual_file" "$checksummed_file" ||
+    fail "SHA256SUMS asset set does not match the release"
+  rm -f "$expected_file" "$actual_file" "$checksummed_file"
   (
     cd "$release_dir"
     if command -v sha256sum >/dev/null 2>&1; then
@@ -223,10 +237,10 @@ build_index() {
   (
     cd "$release_dir"
     checksum_file="$(mktemp)"
-    find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 |
+    rm -f SHA256SUMS
+    printf '%s\0' * |
       sort -z |
-      xargs -0 sha256sum |
-      sed 's#  \\./#  #' > "$checksum_file"
+      xargs -0 sha256sum > "$checksum_file"
     mv "$checksum_file" SHA256SUMS
   )
   validate_release "$release_dir"
