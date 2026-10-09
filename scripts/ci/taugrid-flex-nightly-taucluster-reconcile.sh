@@ -149,10 +149,10 @@ wait_for_reconciliation() {
 verify_gpu_classes() {
   local nodes_json missing
   nodes_json="$("$KUBECTL_BIN" --context "$KUBE_CONTEXT" get nodes -o json)"
-  missing="$(jq -cn \
-    --arg required "$REQUIRED_GPU_CLASSES" \
-    --argjson nodes "$nodes_json" '
-      ($required | split(",") | map(select(length > 0))) as $classes
+  missing="$(jq -c \
+    --arg required "$REQUIRED_GPU_CLASSES" '
+      . as $nodes
+      | ($required | split(",") | map(select(length > 0))) as $classes
       | [
           $classes[]
           | . as $gpuClass
@@ -164,19 +164,18 @@ verify_gpu_classes() {
               and any(.status.conditions[]?; .type == "Ready" and .status == "True")
             ) | not)
         ]
-    ')"
+    ' <<<"$nodes_json")"
   [ "$(jq 'length' <<<"$missing")" -eq 0 ] ||
     fail "TauGrid did not discover Ready GPU capacity for required classes: $(jq -r 'join(", ")' <<<"$missing")"
 
-  jq -n \
+  jq \
     --arg reconciledAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg requiredGPUClasses "$REQUIRED_GPU_CLASSES" \
-    --argjson nodes "$nodes_json" '
+    --arg requiredGPUClasses "$REQUIRED_GPU_CLASSES" '
       {
         reconciled_at: $reconciledAt,
         required_gpu_classes: ($requiredGPUClasses | split(",")),
         nodes: [
-          $nodes.items[]
+          .items[]
           | select(.metadata.labels["tau.azure.com/gpu-class"] != null)
           | {
               name: .metadata.name,
@@ -187,7 +186,7 @@ verify_gpu_classes() {
             }
         ]
       }
-    ' >"${ARTIFACT_DIR}/gpu-class-inventory.json"
+    ' <<<"$nodes_json" >"${ARTIFACT_DIR}/gpu-class-inventory.json"
 }
 
 main() {

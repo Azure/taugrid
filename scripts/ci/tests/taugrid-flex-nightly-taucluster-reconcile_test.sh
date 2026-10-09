@@ -138,6 +138,24 @@ cat >"${fixture}/nodes.json" <<'JSON'
 }
 JSON
 
+jq '
+  .items += [
+    range(0; 12000)
+    | {
+        metadata: {
+          name: ("cpu-" + tostring),
+          labels: {"node.kubernetes.io/instance-type": "Standard_D4_v5"}
+        },
+        spec: {},
+        status: {
+          conditions: [{"type": "Ready", "status": "True"}],
+          allocatable: {"cpu": "4"}
+        }
+      }
+  ]
+' "${fixture}/nodes.json" >"${fixture}/large-nodes.json"
+mv "${fixture}/large-nodes.json" "${fixture}/nodes.json"
+
 cat >"${fixture}/bin/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
