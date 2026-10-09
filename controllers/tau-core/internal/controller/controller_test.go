@@ -1806,6 +1806,66 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 	}
 }
 
+func TestUnresolvedQueueDoesNotAuthorizeRetainedNamespaceAdoption(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("new-workspace-uid")
+	workspace.Spec.Queue = ""
+	retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   workspace.Name,
+		Labels: map[string]string{labelWorkspace: workspace.Name},
+	}}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, retained).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("unresolved reconcile iteration %d: %v", i, err)
+		}
+	}
+	var unresolved tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, req.NamespacedName, &unresolved); err != nil {
+		t.Fatalf("Get unresolved workspace: %v", err)
+	}
+	if unresolved.Status.Target.ResolvedNamespace != "" {
+		t.Fatalf("unresolved queue manufactured namespace continuity: %#v", unresolved.Status.Target)
+	}
+
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "jobqueue"},
+		},
+	}
+	if err := c.Create(ctx, cluster); err != nil {
+		t.Fatalf("create TauCluster default: %v", err)
+	}
+	if err := c.Create(ctx, testClusterQueue("jobqueue")); err != nil {
+		t.Fatalf("create default ClusterQueue: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile after queue recovery: %v", err)
+	}
+
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: retained.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get retained namespace: %v", err)
+	}
+	if _, exists := gotNamespace.Annotations[annotationOwnerUID]; exists {
+		t.Fatalf("retained namespace was adopted after queue recovery: %#v", gotNamespace.Annotations)
+	}
+	var binding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: retained.Name}, &binding); !apierrors.IsNotFound(err) {
+		t.Fatalf("recreated workspace received retained namespace RBAC: %v", err)
+	}
+}
+
 func testWorkspace(name string) *tauv1alpha1.TauWorkspace {
 	return &tauv1alpha1.TauWorkspace{
 		TypeMeta:   metav1.TypeMeta{APIVersion: tauv1alpha1.GroupVersion.String(), Kind: tauv1alpha1.KindTauWorkspace},

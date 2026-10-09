@@ -209,6 +209,14 @@ func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.
 			return r.reportTeamStatus(ctx, team, false, tauv1alpha1.ConditionDeletionBlocked,
 				fmt.Sprintf("workspace %q still references this team", workspace.Name))
 		}
+		appliedCohort, _, err := r.appliedWorkspaceGuarantees(ctx, workspace)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if appliedCohort == teamCohortName(team.Name) {
+			return r.reportTeamStatus(ctx, team, false, tauv1alpha1.ConditionDeletionBlocked,
+				fmt.Sprintf("workspace %q ClusterQueue still uses this team Cohort", workspace.Name))
+		}
 	}
 	cohort := newQueueObject(cohortGVK)
 	cohort.SetName(teamCohortName(team.Name))

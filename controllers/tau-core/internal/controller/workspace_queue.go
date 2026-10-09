@@ -56,7 +56,7 @@ func (r *TauWorkspaceReconciler) reportUnresolvedQueue(ctx context.Context, work
 	desired := tauv1alpha1.TauWorkspaceStatus{
 		Phase:              tauv1alpha1.WorkspacePhaseDegraded,
 		ObservedGeneration: workspace.Generation,
-		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: resolvedNamespace(workspace)},
+		Target:             workspace.Status.Target,
 		Conditions:         mergeConditions(workspace.Status.Conditions, conditions),
 	}
 	if !equalWorkspaceStatus(workspace.Status, desired) {

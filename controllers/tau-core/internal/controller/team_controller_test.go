@@ -16,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 func TestTeamAndWorkspacesReconcileQuotaHierarchy(t *testing.T) {
@@ -129,6 +130,56 @@ func TestTeamRejectsWorkspaceGuaranteesAboveAllocation(t *testing.T) {
 		t.Fatalf("team phase = %q, want Degraded", got.Status.Phase)
 	}
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQuotaReady, metav1.ConditionFalse)
+}
+
+func TestTeamDeletionWaitsForAppliedWorkspaceCohort(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Finalizers = []string{teamFinalizer}
+	now := metav1.Now()
+	team.DeletionTimestamp = &now
+
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "missing-team"}
+
+	cohort := desiredTeamCohort(team, team.Spec.Quota)
+	cohort.SetUID(types.UID("cohort-uid"))
+	team.Status.CohortUID = string(cohort.GetUID())
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, workspace, queue, cohort).
+		WithStatusSubresource(&tauv1alpha1.TauTeam{}).
+		Build()
+	reconciler := &TauTeamReconciler{Client: c}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(team)}
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile deleting Team: %v", err)
+	}
+	var remaining tauv1alpha1.TauTeam
+	if err := c.Get(ctx, req.NamespacedName, &remaining); err != nil {
+		t.Fatalf("Team disappeared while ClusterQueue still used Cohort: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&remaining, teamFinalizer) {
+		t.Fatal("Team finalizer was removed while an applied ClusterQueue still used its Cohort")
+	}
+	deletionBlocked := findCondition(remaining.Status.Conditions, tauv1alpha1.ConditionQuotaReady)
+	if deletionBlocked == nil ||
+		deletionBlocked.Reason != tauv1alpha1.ConditionDeletionBlocked ||
+		!strings.Contains(deletionBlocked.Message, workspace.Name) {
+		t.Fatalf("QuotaReady = %#v, want applied-Cohort deletion block", deletionBlocked)
+	}
+	remainingCohort := newQueueObject(cohortGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, remainingCohort); err != nil {
+		t.Fatalf("Team Cohort was deleted while still applied: %v", err)
+	}
 }
 
 func TestTeamRejectsAggregateAllocationsAboveDiscoveredCapacity(t *testing.T) {
