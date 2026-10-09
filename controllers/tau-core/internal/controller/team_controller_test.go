@@ -153,15 +153,27 @@ func TestTeamReductionBlocksBelowBorrowedReservations(t *testing.T) {
 	}, "status", "flavorsReservation"); err != nil {
 		t.Fatalf("set reservation status: %v", err)
 	}
+	cohort := desiredTeamCohort(team, []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "12", "0", "0"),
+	})
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(team, workspace, queue).
+		WithObjects(team, workspace, queue, cohort).
 		Build()
 	reconciler := &TauTeamReconciler{Client: c}
 
-	err := reconciler.validateTeamReservations(ctx, team)
+	err := reconciler.reconcileTeamCohort(ctx, team, []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "4", "0", "0"),
+	})
 	if err == nil || !strings.Contains(err.Error(), "below active reservations 12") {
 		t.Fatalf("reservation validation error = %v", err)
+	}
+	gotCohort := newQueueObject(cohortGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, gotCohort); err != nil {
+		t.Fatalf("Get Cohort: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "12" {
+		t.Fatalf("shared Cohort quota after blocked Team reduction = %q, want 12", got)
 	}
 }
 
@@ -199,6 +211,106 @@ func TestTeamCapacityRetainsAppliedAllocationDuringReduction(t *testing.T) {
 	err := reconciler.validateTeamCapacity(ctx, language)
 	if err == nil || !strings.Contains(err.Error(), "team allocations 24 exceed discovered capacity 20") {
 		t.Fatalf("capacity validation error = %v", err)
+	}
+	if err := reconciler.validateTeamCapacity(ctx, vision); err != nil {
+		t.Fatalf("reducing team capacity validation: %v", err)
+	}
+}
+
+func TestTeamCapacityAllowsRequestedRebalanceToConverge(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Status: tauv1alpha1.TauClusterStatus{
+			DiscoveredCapacity: []tauv1alpha1.TauResourceCapacityStatus{{
+				Flavor:   "taugrid-gpu-h200",
+				Resource: nvidiaGPUResourceName,
+				Capacity: resource.MustParse("8"),
+			}},
+		},
+	}
+	vision := testTeam("vision", "4")
+	vision.UID = types.UID("vision-team-uid")
+	language := testTeam("language", "4")
+	language.UID = types.UID("language-team-uid")
+	visionCohort := desiredTeamCohort(vision, []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "8", "0", "0"),
+	})
+	languageCohort := desiredTeamCohort(language, []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "8", "0", "0"),
+	})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, vision, language, visionCohort, languageCohort).
+		Build()
+	reconciler := &TauTeamReconciler{Client: c}
+
+	if err := reconciler.validateTeamCapacity(ctx, vision); err != nil {
+		t.Fatalf("first reducing team capacity validation: %v", err)
+	}
+	if err := reconciler.reconcileTeamCohort(ctx, vision, vision.Spec.Quota); err != nil {
+		t.Fatalf("first reducing team Cohort reconcile: %v", err)
+	}
+	if err := reconciler.validateTeamCapacity(ctx, language); err != nil {
+		t.Fatalf("second reducing team capacity validation: %v", err)
+	}
+	if err := reconciler.reconcileTeamCohort(ctx, language, language.Spec.Quota); err != nil {
+		t.Fatalf("second reducing team Cohort reconcile: %v", err)
+	}
+	for _, team := range []*tauv1alpha1.TauTeam{vision, language} {
+		gotCohort := newQueueObject(cohortGVK)
+		if err := c.Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, gotCohort); err != nil {
+			t.Fatalf("Get %s Cohort: %v", team.Name, err)
+		}
+		if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "4" {
+			t.Fatalf("%s Cohort quota after capacity scale-down = %q, want 4", team.Name, got)
+		}
+	}
+}
+
+func TestWorkspaceReconcileDoesNotReduceTeamBelowReservations(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "12", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	if err := unstructured.SetNestedSlice(queue.Object, []any{
+		map[string]any{
+			"name": "taugrid-gpu-h200",
+			"resources": []any{
+				map[string]any{"name": nvidiaGPUResourceName, "total": "12"},
+			},
+		},
+	}, "status", "flavorsReservation"); err != nil {
+		t.Fatalf("set reservation status: %v", err)
+	}
+	cohort := desiredTeamCohort(team, []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "12", "0", "0"),
+	})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flavor, team, workspace, queue, cohort).
+		Build()
+
+	_, err := newTestWorkspaceReconciler(c).reconcileWorkspaceClusterQueue(ctx, workspace)
+	if err == nil || !strings.Contains(err.Error(), "below active reservations 12") {
+		t.Fatalf("workspace reconcile error = %v", err)
+	}
+	gotCohort := newQueueObject(cohortGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, gotCohort); err != nil {
+		t.Fatalf("Get Cohort: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "12" {
+		t.Fatalf("shared Cohort quota after blocked reduction = %q, want 12", got)
 	}
 }
 

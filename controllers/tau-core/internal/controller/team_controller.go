@@ -65,7 +65,7 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err := validateQuotaFlavors(ctx, r.Client, team.Spec.Quota); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "FlavorNotReady", err.Error())
 	}
-	if err := reconcileManagedUnstructured(ctx, r.Client, desiredTeamCohort(&team, sharedQuota), labelTeam, team.Name); err != nil {
+	if err := r.reconcileTeamCohort(ctx, &team, sharedQuota); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "CohortReconcileFailed", err.Error())
 	}
 	return r.reportTeamStatus(ctx, &team, true, "QuotaReady", "team quota hierarchy is reconciled")
@@ -87,6 +87,10 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 	if err := r.List(ctx, &teams, client.InNamespace(team.Namespace)); err != nil {
 		return err
 	}
+	reductionOnly, err := r.teamAllocationReductionOnly(ctx, team)
+	if err != nil {
+		return err
+	}
 	allocated := map[string]resource.Quantity{}
 	for i := range teams.Items {
 		candidate := &teams.Items[i]
@@ -94,13 +98,15 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 		for _, quota := range candidate.Spec.Quota {
 			effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
 		}
-		applied, err := r.appliedTeamAllocation(ctx, candidate)
-		if err != nil {
-			return err
-		}
-		for key, quantity := range applied {
-			if requested, ok := effective[key]; !ok || quantity.Cmp(requested) > 0 {
-				effective[key] = quantity.DeepCopy()
+		if !reductionOnly {
+			applied, err := r.appliedTeamAllocation(ctx, candidate)
+			if err != nil {
+				return err
+			}
+			for key, quantity := range applied {
+				if requested, ok := effective[key]; !ok || quantity.Cmp(requested) > 0 {
+					effective[key] = quantity.DeepCopy()
+				}
 			}
 		}
 		for key, quota := range effective {
@@ -116,6 +122,37 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 		}
 	}
 	return nil
+}
+
+func (r *TauTeamReconciler) teamAllocationReductionOnly(
+	ctx context.Context,
+	team *tauv1alpha1.TauTeam,
+) (bool, error) {
+	applied, err := r.appliedTeamAllocation(ctx, team)
+	if err != nil {
+		return false, err
+	}
+	requested := make(map[string]resource.Quantity, len(team.Spec.Quota))
+	for _, quota := range team.Spec.Quota {
+		requested[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+	}
+	reduced := false
+	for key, quantity := range requested {
+		current := applied[key]
+		comparison := quantity.Cmp(current)
+		if comparison > 0 {
+			return false, nil
+		}
+		if comparison < 0 {
+			reduced = true
+		}
+	}
+	for key, quantity := range applied {
+		if _, exists := requested[key]; !exists && quantity.Sign() > 0 {
+			reduced = true
+		}
+	}
+	return reduced, nil
 }
 
 func (r *TauTeamReconciler) validateTeamReservations(ctx context.Context, team *tauv1alpha1.TauTeam) error {
@@ -153,6 +190,23 @@ func (r *TauTeamReconciler) validateTeamReservations(ctx context.Context, team *
 		}
 	}
 	return nil
+}
+
+func (r *TauTeamReconciler) reconcileTeamCohort(
+	ctx context.Context,
+	team *tauv1alpha1.TauTeam,
+	sharedQuota []tauv1alpha1.TauResourceQuota,
+) error {
+	if err := r.validateTeamReservations(ctx, team); err != nil {
+		return err
+	}
+	return reconcileManagedUnstructured(
+		ctx,
+		r.Client,
+		desiredTeamCohort(team, sharedQuota),
+		labelTeam,
+		team.Name,
+	)
 }
 
 func (r *TauTeamReconciler) appliedTeamAllocation(
