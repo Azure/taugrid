@@ -35,7 +35,6 @@ elif [[ "$*" == *"get jobs -l"* ]]; then
 elif [[ "$*" == *"logs job/"* ]]; then
   echo "marker"
 else
-  cat >/dev/null || true
   echo "ok"
 fi
 EOF
@@ -57,7 +56,19 @@ export FLEX_NIGHTLY_H200_REGION=eastus2euap
 export RAY_E2E_IMAGE=example.test/ray:latest
 export FLEX_NIGHTLY_STORAGE_ARTIFACT_DIR="${fixture}/artifacts"
 
-"$SMOKE"
+python3 - "$SMOKE" <<'PY'
+import subprocess
+import sys
+
+process = subprocess.Popen([sys.argv[1]], stdin=subprocess.PIPE)
+try:
+    returncode = process.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    process.kill()
+    process.wait()
+    raise SystemExit("storage smoke blocked while command stdin remained open")
+raise SystemExit(returncode)
+PY
 
 [ "$(wc -l <"${fixture}/artifacts/storage-results.jsonl" | tr -d ' ')" -eq 3 ] ||
   fail "storage smoke must record all three cross-region cases"
