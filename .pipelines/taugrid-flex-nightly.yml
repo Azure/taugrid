@@ -142,9 +142,9 @@ jobs:
       - checkout: self
 
       - task: GoTool@0
-        displayName: Use Go 1.26.7
+        displayName: Use Go 1.26.9
         inputs:
-          version: 1.26.7
+          version: 1.26.9
 
       - task: DownloadPipelineArtifact@2
         displayName: Download hardware contract
@@ -463,9 +463,9 @@ jobs:
       - checkout: self
 
       - task: GoTool@0
-        displayName: Use Go 1.26.7
+        displayName: Use Go 1.26.9
         inputs:
-          version: 1.26.7
+          version: 1.26.9
 
       - task: AzureCLI@2
         displayName: Run synthetic H200 InfiniBand conformance
