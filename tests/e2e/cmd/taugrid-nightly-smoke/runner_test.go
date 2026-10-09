@@ -146,6 +146,24 @@ func TestOptionsRejectInvalidRunName(t *testing.T) {
 	}
 }
 
+func TestCloseFileAddsCloseFailureToExistingError(t *testing.T) {
+	file, err := os.Create(filepath.Join(t.TempDir(), "closed.txt"))
+	if err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+	original := errors.New("command failed")
+
+	closeFile(file, &original, "closing test artifact")
+
+	if !strings.Contains(original.Error(), "command failed") ||
+		!strings.Contains(original.Error(), "closing test artifact") {
+		t.Fatalf("joined error = %q, want original and close errors", original)
+	}
+}
+
 func TestEnsureProfileAppendsWithoutReplacingExistingProfiles(t *testing.T) {
 	cluster := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "tau.azure.com/v1alpha1",

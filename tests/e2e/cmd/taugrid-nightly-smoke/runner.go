@@ -896,12 +896,12 @@ func (r *runner) waitRunState(ctx context.Context) (string, error) {
 	}
 }
 
-func (r *runner) captureLogs(ctx context.Context) error {
+func (r *runner) captureLogs(ctx context.Context) (retErr error) {
 	logFile, err := os.OpenFile(r.artifactPath("logs.txt"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating Tau log artifact: %w", err)
 	}
-	defer logFile.Close()
+	defer closeFile(logFile, &retErr, "closing Tau log artifact")
 
 	var lastErr error
 	for {
@@ -924,13 +924,19 @@ func (r *runner) captureLogs(ctx context.Context) error {
 	}
 }
 
-func (r *runner) runTauToFile(ctx context.Context, path string, args ...string) error {
+func (r *runner) runTauToFile(ctx context.Context, path string, args ...string) (retErr error) {
 	file, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", path, err)
 	}
-	defer file.Close()
+	defer closeFile(file, &retErr, "closing "+path)
 	return r.commands.run(ctx, file, r.stderr, r.options.tauBinary, args...)
+}
+
+func closeFile(file *os.File, retErr *error, operation string) {
+	if err := file.Close(); err != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("%s: %w", operation, err))
+	}
 }
 
 func (r *runner) artifactPath(name string) string {
