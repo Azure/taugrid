@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+readonly REPO_ROOT
+readonly RECOVER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-recover.sh"
+
+fail() {
+  echo "TauGrid unbounded-stable nightly recovery test failed: $*" >&2
+  exit 1
+}
+
+fixture="$(mktemp -d)"
+trap 'rm -rf "${fixture}"' EXIT
+mkdir -p "${fixture}/bin" "${fixture}/diagnostics"
+export PATH="${fixture}/bin:${PATH}"
+export TAUGRID_RELEASE=taugrid
+export TAUGRID_SYSTEM_NAMESPACE=tau-system
+export TAUGRID_KUBE_CONTEXT=unbounded-stable
+export TAUGRID_DIAGNOSTICS_DIR="${fixture}/diagnostics"
+export FAKE_HELM_STATE="${fixture}/helm-state"
+export FAKE_HELM_LOG="${fixture}/helm.log"
+export FAKE_TAU_LOG="${fixture}/tau.log"
+
+cat >"${fixture}/bin/helm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >>"${FAKE_HELM_LOG}"
+case "$1" in
+  list)
+    if [[ "$(cat "${FAKE_HELM_STATE}")" == "present" ]]; then
+      printf '[{"name":"taugrid","namespace":"tau-system","revision":"8","status":"deployed"}]\n'
+    else
+      printf '[]\n'
+    fi
+    ;;
+  rollback)
+    ;;
+  uninstall)
+    printf 'absent\n' >"${FAKE_HELM_STATE}"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+EOF
+
+cat >"${fixture}/bin/tau" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >>"${FAKE_TAU_LOG}"
+EOF
+chmod +x "${fixture}/bin/helm" "${fixture}/bin/tau"
+export TAUGRID_CLI="${fixture}/bin/tau"
+
+printf 'present\n' >"${FAKE_HELM_STATE}"
+export TAUGRID_PREVIOUS_REVISION=7
+result="$("${RECOVER}" recover)"
+[[ "${result}" == "restored and validated revision 7" ]] ||
+  fail "existing release recovery result was ${result}"
+grep -Fq "rollback taugrid 7" "${FAKE_HELM_LOG}" ||
+  fail "failed install readiness must roll back the previous revision"
+grep -Fq "cluster validate installation" "${FAKE_TAU_LOG}" ||
+  fail "the restored release must be validated"
+
+: >"${FAKE_HELM_LOG}"
+: >"${FAKE_TAU_LOG}"
+printf 'present\n' >"${FAKE_HELM_STATE}"
+export TAUGRID_PREVIOUS_REVISION=0
+result="$("${RECOVER}" recover)"
+[[ "${result}" == "removed the rejected first installation" ]] ||
+  fail "first installation recovery result was ${result}"
+grep -Fq "uninstall taugrid" "${FAKE_HELM_LOG}" ||
+  fail "a rejected first installation must be removed"
+[[ "$(cat "${FAKE_HELM_STATE}")" == "absent" ]] ||
+  fail "the rejected first installation remained present"
+[[ ! -s "${FAKE_TAU_LOG}" ]] ||
+  fail "an absent release must not run installation validation"
+
+cat >"${fixture}/bin/helm" <<'EOF'
+#!/usr/bin/env bash
+echo "simulated Helm inspection failure" >&2
+exit 1
+EOF
+chmod +x "${fixture}/bin/helm"
+if "${RECOVER}" inspect >/dev/null 2>"${fixture}/inspect-error.txt"; then
+  fail "Helm inspection errors must not be treated as an absent release"
+fi
+grep -Fq "simulated Helm inspection failure" "${fixture}/inspect-error.txt" ||
+  fail "inspection failure was not surfaced"
+
+echo "TauGrid unbounded-stable nightly recovery tests passed"

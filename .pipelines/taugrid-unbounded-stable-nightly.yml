@@ -279,14 +279,17 @@ jobs:
                   kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
                   kubectl --context unbounded-stable version
 
-                  previous_revision="0"
-                  if helm status "${TAUGRID_RELEASE}" \
-                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                    --kube-context unbounded-stable >/dev/null 2>&1; then
-                    previous_revision="$(helm status "${TAUGRID_RELEASE}" \
-                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                      --kube-context unbounded-stable \
-                      --output json | jq -r '.version | tostring')"
+                  release_state="$(
+                    TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
+                      TAUGRID_SYSTEM_NAMESPACE="${TAUGRID_SYSTEM_NAMESPACE}" \
+                      scripts/ci/taugrid-unbounded-stable-nightly-recover.sh inspect
+                  )"
+                  previous_revision="$(jq -r '.revision' <<<"${release_state}")"
+                  if [[ "$(jq -r '.exists' <<<"${release_state}")" == "true" ]]; then
+                    if [[ "$(jq -r '.status' <<<"${release_state}")" != "deployed" ]]; then
+                      echo "##vso[task.logissue type=error]Existing TauGrid release is not deployed; repair it before running the nightly"
+                      exit 1
+                    fi
                     helm get values "${TAUGRID_RELEASE}" \
                       --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                       --kube-context unbounded-stable \
@@ -340,11 +343,29 @@ jobs:
                     >"${render_file}" 2>&1
                   printf 'Dry-run rendering completed successfully for source %s.\n' \
                     "${source_version}" >"${diagnostics_dir}/render-summary.txt"
+                  recover_failed_deployment() {
+                    local failure_reason="$1"
+                    local recovery_reason
+                    if recovery_reason="$(
+                      TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
+                        TAUGRID_SYSTEM_NAMESPACE="${TAUGRID_SYSTEM_NAMESPACE}" \
+                        TAUGRID_PREVIOUS_REVISION="${previous_revision}" \
+                        TAUGRID_DIAGNOSTICS_DIR="${diagnostics_dir}" \
+                        scripts/ci/taugrid-unbounded-stable-nightly-recover.sh recover
+                    )"; then
+                      write_result failed \
+                        "${failure_reason}; ${recovery_reason}" \
+                        "${previous_revision}"
+                    else
+                      write_result failed \
+                        "${failure_reason}; recovery failed" \
+                        "${previous_revision}"
+                    fi
+                  }
                   if ! cli/bin/tau "${install_args[@]}" \
                     >"${diagnostics_dir}/install-output.txt" 2>&1; then
-                    write_result failed \
-                      "installation failed; Helm atomic rollback was requested" \
-                      "${previous_revision}"
+                    recover_failed_deployment \
+                      "installation or embedded readiness validation failed"
                     exit 1
                   fi
 
@@ -358,62 +379,7 @@ jobs:
                     --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
                     --timeout 10m \
                     >"${diagnostics_dir}/validation.txt" 2>&1; then
-                    if [[ "${previous_revision}" == "0" ]]; then
-                      if ! helm uninstall "${TAUGRID_RELEASE}" \
-                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                        --kube-context unbounded-stable \
-                        --wait \
-                        --timeout 20m \
-                        >"${diagnostics_dir}/recovery.txt" 2>&1; then
-                        write_result failed \
-                          "readiness validation failed and removal of the first installation failed" \
-                          "${previous_revision}" \
-                          "${current_revision}"
-                        exit 1
-                      fi
-                      if helm status "${TAUGRID_RELEASE}" \
-                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                        --kube-context unbounded-stable >/dev/null 2>&1; then
-                        write_result failed \
-                          "readiness validation failed and the first installation still exists after removal" \
-                          "${previous_revision}" \
-                          "${current_revision}"
-                        exit 1
-                      fi
-                      write_result failed \
-                        "readiness validation failed; removed the first installation" \
-                        "${previous_revision}" \
-                        "${current_revision}"
-                    else
-                      if ! helm rollback "${TAUGRID_RELEASE}" "${previous_revision}" \
-                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                        --kube-context unbounded-stable \
-                        --wait \
-                        --timeout 20m \
-                        >"${diagnostics_dir}/recovery.txt" 2>&1; then
-                        write_result failed \
-                          "readiness validation failed and rollback to revision ${previous_revision} failed" \
-                          "${previous_revision}" \
-                          "${current_revision}"
-                        exit 1
-                      fi
-                      if ! cli/bin/tau cluster validate installation \
-                        --context unbounded-stable \
-                        --release "${TAUGRID_RELEASE}" \
-                        --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
-                        --timeout 10m \
-                        >"${diagnostics_dir}/recovery-validation.txt" 2>&1; then
-                        write_result failed \
-                          "readiness validation failed; rollback to revision ${previous_revision} completed but recovery validation failed" \
-                          "${previous_revision}" \
-                          "${current_revision}"
-                        exit 1
-                      fi
-                      write_result failed \
-                        "readiness validation failed; restored and validated revision ${previous_revision}" \
-                        "${previous_revision}" \
-                        "${current_revision}"
-                    fi
+                    recover_failed_deployment "post-install readiness validation failed"
                     exit 1
                   fi
 

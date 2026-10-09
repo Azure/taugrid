@@ -8,6 +8,8 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly PIPELINE="${REPO_ROOT}/.pipelines/taugrid-unbounded-stable-nightly.yml"
 readonly REPORTER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-report.sh"
+readonly RECOVER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-recover.sh"
+readonly RECOVER_TEST="${REPO_ROOT}/scripts/ci/tests/taugrid-unbounded-stable-nightly-recover_test.sh"
 
 fail() {
   echo "TauGrid unbounded-stable nightly contract test failed: $*" >&2
@@ -16,6 +18,8 @@ fail() {
 
 [ -f "$PIPELINE" ] || fail "pipeline is missing"
 [ -x "$REPORTER" ] || fail "nightly report generator must be executable"
+[ -x "$RECOVER" ] || fail "nightly recovery helper must be executable"
+[ -x "$RECOVER_TEST" ] || fail "nightly recovery fixture must be executable"
 
 grep -Fq 'cron: "45 7 * * *"' "$PIPELINE" ||
   fail "pipeline must run nightly"
@@ -61,7 +65,7 @@ fi
 
 grep -Fq 'helm get values "${TAUGRID_RELEASE}"' "$PIPELINE" ||
   fail "deployment must preserve live operator-supplied values"
-grep -Fq 'previous_revision="0"' "$PIPELINE" ||
+grep -Fq "previous_revision=\"\$(jq -r '.revision' <<<\"\${release_state}\")\"" "$PIPELINE" ||
   fail "deployment must support the first managed installation"
 grep -Fq "printf '{}" "$PIPELINE" ||
   fail "first installation must start from reviewed chart defaults"
@@ -75,12 +79,14 @@ grep -Fq -- "--atomic" "$PIPELINE" ||
   fail "deployment must request rollback after Helm failure"
 grep -Fq "tau cluster validate installation" "$PIPELINE" ||
   fail "deployment must run the TauGrid readiness gate"
-grep -Fq 'helm rollback "${TAUGRID_RELEASE}" "${previous_revision}"' "$PIPELINE" ||
-  fail "readiness failures must restore the previous Helm revision"
-grep -Fq 'helm uninstall "${TAUGRID_RELEASE}"' "$PIPELINE" ||
-  fail "a failed first installation must be removed"
-grep -Fq 'recovery-validation.txt' "$PIPELINE" ||
-  fail "a restored release must pass the TauGrid readiness gate"
+grep -Fq "taugrid-unbounded-stable-nightly-recover.sh inspect" "$PIPELINE" ||
+  fail "release absence must be established through structured inspection"
+grep -Fq "Existing TauGrid release is not deployed" "$PIPELINE" ||
+  fail "deployment must fail closed for a non-deployed existing release"
+grep -Fq "installation or embedded readiness validation failed" "$PIPELINE" ||
+  fail "embedded install readiness failures must enter recovery"
+grep -Fq "taugrid-unbounded-stable-nightly-recover.sh recover" "$PIPELINE" ||
+  fail "readiness failures must restore the previous release state"
 grep -Fq "lifecycleRecorder.enabled == true" "$PIPELINE" ||
   fail "deployment must fail closed for an unpublished lifecycle recorder image"
 
