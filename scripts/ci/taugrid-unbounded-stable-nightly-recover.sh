@@ -27,9 +27,7 @@ release_state() {
       --kube-context "${KUBE_CONTEXT}" \
       --deployed \
       --failed \
-      --pending-install \
-      --pending-upgrade \
-      --pending-rollback \
+      --pending \
       --uninstalled \
       --uninstalling \
       --superseded \

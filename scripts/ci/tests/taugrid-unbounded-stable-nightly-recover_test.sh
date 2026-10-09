@@ -61,6 +61,12 @@ export TAUGRID_PREVIOUS_REVISION=7
 result="$("${RECOVER}" recover)"
 [[ "${result}" == "restored and validated revision 7" ]] ||
   fail "existing release recovery result was ${result}"
+grep -Fq "list --namespace tau-system --kube-context unbounded-stable --deployed --failed --pending --uninstalled --uninstalling --superseded --output json" \
+  "${FAKE_HELM_LOG}" ||
+  fail "release inspection must use Helm 3 and Helm 4 compatible state flags"
+if grep -Eq -- '--pending-(install|upgrade|rollback)' "${FAKE_HELM_LOG}"; then
+  fail "release inspection must not use unsupported granular pending flags"
+fi
 grep -Fq "rollback taugrid 7" "${FAKE_HELM_LOG}" ||
   fail "failed install readiness must roll back the previous revision"
 grep -Fq "cluster validate installation" "${FAKE_TAU_LOG}" ||
