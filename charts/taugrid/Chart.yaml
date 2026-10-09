@@ -17,7 +17,7 @@ dependencies:
     repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
     condition: components.kueue.enabled
   - name: kuberay-operator
-    version: 1.6.2
+    version: 1.7.0
     repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
     condition: components.kuberayOperator.enabled
   - name: tau-core-controller

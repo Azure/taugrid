@@ -322,7 +322,7 @@ Pass-through values for the embedded KubeRay chart:
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `kuberay-operator.image.repository` | string | `mcr.microsoft.com/oss/v2/kuberay/operator` | KubeRay operator image |
-| `kuberay-operator.image.tag` | string | `v1.6.2` | KubeRay operator image tag |
+| `kuberay-operator.image.tag` | string | `v1.7.0` | KubeRay operator image tag |
 | `kuberay-operator.configuration.enabled` | bool | `true` | Enable RayCluster default container env injection |
 
 Refer to the [upstream KubeRay chart values](https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/raycluster-quick-start.html)

@@ -136,7 +136,7 @@ kueue:
 kuberay-operator:
   image:
     repository: mcr.microsoft.com/oss/v2/kuberay/operator
-    tag: v1.6.2
+    tag: v1.7.0
     pullPolicy: IfNotPresent
   podAnnotations:
     adx-mon/scrape: "true"
