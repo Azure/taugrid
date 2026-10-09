@@ -54,7 +54,10 @@ Accelerator-domain placement selects one provider-declared NVLink/NVL72 island;
 network-domain placement selects one scale-out InfiniBand or RoCE fabric and
 may span accelerator domains. Matching GPU models never imply a shared island.
 Neither placement guarantees distinct hosts, and an unavailable shared domain
-remains pending instead of falling back.
+remains pending instead of falling back. Multi-node direct Job torchrun adds a
+separate one-per-GPU-Node host-slot request: its ranks use distinct hosts while
+the selected placement keeps them in one fabric domain. That slot is exclusive
+across all multi-node torchrun ranks, including ranks from different runs.
 
 Delete old policy ConfigMaps, volume mounts, environment variables, and files
 only after every submitter uses a ready TauCluster profile. There is no
