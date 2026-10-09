@@ -199,7 +199,8 @@ jobs:
           wheel_first_dir="$RUNNER_TEMP/tau-python-wheel-a"
           wheel_second_dir="$RUNNER_TEMP/tau-python-wheel-b"
 
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           python -m build --wheel --outdir "$wheel_first_dir" ./sdk/python/python
           python -m build --wheel --outdir "$wheel_second_dir" ./sdk/python/python
 
@@ -267,6 +268,282 @@ jobs:
           compression-level: 0
           retention-days: 1
 
+  sbom:
+    name: Generate and validate release SBOMs
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_SOURCE_REF }}
+
+      - name: Download reproducible release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tau-release-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/tau-release
+
+      - name: Install pinned Syft
+        env:
+          SYFT_VERSION: 1.54.1
+          SYFT_SHA256: c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47
+        run: |
+          set -euo pipefail
+
+          archive="syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          base_url="https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}"
+          curl --fail --location --silent --show-error \
+            --output "$RUNNER_TEMP/$archive" "$base_url/$archive"
+          (
+            cd "$RUNNER_TEMP"
+            printf '%s  %s\n' "$SYFT_SHA256" "$archive" > syft.checksum
+            sha256sum --check syft.checksum
+            mkdir -p syft-bin
+            tar -xzf "$archive" -C syft-bin syft
+          )
+          "$RUNNER_TEMP/syft-bin/syft" version
+
+      - name: Resolve immutable images and generate SPDX SBOMs
+        env:
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+        run: |
+          set -euo pipefail
+
+          release_dir="$RUNNER_TEMP/tau-release"
+          syft="$RUNNER_TEMP/syft-bin/syft"
+          commit="$(git rev-parse HEAD)"
+          version="${RELEASE_TAG#v}"
+          generated_at="$(
+            date -u -d "@$(git show -s --format=%ct HEAD)" '+%Y-%m-%dT%H:%M:%SZ'
+          )"
+          cli_metadata="$RUNNER_TEMP/cli-sboms.jsonl"
+          image_metadata="$RUNNER_TEMP/image-sboms.jsonl"
+          : > "$cli_metadata"
+          : > "$image_metadata"
+
+          sha256_file() {
+            sha256sum "$1" | awk '{print $1}'
+          }
+
+          yaml_mapping_value() {
+            file="$1"
+            path="$2"
+            field="$3"
+            awk -v path="$path" -v field="$field" '
+              BEGIN {
+                path_depth = split(path, path_parts, ".")
+              }
+              /^[[:space:]]*($|#)/ {
+                next
+              }
+              {
+                content = $0
+                sub(/^[ ]*/, "", content)
+                indent = length($0) - length(content)
+                if (indent % 2 != 0 || content !~ /^[^:]+:/) {
+                  next
+                }
+                level = (indent / 2) + 1
+                key = content
+                sub(/:.*/, "", key)
+                stack[level] = key
+                for (i in stack) {
+                  if (i > level) {
+                    delete stack[i]
+                  }
+                }
+                if (level != path_depth + 1 || key != field) {
+                  next
+                }
+                for (i = 1; i <= path_depth; i++) {
+                  if (stack[i] != path_parts[i]) {
+                    next
+                  }
+                }
+                value = content
+                sub(/^[^:]+:[ ]*/, "", value)
+                sub(/[ ]+#.*/, "", value)
+                gsub(/^"|"$/, "", value)
+                print value
+                exit
+              }
+            ' "$file"
+          }
+
+          normalize_spdx() {
+            input="$1"
+            output="$2"
+            name="$3"
+            namespace="$4"
+            jq \
+              --arg name "$name" \
+              --arg namespace "$namespace" \
+              --arg generated "$generated_at" '
+                .name = $name
+                | .documentNamespace = $namespace
+                | .creationInfo.created = $generated
+              ' "$input" > "$output"
+            rm -f "$input"
+          }
+
+          cli_specs=(
+            "tau darwin-amd64 tau-darwin-amd64"
+            "tau darwin-arm64 tau-darwin-arm64"
+            "tau linux-amd64 tau-linux-amd64"
+            "tau linux-arm64 tau-linux-arm64"
+            "tau windows-amd64 tau-windows-amd64.exe"
+            "tau-gen darwin-amd64 tau-gen-darwin-amd64"
+            "tau-gen darwin-arm64 tau-gen-darwin-arm64"
+            "tau-gen linux-amd64 tau-gen-linux-amd64"
+            "tau-gen linux-arm64 tau-gen-linux-arm64"
+            "tau-gen windows-amd64 tau-gen-windows-amd64.exe"
+          )
+          for spec in "${cli_specs[@]}"; do
+            read -r component target asset <<< "$spec"
+            test -f "$release_dir/$asset"
+            sbom="$asset.spdx.json"
+            namespace="https://github.com/Azure/taugrid/sbom/$RELEASE_TAG/$sbom"
+            "$syft" scan "file:$release_dir/$asset" \
+              --source-name "$asset" \
+              --source-version "$RELEASE_TAG" \
+              --output "spdx-json=$release_dir/$sbom.tmp"
+            normalize_spdx \
+              "$release_dir/$sbom.tmp" "$release_dir/$sbom" "$asset" "$namespace"
+            jq -nc \
+              --arg component "$component" \
+              --arg target "$target" \
+              --arg version "$RELEASE_TAG" \
+              --arg asset "$asset" \
+              --arg asset_sha "$(sha256_file "$release_dir/$asset")" \
+              --arg sbom "$sbom" \
+              --arg sbom_sha "$(sha256_file "$release_dir/$sbom")" '{
+                component: $component,
+                target: $target,
+                version: $version,
+                asset: $asset,
+                assetSha256: $asset_sha,
+                sbom: $sbom,
+                sbomSha256: $sbom_sha
+              }' >> "$cli_metadata"
+          done
+
+          image_specs=(
+            "tau|taugrid-core|charts/taugrid-core/Chart.yaml|charts/taugrid-core/values.yaml|lifecycleRecorder.image"
+            "taugrid-portal|taugrid-core|charts/taugrid-core/Chart.yaml|charts/taugrid-core/values.yaml|portal.image"
+            "tau-core-controller|tau-core-controller|charts/tau-core-controller/Chart.yaml|charts/tau-core-controller/values.yaml|image"
+          )
+          for spec in "${image_specs[@]}"; do
+            IFS='|' read -r component chart chart_file values_file image_path <<< "$spec"
+            chart_version="$(awk '$1 == "version:" {gsub(/"/, "", $2); print $2; exit}' "$chart_file")"
+            app_version="$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print $2; exit}' "$chart_file")"
+            repository="$(yaml_mapping_value "$values_file" "$image_path" repository)"
+            image_tag="$(yaml_mapping_value "$values_file" "$image_path" tag)"
+            test "$repository" = "mcr.microsoft.com/aks/ai-runtime/$component"
+            test "$chart_version" = "$version"
+            test "$app_version" = "$version"
+            test "$image_tag" = "$version"
+            tag_reference="$repository:$version"
+
+            manifest_json="$RUNNER_TEMP/$component-manifest.json"
+            resolved=false
+            for attempt in $(seq 1 20); do
+              if docker buildx imagetools inspect \
+                --format '{{json .}}' "$tag_reference" > "$manifest_json"; then
+                resolved=true
+                break
+              fi
+              echo "$tag_reference is not visible yet (attempt $attempt/20)" >&2
+              sleep 30
+            done
+            test "$resolved" = true
+            image_index_digest="$(
+              jq -er '
+                .manifest.digest
+                | select(test("^sha256:[0-9a-f]{64}$"))
+              ' "$manifest_json"
+            )"
+            image_index="$repository@$image_index_digest"
+
+            for arch in amd64 arm64; do
+              platform="linux/$arch"
+              platform_digest="$(
+                jq -er --arg arch "$arch" '
+                  [
+                    .manifest.manifests[]
+                    | select(
+                        .platform.os == "linux"
+                        and .platform.architecture == $arch
+                      )
+                  ]
+                  | if length == 1
+                    then .[0].digest
+                    else error("expected exactly one linux/" + $arch + " manifest")
+                    end
+                  | select(test("^sha256:[0-9a-f]{64}$"))
+                ' "$manifest_json"
+              )"
+              platform_image="$repository@$platform_digest"
+              platform_slug="linux-$arch"
+              digest_slug="${platform_digest/:/-}"
+              sbom="${component}-image-${version}-${platform_slug}-${digest_slug}.spdx.json"
+              source_name="${component}-image-${platform_slug}"
+              namespace="https://github.com/Azure/taugrid/sbom/$RELEASE_TAG/$sbom"
+              "$syft" scan "registry:$platform_image" \
+                --platform "$platform" \
+                --source-name "$source_name" \
+                --source-version "$version" \
+                --output "spdx-json=$release_dir/$sbom.tmp"
+              normalize_spdx \
+                "$release_dir/$sbom.tmp" "$release_dir/$sbom" \
+                "$source_name" "$namespace"
+              jq -nc \
+                --arg component "$component" \
+                --arg chart "$chart" \
+                --arg version "$version" \
+                --arg tag_reference "$tag_reference" \
+                --arg image_index "$image_index" \
+                --arg image_index_digest "$image_index_digest" \
+                --arg platform "$platform" \
+                --arg platform_image "$platform_image" \
+                --arg platform_digest "$platform_digest" \
+                --arg sbom "$sbom" \
+                --arg sbom_sha "$(sha256_file "$release_dir/$sbom")" '{
+                  component: $component,
+                  chart: $chart,
+                  chartVersion: $version,
+                  componentVersion: $version,
+                  tagReference: $tag_reference,
+                  imageIndex: $image_index,
+                  imageIndexDigest: $image_index_digest,
+                  platform: $platform,
+                  platformImage: $platform_image,
+                  platformDigest: $platform_digest,
+                  sbom: $sbom,
+                  sbomSha256: $sbom_sha
+                }' >> "$image_metadata"
+            done
+          done
+
+          scripts/ci/release-sbom-index.sh build \
+            "$release_dir" \
+            "$cli_metadata" \
+            "$image_metadata" \
+            "$RELEASE_TAG" \
+            "$commit" \
+            "$generated_at"
+
+      - name: Upload SBOM-enriched release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tau-release-sbom-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/tau-release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
   validate-windows-assets:
     name: Validate Windows release assets
     needs: build
@@ -305,6 +582,7 @@ jobs:
       - validate
       - gates
       - build
+      - sbom
       - validate-windows-assets
     runs-on: ubuntu-latest
     permissions:
@@ -318,7 +596,7 @@ jobs:
       - name: Download validated release assets
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: tau-release-${{ env.RELEASE_TAG }}
+          name: tau-release-sbom-${{ env.RELEASE_TAG }}
           path: ${{ runner.temp }}/tau-release
 
       - name: Download validated release notes
@@ -369,6 +647,7 @@ jobs:
           }
 
           release_dir="$RUNNER_TEMP/tau-release"
+          scripts/ci/release-sbom-index.sh validate "$release_dir"
           (cd "$release_dir" && shasum -a 256 --check SHA256SUMS)
 
           shopt -s nullglob
@@ -377,26 +656,9 @@ jobs:
             echo "expected exactly one Tau SDK wheel" >&2
             exit 1
           fi
-          wheel_asset="$(basename "${wheel_assets[0]}")"
 
-          expected=(
-            LICENSE
-            SHA256SUMS
-            install.sh
-            install.ps1
-            tau-darwin-amd64
-            tau-darwin-arm64
-            tau-gen-darwin-amd64
-            tau-gen-darwin-arm64
-            tau-gen-linux-amd64
-            tau-gen-linux-arm64
-            tau-linux-amd64
-            tau-linux-arm64
-            tau-windows-amd64.exe
-            tau-gen-windows-amd64.exe
-            "$wheel_asset"
-          )
-          printf '%s\n' "${expected[@]}" | sort > "$RUNNER_TEMP/expected-assets"
+          scripts/ci/release-sbom-index.sh expected-assets \
+            "$release_dir" > "$RUNNER_TEMP/expected-assets"
           find "$release_dir" -maxdepth 1 -type f -exec basename {} \; | sort > "$RUNNER_TEMP/local-assets"
           diff -u "$RUNNER_TEMP/expected-assets" "$RUNNER_TEMP/local-assets"
 
@@ -481,6 +743,7 @@ jobs:
               > "$verify_dir/$asset_name"
             cmp "$release_dir/$asset_name" "$verify_dir/$asset_name"
           done < "$RUNNER_TEMP/github-assets.tsv"
+          scripts/ci/release-sbom-index.sh validate "$verify_dir"
           (cd "$verify_dir" && shasum -a 256 --check SHA256SUMS)
 
           verify_remote_tag

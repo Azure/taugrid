@@ -66,7 +66,7 @@ jobs:
               ;;
             pull_request | push)
               changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-              if grep -Eq '^cli/releases/v[^/]+\.md$|^\.github/workflows/(release-tau|taugrid-validation)\.ya?ml$|^scripts/ci/tests/release-workflow-contract_test\.sh$' \
+              if grep -Eq '^cli/releases/v[^/]+\.md$|^\.github/workflows/(release-tau|taugrid-validation)\.ya?ml$|^scripts/ci/(release-sbom-index\.sh|tests/release-workflow-contract_test\.sh)$' \
                 <<<"$changed_files"; then
                 enabled=true
               fi

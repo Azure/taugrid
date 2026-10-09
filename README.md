@@ -150,6 +150,16 @@ TauGrid first-party images are published under the following MCR repositories:
 
 Use the versioned tag or immutable digest documented by each release rather than a mutable `latest` tag.
 
+Coordinated GitHub Releases also publish SPDX JSON SBOM assets for these three
+images and for every distributed `tau` and `tau-gen` platform binary. The
+release's `taugrid-release-sbom-index.json` maps component and chart versions,
+CLI assets, and immutable public MCR image digests to the exact SBOM filenames
+and checksums. Each coordinated image has separate Linux amd64 and arm64 SBOMs;
+the index records both the top-level OCI image-index digest and the selected
+platform manifest digest. Image SBOMs are generated from the resolved
+`mcr.microsoft.com/...@sha256:...` platform images after they are publicly
+available; they are not OCI referrers or signatures.
+
 ### Local Kind development
 
 Build the current controller and portal sources, load them into a local Kind

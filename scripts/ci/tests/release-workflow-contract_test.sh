@@ -64,6 +64,7 @@ if grep -Fq 'allow_main_release_notes' "${WORKFLOW}"; then
   fail "published legacy releases must not retain a recovery path"
 fi
 validate_block="$(job_block validate)"
+sbom_block="$(job_block sbom)"
 publish_block="$(job_block publish)"
 if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
   fail "read-only validation must not call the write-authorized generate-notes endpoint"
@@ -74,5 +75,26 @@ grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" <<<"${publish_
   fail "release notes must include GitHub-generated change and contributor attribution"
 grep -Fq "cat \"\$generated\"" <<<"${publish_block}" ||
   fail "generated change and contributor notes must be appended to curated notes"
+grep -Fq 'SYFT_VERSION: 1.54.1' <<<"${sbom_block}" ||
+  fail "release SBOM generation must pin Syft"
+grep -Eq 'SYFT_SHA256: [0-9a-f]{64}' <<<"${sbom_block}" ||
+  fail "release SBOM generation must pin and verify the Syft archive digest"
+grep -Fq 'docker buildx imagetools inspect' <<<"${sbom_block}" ||
+  fail "release SBOM generation must resolve image digests with Docker Buildx"
+grep -Fq "scan \"file:\$release_dir/\$asset\"" <<<"${sbom_block}" ||
+  fail "release SBOM generation must scan each CLI binary directly with Syft"
+grep -Fq "scan \"registry:\$platform_image\"" <<<"${sbom_block}" ||
+  fail "release SBOM generation must scan each immutable image manifest with Syft"
+grep -Fq 'release-sbom-index.sh build' <<<"${sbom_block}" ||
+  fail "release SBOM generation must build and validate the release index"
+grep -Fq "tau-release-sbom-\${{ env.RELEASE_TAG }}" <<<"${sbom_block}" ||
+  fail "SBOM-enriched assets must be transferred separately from reproducible binaries"
+grep -Fq "name: tau-release-sbom-\${{ env.RELEASE_TAG }}" <<<"${publish_block}" ||
+  fail "publication must consume the SBOM-enriched release artifact"
+grep -Fq 'release-sbom-index.sh validate' <<<"${publish_block}" ||
+  fail "publication must validate the complete SBOM index and asset set"
+if grep -Eq 'docker (build |push )|cosign|attest|referrer' <<<"${sbom_block}"; then
+  fail "GitHub release SBOM generation must not build, push, sign, or attest images"
+fi
 
 echo "Release workflow contract tests passed"
