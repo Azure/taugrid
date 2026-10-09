@@ -117,6 +117,10 @@ jobs:
           FLEX_NIGHTLY_TAU_NAMESPACE: $(FLEX_NIGHTLY_TAU_NAMESPACE)
           FLEX_NIGHTLY_TAU_QUEUE: $(FLEX_NIGHTLY_TAU_QUEUE)
 
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/taucluster-reconcile"
+        displayName: Ensure TauCluster diagnostics directory exists
+        condition: always()
+
       - task: PublishPipelineArtifact@1
         displayName: Publish TauCluster reconciliation diagnostics
         condition: always()
@@ -211,6 +215,10 @@ jobs:
           FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
           INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/preflight"
+        displayName: Ensure hardware contract directory exists
+        condition: always()
 
       - task: PublishPipelineArtifact@1
         displayName: Publish hardware contract
@@ -307,6 +315,10 @@ jobs:
         env:
           FLEX_ACR_NAME: $(FLEX_NIGHTLY_ACR_NAME)
           NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX)
+
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/images"
+        displayName: Ensure image contract directory exists
+        condition: always()
 
       - task: PublishPipelineArtifact@1
         displayName: Publish immutable image contract
@@ -622,6 +634,10 @@ jobs:
                 TAU_QUEUE: $(FLEX_NIGHTLY_TAU_QUEUE)
                 TAU_PROFILE: $(FLEX_NIGHTLY_TAU_JOB_PROFILE)
 
+            - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/deployment"
+              displayName: Ensure deployment diagnostics directory exists
+              condition: always()
+
             - task: PublishPipelineArtifact@1
               displayName: Publish deployment diagnostics
               condition: always()
@@ -683,6 +699,10 @@ jobs:
           TAUGRID_RELEASE: $(FLEX_NIGHTLY_TAUGRID_RELEASE)
           TAUGRID_SYSTEM_NAMESPACE: $(FLEX_NIGHTLY_TAUGRID_SYSTEM_NAMESPACE)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/tau-cli-smoke"
+        displayName: Ensure Tau CLI results directory exists
+        condition: always()
 
       - task: PublishPipelineArtifact@1
         displayName: Publish Tau CLI smoke results
@@ -751,6 +771,10 @@ jobs:
           FLEX_NIGHTLY_GPU_ROUTING_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/gpu-routing-smoke
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
 
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/gpu-routing-smoke"
+        displayName: Ensure GPU routing results directory exists
+        condition: always()
+
       - task: PublishPipelineArtifact@1
         displayName: Publish GPU routing results
         condition: always()
@@ -807,6 +831,10 @@ jobs:
           FLEX_NIGHTLY_GPU_PROFILE_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/gpu-profile-smoke
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
 
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/gpu-profile-smoke"
+        displayName: Ensure GPU profile results directory exists
+        condition: always()
+
       - task: PublishPipelineArtifact@1
         displayName: Publish GPU profile results
         condition: always()
@@ -862,6 +890,10 @@ jobs:
           FLEX_NIGHTLY_H200_REGION: $(FLEX_NIGHTLY_STORAGE_EASTUS2EUAP_REGION)
           FLEX_NIGHTLY_STORAGE_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/storage-smoke
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/storage-smoke"
+        displayName: Ensure storage results directory exists
+        condition: always()
 
       - task: PublishPipelineArtifact@1
         displayName: Publish cross-region storage results
@@ -1207,6 +1239,10 @@ jobs:
           E2E_KUSTO_URI: $(AKS_AI_RUNTIME_FLEX_KUSTO_ENDPOINT)
           E2E_KUSTO_DB: $(AKS_AI_RUNTIME_FLEX_KUSTO_RESULTS_DATABASE)
 
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/hardware-matrix"
+        displayName: Ensure hardware matrix directory exists
+        condition: always()
+
       - task: PublishPipelineArtifact@1
         displayName: Publish hardware matrix results
         condition: always()
@@ -1388,6 +1424,10 @@ jobs:
           E2E_KUSTO_URI: $(AKS_AI_RUNTIME_FLEX_KUSTO_ENDPOINT)
           E2E_KUSTO_DB: $(AKS_AI_RUNTIME_FLEX_KUSTO_RESULTS_DATABASE)
 
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/h200-rdma"
+        displayName: Ensure H200 RDMA diagnostics directory exists
+        condition: always()
+
       - task: PublishPipelineArtifact@1
         displayName: Publish H200 RDMA diagnostics
         condition: always()
@@ -1443,6 +1483,10 @@ jobs:
           FLEX_NIGHTLY_PORTAL_SERVICE: $(AKS_AI_RUNTIME_FLEX_PORTAL_SERVICE)
           FLEX_NIGHTLY_PORTAL_WORKSPACE: $(AKS_AI_RUNTIME_FLEX_PORTAL_WORKSPACE)
           FLEX_NIGHTLY_KUSTO_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/kusto-checks
+
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/kusto-checks"
+        displayName: Ensure Portal and Kusto results directory exists
+        condition: always()
 
       - task: PublishPipelineArtifact@1
         displayName: Publish Portal and Kusto results
@@ -1513,6 +1557,10 @@ jobs:
           MATRIX_JOB_RESULT: $(MATRIX_JOB_RESULT)
           RDMA_JOB_RESULT: $(RDMA_JOB_RESULT)
           KUSTO_JOB_RESULT: $(KUSTO_JOB_RESULT)
+
+      - bash: mkdir -p "$(Build.ArtifactStagingDirectory)/nightly-report"
+        displayName: Ensure nightly report directory exists
+        condition: always()
 
       - task: PublishPipelineArtifact@1
         displayName: Publish nightly report bundle

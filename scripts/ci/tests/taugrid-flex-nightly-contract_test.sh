@@ -233,6 +233,22 @@ grep -Fq 'compare-capability "${preflight_contract}" "${postflight_contract}"' "
   fail "RDMA cleanup must verify that Flex node capability recovered"
 grep -Fq 'targetPath: $(Build.ArtifactStagingDirectory)/h200-rdma' "$PIPELINE" ||
   fail "RDMA diagnostics must publish from their dedicated artifact directory"
+for artifact_dir in \
+  taucluster-reconcile \
+  preflight \
+  images \
+  deployment \
+  tau-cli-smoke \
+  gpu-routing-smoke \
+  gpu-profile-smoke \
+  storage-smoke \
+  hardware-matrix \
+  h200-rdma \
+  kusto-checks \
+  nightly-report; do
+  grep -Fq "mkdir -p \"\$(Build.ArtifactStagingDirectory)/${artifact_dir}\"" "$PIPELINE" ||
+    fail "pipeline must initialize ${artifact_dir} before unconditional artifact publishing"
+done
 grep -Fq "trap cleanup EXIT" "$PIPELINE" ||
   fail "pipeline must retain fail-safe cleanup traps"
 grep -Fq "condition: always()" "$PIPELINE" ||
