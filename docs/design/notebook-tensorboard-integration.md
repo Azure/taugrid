@@ -26,6 +26,7 @@ Companion: the notebook plugin itself, `notebook-plugin.md`.
 | R3 | "I would need some analysis between the tensorboard format and the existing format we are exporting" | **§2 is that analysis.** Verdict in §2.5. |
 | R4 | Consider another alternative, or a local TauGrid without a backing ADX cluster | §3 D4 records the local-mode question; §10.5 scopes it as a separate design rather than silently absorbing it. |
 | R5 | (self-correction, found while re-verifying against `main`) | §7.2 claimed `portal/README.md` names a `taugrid-metrics-collector` that does not exist in-tree. That was wrong — the component is real at `metrics/experiment-metrics-collector` — so §7.2 now records the correction and §9 Q1 is closed instead of deferred. |
+| R7 | Preserve fractional epoch seconds; narrowing `wall_time` to integer seconds collides event IDs for same-tag, same-step observations inside one second | §2.4 keeps the fractional part and documents why: value and history-line tags are excluded from the projection's identity, so a floored timestamp makes the ADX dedup view hide one observation. A regression case for that pair is now required. |
 | R6 | The collector already owns source checkpoints, typed projection, durable spooling and queued ADX delivery; assess protobuf in the collector module, not `portal/go.mod` | §5 no longer draws the collector as a remote-write forwarder: the adapter is an additional source at the typed-projection boundary, and the existing checkpoints, spool and queued delivery are reused rather than bypassed. §6.1 now records that protobuf is **not** in the collector module, so placement changes the dependency cost. |
 
 The original proposal (per-job TensorBoard sidecar + portal proxy) is preserved in
@@ -107,7 +108,7 @@ already TensorBoard-compatible. Only the container is not.**
 | Encoding | UTF-8 text | binary protobuf | **No** |
 | Framing | newline | length + masked CRC32C | **No** |
 | Step | `_step` int | `Event.step` int64 | **Yes** |
-| Timestamp | `_timestamp` seconds (int) | `Event.wall_time` seconds (double) | **Yes** (narrowing only) |
+| Timestamp | `_timestamp` numeric seconds | `Event.wall_time` seconds (double) | **Yes**, and the fractional part must be preserved |
 | Series identity | object key | `Value.tag` | **Yes** |
 | Scalar value | JSON number | `simple_value` float, or `tensor` | **Yes** (`tensor` needs dtype decode) |
 | Non-scalar | tolerated, skipped | first-class | Partial |
@@ -121,12 +122,22 @@ For the scalar subset — which is what a loss curve needs — the mapping is to
 
 ```
 Event.step                  -> _step        (int64 -> int)
-Event.wall_time             -> _timestamp   (double -> int seconds)
+Event.wall_time             -> _timestamp   (double -> numeric seconds, fractional part kept)
 for v in Event.summary.value:
     v.tag                   -> key
     v.simple_value          -> number      (float)
     v.tensor (scalar)       -> number      (TensorProto dtype decode)
 ```
+
+**Do not floor `wall_time` to whole seconds.** The projection identifies an
+observation by the source file, the tag and the step; value and history-line tags
+are excluded from that identity. Two observations of the same tag and step inside
+one second would therefore collapse to the same event ID, and the ADX dedup view
+would show only one of them. A single training step usually emits its metrics in
+one burst, so this is a routine case rather than an edge case, and the loss would
+be silent. Keep `_timestamp` as numeric seconds with its fractional part, and
+require a regression case that ingests two same-tag, same-step observations inside
+one second and asserts both survive to the dedup view.
 
 Non-scalar `value` entries are dropped from the metric stream. They are **not**
 lost from TauGrid's model: `tfevents` files are already classified as artifacts
