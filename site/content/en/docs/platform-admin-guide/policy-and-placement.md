@@ -86,9 +86,10 @@ pending rather than falling back to a network domain or site.
 
 `same-network-domain` requires one shared fabric but does not generally require
 one worker per host. Generic smaller workers may co-locate. Direct Job torchrun
-workloads with `execution.nodes > 1` add required hostname anti-affinity, so
-their rank pods run on distinct Kubernetes hosts within the selected fabric
-domain.
+workloads with `execution.nodes > 1` request hostname slices of size one from
+Kueue TAS and retain required hostname anti-affinity, so admission and
+scheduling place their rank pods on distinct Kubernetes hosts within the
+selected fabric domain.
 
 Tau emits a warning when this placement is selected. The request does not
 independently require `tau.azure.com/infiniband=true`: Nodes without

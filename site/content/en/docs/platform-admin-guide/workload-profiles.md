@@ -55,7 +55,8 @@ network-domain placement selects one scale-out InfiniBand or RoCE fabric and
 may span accelerator domains. Matching GPU models never imply a shared island.
 Neither placement alone guarantees distinct hosts, and an unavailable shared
 domain remains pending instead of falling back. Direct Job torchrun workloads
-with `execution.nodes > 1` additionally place each rank pod on a distinct
+with `execution.nodes > 1` additionally request one-pod hostname slices from
+Kueue TAS and retain hostname anti-affinity, placing each rank pod on a distinct
 Kubernetes host while `same-network-domain` keeps those hosts within one fabric
 domain.
 

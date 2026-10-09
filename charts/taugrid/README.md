@@ -194,8 +194,9 @@ Selecting `same-network-domain` does not independently require
 `tau.azure.com/infiniband=true` or one worker per host. Nodes without
 authoritative shared-fabric metadata have singleton domains. Generic workloads
 that fit on one Node may still co-locate there. Direct Job torchrun workloads
-with `execution.nodes > 1` additionally require one rank pod per Kubernetes
-host, so their ranks stay on distinct hosts within the selected fabric domain.
+with `execution.nodes > 1` additionally request hostname slices of size one
+from Kueue TAS and retain required hostname anti-affinity, so their ranks stay
+on distinct hosts within the selected fabric domain.
 Tau warns about the generic placement contract and does not fall back to
 `same-site` or `unconstrained`.
 

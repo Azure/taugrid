@@ -992,7 +992,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"labels": podLabels,
 	}
 	correlationAnnotations := workloadmeta.PodCorrelationAnnotations(o.Annotations)
-	if len(correlationAnnotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 {
+	if len(correlationAnnotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 || o.Nodes > 1 {
 		podAnnotations := map[string]any{}
 		for k, v := range correlationAnnotations {
 			podAnnotations[k] = v
@@ -1006,6 +1006,12 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			if k != "" && v != "" && !isGeneratedTauMetadataKey(k) {
 				podAnnotations[k] = v
 			}
+		}
+		if o.Nodes > 1 {
+			// TAS must account for the distinct-host requirement during
+			// admission; pod anti-affinity alone is applied after assignment.
+			podAnnotations[topology.PodSetSliceRequiredTopologyAnnotation] = topology.HostnameTopology
+			podAnnotations[topology.PodSetSliceSizeAnnotation] = "1"
 		}
 		if len(podAnnotations) > 0 {
 			podMetadata["annotations"] = podAnnotations
