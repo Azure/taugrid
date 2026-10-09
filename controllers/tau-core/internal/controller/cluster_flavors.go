@@ -7,11 +7,13 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
+	"github.com/Azure/taugrid/core/workloadmeta"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -20,12 +22,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const nvidiaGPUResourceName = "nvidia.com/gpu"
+const (
+	nvidiaGPUResourceName    = "nvidia.com/gpu"
+	torchrunHostSlotResource = workloadmeta.ResourceTorchrunHostSlot
+)
 
 type discoveredGPUFlavor struct {
-	name     string
-	gpuClass string
-	capacity resource.Quantity
+	name      string
+	gpuClass  string
+	capacity  resource.Quantity
+	hostSlots resource.Quantity
 }
 
 func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavors(
@@ -97,6 +103,7 @@ func (r *TauClusterReconciler) discoverGPUFlavors(ctx context.Context) ([]discov
 	}
 
 	capacityByClass := make(map[string]resource.Quantity)
+	hostSlotsByClass := make(map[string]resource.Quantity)
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
 		gpuClass := strings.TrimSpace(node.Labels[labelkeys.LabelGPUClass])
@@ -107,6 +114,12 @@ func (r *TauClusterReconciler) discoverGPUFlavors(ctx context.Context) ([]discov
 		total := capacityByClass[gpuClass]
 		total.Add(capacity)
 		capacityByClass[gpuClass] = total
+		hostSlot := node.Status.Allocatable[corev1.ResourceName(torchrunHostSlotResource)]
+		if hostSlot.Cmp(resource.MustParse("1")) == 0 {
+			slots := hostSlotsByClass[gpuClass]
+			slots.Add(resource.MustParse("1"))
+			hostSlotsByClass[gpuClass] = slots
+		}
 	}
 
 	classes := make([]string, 0, len(capacityByClass))
@@ -118,9 +131,10 @@ func (r *TauClusterReconciler) discoverGPUFlavors(ctx context.Context) ([]discov
 	flavors := make([]discoveredGPUFlavor, 0, len(classes))
 	for _, gpuClass := range classes {
 		flavors = append(flavors, discoveredGPUFlavor{
-			name:     discoveredGPUFlavorName(gpuClass),
-			gpuClass: gpuClass,
-			capacity: capacityByClass[gpuClass],
+			name:      discoveredGPUFlavorName(gpuClass),
+			gpuClass:  gpuClass,
+			capacity:  capacityByClass[gpuClass],
+			hostSlots: hostSlotsByClass[gpuClass],
 		})
 	}
 	return flavors, nil
@@ -226,7 +240,19 @@ func (r *TauClusterReconciler) reconcileLegacyDiscoveredGPUQuota(
 		return true, fmt.Errorf("ClusterQueue %q GPU flavors are malformed: %w", queueName, err)
 	}
 
-	changed := false
+	changed := ensureCoveredResource(group, torchrunHostSlotResource)
+	if changed {
+		var flavorChanged bool
+		queueFlavors, flavorChanged, err = ensureAllFlavorResourceQuota(
+			queueFlavors,
+			torchrunHostSlotResource,
+			resource.Quantity{},
+		)
+		if err != nil {
+			return true, fmt.Errorf("ClusterQueue %q host-slot quota: %w", queueName, err)
+		}
+		changed = changed || flavorChanged
+	}
 	for _, flavor := range flavors {
 		var flavorChanged bool
 		queueFlavors, flavorChanged, err = ensureQueueFlavorCapacity(queueFlavors, flavor)
@@ -279,33 +305,24 @@ func ensureQueueFlavorCapacity(
 		if err != nil {
 			return queueFlavors, false, err
 		}
-		for j, resourceValue := range resources {
-			resourceQuota, ok := resourceValue.(map[string]any)
-			if !ok || resourceQuota["name"] != nvidiaGPUResourceName {
-				continue
-			}
-			current, err := resource.ParseQuantity(fmt.Sprint(resourceQuota["nominalQuota"]))
-			if err != nil {
-				return queueFlavors, false, fmt.Errorf("invalid GPU nominalQuota: %w", err)
-			}
-			if current.Cmp(discovered.capacity) >= 0 {
-				return queueFlavors, false, nil
-			}
-			resourceQuota["nominalQuota"] = discovered.capacity.String()
-			resources[j] = resourceQuota
-			flavor["resources"] = resources
-			queueFlavors[i] = flavor
-			return queueFlavors, true, nil
+		resources, changed, err := ensureResourceQuota(resources, nvidiaGPUResourceName, discovered.capacity, true)
+		if err != nil {
+			return queueFlavors, false, err
 		}
-		flavor["resources"] = append(resources, map[string]any{
-			"name":         nvidiaGPUResourceName,
-			"nominalQuota": discovered.capacity.String(),
-		})
+		var slotChanged bool
+		resources, slotChanged, err = ensureResourceQuota(resources, torchrunHostSlotResource, discovered.hostSlots, false)
+		if err != nil {
+			return queueFlavors, false, err
+		}
+		if !changed && !slotChanged {
+			return queueFlavors, false, nil
+		}
+		flavor["resources"] = resources
 		queueFlavors[i] = flavor
 		return queueFlavors, true, nil
 	}
 
-	resources, err := discoveredFlavorResources(queueFlavors, discovered.capacity)
+	resources, err := discoveredFlavorResources(queueFlavors, discovered)
 	if err != nil {
 		return queueFlavors, false, err
 	}
@@ -315,7 +332,7 @@ func ensureQueueFlavorCapacity(
 	}), true, nil
 }
 
-func discoveredFlavorResources(queueFlavors []any, capacity resource.Quantity) ([]any, error) {
+func discoveredFlavorResources(queueFlavors []any, discovered discoveredGPUFlavor) ([]any, error) {
 	if len(queueFlavors) == 0 {
 		return nil, fmt.Errorf("cannot derive non-GPU quotas without an existing base flavor")
 	}
@@ -328,7 +345,7 @@ func discoveredFlavorResources(queueFlavors []any, capacity resource.Quantity) (
 		return nil, err
 	}
 	out := make([]any, 0, len(resources)+1)
-	gpuFound := false
+	foundResources := map[string]bool{}
 	for _, raw := range resources {
 		resourceQuota, ok := raw.(map[string]any)
 		if !ok {
@@ -338,19 +355,96 @@ func discoveredFlavorResources(queueFlavors []any, capacity resource.Quantity) (
 		for key, value := range resourceQuota {
 			copied[key] = value
 		}
-		if copied["name"] == nvidiaGPUResourceName {
-			copied["nominalQuota"] = capacity.String()
-			gpuFound = true
+		switch copied["name"] {
+		case nvidiaGPUResourceName:
+			copied["nominalQuota"] = discovered.capacity.String()
+			foundResources[nvidiaGPUResourceName] = true
+		case torchrunHostSlotResource:
+			copied["nominalQuota"] = discovered.hostSlots.String()
+			foundResources[torchrunHostSlotResource] = true
 		}
 		out = append(out, copied)
 	}
-	if !gpuFound {
+	if !foundResources[nvidiaGPUResourceName] {
 		out = append(out, map[string]any{
 			"name":         nvidiaGPUResourceName,
-			"nominalQuota": capacity.String(),
+			"nominalQuota": discovered.capacity.String(),
+		})
+	}
+	if !foundResources[torchrunHostSlotResource] {
+		out = append(out, map[string]any{
+			"name":         torchrunHostSlotResource,
+			"nominalQuota": discovered.hostSlots.String(),
 		})
 	}
 	return out, nil
+}
+
+func ensureCoveredResource(group map[string]any, name string) bool {
+	rawResources, _, _ := unstructured.NestedSlice(group, "coveredResources")
+	resources := make([]string, 0, len(rawResources))
+	for _, raw := range rawResources {
+		if value, ok := raw.(string); ok {
+			resources = append(resources, value)
+		}
+	}
+	if slices.Contains(resources, name) {
+		return false
+	}
+	group["coveredResources"] = append(rawResources, name)
+	return true
+}
+
+func ensureResourceQuota(resources []any, name string, desired resource.Quantity, growOnly bool) ([]any, bool, error) {
+	for i, raw := range resources {
+		resourceQuota, ok := raw.(map[string]any)
+		if !ok || resourceQuota["name"] != name {
+			continue
+		}
+
+		current, err := resource.ParseQuantity(fmt.Sprint(resourceQuota["nominalQuota"]))
+		if err != nil {
+			return resources, false, fmt.Errorf("invalid %s nominalQuota: %w", name, err)
+		}
+		if current.Cmp(desired) == 0 || (growOnly && current.Cmp(desired) > 0) {
+			return resources, false, nil
+		}
+		resourceQuota["nominalQuota"] = desired.String()
+		resources[i] = resourceQuota
+		return resources, true, nil
+	}
+	return append(resources, map[string]any{
+		"name":         name,
+		"nominalQuota": desired.String(),
+	}), true, nil
+}
+
+func ensureAllFlavorResourceQuota(
+	queueFlavors []any,
+	name string,
+	desired resource.Quantity,
+) ([]any, bool, error) {
+	changed := false
+	for i, raw := range queueFlavors {
+		flavor, ok := raw.(map[string]any)
+		if !ok {
+			return queueFlavors, false, fmt.Errorf("flavor entry %d is malformed", i)
+		}
+		resources, _, err := unstructured.NestedSlice(flavor, "resources")
+		if err != nil {
+			return queueFlavors, false, fmt.Errorf("flavor %q resources are malformed: %w", flavor["name"], err)
+		}
+		resources, resourceChanged, err := ensureResourceQuota(resources, name, desired, true)
+		if err != nil {
+			return queueFlavors, false, err
+		}
+		if resourceChanged {
+			flavor["resources"] = resources
+			queueFlavors[i] = flavor
+			changed = true
+		}
+	}
+	return queueFlavors, changed, nil
 }
 
 func managedResourceStatus(

@@ -5,7 +5,7 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 ## Install
 
 ```bash
-tau cluster install --version 0.4.3 --values taugrid-values.yaml
+tau cluster install --version 0.4.4 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -13,7 +13,7 @@ Or with Helm directly:
 ```bash
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.3 \
+  --version 0.4.4 \
   --namespace tau-system --create-namespace \
   --values taugrid-values.yaml \
   --wait --atomic
@@ -148,7 +148,7 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Cover GPU resources and enable controller discovery |
-| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resource names covered by the node-resource group |
+| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu`, `tau.azure.com/torchrun-host-slot` | GPU and one-per-node torchrun slot resources covered by the node-resource group |
 | `baselineQueue.gpu.flavors` | list | `[]` | Optional externally configured GPU ResourceFlavors |
 
 CPU, memory, and GPU are in one Kueue ResourceGroup because they are all tied to
@@ -157,7 +157,8 @@ no GPU taint toleration, and zero GPU quota. When GPU admission, topology, and
 `tau-core-controller` are enabled, the
 controller discovers Nodes with both `tau.azure.com/gpu-class` and allocatable
 `nvidia.com/gpu`, creates one topology-aware ResourceFlavor per observed GPU
-class, and adds its summed allocatable GPU capacity to the baseline ClusterQueue
+class, and adds its summed allocatable GPU capacity plus one ready
+`tau.azure.com/torchrun-host-slot` per GPU Node to the baseline ClusterQueue
 marked `tau.azure.com/discover-gpu-flavors=true`. Each discovered flavor
 declares `sku=gpu:NoSchedule` as an admission taint so CPU-only workloads cannot
 consume its quota. Node creation, GPU-class label changes, and allocatable GPU
@@ -166,6 +167,10 @@ capacity and receive quota once kubelet reports its GPUs.
 Discovered capacity only grows automatically: scaling a pool to zero does not
 remove its flavor or reduce its last known quota. Explicitly configured flavors
 are not pruned by controller discovery.
+Explicit GPU flavors should set `tau.azure.com/torchrun-host-slot` quota to the
+number of GPU Nodes they represent. For upgrade compatibility, omitting that
+resource renders zero slot quota, which safely leaves multi-node torchrun
+pending until the operator configures it.
 
 When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
 workload explicitly selects `unconstrained`, `same-host`,
@@ -192,10 +197,17 @@ cannot fit the workload.
 
 Selecting `same-network-domain` does not independently require
 `tau.azure.com/infiniband=true` or one worker per host. Nodes without
-authoritative shared-fabric metadata have singleton domains. Multi-host work
-therefore remains pending when no domain has enough eligible capacity, while
-workers that fit on one Node may still run there. Tau warns about this contract
-and does not fall back to `same-site` or `unconstrained`.
+authoritative shared-fabric metadata have singleton domains. Workloads that fit
+on one Node may still co-locate there.
+Tau warns about the generic placement contract and does not fall back to
+`same-site` or `unconstrained`.
+
+Multi-node direct Job torchrun additionally requests one
+`tau.azure.com/torchrun-host-slot` per rank. Because the controller advertises
+one slot per GPU Node, Kueue assigns those ranks to distinct hosts while their
+profile topology keeps them in one selected fabric domain. Slot capacity is
+exclusive across all multi-node torchrun workloads, so they do not share a GPU
+Node even when spare GPUs remain.
 
 Azure is recognized from `aks.azure.com/cloud=azure`, the Azure provider ID, or
 managed AKS labels. Region comes from `topology.kubernetes.io/region` or
@@ -241,6 +253,7 @@ baselineQueue:
         tolerations: []
         resources:
           - {name: nvidia.com/gpu, nominalQuota: "1"}
+          - {name: tau.azure.com/torchrun-host-slot, nominalQuota: "1"}
 ```
 
 Canonical classes cover the supported A10, A100, H100, H200, GB200, and GB300
@@ -256,7 +269,7 @@ resources:
   - name: memory
     nominalQuota: 100Ti
 gpu:
-  coveredResources: [nvidia.com/gpu]
+  coveredResources: [nvidia.com/gpu, tau.azure.com/torchrun-host-slot]
   flavors: []
 ```
 
@@ -432,6 +445,8 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "8"
+          - name: tau.azure.com/torchrun-host-slot
+            nominalQuota: "1"
 ```
 
 The default Tau controller rule for `Standard_ND96isr_H200_v5` supplies both

@@ -49,9 +49,14 @@ func TestKustomizeResearcherRoleGrantsRayServicePermissions(t *testing.T) {
 	t.Fatalf("researcher role must grant RayService lifecycle permissions: %#v", role.Rules)
 }
 
-func TestKustomizeControllerRoleMatchesGPUFlavorDiscoveryPermissions(t *testing.T) {
+func TestKustomizeControllerRoleMatchesTopologyAndGPUFlavorPermissions(t *testing.T) {
 	role := kustomizeClusterRole(t, "tau-core-controller")
 	for _, want := range []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"nodes/status"},
+			Verbs:     []string{"get", "patch"},
+		},
 		{
 			APIGroups: []string{"kueue.x-k8s.io"},
 			Resources: []string{"clusterqueues"},
@@ -76,7 +81,7 @@ func TestKustomizeControllerRoleMatchesGPUFlavorDiscoveryPermissions(t *testing.
 			}
 		}
 		if !found {
-			t.Fatalf("Kustomize controller role is missing GPU discovery rule %#v: %#v", want, role.Rules)
+			t.Fatalf("Kustomize controller role is missing topology/GPU discovery rule %#v: %#v", want, role.Rules)
 		}
 	}
 }

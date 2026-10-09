@@ -17,6 +17,7 @@ import (
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -123,9 +124,11 @@ func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 }
 
 type nodeTopologyPlan struct {
-	node    *corev1.Node
-	desired map[string]string
-	invalid bool
+	node            *corev1.Node
+	desired         map[string]string
+	labelsDrifted   bool
+	hostSlotDrifted bool
+	invalid         bool
 }
 
 func (r *TauClusterReconciler) reconcileNodeTopologyLabels(
@@ -145,44 +148,96 @@ func (r *TauClusterReconciler) reconcileNodeTopologyLabels(
 		node := &nodes.Items[i]
 		status.Observed++
 		desired, err := desiredNodeTopologyLabels(node)
+		labelsDrifted := !nodeHasLabels(node, desired)
+		hostSlotDrifted := !nodeHostSlotReady(node, nodeHasGPUCapacity(node))
 		if err != nil {
 			status.Drifted++
 			reconcileErr = errors.Join(reconcileErr, err)
-			if desired != nil && !nodeHasLabels(node, desired) {
-				plans = append(plans, nodeTopologyPlan{node: node, desired: desired, invalid: true})
+			if desired != nil && (labelsDrifted || hostSlotDrifted) {
+				plans = append(plans, nodeTopologyPlan{
+					node:            node,
+					desired:         desired,
+					labelsDrifted:   labelsDrifted,
+					hostSlotDrifted: hostSlotDrifted,
+					invalid:         true,
+				})
 			}
 			continue
 		}
-		if nodeHasLabels(node, desired) {
+		if !labelsDrifted && !hostSlotDrifted {
 			status.Ready++
 			continue
 		}
 		status.Drifted++
-		plans = append(plans, nodeTopologyPlan{node: node, desired: desired})
+		plans = append(plans, nodeTopologyPlan{
+			node:            node,
+			desired:         desired,
+			labelsDrifted:   labelsDrifted,
+			hostSlotDrifted: hostSlotDrifted,
+		})
 	}
 	if !mutate {
 		return status, status.Drifted > 0, reconcileErr
 	}
 
 	for _, plan := range plans {
-		before := plan.node.DeepCopy()
-		if plan.node.Labels == nil {
-			plan.node.Labels = map[string]string{}
+		if plan.labelsDrifted {
+			before := plan.node.DeepCopy()
+			if plan.node.Labels == nil {
+				plan.node.Labels = map[string]string{}
+			}
+			for key, value := range plan.desired {
+				plan.node.Labels[key] = value
+			}
+			if err := r.Patch(ctx, plan.node, client.MergeFrom(before)); err != nil {
+				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("patch node %q topology labels: %w", plan.node.Name, err))
+				continue
+			}
 		}
-		for key, value := range plan.desired {
-			plan.node.Labels[key] = value
-		}
-		if err := r.Patch(ctx, plan.node, client.MergeFrom(before)); err != nil {
-			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("patch node %q topology labels: %w", plan.node.Name, err))
-			continue
+		if plan.hostSlotDrifted {
+			before := plan.node.DeepCopy()
+			setNodeHostSlotCapacity(plan.node, nodeHasGPUCapacity(plan.node))
+			if err := r.Status().Patch(ctx, plan.node, client.MergeFrom(before)); err != nil {
+				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("patch node %q torchrun host-slot capacity: %w", plan.node.Name, err))
+				continue
+			}
 		}
 		if plan.invalid {
 			continue
 		}
-		status.Drifted--
-		status.Ready++
+		if nodeHasLabels(plan.node, plan.desired) && nodeHostSlotReady(plan.node, nodeHasGPUCapacity(plan.node)) {
+			status.Drifted--
+			status.Ready++
+		}
 	}
 	return status, status.Drifted > 0, reconcileErr
+}
+
+func nodeHasGPUCapacity(node *corev1.Node) bool {
+	capacity := node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+	return capacity.Sign() > 0
+}
+
+func nodeHostSlotReady(node *corev1.Node, desired bool) bool {
+	want := resource.MustParse("1")
+	capacity := node.Status.Capacity[corev1.ResourceName(torchrunHostSlotResource)]
+	allocatable := node.Status.Allocatable[corev1.ResourceName(torchrunHostSlotResource)]
+	if desired {
+		return capacity.Cmp(want) == 0 && allocatable.Cmp(want) == 0
+	}
+	return capacity.IsZero() && allocatable.IsZero()
+}
+
+func setNodeHostSlotCapacity(node *corev1.Node, desired bool) {
+	resourceName := corev1.ResourceName(torchrunHostSlotResource)
+	if desired {
+		if node.Status.Capacity == nil {
+			node.Status.Capacity = corev1.ResourceList{}
+		}
+		node.Status.Capacity[resourceName] = resource.MustParse("1")
+		return
+	}
+	delete(node.Status.Capacity, resourceName)
 }
 
 func desiredNodeTopologyLabels(node *corev1.Node) (map[string]string, error) {

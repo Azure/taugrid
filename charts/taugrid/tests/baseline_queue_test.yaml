@@ -47,6 +47,7 @@ tests:
             - cpu
             - memory
             - nvidia.com/gpu
+            - tau.azure.com/torchrun-host-slot
         documentIndex: 1
       - equal:
           path: spec.resourceGroups[0].flavors[0].name
@@ -56,6 +57,12 @@ tests:
           path: spec.resourceGroups[0].flavors[0].resources[2]
           value:
             name: nvidia.com/gpu
+            nominalQuota: "0"
+        documentIndex: 1
+      - equal:
+          path: spec.resourceGroups[0].flavors[0].resources[3]
+          value:
+            name: tau.azure.com/torchrun-host-slot
             nominalQuota: "0"
         documentIndex: 1
       - equal:
@@ -154,6 +161,8 @@ tests:
           resources:
             - name: nvidia.com/gpu
               nominalQuota: "1"
+            - name: tau.azure.com/torchrun-host-slot
+              nominalQuota: "1"
     asserts:
       - notExists:
           path: spec.nodeLabels["tau.azure.com/gpu-class"]
@@ -172,6 +181,7 @@ tests:
             - cpu
             - memory
             - nvidia.com/gpu
+            - tau.azure.com/torchrun-host-slot
         documentIndex: 2
       - equal:
           path: spec.resourceGroups[0].flavors[1].name
@@ -181,6 +191,12 @@ tests:
           path: spec.resourceGroups[0].flavors[1].resources[2]
           value:
             name: nvidia.com/gpu
+            nominalQuota: "1"
+        documentIndex: 2
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].resources[3]
+          value:
+            name: tau.azure.com/torchrun-host-slot
             nominalQuota: "1"
         documentIndex: 2
 
@@ -332,6 +348,12 @@ tests:
       - notExists:
           path: spec.tolerations
         documentIndex: 1
+      - equal:
+          path: spec.resourceGroups[0].flavors[1].resources[3]
+          value:
+            name: tau.azure.com/torchrun-host-slot
+            nominalQuota: "0"
+        documentIndex: 2
 
   - it: accepts GPU flavor resources in a different order
     set:
@@ -374,6 +396,8 @@ tests:
               effect: NoSchedule
           resources:
             - name: nvidia.com/gpu
+              nominalQuota: "1"
+            - name: tau.azure.com/torchrun-host-slot
               nominalQuota: "1"
     asserts:
       - failedTemplate:

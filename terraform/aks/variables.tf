@@ -160,7 +160,7 @@ variable "normalize_gpu_mig" {
 variable "taugrid_version" {
   description = "Published TauGrid chart version passed to tau cluster install."
   type        = string
-  default     = "0.4.3"
+  default     = "0.4.4"
 }
 
 variable "install_taugrid" {
@@ -182,7 +182,7 @@ variable "generated_directory" {
   nullable    = true
 
   validation {
-    condition     = var.generated_directory == null || trimspace(var.generated_directory) != ""
+    condition     = var.generated_directory == null ? true : trimspace(var.generated_directory) != ""
     error_message = "generated_directory must not be empty when set."
   }
 }

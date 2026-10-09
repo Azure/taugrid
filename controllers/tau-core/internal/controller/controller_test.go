@@ -453,7 +453,7 @@ func TestNodeEventsEnqueueTauClusterSingleton(t *testing.T) {
 	}
 }
 
-func TestNodeWatchIgnoresStatusOnlyUpdates(t *testing.T) {
+func TestNodeWatchFiltersStatusUpdates(t *testing.T) {
 	watch := nodeLabelChangePredicate()
 	original := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -475,6 +475,20 @@ func TestNodeWatchIgnoresStatusOnlyUpdates(t *testing.T) {
 	}
 	if !watch.Update(event.UpdateEvent{ObjectOld: statusUpdate, ObjectNew: capacityUpdate}) {
 		t.Fatal("GPU allocatable capacity update must enqueue flavor reconciliation")
+	}
+	slotCapacityUpdate := statusUpdate.DeepCopy()
+	slotCapacityUpdate.Status.Capacity = corev1.ResourceList{
+		corev1.ResourceName(torchrunHostSlotResource): resource.MustParse("1"),
+	}
+	if !watch.Update(event.UpdateEvent{ObjectOld: statusUpdate, ObjectNew: slotCapacityUpdate}) {
+		t.Fatal("host-slot capacity update must enqueue topology reconciliation")
+	}
+	slotAllocatableUpdate := slotCapacityUpdate.DeepCopy()
+	slotAllocatableUpdate.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName(torchrunHostSlotResource): resource.MustParse("1"),
+	}
+	if !watch.Update(event.UpdateEvent{ObjectOld: slotCapacityUpdate, ObjectNew: slotAllocatableUpdate}) {
+		t.Fatal("host-slot allocatable update must enqueue flavor reconciliation")
 	}
 
 	labelUpdate := statusUpdate.DeepCopy()

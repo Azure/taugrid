@@ -427,7 +427,7 @@ done
 install_taugrid() {
   "$TAU_BIN" cluster install \
   --chart "$REPO_ROOT/charts/taugrid" \
-  --version 0.4.3 \
+  --version 0.4.4 \
   --release "$TAUGRID_RELEASE" \
   --namespace "$TAUGRID_NAMESPACE" \
   --context "$KUBE_CONTEXT" \
