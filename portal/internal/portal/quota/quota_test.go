@@ -14,17 +14,28 @@ import (
 
 type fakeReader struct {
 	localQueue, clusterQueue, cohort []byte
+	clusterQueues                    map[string][]byte
+	localQueueNamespaces             []string
+	localQueueNames                  []string
 	clusterQueueNames, cohortNames   []string
 	cohortErr                        error
 }
 
-func (f *fakeReader) GetLocalQueue(context.Context, string, string) ([]byte, error) {
+func (f *fakeReader) GetLocalQueue(_ context.Context, namespace, name string) ([]byte, error) {
+	f.localQueueNamespaces = append(f.localQueueNamespaces, namespace)
+	f.localQueueNames = append(f.localQueueNames, name)
 	return f.localQueue, nil
 }
 func (f *fakeReader) GetClusterQueue(_ context.Context, name string) ([]byte, error) {
 	f.clusterQueueNames = append(f.clusterQueueNames, name)
-	if len(f.clusterQueueNames) == 1 && f.localQueue != nil {
-		return nil, apierrors.NewNotFound(schema.GroupResource{Group: "kueue.x-k8s.io", Resource: "clusterqueues"}, name)
+	if f.clusterQueues != nil {
+		if raw, ok := f.clusterQueues[name]; ok {
+			return raw, nil
+		}
+		return nil, apierrors.NewNotFound(
+			schema.GroupResource{Group: "kueue.x-k8s.io", Resource: "clusterqueues"},
+			name,
+		)
 	}
 	return f.clusterQueue, nil
 }
@@ -35,6 +46,7 @@ func (f *fakeReader) GetCohort(_ context.Context, name string) ([]byte, error) {
 
 func TestReadReportsWorkspaceAndTeamQuota(t *testing.T) {
 	reader := &fakeReader{
+		localQueue: []byte(`{"spec":{"clusterQueue":"tau-ws-vision"}}`),
 		clusterQueue: []byte(`{
 			"metadata":{"name":"tau-ws-vision"},
 			"spec":{"cohortName":"tau-team-research","resourceGroups":[{"flavors":[{"name":"h200","resources":[
@@ -50,7 +62,9 @@ func TestReadReportsWorkspaceAndTeamQuota(t *testing.T) {
 			"status":{"fairSharing":{"weightedShare":"1500m"}}
 		}`),
 	}
-	got, err := Read(context.Background(), reader, Scope{Workspace: "vision", Team: "research"})
+	got, err := Read(context.Background(), reader, Scope{
+		Workspace: "vision", Team: "research", Namespace: "vision", LocalQueue: "jobqueue",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,17 +100,60 @@ func TestReadFallsBackToLegacyLocalQueueAndToleratesMissingCohort(t *testing.T) 
 	if !got.Legacy || got.Workspace.Name != "tau-cq" || got.Team != nil {
 		t.Fatalf("legacy snapshot = %+v", got)
 	}
-	if fmt.Sprint(reader.clusterQueueNames) != "[tau-ws-vision tau-cq]" {
+	if fmt.Sprint(reader.clusterQueueNames) != "[tau-cq]" {
 		t.Fatalf("cluster queue reads = %v", reader.clusterQueueNames)
 	}
 }
 
+func TestReadUsesAuthorizedLocalQueueWhenDirectoryIDCollides(t *testing.T) {
+	reader := &fakeReader{
+		localQueue: []byte(`{"spec":{"clusterQueue":"authorized-cq"}}`),
+		clusterQueues: map[string][]byte{
+			"tau-ws-collision": []byte(`{
+				"metadata":{"name":"tau-ws-collision"},
+				"spec":{"resourceGroups":[]},
+				"status":{"admittedWorkloads":99}
+			}`),
+			"authorized-cq": []byte(`{
+				"metadata":{"name":"authorized-cq"},
+				"spec":{"resourceGroups":[]},
+				"status":{"admittedWorkloads":1}
+			}`),
+		},
+	}
+	got, err := Read(context.Background(), reader, Scope{
+		Workspace: "collision", Namespace: "authorized-ns", LocalQueue: "authorized-lq",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Workspace.Name != "authorized-cq" || got.Workspace.AdmittedWorkloads != 1 {
+		t.Fatalf("snapshot = %+v", got)
+	}
+	if fmt.Sprint(reader.clusterQueueNames) != "[authorized-cq]" {
+		t.Fatalf("cluster queue reads = %v", reader.clusterQueueNames)
+	}
+	if fmt.Sprint(reader.localQueueNamespaces) != "[authorized-ns]" ||
+		fmt.Sprint(reader.localQueueNames) != "[authorized-lq]" {
+		t.Fatalf(
+			"LocalQueue reads namespaces=%v names=%v",
+			reader.localQueueNamespaces,
+			reader.localQueueNames,
+		)
+	}
+}
+
 func TestReadDoesNotFetchTeamCohortWhenQueueDoesNotReferenceExpectedTeam(t *testing.T) {
-	reader := &fakeReader{clusterQueue: []byte(`{
-		"metadata":{"name":"tau-ws-vision"},
-		"spec":{"cohortName":"foreign-cohort","resourceGroups":[]}
-	}`)}
-	got, err := Read(context.Background(), reader, Scope{Workspace: "vision", Team: "research"})
+	reader := &fakeReader{
+		localQueue: []byte(`{"spec":{"clusterQueue":"tau-ws-vision"}}`),
+		clusterQueue: []byte(`{
+			"metadata":{"name":"tau-ws-vision"},
+			"spec":{"cohortName":"foreign-cohort","resourceGroups":[]}
+		}`),
+	}
+	got, err := Read(context.Background(), reader, Scope{
+		Workspace: "vision", Team: "research", Namespace: "vision", LocalQueue: "jobqueue",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -713,6 +713,22 @@ func fetchLifecycleWorkspacePlacement(
 	if err != nil {
 		return workspacePlacement{}, err
 	}
+	return resolveExistingWorkspacePlacement(workspaceStatus, connection)
+}
+
+func fetchReadyWorkspacePlacement(
+	cmd *cobra.Command,
+	kubeContext, systemNamespace, workspaceName string,
+	connection workspaceconnection.ActiveConnection,
+) (workspacePlacement, error) {
+	fetch := fetchWorkspace
+	if runLifecycleWorkspaceFetcherOverride != nil {
+		fetch = runLifecycleWorkspaceFetcherOverride
+	}
+	workspaceStatus, err := fetch(cmd, kubeContext, systemNamespace, workspaceName)
+	if err != nil {
+		return workspacePlacement{}, err
+	}
 	return resolveWorkspacePlacement(workspaceStatus, connection)
 }
 

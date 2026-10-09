@@ -21,7 +21,22 @@ type workspacePlacement struct {
 }
 
 func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspaceconnection.ActiveConnection) (workspacePlacement, error) {
-	if !tauworkspace.Ready(w) {
+	return resolveWorkspacePlacementForUse(w, connection, true)
+}
+
+func resolveExistingWorkspacePlacement(
+	w tauworkspace.Workspace,
+	connection workspaceconnection.ActiveConnection,
+) (workspacePlacement, error) {
+	return resolveWorkspacePlacementForUse(w, connection, false)
+}
+
+func resolveWorkspacePlacementForUse(
+	w tauworkspace.Workspace,
+	connection workspaceconnection.ActiveConnection,
+	requireReady bool,
+) (workspacePlacement, error) {
+	if requireReady && !tauworkspace.Ready(w) {
 		return workspacePlacement{}, fmt.Errorf("workspace %q is not Ready (phase=%s)", w.Metadata.Name, w.Status.Phase)
 	}
 	if expected := strings.TrimSpace(connection.Workspace); expected != "" && expected != strings.TrimSpace(w.Metadata.Name) {

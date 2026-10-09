@@ -191,7 +191,7 @@ func resolveResumeRouting(
 		return resumeRouting{}, nil, err
 	}
 	if workspaceName := strings.TrimSpace(resolution.Connection.Workspace); workspaceName != "" {
-		placement, placementErr := fetchLifecycleWorkspacePlacement(
+		placement, placementErr := fetchReadyWorkspacePlacement(
 			cmd,
 			resolvedContext,
 			systemNamespaceForConnection(cmd, connection),

@@ -125,23 +125,24 @@ func Read(ctx context.Context, reader Reader, scope Scope) (Snapshot, error) {
 	if reader == nil {
 		return Snapshot{}, errors.New("portal started without Kubernetes quota access")
 	}
-	queueName := managedName("tau-ws", scope.Workspace)
-	queueRaw, err := reader.GetClusterQueue(ctx, queueName)
-	if apierrors.IsNotFound(err) && scope.Namespace != "" && scope.LocalQueue != "" {
-		localRaw, localErr := reader.GetLocalQueue(ctx, scope.Namespace, scope.LocalQueue)
-		if localErr != nil {
-			return Snapshot{}, fmt.Errorf("read workspace LocalQueue: %w", localErr)
-		}
-		var local kueueObject
-		if err := json.Unmarshal(localRaw, &local); err != nil {
-			return Snapshot{}, fmt.Errorf("decode workspace LocalQueue: %w", err)
-		}
-		if strings.TrimSpace(local.Spec.ClusterQueue) == "" {
-			return Snapshot{}, errors.New("workspace LocalQueue does not reference a ClusterQueue")
-		}
-		queueName = local.Spec.ClusterQueue
-		queueRaw, err = reader.GetClusterQueue(ctx, queueName)
+	namespace := strings.TrimSpace(scope.Namespace)
+	localQueueName := strings.TrimSpace(scope.LocalQueue)
+	if namespace == "" || localQueueName == "" {
+		return Snapshot{}, errors.New("workspace quota scope requires namespace and LocalQueue")
 	}
+	localRaw, err := reader.GetLocalQueue(ctx, namespace, localQueueName)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("read workspace LocalQueue: %w", err)
+	}
+	var local kueueObject
+	if err := json.Unmarshal(localRaw, &local); err != nil {
+		return Snapshot{}, fmt.Errorf("decode workspace LocalQueue: %w", err)
+	}
+	queueName := strings.TrimSpace(local.Spec.ClusterQueue)
+	if queueName == "" {
+		return Snapshot{}, fmt.Errorf("workspace LocalQueue %q does not reference a ClusterQueue", localQueueName)
+	}
+	queueRaw, err := reader.GetClusterQueue(ctx, queueName)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read workspace ClusterQueue %q: %w", queueName, err)
 	}

@@ -14,9 +14,13 @@ import (
 type quotaReader struct {
 	clusterQueueName string
 	cohortName       string
+	localNamespace   string
+	localQueueName   string
 }
 
-func (r *quotaReader) GetLocalQueue(context.Context, string, string) ([]byte, error) {
+func (r *quotaReader) GetLocalQueue(_ context.Context, namespace, name string) ([]byte, error) {
+	r.localNamespace = namespace
+	r.localQueueName = name
 	return []byte(`{"spec":{"clusterQueue":"tau-cq"}}`), nil
 }
 func (r *quotaReader) GetClusterQueue(_ context.Context, name string) ([]byte, error) {
@@ -47,8 +51,15 @@ func TestQuotaEndpointUsesResolvedWorkspaceScope(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if reader.clusterQueueName != "tau-ws-vision" || reader.cohortName != "tau-team-research" {
-		t.Fatalf("reads = ClusterQueue %q, Cohort %q", reader.clusterQueueName, reader.cohortName)
+	if reader.localNamespace != "vision" || reader.localQueueName != "jobqueue" ||
+		reader.clusterQueueName != "tau-cq" || reader.cohortName != "tau-team-research" {
+		t.Fatalf(
+			"reads = LocalQueue %q/%q, ClusterQueue %q, Cohort %q",
+			reader.localNamespace,
+			reader.localQueueName,
+			reader.clusterQueueName,
+			reader.cohortName,
+		)
 	}
 	var body struct {
 		Scope     WorkspaceScope `json:"scope"`

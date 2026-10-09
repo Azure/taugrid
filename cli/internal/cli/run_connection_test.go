@@ -381,6 +381,49 @@ func TestLifecycleCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T)
 	}
 }
 
+func TestLifecycleCatalogProjectRoutesDegradedWorkspace(t *testing.T) {
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:       "shared-descriptor",
+		WorkspaceUID:    "shared-uid",
+		ContextName:     "catalog-context",
+		SystemNamespace: "tau-platform",
+		KubeconfigPath:  filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:       "shared-namespace",
+		Queue:           "shared-queue",
+	}
+	ensurer := &fakeRunConnectionEnsurer{connection: connection}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		_, _, _ string,
+	) (tauworkspace.Workspace, error) {
+		workspace := readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue")
+		workspace.Status.Phase = "Degraded"
+		return workspace, nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionFromSource(
+		command,
+		"",
+		"",
+		false,
+		false,
+		runConnectionSource{
+			Git: true, Catalog: true, Project: "alpha", Workspace: "alpha-workspace",
+		},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "catalog-context" || gotNamespace != "alpha-namespace" {
+		t.Fatalf("context=%q namespace=%q", gotContext, gotNamespace)
+	}
+}
+
 func TestValidateWorkspaceSelectionRejectsConflicts(t *testing.T) {
 	source := runConnectionSource{Catalog: true, Project: "alpha", Workspace: "alpha-workspace"}
 	for _, tc := range []struct {

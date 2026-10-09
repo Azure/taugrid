@@ -24,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -1181,6 +1182,52 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	deletedLocalQueue.SetGroupVersionKind(localQueueGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: "aurora"}, deletedLocalQueue); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected controller-owned LocalQueue deleted, got err=%v", err)
+	}
+}
+
+func TestWorkspaceDeleteWaitsForClusterQueueFinalizer(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	now := metav1.Now()
+	workspace.DeletionTimestamp = &now
+	workspace.Status.Queue.ClusterQueueUID = "cluster-queue-uid"
+	queue := newQueueObject(clusterQueueGVK)
+	queue.SetName(workspaceClusterQueueName(workspace.Name))
+	queue.SetUID(types.UID("cluster-queue-uid"))
+	queue.SetLabels(workspaceLabels(workspace.Name))
+	queue.SetAnnotations(map[string]string{annotationOwnerUID: string(workspace.UID)})
+	queue.SetFinalizers([]string{"kueue.x-k8s.io/resource-in-use"})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, queue).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	_, err := reconciler.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{
+			Name: workspace.Name, Namespace: workspace.Namespace,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "waiting for ClusterQueue") {
+		t.Fatalf("cleanup error = %v, want pending deletion", err)
+	}
+	var remainingWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &remainingWorkspace); err != nil {
+		t.Fatalf("workspace disappeared before ClusterQueue deletion completed: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&remainingWorkspace, workspaceFinalizer) {
+		t.Fatal("workspace cleanup finalizer was removed before ClusterQueue deletion completed")
+	}
+	remaining := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, remaining); err != nil {
+		t.Fatalf("ClusterQueue disappeared despite resource-in-use finalizer: %v", err)
+	}
+	if remaining.GetDeletionTimestamp() == nil {
+		t.Fatal("ClusterQueue deletion was not requested")
 	}
 }
 

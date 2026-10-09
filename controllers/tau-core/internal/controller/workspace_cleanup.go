@@ -129,7 +129,18 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Contex
 	if err := r.Delete(ctx, queue); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
-	return nil
+	remaining := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(queue), remaining); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf(
+		"waiting for ClusterQueue %q deletion to complete; finalizers=%v",
+		remaining.GetName(),
+		remaining.GetFinalizers(),
+	)
 }
 
 func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
