@@ -27,12 +27,18 @@ TauGrid combines:
 
 1. Explicit [project](../../../reference/glossary/#project) and [target](../../../reference/glossary/#target) selection.
 2. [Repository](../../../reference/glossary/#repository) or monorepo discovery.
-3. The project's [workspace connection descriptor](../../../reference/glossary/#workspace-connection).
+3. The project's checked-in
+   [workspace connection descriptor](../../../reference/glossary/#workspace-connection),
+   or its exact machine-local assignment when no descriptor is present.
 4. Platform-owned [workspace](../../../reference/glossary/#workspace) defaults.
 5. Checked-in [workload](../../../reference/glossary/#workload) intent.
 6. Temporary explicit operator overrides.
 
 Ambiguity is an error. Dry-run output must keep default sources visible.
+
+Checked-in descriptors always take precedence. A local assignment is keyed to
+the physical Git worktree and selected catalog project, so changing one project
+cannot silently redirect another repository.
 
 ```bash
 tau run validate --config tau/train.yaml
