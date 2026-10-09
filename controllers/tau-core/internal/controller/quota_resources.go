@@ -52,6 +52,7 @@ func validateQuotaFlavors(ctx context.Context, reader client.Reader, quotas []ta
 }
 
 func validateQuotaValues(quotas []tauv1alpha1.TauResourceQuota) error {
+	resourcesByFlavor := map[string]map[string]struct{}{}
 	for _, quota := range quotas {
 		if quota.NominalQuota.Sign() < 0 {
 			return fmt.Errorf("quota for flavor %q resource %q must be non-negative", quota.Flavor, quota.Resource)
@@ -64,48 +65,147 @@ func validateQuotaValues(quotas []tauv1alpha1.TauResourceQuota) error {
 				return fmt.Errorf("%s for flavor %q resource %q must be non-negative", name, quota.Flavor, quota.Resource)
 			}
 		}
+		resources := resourcesByFlavor[quota.Flavor]
+		if resources == nil {
+			resources = map[string]struct{}{}
+			resourcesByFlavor[quota.Flavor] = resources
+		}
+		if _, exists := resources[quota.Resource]; exists {
+			return fmt.Errorf("quota for flavor %q resource %q is duplicated", quota.Flavor, quota.Resource)
+		}
+		resources[quota.Resource] = struct{}{}
+	}
+	flavors := make([]string, 0, len(resourcesByFlavor))
+	for flavor := range resourcesByFlavor {
+		flavors = append(flavors, flavor)
+	}
+	sort.Strings(flavors)
+	for i, firstFlavor := range flavors {
+		firstResources := resourcesByFlavor[firstFlavor]
+		for _, secondFlavor := range flavors[i+1:] {
+			secondResources := resourcesByFlavor[secondFlavor]
+			overlap := false
+			for resourceName := range firstResources {
+				if _, exists := secondResources[resourceName]; exists {
+					overlap = true
+					break
+				}
+			}
+			if overlap && !reflect.DeepEqual(firstResources, secondResources) {
+				return fmt.Errorf(
+					"flavors %q and %q must cover identical or disjoint resource sets",
+					firstFlavor,
+					secondFlavor,
+				)
+			}
+		}
 	}
 	return nil
 }
 
 func quotaResourceGroups(quotas []tauv1alpha1.TauResourceQuota, includeLimits bool) []any {
-	byResource := map[string][]tauv1alpha1.TauResourceQuota{}
+	byFlavor := map[string][]tauv1alpha1.TauResourceQuota{}
 	for _, quota := range quotas {
-		byResource[quota.Resource] = append(byResource[quota.Resource], quota)
+		byFlavor[quota.Flavor] = append(byFlavor[quota.Flavor], quota)
 	}
-	resources := make([]string, 0, len(byResource))
-	for resourceName := range byResource {
-		resources = append(resources, resourceName)
+	type quotaGroup struct {
+		resources []string
+		flavors   []string
 	}
-	sort.Strings(resources)
-
-	groups := make([]any, 0, len(resources))
-	for _, resourceName := range resources {
-		entries := byResource[resourceName]
+	byResourceSet := map[string]*quotaGroup{}
+	for flavorName, entries := range byFlavor {
 		sort.Slice(entries, func(i, j int) bool {
-			return entries[i].Flavor < entries[j].Flavor
+			return entries[i].Resource < entries[j].Resource
 		})
-		flavors := make([]any, 0, len(entries))
-		for _, quota := range entries {
-			resourceQuota := map[string]any{
-				"name":         quota.Resource,
-				"nominalQuota": quota.NominalQuota.String(),
-			}
-			if includeLimits {
-				resourceQuota["borrowingLimit"] = normalizedQuotaValue(quota.BorrowingLimit)
-				resourceQuota["lendingLimit"] = normalizedQuotaValue(quota.LendingLimit)
+		resources := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			resources = append(resources, entry.Resource)
+		}
+		key := strings.Join(resources, "\x00")
+		group := byResourceSet[key]
+		if group == nil {
+			group = &quotaGroup{resources: resources}
+			byResourceSet[key] = group
+		}
+		group.flavors = append(group.flavors, flavorName)
+	}
+	keys := make([]string, 0, len(byResourceSet))
+	for key := range byResourceSet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	groups := make([]any, 0, len(keys))
+	for _, key := range keys {
+		group := byResourceSet[key]
+		sort.Strings(group.flavors)
+		flavors := make([]any, 0, len(group.flavors))
+		for _, flavorName := range group.flavors {
+			resources := make([]any, 0, len(byFlavor[flavorName]))
+			for _, quota := range byFlavor[flavorName] {
+				resourceQuota := map[string]any{
+					"name":         quota.Resource,
+					"nominalQuota": quota.NominalQuota.String(),
+				}
+				if includeLimits {
+					resourceQuota["borrowingLimit"] = normalizedQuotaValue(quota.BorrowingLimit)
+					resourceQuota["lendingLimit"] = normalizedQuotaValue(quota.LendingLimit)
+				}
+				resources = append(resources, resourceQuota)
 			}
 			flavors = append(flavors, map[string]any{
-				"name":      quota.Flavor,
-				"resources": []any{resourceQuota},
+				"name":      flavorName,
+				"resources": resources,
 			})
 		}
+		coveredResources := make([]any, 0, len(group.resources))
+		for _, resourceName := range group.resources {
+			coveredResources = append(coveredResources, resourceName)
+		}
 		groups = append(groups, map[string]any{
-			"coveredResources": []any{resourceName},
+			"coveredResources": coveredResources,
 			"flavors":          flavors,
 		})
 	}
 	return groups
+}
+
+func clusterQueueReservations(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	reservations, found, err := unstructured.NestedSlice(queue.Object, "status", "flavorsReservation")
+	if err != nil {
+		return nil, fmt.Errorf("read ClusterQueue %q reservations: %w", queue.GetName(), err)
+	}
+	out := map[string]resource.Quantity{}
+	if !found {
+		return out, nil
+	}
+	for _, rawFlavor := range reservations {
+		flavor, ok := rawFlavor.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("ClusterQueue %q has malformed reservation status", queue.GetName())
+		}
+		flavorName := fmt.Sprint(flavor["name"])
+		resources, _, err := unstructured.NestedSlice(flavor, "resources")
+		if err != nil {
+			return nil, fmt.Errorf("ClusterQueue %q has malformed reservation resources: %w", queue.GetName(), err)
+		}
+		for _, rawResource := range resources {
+			reservation, ok := rawResource.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("ClusterQueue %q has malformed reservation resource", queue.GetName())
+			}
+			resourceName := fmt.Sprint(reservation["name"])
+			total, err := resource.ParseQuantity(fmt.Sprint(reservation["total"]))
+			if err != nil {
+				return nil, fmt.Errorf(
+					"ClusterQueue %q has invalid reservation for flavor %q resource %q: %w",
+					queue.GetName(), flavorName, resourceName, err,
+				)
+			}
+			out[resourceName+"\x00"+flavorName] = total
+		}
+	}
+	return out, nil
 }
 
 func desiredTeamCohort(team *tauv1alpha1.TauTeam, sharedQuota []tauv1alpha1.TauResourceQuota) *unstructured.Unstructured {
@@ -227,45 +327,25 @@ func setOwnerUIDAnnotation(object metav1.Object, uid types.UID) {
 }
 
 func validateClusterQueueQuotaReduction(existing, desired *unstructured.Unstructured) error {
-	reservations, found, err := unstructured.NestedSlice(existing.Object, "status", "flavorsReservation")
+	reservations, err := clusterQueueReservations(existing)
 	if err != nil {
-		return fmt.Errorf("read ClusterQueue %q reservations: %w", existing.GetName(), err)
+		return err
 	}
-	if !found || len(reservations) == 0 {
+	if len(reservations) == 0 {
 		return nil
 	}
 	maximums, err := clusterQueueMaximumQuota(desired)
 	if err != nil {
 		return err
 	}
-	for _, rawFlavor := range reservations {
-		flavor, ok := rawFlavor.(map[string]any)
-		if !ok {
-			return fmt.Errorf("ClusterQueue %q has malformed reservation status", existing.GetName())
-		}
-		flavorName := fmt.Sprint(flavor["name"])
-		resources, _, err := unstructured.NestedSlice(flavor, "resources")
-		if err != nil {
-			return fmt.Errorf("ClusterQueue %q has malformed reservation resources: %w", existing.GetName(), err)
-		}
-		for _, rawResource := range resources {
-			reservation, ok := rawResource.(map[string]any)
-			if !ok {
-				return fmt.Errorf("ClusterQueue %q has malformed reservation resource", existing.GetName())
-			}
-			resourceName := fmt.Sprint(reservation["name"])
-			total, err := resource.ParseQuantity(fmt.Sprint(reservation["total"]))
-			if err != nil {
-				return fmt.Errorf("ClusterQueue %q has invalid reservation for flavor %q resource %q: %w",
-					existing.GetName(), flavorName, resourceName, err)
-			}
-			maximum := maximums[resourceName+"\x00"+flavorName]
-			if total.Cmp(maximum) > 0 {
-				return fmt.Errorf(
-					"refusing to reduce ClusterQueue %q flavor %q resource %q below active reservation %s (new maximum %s)",
-					existing.GetName(), flavorName, resourceName, total.String(), maximum.String(),
-				)
-			}
+	for key, total := range reservations {
+		maximum := maximums[key]
+		if total.Cmp(maximum) > 0 {
+			resourceName, flavorName, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf(
+				"refusing to reduce ClusterQueue %q flavor %q resource %q below active reservation %s (new maximum %s)",
+				existing.GetName(), flavorName, resourceName, total.String(), maximum.String(),
+			)
 		}
 	}
 	return nil

@@ -5,10 +5,12 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -130,6 +132,133 @@ func TestTeamRejectsWorkspaceGuaranteesAboveAllocation(t *testing.T) {
 		t.Fatalf("team phase = %q, want Degraded", got.Status.Phase)
 	}
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQuotaReady, metav1.ConditionFalse)
+}
+
+func TestTeamReductionBlocksBelowBorrowedReservations(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	team := testTeam("vision", "8")
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "12", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	if err := unstructured.SetNestedSlice(queue.Object, []any{
+		map[string]any{
+			"name": "taugrid-gpu-h200",
+			"resources": []any{
+				map[string]any{"name": nvidiaGPUResourceName, "total": "12"},
+			},
+		},
+	}, "status", "flavorsReservation"); err != nil {
+		t.Fatalf("set reservation status: %v", err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, workspace, queue).
+		Build()
+	reconciler := &TauTeamReconciler{Client: c}
+
+	err := reconciler.validateTeamReservations(ctx, team)
+	if err == nil || !strings.Contains(err.Error(), "below active reservations 12") {
+		t.Fatalf("reservation validation error = %v", err)
+	}
+}
+
+func TestTeamCapacityRetainsAppliedAllocationDuringReduction(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Status: tauv1alpha1.TauClusterStatus{
+			DiscoveredCapacity: []tauv1alpha1.TauResourceCapacityStatus{{
+				Flavor:   "taugrid-gpu-h200",
+				Resource: nvidiaGPUResourceName,
+				Capacity: resource.MustParse("20"),
+			}},
+		},
+	}
+	vision := testTeam("vision", "8")
+	vision.UID = types.UID("vision-team-uid")
+	language := testTeam("language", "8")
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: vision.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "12", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	cohort := desiredTeamCohort(vision, []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "12", "0", "0"),
+	})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cluster, vision, language, workspace, queue, cohort).
+		Build()
+	reconciler := &TauTeamReconciler{Client: c}
+
+	err := reconciler.validateTeamCapacity(ctx, language)
+	if err == nil || !strings.Contains(err.Error(), "team allocations 24 exceed discovered capacity 20") {
+		t.Fatalf("capacity validation error = %v", err)
+	}
+}
+
+func TestQuotaResourceGroupsKeepFlavorUniqueAcrossResources(t *testing.T) {
+	cpuBorrowing := resource.MustParse("2")
+	cpuLending := resource.MustParse("1")
+	quotas := []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("shared-flavor", "8", "4", "0"),
+		{
+			Flavor:         "shared-flavor",
+			Resource:       string(corev1.ResourceCPU),
+			NominalQuota:   resource.MustParse("32"),
+			BorrowingLimit: &cpuBorrowing,
+			LendingLimit:   &cpuLending,
+		},
+	}
+	groups := quotaResourceGroups(quotas, true)
+	if len(groups) != 1 {
+		t.Fatalf("resourceGroups = %#v, want one group for shared flavor", groups)
+	}
+	group := groups[0].(map[string]any)
+	covered := group["coveredResources"].([]any)
+	if got := fmt.Sprint(covered); got != "[cpu nvidia.com/gpu]" {
+		t.Fatalf("coveredResources = %s", got)
+	}
+	flavors := group["flavors"].([]any)
+	if len(flavors) != 1 {
+		t.Fatalf("flavors = %#v, want shared flavor exactly once", flavors)
+	}
+	flavor := flavors[0].(map[string]any)
+	if flavor["name"] != "shared-flavor" {
+		t.Fatalf("flavor name = %v", flavor["name"])
+	}
+	resources := flavor["resources"].([]any)
+	if len(resources) != len(covered) {
+		t.Fatalf("flavor resources = %#v, coveredResources = %#v", resources, covered)
+	}
+	for index, resourceName := range covered {
+		resourceQuota := resources[index].(map[string]any)
+		if resourceQuota["name"] != resourceName {
+			t.Fatalf("resource[%d] = %v, covered resource = %v", index, resourceQuota["name"], resourceName)
+		}
+	}
+}
+
+func TestQuotaValuesRejectPartiallyOverlappingFlavorResources(t *testing.T) {
+	quotas := []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("combined-flavor", "8", "0", "0"),
+		{
+			Flavor:       "combined-flavor",
+			Resource:     string(corev1.ResourceCPU),
+			NominalQuota: resource.MustParse("32"),
+		},
+		testGPUQuota("gpu-only-flavor", "4", "0", "0"),
+	}
+
+	err := validateQuotaValues(quotas)
+	if err == nil || !strings.Contains(err.Error(), "must cover identical or disjoint resource sets") {
+		t.Fatalf("quota validation error = %v", err)
+	}
 }
 
 func TestTeamDeletionWaitsForAppliedWorkspaceCohort(t *testing.T) {

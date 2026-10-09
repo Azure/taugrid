@@ -52,6 +52,9 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	if err := r.validateTeamReservations(ctx, &team); err != nil {
+		return r.reportTeamStatus(ctx, &team, false, "ReservationBlocked", err.Error())
+	}
 	if err := r.validateTeamCapacity(ctx, &team); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "CapacityExceeded", err.Error())
 	}
@@ -86,10 +89,23 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 	}
 	allocated := map[string]resource.Quantity{}
 	for i := range teams.Items {
-		for _, quota := range teams.Items[i].Spec.Quota {
-			key := quotaKey(quota)
+		candidate := &teams.Items[i]
+		effective := map[string]resource.Quantity{}
+		for _, quota := range candidate.Spec.Quota {
+			effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+		}
+		applied, err := r.appliedTeamAllocation(ctx, candidate)
+		if err != nil {
+			return err
+		}
+		for key, quantity := range applied {
+			if requested, ok := effective[key]; !ok || quantity.Cmp(requested) > 0 {
+				effective[key] = quantity.DeepCopy()
+			}
+		}
+		for key, quota := range effective {
 			total := allocated[key]
-			total.Add(quota.NominalQuota)
+			total.Add(quota)
 			allocated[key] = total
 		}
 	}
@@ -100,6 +116,84 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 		}
 	}
 	return nil
+}
+
+func (r *TauTeamReconciler) validateTeamReservations(ctx context.Context, team *tauv1alpha1.TauTeam) error {
+	requested := make(map[string]resource.Quantity, len(team.Spec.Quota))
+	for _, quota := range team.Spec.Quota {
+		requested[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+	}
+	reserved := map[string]resource.Quantity{}
+	var workspaces tauv1alpha1.TauWorkspaceList
+	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+		return err
+	}
+	for i := range workspaces.Items {
+		cohort, _, reservations, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
+		if err != nil {
+			return err
+		}
+		if cohort != teamCohortName(team.Name) {
+			continue
+		}
+		for key, quantity := range reservations {
+			total := reserved[key]
+			total.Add(quantity)
+			reserved[key] = total
+		}
+	}
+	for key, total := range reserved {
+		limit := requested[key]
+		if total.Cmp(limit) > 0 {
+			resourceName, flavor, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf(
+				"refusing to reduce team %q flavor %q resource %q below active reservations %s (requested allocation %s)",
+				team.Name, flavor, resourceName, total.String(), limit.String(),
+			)
+		}
+	}
+	return nil
+}
+
+func (r *TauTeamReconciler) appliedTeamAllocation(
+	ctx context.Context,
+	team *tauv1alpha1.TauTeam,
+) (map[string]resource.Quantity, error) {
+	allocation := map[string]resource.Quantity{}
+	cohortName := teamCohortName(team.Name)
+	cohort := newQueueObject(cohortGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: cohortName}, cohort); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, err
+		}
+	} else {
+		shared, err := clusterQueueNominalQuota(cohort)
+		if err != nil {
+			return nil, err
+		}
+		for key, quantity := range shared {
+			allocation[key] = quantity.DeepCopy()
+		}
+	}
+	var workspaces tauv1alpha1.TauWorkspaceList
+	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+		return nil, err
+	}
+	for i := range workspaces.Items {
+		appliedCohort, guarantees, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
+		if err != nil {
+			return nil, err
+		}
+		if appliedCohort != cohortName {
+			continue
+		}
+		for key, quantity := range guarantees {
+			total := allocation[key]
+			total.Add(quantity)
+			allocation[key] = total
+		}
+	}
+	return allocation, nil
 }
 
 func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alpha1.TauTeam) ([]tauv1alpha1.TauResourceQuota, error) {
@@ -170,29 +264,41 @@ func (r *TauTeamReconciler) appliedWorkspaceGuarantees(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
 ) (string, map[string]resource.Quantity, error) {
+	cohort, guarantees, _, err := r.appliedWorkspaceQueue(ctx, workspace)
+	return cohort, guarantees, err
+}
+
+func (r *TauTeamReconciler) appliedWorkspaceQueue(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) (string, map[string]resource.Quantity, map[string]resource.Quantity, error) {
 	queue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", nil, nil
+			return "", nil, nil, nil
 		}
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	labels := queue.GetLabels()
 	if labels[labelManagedBy] != labelManagedByValue || labels[labelWorkspace] != workspace.Name {
-		return "", nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
+		return "", nil, nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
 	}
 	if ownerUID := queue.GetAnnotations()[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
-		return "", nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
+		return "", nil, nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
 	}
 	applied, err := clusterQueueNominalQuota(queue)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
+	}
+	reservations, err := clusterQueueReservations(queue)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
 	if err != nil {
-		return "", nil, fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
+		return "", nil, nil, fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
 	}
-	return strings.TrimSpace(cohort), applied, nil
+	return strings.TrimSpace(cohort), applied, reservations, nil
 }
 
 func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.TauTeam) (ctrl.Result, error) {
