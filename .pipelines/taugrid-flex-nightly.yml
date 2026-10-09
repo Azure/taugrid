@@ -53,6 +53,8 @@ variables:
     value: nightly.cpu.1x
   - name: FLEX_NIGHTLY_ACR_NAME
     value: $(AKS_AI_RUNTIME_FLEX_ACR_NAME)
+  - name: FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID
+    value: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
   - name: FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX
     value: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX)
   - name: FLEX_NIGHTLY_TAUGRID_RELEASE
@@ -102,6 +104,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --file "${KUBECONFIG}" \
@@ -173,6 +176,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --file "${KUBECONFIG}" \
@@ -463,6 +467,7 @@ jobs:
                   trap cleanup EXIT
 
                   az aks get-credentials \
+                    --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
                     --resource-group "${FLEX_RESOURCE_GROUP}" \
                     --name "${FLEX_CLUSTER_NAME}" \
                     --context flex-nightly \
@@ -680,6 +685,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --context flex-nightly \
@@ -755,6 +761,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --context flex-nightly \
@@ -817,6 +824,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --context flex-nightly \
@@ -869,6 +877,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --context flex-nightly \
@@ -940,6 +949,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --file "${KUBECONFIG}" \
@@ -1283,6 +1293,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --file "${KUBECONFIG}" \
@@ -1465,6 +1476,7 @@ jobs:
 
             export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
             az aks get-credentials \
+              --subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}" \
               --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
               --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
               --context flex-nightly \

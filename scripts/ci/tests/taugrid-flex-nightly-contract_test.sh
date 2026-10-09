@@ -65,6 +65,12 @@ grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
   fail "pipeline must run on the approved 1ES AKS AI Runtime pool"
 grep -Fq "azureSubscription: \$(azureServiceConnection)" "$PIPELINE" ||
   fail "pipeline must use the approved Azure DevOps service connection"
+grep -Fq 'value: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)' "$PIPELINE" ||
+  fail "pipeline must receive the Flex cluster subscription through an ADO variable"
+credential_commands="$(grep -Fc "az aks get-credentials" "$PIPELINE")"
+subscription_routes="$(grep -Fc -- '--subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}"' "$PIPELINE")"
+[[ "$credential_commands" -gt 0 && "$credential_commands" -eq "$subscription_routes" ]] ||
+  fail "every AKS credential request must explicitly target the Flex cluster subscription"
 grep -Fq "deployment: deploy_flex" "$PIPELINE" ||
   fail "current main must be deployed through an Azure DevOps deployment job"
 grep -Fq "job: taucluster_reconcile" "$PIPELINE" ||
