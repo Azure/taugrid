@@ -1,10 +1,33 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS microsoft-go
+
+ARG MICROSOFT_GO_COMMIT=5e399a544ddb40d8ae13d077b10dc9a91d8b36e1
+
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/microsoft-go
+RUN git init \
+    && git remote add origin https://github.com/microsoft/go.git \
+    && git fetch --depth 1 origin "${MICROSOFT_GO_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
+    && git submodule update --init --depth 1 \
+    && git -C go config user.name "Microsoft Go build" \
+    && git -C go config user.email "golang@microsoft.com" \
+    && git -C go am /tmp/microsoft-go/patches/[0-9][0-9][0-9][0-9]-*.patch \
+    && cd go/src \
+    && GOROOT_BOOTSTRAP=/usr/local/go ./make.bash \
+    && ../bin/go version | grep -F "go1.26.9" \
+    && GOEXPERIMENT=systemcrypto ../bin/go env GOEXPERIMENT | grep -Fx "systemcrypto"
+
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS builder
 
-ENV GOTOOLCHAIN=go1.26.9 \
-    MS_GOTOOLCHAIN_ALLOW_NON_LOCAL=1
+COPY --from=microsoft-go /tmp/microsoft-go/go /usr/local/microsoft-go
+ENV GOROOT=/usr/local/microsoft-go \
+    GOTOOLCHAIN=local \
+    PATH=/usr/local/microsoft-go/bin:${PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends gcc \
     && rm -rf /var/lib/apt/lists/*
