@@ -20,8 +20,8 @@ readonly TAU_CLI="${TAUGRID_CLI:-cli/bin/tau}"
 readonly DIAGNOSTICS_DIR="${TAUGRID_DIAGNOSTICS_DIR:-.}"
 
 release_state() {
-  local inventory matches
-  inventory="$(
+  local inventory matches match_count revision status
+  if ! inventory="$(
     helm list \
       --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
       --kube-context "${KUBE_CONTEXT}" \
@@ -32,23 +32,35 @@ release_state() {
       --uninstalling \
       --superseded \
       --output json
-  )"
-  matches="$(
+  )"; then
+    echo "failed to inspect Helm release inventory" >&2
+    return 1
+  fi
+  if ! matches="$(
     jq --arg release "${TAUGRID_RELEASE}" \
       '[.[] | select(.name == $release)]' <<<"${inventory}"
-  )"
-  if [[ "$(jq 'length' <<<"${matches}")" -gt 1 ]]; then
+  )"; then
+    echo "failed to parse Helm release inventory" >&2
+    return 1
+  fi
+  if ! match_count="$(jq -er 'length' <<<"${matches}")"; then
+    echo "failed to count matching Helm releases" >&2
+    return 1
+  fi
+  if [[ "${match_count}" -gt 1 ]]; then
     echo "multiple Helm releases named ${TAUGRID_RELEASE} exist in ${TAUGRID_SYSTEM_NAMESPACE}" >&2
     return 1
   fi
-  if [[ "$(jq 'length' <<<"${matches}")" -eq 0 ]]; then
+  if [[ "${match_count}" -eq 0 ]]; then
     jq -n '{exists: false, revision: "0", status: ""}'
     return
   fi
 
-  local revision status
-  revision="$(jq -r '.[0].revision | tostring' <<<"${matches}")"
-  status="$(jq -r '.[0].status' <<<"${matches}")"
+  if ! revision="$(jq -er '.[0].revision | tostring' <<<"${matches}")" ||
+    ! status="$(jq -er '.[0].status' <<<"${matches}")"; then
+    echo "matching Helm release has incomplete state" >&2
+    return 1
+  fi
   if [[ ! "${revision}" =~ ^[1-9][0-9]*$ ]]; then
     echo "Helm returned an invalid revision for ${TAUGRID_RELEASE}: ${revision}" >&2
     return 1
@@ -68,7 +80,10 @@ recover() {
   mkdir -p "${DIAGNOSTICS_DIR}"
 
   local state
-  state="$(release_state)"
+  if ! state="$(release_state)"; then
+    echo "cannot recover without a valid Helm release inventory" >&2
+    return 1
+  fi
   if [[ "${TAUGRID_PREVIOUS_REVISION}" == "0" ]]; then
     if [[ "$(jq -r '.exists' <<<"${state}")" == "true" ]]; then
       helm uninstall "${TAUGRID_RELEASE}" \
@@ -78,7 +93,10 @@ recover() {
         --timeout 20m \
         >"${DIAGNOSTICS_DIR}/recovery.txt" 2>&1
     fi
-    state="$(release_state)"
+    if ! state="$(release_state)"; then
+      echo "cannot verify first-install recovery without a valid Helm release inventory" >&2
+      return 1
+    fi
     if [[ "$(jq -r '.exists' <<<"${state}")" != "false" ]]; then
       echo "the rejected first installation still exists after recovery" >&2
       exit 1

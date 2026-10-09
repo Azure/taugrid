@@ -97,5 +97,15 @@ if "${RECOVER}" inspect >/dev/null 2>"${fixture}/inspect-error.txt"; then
 fi
 grep -Fq "simulated Helm inspection failure" "${fixture}/inspect-error.txt" ||
   fail "inspection failure was not surfaced"
+export TAUGRID_PREVIOUS_REVISION=0
+if "${RECOVER}" recover >"${fixture}/recover-output.txt" 2>"${fixture}/recover-error.txt"; then
+  fail "recovery must fail when Helm inventory inspection fails"
+fi
+grep -Fq "cannot recover without a valid Helm release inventory" \
+  "${fixture}/recover-error.txt" ||
+  fail "recovery did not surface the invalid inventory"
+if grep -Fq "removed the rejected first installation" "${fixture}/recover-output.txt"; then
+  fail "recovery falsely reported success after an inspection failure"
+fi
 
 echo "TauGrid unbounded-stable nightly recovery tests passed"
