@@ -53,7 +53,7 @@ func lifecycleFlagsContextExplicit(cmd *cobra.Command) bool {
 }
 
 func (f *runLifecycleConnectionFlags) resolve(cmd *cobra.Command) (string, string, func(), error) {
-	return f.resolveWithEnsurer(cmd, defaultRunConnectionEnsurer(cmd))
+	return f.resolveWithEnsurer(cmd, defaultRunLifecycleConnectionManager(cmd))
 }
 
 func (f *runLifecycleConnectionFlags) resolveWithEnsurer(cmd *cobra.Command, underlying runConnectionEnsurer) (string, string, func(), error) {
@@ -158,14 +158,6 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 		restore()
 		return "", "", nil, err
 	}
-	if !tauworkspace.Ready(workspaceStatus) {
-		restore()
-		return "", "", nil, fmt.Errorf(
-			"workspace %q is not Ready (phase=%s)",
-			workspaceStatus.Metadata.Name,
-			workspaceStatus.Status.Phase,
-		)
-	}
 	workspaceNamespace := firstNonEmpty(
 		workspaceTargetNamespace(workspaceStatus),
 		workspaceStatus.Metadata.Name,
@@ -210,6 +202,13 @@ func defaultRunConnectionManager(cmd *cobra.Command) workspaceconnection.Manager
 		Verifier:    workspaceconnection.KubectlVerifier{},
 		TauVersion:  version.Version,
 	}
+}
+
+func defaultRunLifecycleConnectionManager(cmd *cobra.Command) workspaceconnection.Manager {
+	manager := defaultRunConnectionManager(cmd)
+	manager.AllowUnreadyWorkspace = true
+	manager.Verifier = workspaceconnection.KubectlVerifier{AllowUnreadyWorkspace: true}
+	return manager
 }
 
 func stdinIsTerminal(input io.Reader) bool {
@@ -507,7 +506,14 @@ func resolveRunLifecycleConnection(
 	contextExplicit bool,
 	namespaceExplicit bool,
 ) (string, string, func(), error) {
-	return resolveRunLifecycleConnectionUsing(cmd, kubeContext, namespace, contextExplicit, namespaceExplicit, defaultRunConnectionEnsurer(cmd))
+	return resolveRunLifecycleConnectionUsing(
+		cmd,
+		kubeContext,
+		namespace,
+		contextExplicit,
+		namespaceExplicit,
+		defaultRunLifecycleConnectionManager(cmd),
+	)
 }
 
 func resolveRunLifecycleConnectionUsing(
@@ -750,7 +756,7 @@ func resolveWorkspaceControlPlaneConnection(
 		cmd,
 		kubeContext,
 		namespace,
-		defaultRunConnectionEnsurer(cmd),
+		defaultRunLifecycleConnectionManager(cmd),
 	)
 }
 

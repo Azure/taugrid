@@ -419,8 +419,5 @@ func validateCachedRunLogsRoute(ctx context.Context, runner kubeRawRunner, route
 			namespace,
 		)
 	}
-	if !tauworkspace.Ready(workspace) {
-		return fmt.Errorf("cached workspace %q is not Ready; reconnect the workspace", route.Workspace)
-	}
 	return nil
 }

@@ -17,8 +17,9 @@ type rawRunner interface {
 }
 
 type KubectlVerifier struct {
-	KubectlPath string
-	NewRunner   func(contextName, kubeconfigPath string) rawRunner
+	KubectlPath           string
+	NewRunner             func(contextName, kubeconfigPath string) rawRunner
+	AllowUnreadyWorkspace bool
 }
 
 func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kubeconfigPath string) (Verification, error) {
@@ -43,7 +44,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	if queue == "" {
 		return Verification{}, fmt.Errorf("TauWorkspace %q has no resolved LocalQueue", descriptor.Workspace)
 	}
-	if !tauworkspace.Ready(workspace) {
+	if !v.AllowUnreadyWorkspace && !tauworkspace.Ready(workspace) {
 		return Verification{}, fmt.Errorf(
 			"TauWorkspace %q is not Ready (phase=%s, observedGeneration=%d, generation=%d)",
 			descriptor.Workspace,

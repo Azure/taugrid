@@ -108,6 +108,10 @@ type Manager struct {
 	// to TAU_CONNECTION_REVALIDATION_TIMEOUT, then defaultRevalidationTimeout.
 	RevalidationTimeout time.Duration
 	TauVersion          string
+	// AllowUnreadyWorkspace permits connection verification for diagnostics and
+	// existing-workload lifecycle operations. Identity, placement, authorization,
+	// and Kubernetes permission checks still run.
+	AllowUnreadyWorkspace bool
 }
 
 func DefaultConfigDir() (string, error) {
@@ -291,7 +295,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			}
 			return ActiveConnection{}, fmt.Errorf("revalidate Tau workspace connection: %w", verifyErr)
 		}
-		if err := validateVerification(discovery.Descriptor, verification); err != nil {
+		if err := validateVerification(discovery.Descriptor, verification, m.AllowUnreadyWorkspace); err != nil {
 			return ActiveConnection{}, fmt.Errorf("revalidate Tau workspace connection: %w", err)
 		}
 		if changes := state.contractChanges(verification); len(changes) > 0 {
@@ -633,7 +637,11 @@ func (m Manager) stateFresh(state connectionState) bool {
 	return !state.VerifiedAt.IsZero() && m.now().Sub(state.VerifiedAt) <= ttl
 }
 
-func validateVerification(descriptor Descriptor, verification Verification) error {
+func validateVerification(
+	descriptor Descriptor,
+	verification Verification,
+	allowUnreadyWorkspace bool,
+) error {
 	contextName := firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
 	if contextName != descriptor.Cluster.ContextName {
 		return fmt.Errorf(
@@ -643,7 +651,7 @@ func validateVerification(descriptor Descriptor, verification Verification) erro
 			descriptor.Cluster.ContextName,
 		)
 	}
-	if verification.WorkspacePhase != "Ready" {
+	if !allowUnreadyWorkspace && verification.WorkspacePhase != "Ready" {
 		return fmt.Errorf(
 			"workspace %q is not Ready (phase=%s)",
 			descriptor.Workspace,
@@ -1034,7 +1042,7 @@ func (m Manager) verifyCandidate(
 		}
 		return Verification{}, err
 	}
-	if err := validateVerification(discovery.Descriptor, verification); err != nil {
+	if err := validateVerification(discovery.Descriptor, verification, m.AllowUnreadyWorkspace); err != nil {
 		return Verification{}, err
 	}
 	return verification, nil

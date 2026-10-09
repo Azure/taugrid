@@ -91,6 +91,7 @@ func TestKubectlVerifierRejectsStaleReadyGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	runner := &verifierFakeRunner{responses: map[string]string{
 		"-n tau-system get workspace.tau.azure.com sample -o json": `{
 		  "apiVersion": "tau.azure.com/v1alpha1",
@@ -113,6 +114,31 @@ func TestKubectlVerifierRejectsStaleReadyGeneration(t *testing.T) {
 		!strings.Contains(err.Error(), "observedGeneration=7") ||
 		!strings.Contains(err.Error(), "generation=8") {
 		t.Fatalf("expected stale-generation readiness failure, got %v", err)
+	}
+}
+
+func TestKubectlVerifierAllowsDegradedWorkspaceForLifecycle(t *testing.T) {
+	descriptor, runner := workspaceRBACVerifierFixture(t)
+	workspaceKey := "-n tau-system get workspace.tau.azure.com sample -o json"
+	runner.responses[workspaceKey] = strings.Replace(
+		runner.responses[workspaceKey],
+		`"phase": "Ready"`,
+		`"phase": "Degraded"`,
+		1,
+	)
+	verifier := KubectlVerifier{
+		AllowUnreadyWorkspace: true,
+		NewRunner:             func(string, string) rawRunner { return runner },
+	}
+	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.WorkspacePhase != "Degraded" || got.WorkspaceUID != "workspace-uid" {
+		t.Fatalf("verification = %#v", got)
+	}
+	if len(runner.calls) < 2 {
+		t.Fatalf("authorization checks did not run: %v", runner.calls)
 	}
 }
 
