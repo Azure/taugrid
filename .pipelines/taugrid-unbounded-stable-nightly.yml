@@ -32,6 +32,16 @@ jobs:
     steps:
       - checkout: self
 
+      - task: GoTool@0
+        displayName: Use Go 1.26.9
+        inputs:
+          version: 1.26.9
+
+      - bash: |
+          set -euo pipefail
+          go -C tests/e2e test ./cmd/taugrid-nightly-smoke
+        displayName: Test Tau-native nightly runner
+
       - bash: scripts/ci/tests/taugrid-unbounded-stable-nightly-contract_test.sh
         displayName: Validate pipeline contract
 
@@ -306,6 +316,9 @@ jobs:
                   fi
 
                   make -C cli build
+                  go -C tests/e2e build \
+                    -o "${tools_dir}/taugrid-nightly-smoke" \
+                    ./cmd/taugrid-nightly-smoke
                   scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid
 
                   install_args=(
@@ -376,6 +389,19 @@ jobs:
                     --timeout 10m \
                     >"${diagnostics_dir}/validation.txt" 2>&1; then
                     recover_failed_deployment "post-install readiness validation failed"
+                    exit 1
+                  fi
+
+                  smoke_run_name="taugrid-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
+                  if ! "${tools_dir}/taugrid-nightly-smoke" \
+                    --tau "$(Build.SourcesDirectory)/cli/bin/tau" \
+                    --context unbounded-stable \
+                    --system-namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --source-dir "$(Build.SourcesDirectory)/tests/e2e/tau-native-nightly" \
+                    --artifact-dir "${artifact_dir}/tau-native-smoke" \
+                    --run-name "${smoke_run_name}" \
+                    >"${diagnostics_dir}/tau-native-smoke.txt" 2>&1; then
+                    recover_failed_deployment "Tau-native workload smoke failed"
                     exit 1
                   fi
 

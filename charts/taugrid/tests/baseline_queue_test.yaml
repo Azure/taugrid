@@ -5,7 +5,7 @@ tests:
   - it: renders the portable queue contract by default
     asserts:
       - hasDocuments:
-          count: 6
+          count: 7
       - equal:
           path: kind
           value: ResourceFlavor
@@ -14,8 +14,9 @@ tests:
           path: spec.nodeLabels["kubernetes.io/os"]
           value: linux
         documentIndex: 0
-      - notExists:
+      - equal:
           path: spec.topologyName
+          value: taugrid-cpu-topology
         documentIndex: 0
       - equal:
           path: kind
@@ -113,6 +114,18 @@ tests:
           path: value
           value: 1200
         documentIndex: 5
+      - equal:
+          path: kind
+          value: Topology
+        documentIndex: 6
+      - equal:
+          path: metadata.name
+          value: taugrid-cpu-topology
+        documentIndex: 6
+      - equal:
+          path: spec.levels[0].nodeLabel
+          value: kubernetes.io/hostname
+        documentIndex: 6
 
   - it: disables every baseline queue object together
     set:
@@ -140,7 +153,7 @@ tests:
   - it: defers GPU ResourceFlavors to controller discovery by default
     asserts:
       - hasDocuments:
-          count: 6
+          count: 7
       - lengthEqual:
           path: spec.resourceGroups[0].flavors
           count: 1
@@ -207,7 +220,7 @@ tests:
       baselineQueue.gpu.flavors: []
     asserts:
       - hasDocuments:
-          count: 6
+          count: 7
       - equal:
           path: kind
           value: ClusterQueue

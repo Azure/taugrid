@@ -1,5 +1,6 @@
 {{- if .Values.baselineQueue.enabled }}
 {{- $topologyEnabled := and .Values.baselineQueue.topology.enabled .Values.components.tauCoreController.enabled }}
+{{- $cpuTopologyName := "taugrid-cpu-topology" }}
 {{- $gpuDiscoveryEnabled := and .Values.baselineQueue.gpu.enabled $topologyEnabled }}
 {{- $gpuFlavors := .Values.baselineQueue.gpu.flavors }}
 {{- if and .Values.baselineQueue.topology.enabled (ne .Values.baselineQueue.topology.name "taugrid-gpu-topology") }}
@@ -74,6 +75,9 @@ spec:
   {{- with .Values.baselineQueue.flavor.tolerations }}
   tolerations:
     {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if $topologyEnabled }}
+  topologyName: {{ $cpuTopologyName }}
   {{- end }}
 ---
 {{- if .Values.baselineQueue.gpu.enabled }}
@@ -203,4 +207,16 @@ metadata:
     {{- include "taugrid.labels" . | nindent 4 }}
 value: 1200
 description: Elevated Kueue admission priority for approved TauGrid workloads.
+{{- if $topologyEnabled }}
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Topology
+metadata:
+  name: {{ $cpuTopologyName }}
+  labels:
+    {{- include "taugrid.labels" . | nindent 4 }}
+spec:
+  levels:
+    - nodeLabel: kubernetes.io/hostname
+{{- end }}
 {{- end }}

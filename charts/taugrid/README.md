@@ -143,9 +143,9 @@ should replace this with deliberate capacity policy.
 | `baselineQueue.enabled` | bool | `true` | Create the baseline ClusterQueue, LocalQueue, and CPU ResourceFlavor |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (must be a valid DNS label) |
 | `baselineQueue.namespaceSelector` | object | `{matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]}` | Which namespaces get the LocalQueue |
-| `baselineQueue.topology.enabled` | bool | `true` | Reference the controller-owned Topology from GPU flavors |
+| `baselineQueue.topology.enabled` | bool | `true` | Enable the controller-owned GPU Topology and a chart-owned hostname-only CPU Topology |
 | `baselineQueue.topology.name` | string | `taugrid-gpu-topology` | Controller-owned Topology object name |
-| `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out |
+| `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory ResourceFlavor; keep GPU labels and tolerations out; topology-enabled installs bind it to `taugrid-cpu-topology` |
 | `baselineQueue.resources` | list | cpu and memory | CPU/memory admission quotas |
 | `baselineQueue.gpu.enabled` | bool | `true` | Cover GPU resources and enable controller discovery |
 | `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu`, `tau.azure.com/torchrun-host-slot` | GPU and one-per-node torchrun slot resources covered by the node-resource group |
