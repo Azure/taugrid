@@ -485,7 +485,12 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		// Matches the eval/CPU templates, which delete immediately for the same reason.
 		"ttlSecondsAfterFinished": int64(rayJobTTLSecondsAfterFinished),
 		"submissionMode":          "HTTPMode",
-		"entrypoint":              jobEntrypoint,
+		// KubeRay 1.6 moved the submitter Job's retry count to
+		// submitterConfig.backoffLimit. Unset lets KubeRay apply its own default
+		// (2), which retries a deterministic failure; the successful retry then
+		// masks the real failure in the RayJob status.
+		"submitterConfig": map[string]any{"backoffLimit": int64(0)},
+		"entrypoint":      jobEntrypoint,
 		"rayClusterSpec": map[string]any{
 			"rayVersion":       rayVersionString(image),
 			"headGroupSpec":    head,

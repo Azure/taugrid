@@ -133,6 +133,40 @@ CI runs on every PR to main (`.github/workflows/taugrid-validation.yml`). It bui
 
 Key CI settings: `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`. Tests run with `-count=1` (no caching). The controller module uses `-race`.
 
+## Review and Validation Discipline (Required)
+
+The full layer matrix, per-layer commands and the known environment-specific
+failures live in [docs/TESTING.md](docs/TESTING.md). The rules below are
+mandatory for every change.
+
+1. **Syntax checks are not validation, and execution is.** `node --check` (or
+   importing a module without running it) has passed files that threw at module
+   load. Any harness, script, or lifecycle change must be *executed*, and any
+   lifecycle logic must have a mocked-API test that runs it. Mocked transports
+   are acceptable; a syntax check is not.
+2. **Review the diff for these five defect classes before pushing:**
+   a. initialization order / temporal dead zone (a value derived from another
+      value declared later);
+   b. a constant duplicated across files that must agree (version pins, limits,
+      defaults, producer/consumer strings);
+   c. a client capability assumed but absent on the supported dependency floor;
+   d. a reopened or retried resource that reports success after the first
+      attempt failed;
+   e. narrowing a value that participates in identity or dedup (truncating,
+      lowercasing, normalizing, rounding);
+   f. an assertion that a failure message can satisfy. A pass condition must
+      key on evidence the thing under test worked, never on a token that an
+      error string also contains. `run-embed-e2e` asserted /TauGrid/ and the
+      proxy's own banner says "TauGrid portal proxy could not reach ...", so
+      the harness reported PASS while the iframe showed an error page. When a
+      layer cannot obtain its evidence, report it as untested or fail it -
+      never as a pass.
+3. **Every review comment gets a reply that states the evidence** (command,
+   output, `file:line`). Any claim about the repository must be verified against
+   the target branch (`git show origin/main:<path>`, `git ls-tree origin/main`),
+   never against whatever checkout happens to be current. A stale-checkout
+   search is not evidence about the branch under review.
+
 ## TauGrid Release Version Bump
 
 TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
@@ -202,7 +236,7 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 
 ## Conventions
 
-- Go toolchain: 1.26.7 (see `.go-version`); modules require Go 1.26.5
+- Go toolchain: 1.26.9 (see `.go-version`); modules require Go 1.26.9
 - Linting: staticcheck v0.7.0 for cli/core/portal; golangci-lint for monitoring modules
 - `staticcheck.conf` at repo root disables specific style checks (ST1000, ST1003, ST1005, ST1016, ST1020-ST1023, S1016) — do not re-enable without fixing all findings
 - Python: requires 3.10+, lint with ruff

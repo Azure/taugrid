@@ -77,7 +77,10 @@ jobs:
       - name: Install SDK development dependencies
         run: |
           python -m pip install --upgrade pip==26.2.1
-          python -m pip install --editable '.[dev]' build==1.5.0 pip-audit==2.10.1
+          # The widgets extra is required, not optional, for this suite: the
+          # Jupyter server extension tests import jupyter_server, tornado, and
+          # urllib3 at module scope, so a dev-only install cannot collect them.
+          python -m pip install --editable '.[dev,widgets]' build==1.5.0 pip-audit==2.10.1
 
       - name: Check installed dependencies
         run: python -m pip check
@@ -92,18 +95,67 @@ jobs:
         if: matrix.python-version == '3.x'
         run: python -m build
 
+  floors:
+    name: Python SDK / Minimum dependency floors
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdk/python/python
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.x
+          check-latest: true
+          cache: pip
+          cache-dependency-path: sdk/python/python/pyproject.toml
+
+      - name: Install declared minimum dependencies
+        run: |
+          python -m pip install --upgrade pip==26.2.1
+          python -m pip install --editable '.[dev,widgets]'
+          # Pin the floor of every ranged dependency the notebook surfaces read
+          # through. kubernetes 30.1.0 plus the final urllib3 1.26 release has
+          # no HTTPResponse.read1; a bounded reader that assumes read1 silently
+          # returns an undecoded response there. 1.26.0 itself is not usable:
+          # it cannot be imported on Python 3.12+.
+          python -m pip install 'kubernetes==30.1.0' 'urllib3==1.26.20'
+
+      - name: Verify the floors took effect
+        run: |
+          python - <<'PY'
+          import importlib.metadata as metadata
+          for name, expected in (("kubernetes", "30.1.0"), ("urllib3", "1.26.20")):
+              found = metadata.version(name)
+              assert found == expected, f"{name} is {found}, expected {expected}"
+              print(f"{name}=={found}")
+          from urllib3 import HTTPResponse
+          assert not hasattr(HTTPResponse, "read1"), "floor no longer exercises the legacy reader"
+          print("legacy reader path exercised")
+          PY
+
+      - name: Test bounded reads on the declared floors
+        run: python -m pytest tests/test_kube_io.py tests/test_jupyter_metrics.py tests/test_jupyter_runs.py tests/test_jupyter_destinations.py -q
+
   required:
     name: Required
     if: always()
     needs:
       - lint
       - test
+      - floors
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
         env:
           LINT_RESULT: ${{ needs.lint.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          FLOORS_RESULT: ${{ needs.floors.result }}
         run: |
           test "${LINT_RESULT}" = success
           test "${TEST_RESULT}" = success
+          test "${FLOORS_RESULT}" = success
