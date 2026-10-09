@@ -6,7 +6,7 @@ pr: none
 
 schedules:
   - cron: "15 8 * * *"
-    displayName: Daily TauGrid Flex hardware matrix
+    displayName: Daily TauGrid Flex end-to-end validation
     branches:
       include:
         - main
@@ -21,9 +21,9 @@ parameters:
       - smoke
       - full
   - name: rdmaConformance
-    displayName: Run extended H200 RDMA/NCCL conformance
+    displayName: Run H200 InfiniBand/NCCL conformance
     type: boolean
-    default: false
+    default: true
   - name: includeDGXSpark
     displayName: Include DGX Spark targets
     type: boolean
@@ -43,6 +43,26 @@ variables:
     value: shared-cluster-controllers
   - name: FLEX_NIGHTLY_GPU_TOPOLOGY
     value: taugrid-gpu-topology
+  - name: FLEX_NIGHTLY_TAU_NAMESPACE
+    value: ray
+  - name: FLEX_NIGHTLY_TAU_QUEUE
+    value: backfill
+  - name: FLEX_NIGHTLY_TAU_JOB_PROFILE
+    value: nightly.cpu.1x
+  - name: FLEX_NIGHTLY_TAU_RAY_PROFILE
+    value: nightly.cpu.1x
+  - name: FLEX_NIGHTLY_ACR_NAME
+    value: $(AKS_AI_RUNTIME_FLEX_ACR_NAME)
+  - name: FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX
+    value: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX)
+  - name: FLEX_NIGHTLY_TAUGRID_RELEASE
+    value: $(AKS_AI_RUNTIME_FLEX_TAUGRID_RELEASE)
+  - name: FLEX_NIGHTLY_TAUGRID_SYSTEM_NAMESPACE
+    value: $(AKS_AI_RUNTIME_FLEX_TAUGRID_SYSTEM_NAMESPACE)
+  - name: FLEX_NIGHTLY_STORAGE_WESTEUROPE_REGION
+    value: $(AKS_AI_RUNTIME_FLEX_STORAGE_WESTEUROPE_REGION)
+  - name: FLEX_NIGHTLY_STORAGE_EASTUS2EUAP_REGION
+    value: $(AKS_AI_RUNTIME_FLEX_STORAGE_EASTUS2EUAP_REGION)
   - name: AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES
     value: "2"
   - name: FINEWEB_TRAIN_STEPS
@@ -53,8 +73,60 @@ variables:
     value: "60"
 
 jobs:
+  - job: taucluster_reconcile
+    displayName: Reconcile TauCluster GPU catalog
+    timeoutInMinutes: 15
+    steps:
+      - checkout: self
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-taucluster-reconcile_test.sh
+        displayName: Validate TauCluster reconciliation
+
+      - task: AzureCLI@2
+        displayName: Reconcile reviewed GPU classes and nightly profile
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            FLEX_NIGHTLY_TAUCLUSTER_ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/taucluster-reconcile" \
+              scripts/ci/taugrid-flex-nightly-taucluster-reconcile.sh
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_TAU_PROFILE: $(FLEX_NIGHTLY_TAU_JOB_PROFILE)
+          FLEX_NIGHTLY_TAU_NAMESPACE: $(FLEX_NIGHTLY_TAU_NAMESPACE)
+          FLEX_NIGHTLY_TAU_QUEUE: $(FLEX_NIGHTLY_TAU_QUEUE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish TauCluster reconciliation diagnostics
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/taucluster-reconcile
+          artifact: taugrid-flex-taucluster-reconcile-$(Build.BuildId)-$(System.JobAttempt)
+
   - job: preflight
     displayName: Hardware and topology contract
+    dependsOn: taucluster_reconcile
     timeoutInMinutes: 15
     steps:
       - checkout: self
@@ -64,6 +136,18 @@ jobs:
 
       - bash: scripts/ci/tests/taugrid-flex-nightly-report_test.sh
         displayName: Validate nightly report generation
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-cli-smoke_test.sh
+        displayName: Validate Tau CLI nightly smoke
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-gpu-profile-smoke_test.sh
+        displayName: Validate GPU workload-profile smoke
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-storage-smoke_test.sh
+        displayName: Validate cross-region storage smoke
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-kusto-check_test.sh
+        displayName: Validate Portal and Kusto checks
 
       - task: AzureCLI@2
         displayName: Inventory Flex hardware matrix
@@ -123,6 +207,7 @@ jobs:
           FLEX_NIGHTLY_DGX_SELECTOR: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR)
           FLEX_NIGHTLY_DGX_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE)
           FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
+          FLEX_NIGHTLY_H100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H100_SITE)
           FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
           INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
@@ -134,9 +219,660 @@ jobs:
           targetPath: $(Build.ArtifactStagingDirectory)/preflight
           artifact: taugrid-flex-hardware-contract
 
+  - job: build_images
+    displayName: Publish immutable TauGrid images
+    dependsOn: preflight
+    timeoutInMinutes: 180
+    steps:
+      - checkout: self
+
+      - task: AzureCLI@2
+        displayName: Build, publish, and verify deployment images
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            require_value() {
+              local name="$1"
+              local value="${!name:-}"
+              if [[ -z "${value}" || "${value}" == '$('* ]]; then
+                echo "##vso[task.logissue type=error]${name} must be configured in Azure DevOps"
+                exit 1
+              fi
+            }
+
+            require_value FLEX_ACR_NAME
+            require_value NIGHTLY_IMAGE_REPOSITORY_PREFIX
+
+            registry="${FLEX_ACR_NAME}.azurecr.io"
+            image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"
+            artifact_dir="$(Build.ArtifactStagingDirectory)/images"
+            mkdir -p "${artifact_dir}"
+
+            az acr login --name "${FLEX_ACR_NAME}"
+            builder="taugrid-flex-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
+            docker buildx create --name "${builder}" --driver docker-container --use
+            trap 'docker buildx rm "${builder}" >/dev/null 2>&1 || true' EXIT
+
+            controller_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}"
+            portal_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}"
+            collector_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"
+
+            make -C images/tau-core-controller docker-push \
+              IMG="${controller_image}" \
+              TAG="${image_tag}" \
+              PLATFORMS=linux/amd64,linux/arm64
+            make -C images/taugrid-portal docker-push \
+              IMG="${portal_image}" \
+              TAG="${image_tag}" \
+              VERSION="${image_tag}" \
+              COMMIT="${BUILD_SOURCEVERSION}" \
+              DATE="$(git show -s --format=%cI "${BUILD_SOURCEVERSION}")" \
+              PLATFORMS=linux/amd64,linux/arm64
+            make -C images/gpu-metrics-collector docker-push \
+              ACR_REGISTRY="${registry}" \
+              PUSH_IMG="${collector_image}" \
+              TAG="${image_tag}" \
+              PLATFORMS=linux/amd64,linux/arm64
+
+            for image in \
+              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}" \
+              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}" \
+              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"; do
+              digest="$(az acr repository show \
+                --name "${FLEX_ACR_NAME}" \
+                --image "${image}" \
+                --query digest \
+                --output tsv)"
+              if [[ -z "${digest}" ]]; then
+                echo "##vso[task.logissue type=error]Published image ${image} has no registry digest"
+                exit 1
+              fi
+            done
+
+            jq -n \
+              --arg registry "${registry}" \
+              --arg repositoryPrefix "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}" \
+              --arg tag "${image_tag}" \
+              --arg sourceVersion "${BUILD_SOURCEVERSION}" \
+              '{
+                registry: $registry,
+                repository_prefix: $repositoryPrefix,
+                tag: $tag,
+                source_version: $sourceVersion
+              }' >"${artifact_dir}/images.json"
+        env:
+          FLEX_ACR_NAME: $(FLEX_NIGHTLY_ACR_NAME)
+          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish immutable image contract
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/images
+          artifact: taugrid-flex-images
+
+  - deployment: deploy_flex
+    displayName: Deploy current TauGrid main to Flex
+    environment: flex
+    dependsOn: build_images
+    timeoutInMinutes: 90
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+
+            - task: GoTool@0
+              displayName: Use Go 1.26.9
+              inputs:
+                version: 1.26.9
+
+            - task: DownloadPipelineArtifact@2
+              displayName: Download immutable image contract
+              inputs:
+                artifact: taugrid-flex-images
+                path: $(Pipeline.Workspace)/taugrid-flex-images
+
+            - task: AzureCLI@2
+              displayName: Upgrade and validate TauGrid on Flex
+              inputs:
+                azureSubscription: $(azureServiceConnection)
+                scriptType: bash
+                scriptLocation: inlineScript
+                inlineScript: |
+                  set -euo pipefail
+
+                  require_value() {
+                    local name="$1"
+                    local value="${!name:-}"
+                    if [[ -z "${value}" || "${value}" == '$('* ]]; then
+                      echo "##vso[task.logissue type=error]${name} must be configured in Azure DevOps"
+                      exit 1
+                    fi
+                  }
+
+                  require_value FLEX_RESOURCE_GROUP
+                  require_value FLEX_CLUSTER_NAME
+                  require_value TAUGRID_RELEASE
+                  require_value TAUGRID_SYSTEM_NAMESPACE
+                  require_value TAU_NAMESPACE
+                  require_value TAU_QUEUE
+                  require_value TAU_PROFILE
+
+                  image_contract="$(Pipeline.Workspace)/taugrid-flex-images/images.json"
+                  test -s "${image_contract}"
+                  registry="$(jq -r '.registry' "${image_contract}")"
+                  repository_prefix="$(jq -r '.repository_prefix' "${image_contract}")"
+                  image_tag="$(jq -r '.tag' "${image_contract}")"
+                  source_version="$(jq -r '.source_version' "${image_contract}")"
+                  [[ "${source_version}" == "${BUILD_SOURCEVERSION}" ]]
+
+                  artifact_dir="$(Build.ArtifactStagingDirectory)/deployment"
+                  diagnostics_dir="${artifact_dir}/diagnostics"
+                  result_file="${artifact_dir}/deployment-result.json"
+                  values_file="$(Agent.TempDirectory)/flex-values.json"
+                  render_file="$(Agent.TempDirectory)/flex-render.txt"
+                  mkdir -p "${diagnostics_dir}"
+
+                  export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+                  tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+                  mkdir -p "${tools_dir}"
+                  if ! command -v kubelogin >/dev/null 2>&1; then
+                    az aks install-cli \
+                      --install-location "${tools_dir}/kubectl" \
+                      --kubelogin-install-location "${tools_dir}/kubelogin"
+                    export PATH="${tools_dir}:${PATH}"
+                  fi
+
+                  write_result() {
+                    local status="$1"
+                    local reason="$2"
+                    local previous_revision="${3:-}"
+                    local current_revision="${4:-}"
+                    jq -n \
+                      --arg environment flex \
+                      --arg status "${status}" \
+                      --arg reason "${reason}" \
+                      --arg sourceVersion "${source_version}" \
+                      --arg imageTag "${image_tag}" \
+                      --arg previousRevision "${previous_revision}" \
+                      --arg currentRevision "${current_revision}" \
+                      '{
+                        environment: $environment,
+                        status: $status,
+                        reason: $reason,
+                        source_version: $sourceVersion,
+                        image_tag: $imageTag,
+                        previous_revision: $previousRevision,
+                        current_revision: $currentRevision
+                      }' >"${result_file}"
+                  }
+
+                  cleanup() {
+                    rc=$?
+                    trap - EXIT
+                    set +e
+                    helm status "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context flex-nightly \
+                      --output json 2>"${diagnostics_dir}/helm-status-error.txt" |
+                      jq '{
+                        name: .name,
+                        namespace: .namespace,
+                        revision: .version,
+                        status: .info.status,
+                        description: .info.description,
+                        first_deployed: .info.first_deployed,
+                        last_deployed: .info.last_deployed,
+                        deleted: .info.deleted
+                      }' >"${diagnostics_dir}/helm-status.json"
+                    helm history "${TAUGRID_RELEASE}" \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      --kube-context flex-nightly \
+                      --output yaml >"${diagnostics_dir}/helm-history.yaml" 2>&1
+                    kubectl --context flex-nightly \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      get deployments,daemonsets,statefulsets,pods -o wide \
+                      >"${diagnostics_dir}/resources.txt" 2>&1
+                    kubectl --context flex-nightly \
+                      --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                      get events --sort-by=.lastTimestamp \
+                      >"${diagnostics_dir}/events.txt" 2>&1
+                    if [[ ! -s "${result_file}" ]]; then
+                      write_result failed "deployment command failed; Helm atomic rollback was requested"
+                    fi
+                    rm -f "${values_file}" "${render_file}" "${KUBECONFIG}"
+                    exit "${rc}"
+                  }
+                  trap cleanup EXIT
+
+                  az aks get-credentials \
+                    --resource-group "${FLEX_RESOURCE_GROUP}" \
+                    --name "${FLEX_CLUSTER_NAME}" \
+                    --context flex-nightly \
+                    --file "${KUBECONFIG}" \
+                    --overwrite-existing
+                  kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+                  kubectl --context flex-nightly version
+
+                  release_state="$(
+                    TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
+                      TAUGRID_SYSTEM_NAMESPACE="${TAUGRID_SYSTEM_NAMESPACE}" \
+                      TAUGRID_KUBE_CONTEXT=flex-nightly \
+                      scripts/ci/taugrid-unbounded-stable-nightly-recover.sh inspect
+                  )"
+                  previous_revision="$(jq -r '.revision' <<<"${release_state}")"
+                  if [[ "$(jq -r '.exists' <<<"${release_state}")" != "true" ]]; then
+                    echo "##vso[task.logissue type=error]The managed Flex TauGrid release is absent; bootstrap it through the reviewed platform installation before enabling nightly upgrades"
+                    exit 1
+                  fi
+                  if [[ "$(jq -r '.status' <<<"${release_state}")" != "deployed" ]]; then
+                    echo "##vso[task.logissue type=error]Existing TauGrid release is not deployed; repair it before running the nightly"
+                    exit 1
+                  fi
+                  helm get values "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --kube-context flex-nightly \
+                    --output json >"${values_file}"
+
+                  live_values="$(helm get values "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --kube-context flex-nightly \
+                    --all \
+                    --output json)"
+                  if ! jq -e '
+                    .components.kueue.enabled == false
+                    and .components.kuberayOperator.enabled == false
+                    and .baselineQueue.enabled == false
+                    and .["tau-core-controller"].tauCluster.create == false
+                  ' <<<"${live_values}" >/dev/null; then
+                    echo "##vso[task.logissue type=error]The existing Flex release must already use external Kueue, external KubeRay, external queue policy, and an external TauCluster; refusing to transfer ownership during a nightly"
+                    exit 1
+                  fi
+                  if jq -e '.["taugrid-core"].lifecycleRecorder.enabled == true' \
+                    <<<"${live_values}" >/dev/null; then
+                    echo "##vso[task.logissue type=error]The nightly cannot replace the lifecycle recorder with an unpublished image; use a released MCR image or disable the recorder before enabling this deployment"
+                    exit 1
+                  fi
+
+                  nightly_profile="$(jq -cn \
+                    --arg name "${TAU_PROFILE}" \
+                    --arg namespace "${TAU_NAMESPACE}" \
+                    --arg queue "${TAU_QUEUE}" \
+                    '{
+                      name:$name,
+                      description:"TauGrid Flex nightly CPU command lifecycle.",
+                      applicability:{
+                        teams:[],
+                        lanes:["training"],
+                        namespaces:[$namespace]
+                      },
+                      gpusPerWorker:0,
+                      workerCount:1,
+                      mode:"fixed",
+                      placement:"unconstrained",
+                      defaultLocalQueue:$queue,
+                      executionTarget:"singleCluster"
+                    }')"
+                  kubectl --context flex-nightly get clusters.tau.azure.com cluster \
+                    -o json >"${diagnostics_dir}/taucluster-before-deploy.json"
+                  current_profiles="$(jq -c \
+                    '.spec.workloadProfiles // []' \
+                    "${diagnostics_dir}/taucluster-before-deploy.json")"
+                  updated_profiles="$(jq -c \
+                    --argjson profile "${nightly_profile}" \
+                    'map(select(.name != $profile.name)) + [$profile]' \
+                    <<<"${current_profiles}")"
+                  jq --argjson profiles "${updated_profiles}" \
+                    '.["tau-core-controller"].tauCluster.workloadProfiles = $profiles' \
+                    "${values_file}" >"${values_file}.tmp"
+                  mv "${values_file}.tmp" "${values_file}"
+                  jq '.["tau-core-controller"].tauCluster.workloadProfiles' \
+                    "${values_file}" >"${diagnostics_dir}/workload-profiles.json"
+
+                  make -C cli build
+                  scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid
+
+                  install_args=(
+                    cluster install
+                    --context flex-nightly
+                    --release "${TAUGRID_RELEASE}"
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}"
+                    --chart charts/taugrid
+                    --version "$(awk '$1 == "version:" { print $2; exit }' charts/taugrid/Chart.yaml)"
+                    --values "${values_file}"
+                    --timeout 20m
+                    --wait
+                    --atomic
+                    --set "components.kueue.enabled=false"
+                    --set "components.kuberayOperator.enabled=false"
+                    --set "baselineQueue.enabled=false"
+                    --set-string "tau-core-controller.image.repository=${registry}/${repository_prefix}/tau-core-controller"
+                    --set-string "tau-core-controller.image.tag=${image_tag}"
+                    --set-string "tau-core-controller.image.digest="
+                    --set-string "tau-core-controller.image.pullPolicy=Always"
+                    --set-string "taugrid-core.portal.image.repository=${registry}/${repository_prefix}/taugrid-portal"
+                    --set-string "taugrid-core.portal.image.tag=${image_tag}"
+                    --set-string "taugrid-core.portal.image.digest="
+                    --set-string "taugrid-core.portal.image.pullPolicy=Always"
+                    --set-string "taugrid-core.stellar.image.repository=${registry}/${repository_prefix}/taugrid-portal"
+                    --set-string "taugrid-core.stellar.image.tag=${image_tag}"
+                    --set-string "taugrid-core.stellar.image.pullPolicy=Always"
+                    --set-string "gpu-monitoring.metricsCollector.image.repository=${registry}/${repository_prefix}/gpu-metrics-collector"
+                    --set-string "gpu-monitoring.metricsCollector.image.tag=${image_tag}"
+                    --set-string "gpu-monitoring.metricsCollector.image.digest="
+                  )
+
+                  cli/bin/tau "${install_args[@]}" --dry-run \
+                    >"${render_file}" 2>&1
+                  printf 'Dry-run rendering completed successfully for source %s.\n' \
+                    "${source_version}" >"${diagnostics_dir}/render-summary.txt"
+                  recover_failed_deployment() {
+                    local failure_reason="$1"
+                    local recovery_reason
+                    if recovery_reason="$(
+                      TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
+                        TAUGRID_SYSTEM_NAMESPACE="${TAUGRID_SYSTEM_NAMESPACE}" \
+                        TAUGRID_KUBE_CONTEXT=flex-nightly \
+                        TAUGRID_PREVIOUS_REVISION="${previous_revision}" \
+                        TAUGRID_DIAGNOSTICS_DIR="${diagnostics_dir}" \
+                        scripts/ci/taugrid-unbounded-stable-nightly-recover.sh recover
+                    )"; then
+                      write_result failed \
+                        "${failure_reason}; ${recovery_reason}" \
+                        "${previous_revision}"
+                    else
+                      write_result failed \
+                        "${failure_reason}; recovery failed" \
+                        "${previous_revision}"
+                    fi
+                  }
+                  if ! cli/bin/tau "${install_args[@]}" \
+                    >"${diagnostics_dir}/install-output.txt" 2>&1; then
+                    recover_failed_deployment \
+                      "installation or embedded readiness validation failed"
+                    exit 1
+                  fi
+
+                  current_revision="$(helm status "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --kube-context flex-nightly \
+                    --output json | jq -r '.version | tostring')"
+                  if ! cli/bin/tau cluster validate installation \
+                    --context flex-nightly \
+                    --release "${TAUGRID_RELEASE}" \
+                    --namespace "${TAUGRID_SYSTEM_NAMESPACE}" \
+                    --timeout 10m \
+                    >"${diagnostics_dir}/validation.txt" 2>&1; then
+                    recover_failed_deployment "post-install readiness validation failed"
+                    exit 1
+                  fi
+
+                  write_result passed "" "${previous_revision}" "${current_revision}"
+              env:
+                FLEX_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+                FLEX_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+                TAUGRID_RELEASE: $(FLEX_NIGHTLY_TAUGRID_RELEASE)
+                TAUGRID_SYSTEM_NAMESPACE: $(FLEX_NIGHTLY_TAUGRID_SYSTEM_NAMESPACE)
+                TAU_NAMESPACE: $(FLEX_NIGHTLY_TAU_NAMESPACE)
+                TAU_QUEUE: $(FLEX_NIGHTLY_TAU_QUEUE)
+                TAU_PROFILE: $(FLEX_NIGHTLY_TAU_JOB_PROFILE)
+
+            - task: PublishPipelineArtifact@1
+              displayName: Publish deployment diagnostics
+              condition: always()
+              inputs:
+                targetPath: $(Build.ArtifactStagingDirectory)/deployment
+                artifact: taugrid-flex-deployment-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: tau_cli_smoke
+    displayName: Tau CLI functional smoke
+    dependsOn: deploy_flex
+    timeoutInMinutes: 60
+    steps:
+      - checkout: self
+
+      - task: GoTool@0
+        displayName: Use Go 1.26.9
+        inputs:
+          version: 1.26.9
+
+      - bash: make -C cli build
+        displayName: Build Tau CLI from current main
+
+      - task: AzureCLI@2
+        displayName: Run Tau command lifecycle on Flex
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --context flex-nightly \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            scripts/ci/taugrid-flex-nightly-cli-smoke.sh
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_TAU_NAMESPACE: $(FLEX_NIGHTLY_TAU_NAMESPACE)
+          FLEX_NIGHTLY_TAU_QUEUE: $(FLEX_NIGHTLY_TAU_QUEUE)
+          FLEX_NIGHTLY_TAU_JOB_PROFILE: $(FLEX_NIGHTLY_TAU_JOB_PROFILE)
+          FLEX_NIGHTLY_TAU_RAY_PROFILE: $(FLEX_NIGHTLY_TAU_RAY_PROFILE)
+          FLEX_NIGHTLY_TAU_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/tau-cli-smoke
+          TAUGRID_RELEASE: $(FLEX_NIGHTLY_TAUGRID_RELEASE)
+          TAUGRID_SYSTEM_NAMESPACE: $(FLEX_NIGHTLY_TAUGRID_SYSTEM_NAMESPACE)
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish Tau CLI smoke results
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/tau-cli-smoke
+          artifact: taugrid-flex-cli-smoke-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: gpu_queue_routing
+    displayName: Tau GPU class queue routing
+    dependsOn: tau_cli_smoke
+    timeoutInMinutes: 90
+    steps:
+      - checkout: self
+
+      - bash: scripts/ci/tests/taugrid-flex-nightly-gpu-routing-smoke_test.sh
+        displayName: Validate GPU queue-routing smoke
+
+      - task: GoTool@0
+        displayName: Use Go 1.26.9
+        inputs:
+          version: 1.26.9
+
+      - bash: make -C cli build
+        displayName: Build Tau CLI from current main
+
+      - task: DownloadPipelineArtifact@2
+        displayName: Download hardware contract
+        inputs:
+          artifact: taugrid-flex-hardware-contract
+          path: $(Pipeline.Workspace)/taugrid-flex-hardware-contract
+
+      - task: AzureCLI@2
+        displayName: Verify A100, H100, and H200 admission
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --context flex-nightly \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            TAU_BIN="$(Build.SourcesDirectory)/cli/bin/tau" \
+              scripts/ci/taugrid-flex-nightly-gpu-routing-smoke.sh
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_HARDWARE_CONTRACT: $(Pipeline.Workspace)/taugrid-flex-hardware-contract/hardware-matrix.json
+          FLEX_NIGHTLY_GPU_ROUTING_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/gpu-routing-smoke
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish GPU routing results
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/gpu-routing-smoke
+          artifact: taugrid-flex-gpu-routing-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: gpu_profile_smoke
+    displayName: Tau GPU workload-profile validation
+    dependsOn: gpu_queue_routing
+    timeoutInMinutes: 240
+    steps:
+      - checkout: self
+
+      - task: GoTool@0
+        displayName: Use Go 1.26.9
+        inputs:
+          version: 1.26.9
+
+      - bash: make -C cli build
+        displayName: Build Tau CLI from current main
+
+      - task: AzureCLI@2
+        displayName: Dry-run all and live-test representative GPU profiles
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --context flex-nightly \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            scripts/ci/taugrid-flex-nightly-gpu-profile-smoke.sh
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_GPU_PROFILE_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/gpu-profile-smoke
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish GPU profile results
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/gpu-profile-smoke
+          artifact: taugrid-flex-gpu-profile-smoke-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: storage_smoke
+    displayName: Cross-region Azure Blob PVC smoke
+    dependsOn: gpu_profile_smoke
+    timeoutInMinutes: 60
+    steps:
+      - checkout: self
+
+      - task: AzureCLI@2
+        displayName: Validate Blob persistence from A100 and H200 sites
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --context flex-nightly \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            scripts/ci/taugrid-flex-nightly-storage-smoke.sh
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_STORAGE_NAMESPACE: $(AKS_AI_RUNTIME_FLEX_STORAGE_NAMESPACE)
+          FLEX_NIGHTLY_STORAGE_PVC: $(AKS_AI_RUNTIME_FLEX_STORAGE_PVC)
+          FLEX_NIGHTLY_STORAGE_ACCOUNT: $(AKS_AI_RUNTIME_FLEX_STORAGE_ACCOUNT)
+          FLEX_NIGHTLY_STORAGE_ACCOUNT_REGION: $(AKS_AI_RUNTIME_FLEX_STORAGE_ACCOUNT_REGION)
+          FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
+          FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
+          FLEX_NIGHTLY_A100_REGION: $(FLEX_NIGHTLY_STORAGE_WESTEUROPE_REGION)
+          FLEX_NIGHTLY_H200_REGION: $(FLEX_NIGHTLY_STORAGE_EASTUS2EUAP_REGION)
+          FLEX_NIGHTLY_STORAGE_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/storage-smoke
+          RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish cross-region storage results
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/storage-smoke
+          artifact: taugrid-flex-storage-smoke-$(Build.BuildId)-$(System.JobAttempt)
+
   - job: hardware_matrix
     displayName: Ray Serve and Ray Train hardware matrix
-    dependsOn: preflight
+    dependsOn: storage_smoke
     timeoutInMinutes: 300
     steps:
       - checkout: self
@@ -186,6 +922,13 @@ jobs:
             summary="${artifact_dir}/matrix-results.jsonl"
             mkdir -p "${bundle_dir}"
             : >"${summary}"
+
+            post_deploy_contract="${bundle_dir}/post-deploy-hardware-contract.json"
+            FLEX_NIGHTLY_CONTRACT_FILE="${post_deploy_contract}" \
+              "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" cluster
+            "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" \
+              compare-capability "${contract}" "${post_deploy_contract}"
+            contract="${post_deploy_contract}"
 
             cleanup() {
               rc=$?
@@ -278,7 +1021,10 @@ jobs:
             export E2E_HARDWARE_MATRIX=1
             export MATRIX_NAMESPACE="${namespace}"
             export RAY_E2E_IMAGE
+            export E2E_BUNDLE_DIR="${bundle_dir}/e2e"
             export E2E_RESULT_FILE="${artifact_dir}/e2e-results.jsonl"
+            export E2E_KUSTO_URI
+            export E2E_KUSTO_DB
 
             run_case() {
               local target_json="$1"
@@ -396,6 +1142,8 @@ jobs:
                 name="$(jq -r '.name' <<<"${target}")"
                 if [[ "${name}" == "dgx-spark" ]]; then
                   run_case "${target}" 2 2 1 tau.azure.com/site
+                elif [[ "${name}" == "h100" ]]; then
+                  run_case "${target}" 2 1 2 kubernetes.io/hostname
                 else
                   run_case "${target}" 8 1 8 kubernetes.io/hostname
                   run_case "${target}" 16 2 8 tau.azure.com/site
@@ -403,7 +1151,16 @@ jobs:
               fi
             done < <(jq -c '.targets[]' "${contract}")
 
-            available_targets="$(jq -c '[.targets[] | select(.status == "available") | {name,selector,site:.expected_site}]' "${contract}")"
+            available_targets="$(jq -c '
+              [
+                .targets[]
+                | select(.status == "available")
+                | {name,selector,site:.expected_site}
+              ]
+              | sort_by(.site, .name)
+              | group_by(.site)
+              | map(.[0])
+            ' "${contract}")"
             if [[ "$(jq 'length' <<<"${available_targets}")" -ge 2 ]]; then
               export E2E_MULTISITE_NAMESPACE="${namespace}"
               export E2E_MULTISITE_QUEUE_PREFIX=matrix
@@ -443,9 +1200,12 @@ jobs:
           FLEX_NIGHTLY_DGX_SELECTOR: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR)
           FLEX_NIGHTLY_DGX_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE)
           FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
+          FLEX_NIGHTLY_H100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H100_SITE)
           FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
           H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
+          E2E_KUSTO_URI: $(AKS_AI_RUNTIME_FLEX_KUSTO_ENDPOINT)
+          E2E_KUSTO_DB: $(AKS_AI_RUNTIME_FLEX_KUSTO_RESULTS_DATABASE)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish hardware matrix results
@@ -455,7 +1215,7 @@ jobs:
           artifact: taugrid-flex-hardware-matrix-$(Build.BuildId)-$(System.JobAttempt)
 
   - job: h200_rdma
-    displayName: Optional H200 RDMA and NCCL extension
+    displayName: H200 InfiniBand and NCCL conformance
     dependsOn: hardware_matrix
     condition: and(succeeded(), ${{ eq(parameters.rdmaConformance, true) }})
     timeoutInMinutes: 90
@@ -494,13 +1254,75 @@ jobs:
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
 
             namespace="taugrid-nightly-rdma-$(Build.BuildId)-$(System.JobAttempt)"
+            artifact_dir="$(Build.ArtifactStagingDirectory)/h200-rdma"
+            bundle_dir="${artifact_dir}/diagnostics"
+            preflight_contract="${bundle_dir}/preflight-hardware-contract.json"
+            mkdir -p "${bundle_dir}"
+
+            FLEX_NIGHTLY_CONTRACT_FILE="${preflight_contract}" \
+              "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" cluster
+
             cleanup() {
               rc=$?
               trap - EXIT
               set +e
-              kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" -o wide \
-                >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1
-              kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m
+              cleanup_status=passed
+              cleanup_reason=""
+              capability_status=not-run
+              capability_reason=""
+              postflight_contract="${bundle_dir}/postflight-hardware-contract.json"
+              kubectl get rayjobs,rayclusters,workloads,localqueues,pods,jobs \
+                -n "${namespace}" -o wide >"${bundle_dir}/resources.txt" 2>&1
+              kubectl get events -n "${namespace}" --sort-by=.lastTimestamp \
+                >"${bundle_dir}/events.txt" 2>&1
+              kubectl get nodes -l 'tau.azure.com/site' -o json |
+                jq '[.items[] | {
+                  name: .metadata.name,
+                  site: .metadata.labels["tau.azure.com/site"],
+                  gpu_class: .metadata.labels["tau.azure.com/gpu-class"],
+                  gpu_series: .metadata.labels["kueue.azure.com/gpu-series"],
+                  network_domain: .metadata.labels["tau.azure.com/network-domain"],
+                  accelerator_domain: .metadata.labels["tau.azure.com/accelerator-domain"],
+                  gpu: .status.allocatable["nvidia.com/gpu"],
+                  rdma: .status.allocatable["rdma/rdma_shared_device_a"]
+                }]' >"${bundle_dir}/nodes.json" 2>&1
+              if ! kubectl delete namespace "${namespace}" \
+                --ignore-not-found --wait=true --timeout=15m; then
+                cleanup_status=failed
+                cleanup_reason="namespace deletion command failed"
+                rc=1
+              fi
+              if kubectl get namespace "${namespace}" >/dev/null 2>&1; then
+                echo "##vso[task.logissue type=error]RDMA namespace ${namespace} still exists after cleanup"
+                cleanup_status=failed
+                cleanup_reason="RDMA namespace still exists after cleanup"
+                rc=1
+              elif FLEX_NIGHTLY_CONTRACT_FILE="${postflight_contract}" \
+                "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" cluster; then
+                if "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" \
+                  compare-capability "${preflight_contract}" "${postflight_contract}"; then
+                  capability_status=passed
+                else
+                  echo "##vso[task.logissue type=error]Flex node capability did not recover after RDMA conformance"
+                  capability_status=failed
+                  capability_reason="capability differed from the pre-RDMA contract"
+                  rc=1
+                fi
+              else
+                echo "##vso[task.logissue type=error]Post-RDMA Flex capability inventory failed"
+                capability_status=failed
+                capability_reason="post-RDMA capability inventory failed"
+                rc=1
+              fi
+              jq -n \
+                --arg cleanupStatus "${cleanup_status}" \
+                --arg cleanupReason "${cleanup_reason}" \
+                --arg capabilityStatus "${capability_status}" \
+                --arg capabilityReason "${capability_reason}" \
+                '{
+                  cleanup: {status: $cleanupStatus, reason: $cleanupReason},
+                  capability: {status: $capabilityStatus, reason: $capabilityReason}
+                }' >"${bundle_dir}/rdma-postflight-status.json"
               exit "${rc}"
             }
             trap cleanup EXIT
@@ -536,6 +1358,10 @@ jobs:
             export FINEWEB_CHECKPOINT_INTERVAL
             export FINEWEB_RAYJOB_TIMEOUT_MINUTES
             export RAY_E2E_IMAGE
+            export E2E_BUNDLE_DIR="${bundle_dir}/e2e"
+            export E2E_RESULT_FILE="${artifact_dir}/e2e-results.jsonl"
+            export E2E_KUSTO_URI
+            export E2E_KUSTO_DB
             if [[ -n "${H200_SCHEDULER_RECOVERY_NODE:-}" &&
                   "${H200_SCHEDULER_RECOVERY_NODE}" != '$('* ]]; then
               export FINEWEB_SCHEDULER_RECOVERY_NODE="${H200_SCHEDULER_RECOVERY_NODE}"
@@ -543,32 +1369,115 @@ jobs:
             go test -v -count=1 -timeout 75m \
               -run '^TestFineWebRayTrain16xH200IB$' ./stack/
         env:
+          FLEX_NIGHTLY_DEPLOY_MODE: $(FLEX_NIGHTLY_DEPLOY_MODE)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
+          FLEX_NIGHTLY_MIN_RDMA_NODES: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES)
+          FLEX_NIGHTLY_INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
+          FLEX_NIGHTLY_DGX_SELECTOR: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR)
+          FLEX_NIGHTLY_DGX_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE)
+          FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
+          FLEX_NIGHTLY_H100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H100_SITE)
+          FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
           H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
           FINEWEB_TRAIN_STEPS: $(FINEWEB_TRAIN_STEPS)
           FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)
           FINEWEB_RAYJOB_TIMEOUT_MINUTES: $(FINEWEB_RAYJOB_TIMEOUT_MINUTES)
+          E2E_KUSTO_URI: $(AKS_AI_RUNTIME_FLEX_KUSTO_ENDPOINT)
+          E2E_KUSTO_DB: $(AKS_AI_RUNTIME_FLEX_KUSTO_RESULTS_DATABASE)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish H200 RDMA diagnostics
         condition: always()
         inputs:
-          targetPath: $(Build.ArtifactStagingDirectory)
+          targetPath: $(Build.ArtifactStagingDirectory)/h200-rdma
           artifact: taugrid-flex-h200-rdma-$(Build.BuildId)-$(System.JobAttempt)
+
+  - job: kusto_checks
+    displayName: Portal and Kusto ingestion checks
+    dependsOn:
+      - hardware_matrix
+      - h200_rdma
+    condition: and(always(), ne(dependencies.hardware_matrix.result, 'Skipped'), ne(dependencies.hardware_matrix.result, 'Canceled'))
+    timeoutInMinutes: 20
+    steps:
+      - checkout: self
+
+      - task: AzureCLI@2
+        displayName: Validate Portal ADX discovery and E2E result ingestion
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+              export PATH="${tools_dir}:${PATH}"
+            fi
+
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --context flex-nightly \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            scripts/ci/taugrid-flex-nightly-kusto-check.sh
+        env:
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          FLEX_NIGHTLY_KUSTO_ENDPOINT: $(AKS_AI_RUNTIME_FLEX_KUSTO_ENDPOINT)
+          FLEX_NIGHTLY_KUSTO_QUERY_DATABASE: $(AKS_AI_RUNTIME_FLEX_KUSTO_QUERY_DATABASE)
+          FLEX_NIGHTLY_KUSTO_RESULTS_DATABASE: $(AKS_AI_RUNTIME_FLEX_KUSTO_RESULTS_DATABASE)
+          FLEX_NIGHTLY_PORTAL_NAMESPACE: $(AKS_AI_RUNTIME_FLEX_PORTAL_NAMESPACE)
+          FLEX_NIGHTLY_PORTAL_SERVICE: $(AKS_AI_RUNTIME_FLEX_PORTAL_SERVICE)
+          FLEX_NIGHTLY_PORTAL_WORKSPACE: $(AKS_AI_RUNTIME_FLEX_PORTAL_WORKSPACE)
+          FLEX_NIGHTLY_KUSTO_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/kusto-checks
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish Portal and Kusto results
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)/kusto-checks
+          artifact: taugrid-flex-kusto-checks-$(Build.BuildId)-$(System.JobAttempt)
 
   - job: nightly_report
     displayName: Publish human-readable nightly report
     dependsOn:
+      - taucluster_reconcile
       - preflight
+      - build_images
+      - deploy_flex
+      - tau_cli_smoke
+      - gpu_queue_routing
+      - gpu_profile_smoke
+      - storage_smoke
       - hardware_matrix
       - h200_rdma
+      - kusto_checks
     condition: always()
     variables:
+      TAUCLUSTER_JOB_RESULT: $[ dependencies.taucluster_reconcile.result ]
       PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]
+      BUILD_IMAGES_JOB_RESULT: $[ dependencies.build_images.result ]
+      DEPLOY_JOB_RESULT: $[ dependencies.deploy_flex.result ]
+      CLI_SMOKE_JOB_RESULT: $[ dependencies.tau_cli_smoke.result ]
+      GPU_ROUTING_JOB_RESULT: $[ dependencies.gpu_queue_routing.result ]
+      GPU_PROFILE_JOB_RESULT: $[ dependencies.gpu_profile_smoke.result ]
+      STORAGE_JOB_RESULT: $[ dependencies.storage_smoke.result ]
       MATRIX_JOB_RESULT: $[ dependencies.hardware_matrix.result ]
       RDMA_JOB_RESULT: $[ dependencies.h200_rdma.result ]
+      KUSTO_JOB_RESULT: $[ dependencies.kusto_checks.result ]
     steps:
       - checkout: self
 
@@ -593,9 +1502,17 @@ jobs:
         env:
           FLEX_NIGHTLY_PROFILE: ${{ parameters.profile }}
           FLEX_NIGHTLY_RDMA_ENABLED: ${{ parameters.rdmaConformance }}
+          TAUCLUSTER_JOB_RESULT: $(TAUCLUSTER_JOB_RESULT)
           PREFLIGHT_JOB_RESULT: $(PREFLIGHT_JOB_RESULT)
+          BUILD_IMAGES_JOB_RESULT: $(BUILD_IMAGES_JOB_RESULT)
+          DEPLOY_JOB_RESULT: $(DEPLOY_JOB_RESULT)
+          CLI_SMOKE_JOB_RESULT: $(CLI_SMOKE_JOB_RESULT)
+          GPU_ROUTING_JOB_RESULT: $(GPU_ROUTING_JOB_RESULT)
+          GPU_PROFILE_JOB_RESULT: $(GPU_PROFILE_JOB_RESULT)
+          STORAGE_JOB_RESULT: $(STORAGE_JOB_RESULT)
           MATRIX_JOB_RESULT: $(MATRIX_JOB_RESULT)
           RDMA_JOB_RESULT: $(RDMA_JOB_RESULT)
+          KUSTO_JOB_RESULT: $(KUSTO_JOB_RESULT)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish nightly report bundle
