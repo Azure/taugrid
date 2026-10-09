@@ -172,6 +172,55 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 	}
 }
 
+func TestRenderShmSizeAppliesToHeadAndWorkers(t *testing.T) {
+	for _, tc := range []struct{ shmSize, want string }{{"", "16Gi"}, {"64Gi", "64Gi"}} {
+		out, err := Render(Options{
+			Name:            "shm-ray",
+			Namespace:       "tau",
+			ScriptName:      "train.py",
+			Script:          []byte("print('ok')\n"),
+			Workers:         2,
+			GPUsPerWorker:   8,
+			ShmSize:         tc.shmSize,
+			TopologyOptions: topology.Options{QueueName: "jobqueue"},
+		})
+		if err != nil {
+			t.Fatalf("ShmSize=%q: %v", tc.shmSize, err)
+		}
+		cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+		head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		for podName, pod := range map[string]map[string]any{"head": head, "worker": worker} {
+			size := ""
+			for _, raw := range pod["volumes"].([]any) {
+				vol := raw.(map[string]any)
+				if vol["name"] == "dshm" {
+					size, _ = vol["emptyDir"].(map[string]any)["sizeLimit"].(string)
+				}
+			}
+			if size != tc.want {
+				t.Errorf("ShmSize=%q: %s dshm sizeLimit=%q, want %q", tc.shmSize, podName, size, tc.want)
+			}
+		}
+	}
+}
+
+func TestRenderRejectsInvalidShmSize(t *testing.T) {
+	_, err := Render(Options{
+		Name:            "bad-shm-ray",
+		Namespace:       "tau",
+		ScriptName:      "train.py",
+		Script:          []byte("print('ok')\n"),
+		Workers:         1,
+		GPUsPerWorker:   1,
+		ShmSize:         "-8Gi",
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "runtime.shm_size") {
+		t.Fatalf("err=%v, want runtime.shm_size error", err)
+	}
+}
+
 func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	out, err := Render(Options{
 		Name:               "ray-smoke",

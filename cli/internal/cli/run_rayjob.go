@@ -236,6 +236,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 			RedactSecrets:      o.dryRun == "client",
 			SecurityMode:       o.securityMode,
 			RDMA:               runconfig.NormalizeRDMA(o.rdma),
+			ShmSize:            o.shmSize,
 			DataPVC:            dataPVC,
 			Profile:            p,
 			TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),

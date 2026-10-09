@@ -179,6 +179,9 @@ type Options struct {
 	// RDMA opts the Job into network-domain topology placement and injects the
 	// IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities NCCL NET/IB needs.
 	RDMA RDMAOptions
+	// ShmSize, when set, mounts a memory-backed /dev/shm of this size for any
+	// launcher. Empty keeps the torchrun multi-process default.
+	ShmSize string
 
 	// OutputDir, if set, advertises the durable result path on the pod via
 	// the TAU_OUTPUT_DIR env var. Setting this does not otherwise affect
@@ -270,6 +273,9 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	}
 	if o.Retry < 0 {
 		return nil, fmt.Errorf("--retry must be >= 0, got %d", o.Retry)
+	}
+	if err := runconfig.ValidateShmSize(o.ShmSize); err != nil {
+		return nil, err
 	}
 
 	image, err := resolveImage(p, o)
@@ -919,12 +925,16 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 
 	// /dev/shm: PyTorch DDP uses shared memory for inter-process IPC. The
 	// default 64MB is too small for multi-GPU training; mount an emptyDir
-	// backed by memory. RDMA workloads get a larger default (32Gi).
-	if o.Launcher == "torchrun" && (o.ProcessesPerNode > 1 || o.Nodes > 1) && !hasVolume(pod, "dshm") {
-		shmSize := "16Gi"
+	// backed by memory. RDMA workloads get a larger default (32Gi). An
+	// explicit ShmSize applies to every launcher (e.g. vLLM servers).
+	shmSize := o.ShmSize
+	if shmSize == "" && o.Launcher == "torchrun" && (o.ProcessesPerNode > 1 || o.Nodes > 1) {
+		shmSize = "16Gi"
 		if o.RDMA.Enabled {
 			shmSize = runconfig.DefaultRDMAShmSize
 		}
+	}
+	if shmSize != "" && !hasVolume(pod, "dshm") {
 		shmVol := map[string]any{
 			"name":     "dshm",
 			"emptyDir": map[string]any{"medium": "Memory", "sizeLimit": shmSize},

@@ -80,6 +80,7 @@ var fieldCatalog = map[string]FieldInfo{
 	"runtime.security.mode": {Status: statusDirectOnly, Description: "Apply Kubernetes Restricted Pod Security fields to every generated container and init container.", Values: []string{SecurityModeRestricted}},
 	"runtime.rdma":          {Status: statusSupported, Description: "RDMA runtime and topology placement for InfiniBand workloads. Requires one network domain through Kueue TAS, adds IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities, and configures shared memory."},
 	"runtime.rdma.enabled":  {Status: statusSupported, Description: "Enable RDMA runtime setup and network-domain topology placement.", Default: "false"},
+	"runtime.shm_size":      {Status: statusDirectOnly, Description: "Memory-backed /dev/shm capacity as a positive Kubernetes quantity, e.g. 64Gi. Direct Jobs get the mount for any launcher; direct RayJobs apply it to the head and every worker. The emptyDir counts against the pod memory limit.", Default: "Jobs: 16Gi for multi-process torchrun (32Gi with runtime.rdma), none otherwise; RayJobs: 16Gi"},
 
 	"compute":                       {Status: statusSupported, Description: "Workload sizing and dispatch hints."},
 	"compute.workers":               {Status: statusSupported, Description: "Ray execution-worker count. Generated RayJobs add a separate control-only head on the system node pool.", Default: "1"},

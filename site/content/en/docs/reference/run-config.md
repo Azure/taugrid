@@ -129,7 +129,7 @@ Main field groups:
 | Group | Purpose |
 |---|---|
 | `name`, `engine`, `entrypoint` | Workload identity and execution mode; `script` aliases `entrypoint`, and the nested `run.*` block adds immutable Job source staging and Ray project-directory shipping |
-| `runtime` | Image, direct-Job container working directory, packages, environment, and optional restricted pod security; top-level `image` is a lowest-priority alias for `runtime.image` |
+| `runtime` | Image, direct-Job container working directory, packages, environment, shared memory size, and optional restricted pod security; top-level `image` is a lowest-priority alias for `runtime.image` |
 | `compute` | Worker, GPU, CPU, and memory intent |
 | `execution` | Launcher, node/process topology, launcher configs, and Ray Tune search settings |
 | `policy` | Explicit operator/accounting overrides |
@@ -191,6 +191,22 @@ runtime:
 ```
 
 TauGrid applies the Kubernetes Restricted Pod Security fields to the Job or RayJob pod and every generated main, sidecar, and init container. Missing container user and group IDs default to numeric `65532`; explicit nonzero IDs are preserved. Rendering fails if a profile requests root, privileged mode, privilege escalation, or added capabilities, and the image must support the selected non-root identity.
+
+## Shared memory
+
+Set `runtime.shm_size` to a positive Kubernetes quantity when a direct Job or RayJob needs a larger memory-backed `/dev/shm`, for example a vLLM server, NCCL with many local ranks, or a PyTorch DataLoader with many workers:
+
+```yaml
+runtime:
+  shm_size: 64Gi
+```
+
+| Engine | Unset | Set |
+|---|---|---|
+| `job` | 16Gi for `torchrun` with more than one process or node (32Gi with `runtime.rdma`); no mount otherwise | Mounted at `/dev/shm` for every launcher |
+| `rayjob` | 16Gi on the head and every worker | Replaces 16Gi on the head and every worker |
+
+The volume is an `emptyDir` with `medium: Memory`, so pages written to `/dev/shm` count against the pod memory limit. Managed workflow manifests (`workflow.file` or `schema_version`) reject this field.
 
 ## Config identity
 

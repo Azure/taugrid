@@ -120,6 +120,8 @@ type Options struct {
 	RedactSecrets   bool
 	SecurityMode    string
 	RDMA            runconfig.NormalizedRDMA
+	// ShmSize overrides the 16Gi memory-backed /dev/shm on head and workers.
+	ShmSize         string
 	DataPVC         string
 	Profile         profile.Profile
 	TopologyOptions topology.Options
@@ -233,6 +235,9 @@ func (o Options) validate() error {
 	}
 	if o.Namespace == "" {
 		return fmt.Errorf("namespace is required")
+	}
+	if err := runconfig.ValidateShmSize(o.ShmSize); err != nil {
+		return err
 	}
 	if strings.TrimSpace(o.ScriptName) == "" {
 		return fmt.Errorf("script name is required")
@@ -1033,8 +1038,18 @@ func volumes(o Options, isHead bool) []any {
 	return append(vols,
 		data,
 		map[string]any{"name": "tau-hot", "emptyDir": map[string]any{}},
-		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
+		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": shmSize(o)}},
 	)
+}
+
+// defaultShmSize is the RayJob /dev/shm capacity when runtime.shm_size is unset.
+const defaultShmSize = "16Gi"
+
+func shmSize(o Options) string {
+	if o.ShmSize != "" {
+		return o.ShmSize
+	}
+	return defaultShmSize
 }
 
 // volumeMounts returns the main container's volume mounts. The script mount is

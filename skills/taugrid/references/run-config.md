@@ -63,6 +63,7 @@ managed manifest; `workflow.extra_scripts`, `main_script`, and
 | `runtime.env_kv` | Managed workflow only; direct Job/RayJob configs reject it |
 | `runtime.pip` | Ray runtime-env packages; direct Jobs must bake dependencies into their image |
 | `runtime.security.mode` | `restricted` applies Restricted Pod Security fields to generated containers/init containers; the image must support running non-root |
+| `runtime.shm_size` | Direct Job/RayJob only: memory-backed `/dev/shm` size, e.g. `64Gi`. Jobs get it for any launcher (default: 16Gi only for multi-process torchrun, 32Gi with RDMA); RayJobs apply it to head and workers (default 16Gi). Counts against the pod memory limit |
 
 Key Vault-backed managed workflows require tenant/client identity, a pod
 ServiceAccount, and one vault across all references; bare secret names also

@@ -22,6 +22,7 @@ import (
 	offloadcontract "github.com/Azure/taugrid/core/metricsoffload"
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // Config is the implementation-backed shape for direct `tau run --config`
@@ -126,6 +127,9 @@ type Runtime struct {
 	EnvKV      map[string]string `yaml:"env_kv"`
 	Security   Security          `yaml:"security"`
 	RDMA       RDMA              `yaml:"rdma"`
+	// ShmSize sets the memory-backed /dev/shm capacity for direct Job and
+	// RayJob pods. Empty keeps the engine defaults.
+	ShmSize string `yaml:"shm_size"`
 }
 
 // RDMA opts workload containers into RDMA topology placement and the memlock
@@ -134,9 +138,22 @@ type RDMA struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// DefaultRDMAShmSize is the /dev/shm size for RDMA Job workloads when the
-// renderer does not receive an explicit override.
+// DefaultRDMAShmSize is the /dev/shm size for RDMA Job workloads when
+// runtime.shm_size is not set.
 const DefaultRDMAShmSize = "32Gi"
+
+// ValidateShmSize accepts an empty value (engine default) or a positive
+// Kubernetes quantity such as 32Gi.
+func ValidateShmSize(value string) error {
+	if value == "" {
+		return nil
+	}
+	size, err := resource.ParseQuantity(value)
+	if err != nil || size.Sign() <= 0 {
+		return fmt.Errorf("runtime.shm_size must be a positive Kubernetes quantity, such as 32Gi (got %q)", value)
+	}
+	return nil
+}
 
 var qualifiedNameSegmentRE = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
 
@@ -145,8 +162,8 @@ var qualifiedNameSegmentRE = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-
 // anchored and matches a single segment of a qualified resource name.
 func QualifiedNameSegmentRE() *regexp.Regexp { return qualifiedNameSegmentRE }
 
-// NormalizedRDMA is the resolved RDMA configuration. ShmSize is deliberately
-// excluded because the RayJob path manages /dev/shm independently.
+// NormalizedRDMA is the resolved RDMA configuration. /dev/shm sizing is
+// configured separately through runtime.shm_size.
 type NormalizedRDMA struct {
 	Enabled bool
 }
@@ -474,6 +491,9 @@ func (c Config) ValidateDirect() error {
 		return err
 	}
 	if err := c.Runtime.Security.Validate(); err != nil {
+		return err
+	}
+	if err := ValidateShmSize(c.Runtime.ShmSize); err != nil {
 		return err
 	}
 	if err := ValidateLiteralEnvPayloads(c.Runtime.Env); err != nil {
@@ -1031,6 +1051,14 @@ func (c Config) ValidateExecution(engine string) error {
 	}
 	if c.Runtime.RDMA.Enabled && c.Workflow.File != "" {
 		return fmt.Errorf("runtime.rdma cannot be set with workflow.file; configure runtime.rdma in the referenced managed manifest")
+	}
+	if c.Runtime.ShmSize != "" {
+		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
+			return fmt.Errorf("runtime.shm_size requires direct Job or RayJob dispatch and cannot be used with workflow.file")
+		}
+		if err := ValidateShmSize(c.Runtime.ShmSize); err != nil {
+			return err
+		}
 	}
 	var launcher string
 	if c.Execution.Launcher != nil {

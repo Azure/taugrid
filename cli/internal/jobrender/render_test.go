@@ -2194,6 +2194,83 @@ func TestRender_Torchrun_NoDevShm_WhenPPN1(t *testing.T) {
 	}
 }
 
+// devShm returns the dshm emptyDir sizeLimit and whether the main container
+// mounts it at /dev/shm.
+func devShm(t *testing.T, out []byte) (string, bool) {
+	t.Helper()
+	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	size := ""
+	vols, _ := pod["volumes"].([]any)
+	for _, v := range vols {
+		vol := v.(map[string]any)
+		if vol["name"] == "dshm" {
+			emptyDir := vol["emptyDir"].(map[string]any)
+			if emptyDir["medium"] != "Memory" {
+				t.Errorf("dshm volume should be medium=Memory: %v", emptyDir)
+			}
+			size, _ = emptyDir["sizeLimit"].(string)
+		}
+	}
+	c := pod["containers"].([]any)[0].(map[string]any)
+	mounts, _ := c["volumeMounts"].([]any)
+	for _, vm := range mounts {
+		mount := vm.(map[string]any)
+		if mount["name"] == "dshm" && mount["mountPath"] == "/dev/shm" {
+			return size, true
+		}
+	}
+	return size, false
+}
+
+func TestRender_ShmSize_AppliesToPythonLauncher(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:       "vllm-server",
+		Namespace:  "tau",
+		ScriptPath: torchrunScript(t),
+		ShmSize:    "64Gi",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if size, mounted := devShm(t, out); size != "64Gi" || !mounted {
+		t.Errorf("dshm sizeLimit=%q mounted=%v, want 64Gi mounted", size, mounted)
+	}
+}
+
+func TestRender_ShmSize_OverridesTorchrunDefault(t *testing.T) {
+	for _, rdma := range []bool{false, true} {
+		out, err := Render(multiGPUProfile(8), Options{
+			Name:             "ddp-shm-override",
+			Namespace:        "tau",
+			ScriptPath:       torchrunScript(t),
+			Launcher:         "torchrun",
+			ProcessesPerNode: 8,
+			RDMA:             RDMAOptions{Enabled: rdma},
+			ShmSize:          "48Gi",
+		})
+		if err != nil {
+			t.Fatalf("render rdma=%v: %v", rdma, err)
+		}
+		if size, mounted := devShm(t, out); size != "48Gi" || !mounted {
+			t.Errorf("rdma=%v: dshm sizeLimit=%q mounted=%v, want 48Gi mounted", rdma, size, mounted)
+		}
+	}
+}
+
+func TestRender_ShmSize_RejectsInvalidQuantity(t *testing.T) {
+	for _, value := range []string{"0", "-1Gi", "lots"} {
+		_, err := Render(trainProfile(), Options{
+			Name:       "bad-shm",
+			Namespace:  "tau",
+			ScriptPath: torchrunScript(t),
+			ShmSize:    value,
+		})
+		if err == nil || !strings.Contains(err.Error(), "runtime.shm_size") {
+			t.Errorf("ShmSize=%q: err=%v, want runtime.shm_size error", value, err)
+		}
+	}
+}
+
 func TestRender_Torchrun_ExecutionAnnotation(t *testing.T) {
 	script := torchrunScript(t)
 	out, err := Render(multiGPUProfile(4), Options{

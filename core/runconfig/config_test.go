@@ -1288,6 +1288,41 @@ func TestNormalizeEngineCanonicalizesLegacyRayAlias(t *testing.T) {
 	}
 }
 
+func TestRuntimeShmSize(t *testing.T) {
+	for _, engine := range []string{EngineJob, EngineRayJob} {
+		cfg, warnings, err := parseWithDiagnostics([]byte(`name: shm
+engine: `+engine+`
+entrypoint: train.py
+runtime:
+  shm_size: 64Gi
+`), "tau.yaml")
+		if err != nil {
+			t.Fatalf("%s: %v", engine, err)
+		}
+		if len(warnings) != 0 {
+			t.Fatalf("%s: unexpected warnings %v", engine, warnings)
+		}
+		if cfg.Runtime.ShmSize != "64Gi" {
+			t.Fatalf("%s: runtime.shm_size = %q", engine, cfg.Runtime.ShmSize)
+		}
+		if err := cfg.ValidateExecution(engine); err != nil {
+			t.Fatalf("%s: %v", engine, err)
+		}
+	}
+
+	for _, value := range []string{"0", "-1Gi", "lots", "16 Gi"} {
+		err := (Config{Runtime: Runtime{ShmSize: value}}).ValidateDirect()
+		if err == nil || !strings.Contains(err.Error(), "runtime.shm_size must be a positive Kubernetes quantity") {
+			t.Fatalf("ValidateDirect(%q) error = %v", value, err)
+		}
+	}
+
+	managed := Config{Workflow: Workflow{File: "workflow.yaml"}, Runtime: Runtime{ShmSize: "64Gi"}}
+	if err := managed.ValidateExecution(EngineJob); err == nil || !strings.Contains(err.Error(), "cannot be used with workflow.file") {
+		t.Fatalf("workflow.file error = %v", err)
+	}
+}
+
 func TestRuntimeSecurityModeValidation(t *testing.T) {
 	if err := (Security{Mode: SecurityModeRestricted}).Validate(); err != nil {
 		t.Fatal(err)

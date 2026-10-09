@@ -2208,6 +2208,46 @@ func TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage(t *testing.T) {
 	}
 }
 
+func TestRunConfigShmSizeCarriedThroughToRenderer(t *testing.T) {
+	for _, tc := range []struct{ name, config string }{
+		{name: "job", config: `name: shm-job
+engine: job
+entrypoint: serve.py
+compute:
+  gpus: 1
+runtime:
+  image: busybox:1.36
+  shm_size: 64Gi
+`},
+		{name: "rayjob", config: `name: shm-rayjob
+engine: rayjob
+entrypoint: train.py
+compute:
+  workers: 2
+  gpus_per_worker: 1
+runtime:
+  shm_size: 64Gi
+`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, script := range []string{"serve.py", "train.py"} {
+				if err := os.WriteFile(filepath.Join(dir, script), []byte("print('ok')\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := filepath.Join(dir, "tau.yaml")
+			if err := os.WriteFile(config, []byte(tc.config), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+			if !strings.Contains(rendered, "sizeLimit: 64Gi") || strings.Contains(rendered, "sizeLimit: 16Gi") {
+				t.Fatalf("dry-run did not apply runtime.shm_size:\n%s", rendered)
+			}
+		})
+	}
+}
+
 func TestRunConfigRDMACarriedThroughToRenderer(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "train.py")
