@@ -77,6 +77,28 @@ credential_commands="$(grep -Fc "az aks get-credentials" "$PIPELINE")"
 subscription_routes="$(grep -Fc -- '--subscription "${FLEX_NIGHTLY_CLUSTER_SUBSCRIPTION_ID}"' "$PIPELINE")"
 [[ "$credential_commands" -gt 0 && "$credential_commands" -eq "$subscription_routes" ]] ||
   fail "every AKS credential request must explicitly target the Flex cluster subscription"
+missing_context_routes="$(
+  awk '
+    /az aks get-credentials/ {
+      active = 1
+      has_context = 0
+    }
+    active && /--context flex-nightly/ {
+      has_context = 1
+    }
+    active && /--overwrite-existing/ {
+      if (!has_context) {
+        missing++
+      }
+      active = 0
+    }
+    END {
+      print missing + 0
+    }
+  ' "$PIPELINE"
+)"
+[[ "$missing_context_routes" -eq 0 ]] ||
+  fail "every AKS credential request must create the shared flex-nightly context"
 grep -Fq "deployment: deploy_flex" "$PIPELINE" ||
   fail "current main must be deployed through an Azure DevOps deployment job"
 grep -Fq "job: taucluster_reconcile" "$PIPELINE" ||
