@@ -36,7 +36,7 @@ variables:
   - name: azureClusterServiceConnection
     value: aks ai runtime - corp
   - name: azureRegistryServiceConnection
-    value: aks ai runtime - prod
+    value: aks ai runtime - corp
   - name: GOFLAGS
     value: -mod=readonly
   - name: GOTOOLCHAIN

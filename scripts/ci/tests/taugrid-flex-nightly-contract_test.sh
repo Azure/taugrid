@@ -65,12 +65,12 @@ grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
   fail "pipeline must run on the approved 1ES AKS AI Runtime pool"
 grep -Fq "value: aks ai runtime - corp" "$PIPELINE" ||
   fail "cluster operations must use the corp Azure DevOps service connection"
-grep -Fq "value: aks ai runtime - prod" "$PIPELINE" ||
-  fail "registry operations must use the prod Azure DevOps service connection"
+[[ "$(grep -Fc "value: aks ai runtime - corp" "$PIPELINE")" -eq 2 ]] ||
+  fail "cluster and registry operations must use the corp Azure DevOps service connection"
 [[ "$(grep -Fc 'azureSubscription: $(azureClusterServiceConnection)' "$PIPELINE")" -eq 10 ]] ||
   fail "every cluster-facing AzureCLI task must use the corp service connection"
 [[ "$(grep -Fc 'azureSubscription: $(azureRegistryServiceConnection)' "$PIPELINE")" -eq 1 ]] ||
-  fail "only the image publishing task may use the prod service connection"
+  fail "only the image publishing task may use the registry service connection"
 grep -Fq 'value: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)' "$PIPELINE" ||
   fail "pipeline must receive the Flex cluster subscription through an ADO variable"
 credential_commands="$(grep -Fc "az aks get-credentials" "$PIPELINE")"

@@ -404,9 +404,11 @@ DGX selector.
 
 Create the pipeline in the AKS AI Runtime Azure DevOps project from
 `.pipelines/taugrid-flex-nightly.yml`. It uses the existing
-`aks ai runtime - prod` Azure service connection. The selected Ray image must
-include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
-require `linux/arm64` because DGX Spark is arm64.
+`aks ai runtime - corp` Azure service connection for both the Flex cluster and
+the `aksairuntime` registry because both resources are in the Flex subscription.
+The selected Ray image must include `linux/amd64`; manual runs with
+`includeDGXSpark=true` additionally require `linux/arm64` because DGX Spark is
+arm64.
 Configure:
 
 | Name | Secret | Purpose |
