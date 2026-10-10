@@ -55,10 +55,11 @@ type Options struct {
 type Component string
 
 const (
-	ComponentKueue   Component = "Kueue"
-	ComponentKubeRay Component = "KubeRay"
-	ComponentTauCore Component = "Tau controller"
-	ComponentPortal  Component = "Portal"
+	ComponentKueue         Component = "Kueue"
+	ComponentKubeRay       Component = "KubeRay"
+	ComponentTauCore       Component = "Tau controller"
+	ComponentPortal        Component = "Portal"
+	ComponentBaselineQueue Component = "Baseline queue"
 )
 
 type chartComponent struct {
@@ -99,6 +100,9 @@ func SettingsFromValues(helmValues []byte) (ReleaseSettings, error) {
 				Enabled *bool `json:"enabled"`
 			} `json:"portal"`
 		} `json:"taugrid-core"`
+		BaselineQueue struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"baselineQueue"`
 	}
 	if err := json.Unmarshal(helmValues, &values); err != nil {
 		return ReleaseSettings{}, fmt.Errorf("decode Helm release values: %w", err)
@@ -120,6 +124,9 @@ func SettingsFromValues(helmValues []byte) (ReleaseSettings, error) {
 	}
 	if !tauGridCoreEnabled || (values.TauGridCore.Portal.Enabled != nil && !*values.TauGridCore.Portal.Enabled) {
 		disabled = append(disabled, ComponentPortal)
+	}
+	if values.BaselineQueue.Enabled != nil && !*values.BaselineQueue.Enabled {
+		disabled = append(disabled, ComponentBaselineQueue)
 	}
 	return ReleaseSettings{
 		DisabledComponents:  disabled,
@@ -299,7 +306,11 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 			checkTauCluster(ctx, runner),
 		)
 	}
-	results = append(results, checkBaselineQueue(ctx, runner, opts.Release))
+	if slices.Contains(opts.DisabledComponents, ComponentBaselineQueue) {
+		results = append(results, skip("Baseline queue", "baselineQueue.enabled is false in the Helm release"))
+	} else {
+		results = append(results, checkBaselineQueue(ctx, runner, opts.Release))
+	}
 	if slices.Contains(opts.DisabledComponents, ComponentTauCore) {
 		results = append(results, skip("Quota guard", "components.tauCoreController.enabled is false in the Helm release"))
 	} else {

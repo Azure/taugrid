@@ -146,6 +146,21 @@ func TestCheckSkipsDisabledPortalWithoutReadingItsDeployment(t *testing.T) {
 	}
 }
 
+func TestCheckSkipsExternallyManagedBaselineQueue(t *testing.T) {
+	runner := readyRunner()
+	delete(runner, "get clusterqueues --selector app.kubernetes.io/instance=taugrid,app.kubernetes.io/part-of=taugrid --output=json")
+	opts := testOptions()
+	opts.DisabledComponents = []Component{ComponentBaselineQueue}
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("external baseline queue blocked readiness:\n%s", report.Summary())
+	}
+	if !strings.Contains(report.Summary(), "SKIP  Baseline queue") {
+		t.Fatalf("summary missing baseline queue skip:\n%s", report.Summary())
+	}
+}
+
 func TestCheckFindsPortalByStableComponentLabel(t *testing.T) {
 	runner := readyRunner()
 	key := "get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"
@@ -298,6 +313,11 @@ func TestDisabledComponentsReadsChartSwitches(t *testing.T) {
 			name:   "only portal disabled",
 			values: `{"taugrid-core":{"portal":{"enabled":false}}}`,
 			want:   []Component{ComponentPortal},
+		},
+		{
+			name:   "external baseline queue",
+			values: `{"baselineQueue":{"enabled":false}}`,
+			want:   []Component{ComponentBaselineQueue},
 		},
 		{
 			name:   "shorthand bool leaves the subchart installed",

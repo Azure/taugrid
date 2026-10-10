@@ -23,10 +23,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+const kubectlWaitDelay = 2 * time.Second
 
 // Runner runs kubectl with a fixed context (empty = current-context).
 type Runner struct {
@@ -140,6 +143,7 @@ func (r *Runner) Raw(ctx context.Context, extraArgs []string, stdin []byte) (str
 func (r *Runner) RawStream(ctx context.Context, extraArgs []string, stdin []byte, out io.Writer) error {
 	args := append(r.baseArgs(), extraArgs...)
 	cmd := exec.CommandContext(ctx, r.bin(), args...)
+	cmd.WaitDelay = kubectlWaitDelay
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
@@ -162,6 +166,7 @@ func (r *Runner) RawStream(ctx context.Context, extraArgs []string, stdin []byte
 func (r *Runner) ExecInteractive(ctx context.Context, extraArgs []string) error {
 	args := append(r.baseArgs(), extraArgs...)
 	cmd := exec.CommandContext(ctx, r.bin(), args...)
+	cmd.WaitDelay = kubectlWaitDelay
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -170,6 +175,7 @@ func (r *Runner) ExecInteractive(ctx context.Context, extraArgs []string) error 
 
 func (r *Runner) run(ctx context.Context, args []string, stdin []byte) (string, error) {
 	cmd := exec.CommandContext(ctx, r.bin(), args...)
+	cmd.WaitDelay = kubectlWaitDelay
 	if stdin != nil {
 		cmd.Stdin = bytes.NewReader(stdin)
 	}
