@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
@@ -273,7 +274,7 @@ func TestCatalogConnectionRejectsConflictingConfigWorkspaceBeforeActivation(t *t
 	_, _, err = applyAutomaticRunConnection(
 		context.Background(),
 		options,
-		runConnectionSource{Catalog: true, Project: "alpha", Discovery: &discovery},
+		runConnectionSource{Catalog: true, Project: "alpha", Workspace: "alpha-workspace", Discovery: &discovery},
 		false,
 		ensurer,
 	)
@@ -282,8 +283,165 @@ func TestCatalogConnectionRejectsConflictingConfigWorkspaceBeforeActivation(t *t
 		!strings.Contains(err.Error(), `project "alpha"`) {
 		t.Fatalf("expected catalog workspace conflict, got %v", err)
 	}
+
 	if ensurer.calls != 0 {
 		t.Fatalf("workspace conflict activated connection %d times", ensurer.calls)
+	}
+}
+
+func TestCatalogWorkspaceUsesExistingConnectionForClusterAccess(t *testing.T) {
+	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery := workspaceconnection.Discovery{Descriptor: descriptor}
+	options := defaultRunDispatchOptions()
+	options.workspace = "alpha-workspace"
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace: "sample", WorkspaceUID: "sample-uid", ContextName: "catalog-context",
+		Namespace: "sample-ns", Queue: "sample-queue",
+	}}
+	got, connection, err := applyLiveRunConnection(
+		context.Background(),
+		options,
+		runConnectionSource{
+			Catalog: true, Project: "alpha", Workspace: "alpha-workspace", Discovery: &discovery,
+		},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ensurer.calls != 1 || got.workspace != "alpha-workspace" || got.kubeContext != "catalog-context" {
+		t.Fatalf("calls=%d options=%#v", ensurer.calls, got)
+	}
+	if connection.Workspace != "alpha-workspace" ||
+		connection.WorkspaceUID != "" ||
+		connection.Namespace != "" ||
+		connection.Queue != "" {
+		t.Fatalf("selected workspace identity retained descriptor placement: %#v", connection)
+	}
+}
+
+func TestLifecycleCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:       "shared-descriptor",
+		WorkspaceUID:    "shared-uid",
+		ContextName:     "catalog-context",
+		SystemNamespace: "tau-platform",
+		KubeconfigPath:  filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:       "shared-namespace",
+		Queue:           "shared-queue",
+	}
+	ensurer := &fakeRunConnectionEnsurer{connection: connection}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "catalog-context" || namespace != "tau-platform" || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return tauworkspace.Workspace{
+			Metadata: tauworkspace.ObjectMeta{Name: "alpha-workspace", UID: "alpha-uid", Generation: 1},
+			Spec: tauworkspace.WorkspaceSpec{
+				Queue:  "alpha-queue",
+				Target: tauworkspace.WorkspaceTarget{Namespace: "alpha-namespace"},
+			},
+			Status: tauworkspace.WorkspaceStatus{
+				Phase:              "Ready",
+				ObservedGeneration: 1,
+				Target:             tauworkspace.WorkspaceTargetStatus{ResolvedNamespace: "alpha-namespace"},
+				Queue: tauworkspace.WorkspaceQueueStatus{
+					LocalQueue: "alpha-queue", ClusterQueue: "alpha-cq",
+				},
+			},
+		}, nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionFromSource(
+		command,
+		"",
+		"",
+		false,
+		false,
+		runConnectionSource{
+			Git: true, Catalog: true, Project: "alpha", Workspace: "alpha-workspace",
+		},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "catalog-context" || gotNamespace != "alpha-namespace" {
+		t.Fatalf("context=%q namespace=%q", gotContext, gotNamespace)
+	}
+}
+
+func TestLifecycleCatalogProjectRoutesDegradedWorkspace(t *testing.T) {
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:       "shared-descriptor",
+		WorkspaceUID:    "shared-uid",
+		ContextName:     "catalog-context",
+		SystemNamespace: "tau-platform",
+		KubeconfigPath:  filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:       "shared-namespace",
+		Queue:           "shared-queue",
+	}
+	ensurer := &fakeRunConnectionEnsurer{connection: connection}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		_, _, _ string,
+	) (tauworkspace.Workspace, error) {
+		workspace := readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue")
+		workspace.Status.Phase = "Degraded"
+		return workspace, nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionFromSource(
+		command,
+		"",
+		"",
+		false,
+		false,
+		runConnectionSource{
+			Git: true, Catalog: true, Project: "alpha", Workspace: "alpha-workspace",
+		},
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "catalog-context" || gotNamespace != "alpha-namespace" {
+		t.Fatalf("context=%q namespace=%q", gotContext, gotNamespace)
+	}
+}
+
+func TestValidateWorkspaceSelectionRejectsConflicts(t *testing.T) {
+	source := runConnectionSource{Catalog: true, Project: "alpha", Workspace: "alpha-workspace"}
+	for _, tc := range []struct {
+		name, policy, flag, want string
+	}{
+		{"policy and flag", "policy-workspace", "flag-workspace", "--workspace"},
+		{"catalog policy", "other", "", "catalog workspace"},
+		{"catalog flag", "", "other", "catalog workspace"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWorkspaceSelection(source, tc.policy, tc.flag)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	if err := validateWorkspaceSelection(source, "alpha-workspace", "alpha-workspace"); err != nil {
+		t.Fatalf("matching workspace rejected: %v", err)
 	}
 }
 
@@ -577,6 +735,100 @@ func TestLifecycleExplicitContextBypassesCatalogAmbiguity(t *testing.T) {
 	defer restore()
 	if gotContext != "explicit-context" || gotNamespace != "explicit-namespace" || ensurer.calls != 0 {
 		t.Fatalf("context=%q namespace=%q calls=%d", gotContext, gotNamespace, ensurer.calls)
+	}
+}
+
+func TestLifecycleExplicitContextStillResolvesProjectWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "beta-workspace"},
+	})
+	withRunRoutingCWD(t, root)
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().String("context", "", "")
+	if err := command.Flags().Set("context", "explicit-context"); err != nil {
+		t.Fatal(err)
+	}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "explicit-context" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithEnsurer(
+		command,
+		"explicit-context",
+		"",
+		true,
+		false,
+		"alpha",
+		&fakeRunConnectionEnsurer{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "explicit-context" || gotNamespace != "alpha-namespace" {
+		t.Fatalf("context=%q namespace=%q", gotContext, gotNamespace)
+	}
+}
+
+func TestWorkspaceControlPlaneResolutionDoesNotFetchWorkloadPlacement(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	withRunRoutingCWD(t, filepath.Join(root, "alpha"))
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	runLifecycleWorkspaceFetcherOverride = func(
+		*cobra.Command, string, string, string,
+	) (tauworkspace.Workspace, error) {
+		t.Fatal("control-plane resolution fetched TauWorkspace workload placement")
+		return tauworkspace.Workspace{}, nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		ContextName: "catalog-context", KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig"),
+	}}
+
+	gotContext, restore, err := resolveWorkspaceControlPlaneConnectionWithEnsurer(
+		command,
+		"",
+		defaultSystemNamespace(),
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "catalog-context" || ensurer.calls != 1 {
+		t.Fatalf("context=%q calls=%d", gotContext, ensurer.calls)
+	}
+}
+
+func readyTestWorkspace(name, uid, namespace, queue string) tauworkspace.Workspace {
+	return tauworkspace.Workspace{
+		Metadata: tauworkspace.ObjectMeta{Name: name, UID: uid, Generation: 1},
+		Spec: tauworkspace.WorkspaceSpec{
+			Queue:  queue,
+			Target: tauworkspace.WorkspaceTarget{Namespace: namespace},
+		},
+		Status: tauworkspace.WorkspaceStatus{
+			Phase:              "Ready",
+			ObservedGeneration: 1,
+			Target:             tauworkspace.WorkspaceTargetStatus{ResolvedNamespace: namespace},
+			Queue: tauworkspace.WorkspaceQueueStatus{
+				LocalQueue: queue, ClusterQueue: queue + "-cq",
+			},
+		},
 	}
 }
 

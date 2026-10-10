@@ -309,12 +309,17 @@ portal:
   # workspace `tau workspace create` makes by default.
   workspace: taugrid-default
   # Optional metadata-only TauWorkspace directory. When enabled, every Portal
-  # request is resolved from ?workspace=<id> after the trusted auth proxy supplies
-  # the configured Entra user/group headers. Browser-provided namespace/cluster
-  # values cannot override a resolved workspace. Remote clusters are redirected
-  # only to registered HTTPS Portal endpoints; no remote kubeconfigs are loaded.
+  # request is resolved from ?workspace=<id>. Entries normally require identity
+  # from a trusted auth proxy; operators may explicitly expose cluster-wide
+  # entries without per-user RBAC below. Browser-provided namespace/cluster values
+  # cannot override a resolved workspace. Remote clusters are redirected only to
+  # registered HTTPS Portal endpoints; no remote kubeconfigs are loaded.
   workspaceDirectory:
     enabled: false
+    # Allow browser workspace switching without per-user identity only for
+    # directory entries whose authorization.mode is cluster-wide and that omit
+    # users/groups. Workspace-rbac entries always require trusted identity.
+    allowUnauthenticatedClusterWide: false
     localCluster: ""
     endpoints: []
     # Workspace records may opt into experimentsBackend: {url, bearerTokenFile}
@@ -422,7 +427,7 @@ portal:
     # Create the ClusterRole + ClusterRoleBinding granting the portal's
     # ServiceAccount read access to core Services (Ray board discovery), Pods,
     # Events, and RayClusters (Job detail), core Nodes (Cluster Nodes board), and
-    # Kueue LocalQueues/ClusterQueues/Workloads (Jobs board), plus get-only
+    # Kueue LocalQueues/ClusterQueues/Cohorts/Workloads (Jobs and quota boards), plus get-only
     # access to the singleton TauCluster workload profile status. Requires
     # serviceAccount.create=true. Without it, the Jobs, Ray, Cluster Nodes, and
     # profile readiness views degrade while the portal still serves the shell,

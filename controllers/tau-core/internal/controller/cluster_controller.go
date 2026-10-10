@@ -56,6 +56,7 @@ type topologyReconcileState struct {
 	driftCondition       metav1.Condition
 	ownershipCondition   metav1.Condition
 	managedResources     []tauv1alpha1.TauManagedResourceStatus
+	discoveredCapacity   []tauv1alpha1.TauResourceCapacityStatus
 	reconciliationFailed bool
 }
 
@@ -503,6 +504,7 @@ func tauClusterStatus(
 		Nodes:              nodes.status,
 		Queues:             topology.status,
 		WorkloadProfiles:   profiles.status,
+		DiscoveredCapacity: topology.discoveredCapacity,
 		ManagedResources:   topology.managedResources,
 		Conditions:         mergeConditions(cluster.Status.Conditions, conditions),
 	}

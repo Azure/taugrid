@@ -106,24 +106,48 @@ func groupsFromPolicy(pol topology.Policy, namespace string, localByName map[str
 		if p.Disabled {
 			continue
 		}
+		clusterQueueName := p.ClusterQueue
+		if localQueue, ok := localByName[p.QueueName]; ok && strings.TrimSpace(localQueue.Spec.ClusterQueue) != "" {
+			clusterQueueName = strings.TrimSpace(localQueue.Spec.ClusterQueue)
+		}
+		clusterQueue, clusterQueueFound := clusterByName[clusterQueueName]
+		team := p.Team
+		workspace := ""
+		cohort := ""
+		quotaScope := "cluster"
+		if clusterQueueFound {
+			if labeledTeam := strings.TrimSpace(clusterQueue.Metadata.Labels["tau.azure.com/team"]); labeledTeam != "" {
+				team = labeledTeam
+			}
+			workspace = strings.TrimSpace(clusterQueue.Metadata.Labels["tau.azure.com/workspace"])
+			cohort = clusterQueue.Cohort()
+			if workspace != "" {
+				quotaScope = "workspace"
+			} else if cohort != "" {
+				quotaScope = "team"
+			}
+		}
 		key := groupKey{
 			namespace:      namespace,
-			team:           p.Team,
+			team:           team,
 			lane:           p.Lane,
 			gpuClass:       p.GPUClass,
 			queue:          p.QueueName,
-			clusterQueue:   p.ClusterQueue,
+			clusterQueue:   clusterQueueName,
 			resourceFlavor: p.ResourceFlavor,
 		}
 		g := groups[key]
 		if g.Team == "" {
 			g = Group{
 				Namespace:      namespace,
-				Team:           p.Team,
+				Workspace:      workspace,
+				Team:           team,
 				Lane:           p.Lane,
 				GPUClass:       p.GPUClass,
 				Queue:          p.QueueName,
-				ClusterQueue:   p.ClusterQueue,
+				ClusterQueue:   clusterQueueName,
+				Cohort:         cohort,
+				QuotaScope:     quotaScope,
 				ResourceFlavor: p.ResourceFlavor,
 			}
 			if q, ok := localByName[p.QueueName]; ok {
@@ -133,8 +157,8 @@ func groupsFromPolicy(pol topology.Policy, namespace string, localByName map[str
 				g.Reserving = q.Status.ReservingWorkloads
 				g.Conditions = append(g.Conditions, conditionsFrom(q.Status.Conditions)...)
 			}
-			if cq, ok := clusterByName[p.ClusterQueue]; ok {
-				applyClusterQueueQuota(&g, cq, p.ResourceFlavor)
+			if clusterQueueFound {
+				applyClusterQueueQuota(&g, clusterQueue, p.ResourceFlavor)
 			}
 		}
 		g.Presets = append(g.Presets, p.Name)

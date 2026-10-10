@@ -5,6 +5,7 @@ package queuequota
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -48,6 +49,17 @@ func Fetch(ctx context.Context, r RawRunner, opts FetchOptions) (Report, error) 
 		FlavorsRaw:      map[string][]byte{},
 	}
 
+	var cq clusterQueueDoc
+	if err := json.Unmarshal([]byte(cqRaw), &cq); err != nil {
+		return Report{}, fmt.Errorf("parse ClusterQueue %s: %w", cqName, err)
+	}
+	if cohortName := strings.TrimSpace(cq.cohortName()); cohortName != "" {
+		cohortRaw, err := r.Raw(ctx, []string{"get", "cohort.kueue.x-k8s.io", cohortName, "-o", "json"}, nil)
+		if err == nil {
+			in.CohortRaw = []byte(cohortRaw)
+		}
+	}
+
 	if in.LocalQueue != "" && strings.TrimSpace(opts.Namespace) != "" {
 		lqRaw, err := r.Raw(ctx, []string{
 			"-n", opts.Namespace, "get", "localqueue.kueue.x-k8s.io", in.LocalQueue, "-o", "json",
@@ -67,6 +79,21 @@ func Fetch(ctx context.Context, r RawRunner, opts FetchOptions) (Report, error) 
 			continue
 		}
 		in.FlavorsRaw[name] = []byte(raw)
+	}
+	if len(in.CohortRaw) > 0 {
+		var cohort cohortDoc
+		if err := json.Unmarshal(in.CohortRaw, &cohort); err != nil {
+			return Report{}, fmt.Errorf("parse Cohort: %w", err)
+		}
+		for _, name := range cohort.flavorNames() {
+			if _, ok := in.FlavorsRaw[name]; ok {
+				continue
+			}
+			raw, err := r.Raw(ctx, []string{"get", "resourceflavor.kueue.x-k8s.io", name, "-o", "json"}, nil)
+			if err == nil {
+				in.FlavorsRaw[name] = []byte(raw)
+			}
+		}
 	}
 	return Build(in)
 }

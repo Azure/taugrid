@@ -16,6 +16,17 @@
             "externalURL": { "type": "string" }
           }
         },
+        "workspaceDirectory": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "allowUnauthenticatedClusterWide": { "type": "boolean" },
+            "localCluster": { "type": "string" },
+            "endpoints": { "type": "array", "items": { "type": "object" } },
+            "workspaces": { "type": "array", "items": { "type": "object" } }
+          }
+        },
         "entraAuth": {
           "type": "object",
           "additionalProperties": false,

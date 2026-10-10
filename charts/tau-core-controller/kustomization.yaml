@@ -8,6 +8,7 @@ kind: Kustomization
 resources:
   - kustomize/namespace.yaml
   - crds/tau.azure.com_clusters.yaml
+  - crds/tau.azure.com_teams.yaml
   - crds/tau.azure.com_workspaces.yaml
   - crds/tau.azure.com_quotarequests.yaml
   - kustomize/serviceaccount.yaml

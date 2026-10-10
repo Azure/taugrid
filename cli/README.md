@@ -224,11 +224,10 @@ connection Tau activated, `--context <name>` to disambiguate duplicate
 workspace names, `inspect --output json` for automation, and `clear --yes` to
 remove only the local assignment.
 
-During the current single-workspace phase, `cluster-wide` is the normal platform
-shape and supplies policy defaults, but workspace selection is not an
-authorization boundary: the AKS credential can access the cluster, and
-Kubernetes audit records the shared cluster-user identity rather than the
-initiating human. Future multi-workspace isolation uses `workspace-rbac`.
+`cluster-wide` connections can supply shared cluster access, while
+`workspace-rbac` connections enforce namespace-scoped authorization. In either
+case, the selected TauWorkspace supplies namespace, queue, priority, and output
+defaults.
 
 Use the run lifecycle after submission:
 
@@ -265,10 +264,12 @@ schema: tau.projects.v1
 projects:
   vision:
     path: projects/vision
-    connection: projects/vision/tau/workspace.connection.yaml
+    connection: connections/research-cluster.yaml
+    workspace: vision-training
   language:
     path: projects/language
-    connection: projects/language/tau/workspace.connection.yaml
+    connection: connections/research-cluster.yaml
+    workspace: language-training
 ```
 
 Tau selects a project from explicit `--project`, an explicit config path, the
@@ -280,8 +281,24 @@ tau run train --project vision
 tau run status <run-name> --project vision
 ```
 
+`workspace` is optional for backward compatibility. When omitted, the
+connection descriptor's workspace remains the project default. When present,
+the catalog workspace is the project's binding while `connection` continues to
+describe how Tau reaches and authenticates to the cluster, so multiple projects
+may share one connection descriptor.
+
+Workspace declarations are assertions, not a precedence chain. A
+`policy.workspace` value or `--workspace` flag must match the selected
+project's catalog workspace, and `policy.workspace` and `--workspace` must also
+match each other. Tau reports a conflict before activating the connection.
+
 Repositories that require catalog routing should set
 `requirements.minTauVersion: 0.5.0` in their workspace connection descriptor.
+
+For quota inspection, `tau workspace quota show <workspace>` follows the
+workspace status to its actual ClusterQueue. Team-backed workspaces show both
+the workspace allocation and the TauTeam Cohort's shared allocation. These are
+administrative quota levels, not physical GPU/node capacity.
 
 ## Public command surface
 

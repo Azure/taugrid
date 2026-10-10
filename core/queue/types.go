@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package queue builds a researcher-facing view of Kueue queue pressure.
+// Package queue builds a researcher-facing view of Kueue queue pressure and
+// administrative quota.
 package queue
 
 import (
@@ -30,7 +31,7 @@ type Options struct {
 	GPUClass  string
 }
 
-// Snapshot is the machine-readable queue/capacity view returned by Tau.
+// Snapshot is the machine-readable queue/quota view returned by Tau.
 type Snapshot struct {
 	Namespace string   `json:"namespace"`
 	Groups    []Group  `json:"groups"`
@@ -43,12 +44,18 @@ type Group struct {
 	// Namespace is the LocalQueue namespace this group reports on. It is set
 	// on every group so a cluster-wide snapshot can distinguish the same queue
 	// name across namespaces.
-	Namespace        string            `json:"namespace,omitempty"`
-	GPUClass         string            `json:"gpuClass"`
-	Team             string            `json:"team"`
-	Lane             string            `json:"lane"`
-	Queue            string            `json:"queue"`
-	ClusterQueue     string            `json:"clusterQueue"`
+	Namespace    string `json:"namespace,omitempty"`
+	Workspace    string `json:"workspace,omitempty"`
+	GPUClass     string `json:"gpuClass"`
+	Team         string `json:"team"`
+	Lane         string `json:"lane"`
+	Queue        string `json:"queue"`
+	ClusterQueue string `json:"clusterQueue"`
+	Cohort       string `json:"cohort,omitempty"`
+	// QuotaScope distinguishes workspace/team administrative allocation from
+	// legacy cluster queues. None of these values represents physical GPU
+	// capacity; node supply must be observed separately.
+	QuotaScope       string            `json:"quotaScope,omitempty"`
 	ResourceFlavor   string            `json:"resourceFlavor"`
 	Presets          []string          `json:"presets"`
 	QueueFound       bool              `json:"queueFound"`

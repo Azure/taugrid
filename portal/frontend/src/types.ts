@@ -50,6 +50,22 @@ export interface Overview extends Scoped {
     fleetUnavailable?: string; healthUnavailable?: string; queueUnavailable?: string; costUnavailable?: string; rayUnavailable?: string;
   };
 }
+export interface QuotaResource {
+  flavor: string; resource: string; nominal: string;
+  borrowingLimit?: string; lendingLimit?: string; reserved?: string; used?: string; borrowed?: string;
+}
+export interface Quota extends Scoped {
+  legacy: boolean; teamUnavailable?: string;
+  workspace: {
+    name: string; cohort?: string; resources: QuotaResource[];
+    pendingWorkloads: number; reservingWorkloads: number; admittedWorkloads: number;
+    usageAvailable: boolean; reservationAvailable: boolean;
+  };
+  team?: {
+    name: string; resources: QuotaResource[]; weightedShare?: string;
+    usageAvailable: boolean; usageUnavailable?: string;
+  };
+}
 export interface GPU {
   cluster?: string; instance: string; gpu: string; modelName?: string; namespace?: string; pod?: string;
   utilizationPct: number | null; temperatureCelsius: number | null; powerWatts: number | null;

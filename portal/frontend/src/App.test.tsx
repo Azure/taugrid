@@ -127,7 +127,7 @@ describe('Portal route data loading', () => {
     await userEvent.hover(fleetLink);
     await waitFor(() => expect(requests.filter(url => url.includes('/api/portal/nodes'))).toHaveLength(1));
 
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Workspace' }), 'beta');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Project workspace' }), 'beta');
     await waitFor(() => expect(requests.some(url => url.includes('/api/portal/workspaces?workspace=beta'))).toBe(true));
     await waitFor(() => expect(alphaRequestAborted).toBe(true));
     await userEvent.hover(screen.getByRole('link', { name: 'Fleet' }));

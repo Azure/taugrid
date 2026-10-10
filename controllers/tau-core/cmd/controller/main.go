@@ -85,6 +85,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "TauWorkspace")
 		os.Exit(1)
 	}
+	if err := (&corecontroller.TauTeamReconciler{
+		Client:          mgr.GetClient(),
+		SystemNamespace: systemNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TauTeam")
+		os.Exit(1)
+	}
 	if err := (&corecontroller.TauQuotaRequestReconciler{
 		Client:          mgr.GetClient(),
 		SystemNamespace: systemNamespace,

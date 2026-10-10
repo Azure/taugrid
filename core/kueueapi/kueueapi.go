@@ -108,6 +108,9 @@ type ClusterQueue struct {
 		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Spec struct {
+		// Kueue v1beta1 used cohort; v1beta2 uses cohortName.
+		Cohort         string `json:"cohort"`
+		CohortName     string `json:"cohortName"`
 		ResourceGroups []struct {
 			Flavors []struct {
 				Name      string `json:"name"`
@@ -124,6 +127,13 @@ type ClusterQueue struct {
 		FlavorsReservation []FlavorStatus `json:"flavorsReservation"`
 		FlavorsUsage       []FlavorStatus `json:"flavorsUsage"`
 	} `json:"status"`
+}
+
+func (cq ClusterQueue) Cohort() string {
+	if strings.TrimSpace(cq.Spec.CohortName) != "" {
+		return strings.TrimSpace(cq.Spec.CohortName)
+	}
+	return strings.TrimSpace(cq.Spec.Cohort)
 }
 
 type FlavorStatus struct {

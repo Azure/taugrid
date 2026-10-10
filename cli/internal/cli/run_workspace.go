@@ -14,13 +14,29 @@ import (
 
 type workspacePlacement struct {
 	Workspace    string
+	WorkspaceUID string
 	Namespace    string
 	LocalQueue   string
 	ClusterQueue string
 }
 
 func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspaceconnection.ActiveConnection) (workspacePlacement, error) {
-	if !tauworkspace.Ready(w) {
+	return resolveWorkspacePlacementForUse(w, connection, true)
+}
+
+func resolveExistingWorkspacePlacement(
+	w tauworkspace.Workspace,
+	connection workspaceconnection.ActiveConnection,
+) (workspacePlacement, error) {
+	return resolveWorkspacePlacementForUse(w, connection, false)
+}
+
+func resolveWorkspacePlacementForUse(
+	w tauworkspace.Workspace,
+	connection workspaceconnection.ActiveConnection,
+	requireReady bool,
+) (workspacePlacement, error) {
+	if requireReady && !tauworkspace.Ready(w) {
 		return workspacePlacement{}, fmt.Errorf("workspace %q is not Ready (phase=%s)", w.Metadata.Name, w.Status.Phase)
 	}
 	if expected := strings.TrimSpace(connection.Workspace); expected != "" && expected != strings.TrimSpace(w.Metadata.Name) {
@@ -37,6 +53,7 @@ func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspacecon
 
 	placement := workspacePlacement{
 		Workspace:    strings.TrimSpace(w.Metadata.Name),
+		WorkspaceUID: strings.TrimSpace(w.Metadata.UID),
 		Namespace:    firstNonEmpty(w.Status.Target.ResolvedNamespace, w.Spec.Target.Namespace, w.Metadata.Name),
 		LocalQueue:   firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue),
 		ClusterQueue: strings.TrimSpace(w.Status.Queue.ClusterQueue),

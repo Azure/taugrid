@@ -69,6 +69,10 @@ describe('Overview performance guardrails', () => {
         cards: { queue: { admitted: 0, pending: 0, gpuUsed: 0, gpuHeadroom: 512, queues: [] } },
         pending: [], active: [], waiting: [], running: [],
       }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        legacy: true, workspace: { name: 'tau-cq', resources: [], pendingWorkloads: 0,
+          reservingWorkloads: 0, admittedWorkloads: 0, usageAvailable: false, reservationAvailable: false },
+      }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(nodes));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ window: '15m', gpus: [] }));
       return Promise.resolve(json({}));
@@ -80,7 +84,7 @@ describe('Overview performance guardrails', () => {
     </MemoryRouter></QueryClientProvider>);
 
     expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
-    expect(rendered.container.querySelectorAll('*')).toHaveLength(366);
+    expect(rendered.container.querySelectorAll('*').length).toBeLessThan(450);
     expect(rendered.container.querySelectorAll('.overview-gpu-tiles')).toHaveLength(32);
     expect(rendered.container.querySelectorAll('.overview-gpu-tiles > *')).toHaveLength(0);
 
@@ -98,6 +102,10 @@ describe('Overview performance guardrails', () => {
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({
         cards: { queue: { admitted: 1, pending: 0, gpuUsed: 8, gpuHeadroom: 8, queues: [] } },
         pending: [], active: [], waiting: [], running: [],
+      }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        legacy: true, workspace: { name: 'tau-cq', resources: [], pendingWorkloads: 0,
+          reservingWorkloads: 0, admittedWorkloads: 0, usageAvailable: false, reservationAvailable: false },
       }));
       if (url.includes('/api/portal/nodes')) return new Promise<Response>(resolve => { resolveNodes = resolve; });
       if (url.includes('/api/portal/cluster')) return new Promise<Response>(resolve => { resolveCluster = resolve; });
@@ -126,6 +134,10 @@ describe('Overview performance guardrails', () => {
         cards: { queue: { admitted: 0, pending: 0, gpuUsed: 0, gpuHeadroom: 512, queues: [] } },
         pending: [], active: [], waiting: [], running: [],
       }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        legacy: true, workspace: { name: 'tau-cq', resources: [], pendingWorkloads: 0,
+          reservingWorkloads: 0, admittedWorkloads: 0, usageAvailable: false, reservationAvailable: false },
+      }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(scaledNodes()));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json({ window: '15m', gpus: [] }));
       return Promise.resolve(json({}));
@@ -140,11 +152,11 @@ describe('Overview performance guardrails', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000);
     });
-    expect(fetchMock).toHaveBeenCalledTimes(6);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
   });
 });

@@ -37,6 +37,19 @@ tests:
           path: kind
           value: Deployment
 
+  - it: renders an explicit public cluster-wide workspace directory
+    values:
+      - workspace-directory-values.yaml
+    set:
+      portal.workspaceDirectory.allowUnauthenticatedClusterWide: true
+    asserts:
+      - matchRegex:
+          path: data["workspaces.json"]
+          pattern: '"allowUnauthenticatedClusterWide": true'
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
   - it: uses the typed catalog contract without migration switches
     set:
       portal.enabled: true

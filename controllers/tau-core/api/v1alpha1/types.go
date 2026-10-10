@@ -5,6 +5,7 @@ package v1alpha1
 
 import (
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -14,6 +15,7 @@ const (
 	LegacySystemNamespace = "tau-platform"
 
 	KindTauCluster      = "TauCluster"
+	KindTauTeam         = "TauTeam"
 	KindTauWorkspace    = "TauWorkspace"
 	KindTauQuotaRequest = "TauQuotaRequest"
 
@@ -54,6 +56,11 @@ const (
 	WorkspacePhaseReady    = "Ready"
 	WorkspacePhaseDegraded = "Degraded"
 
+	TeamPhasePending  = "Pending"
+	TeamPhaseReady    = "Ready"
+	TeamPhaseDegraded = "Degraded"
+
+	ConditionQuotaReady            = "QuotaReady"
 	ConditionRBACReady             = "RBACReady"
 	ConditionQueueReady            = "QueueReady"
 	ConditionWorkloadIdentityReady = "WorkloadIdentityReady"
@@ -140,6 +147,38 @@ type TauClusterWorkspaceDefaults struct {
 	DefaultQueue string `json:"defaultQueue,omitempty"`
 }
 
+type TauResourceQuota struct {
+	// Flavor is the Kueue ResourceFlavor that provides this resource.
+	// +kubebuilder:validation:MinLength=1
+	Flavor string `json:"flavor"`
+	// Resource is the Kubernetes resource name, for example nvidia.com/gpu.
+	// +kubebuilder:validation:MinLength=1
+	Resource string `json:"resource"`
+	// NominalQuota is the guaranteed quota assigned to this scope.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!string(self).startsWith('-')",message="nominalQuota must be non-negative"
+	NominalQuota resource.Quantity `json:"nominalQuota"`
+	// BorrowingLimit is the maximum additional quota this scope may borrow.
+	// When omitted, TauGrid writes an explicit zero to Kueue.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!string(self).startsWith('-')",message="borrowingLimit must be non-negative"
+	BorrowingLimit *resource.Quantity `json:"borrowingLimit,omitempty"`
+	// LendingLimit is the maximum unused nominal quota this scope may lend.
+	// When omitted, TauGrid writes an explicit zero to Kueue.
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:XValidation:rule="!string(self).startsWith('-')",message="lendingLimit must be non-negative"
+	LendingLimit *resource.Quantity `json:"lendingLimit,omitempty"`
+}
+
+type TauResourceCapacityStatus struct {
+	Flavor   string            `json:"flavor"`
+	Resource string            `json:"resource"`
+	Capacity resource.Quantity `json:"capacity"`
+}
+
 type TauClusterSpec struct {
 	// ManagementMode controls whether TauCluster only reports desired-state
 	// differences or is allowed to reconcile explicitly owned resources.
@@ -186,6 +225,10 @@ type TauClusterStatus struct {
 	Nodes              TauClusterSectionStatus  `json:"nodes,omitempty"`
 	Queues             TauClusterSectionStatus  `json:"queues,omitempty"`
 	WorkloadProfiles   profile.ProfileSetStatus `json:"workloadProfiles,omitempty"`
+	// +listType=map
+	// +listMapKey=flavor
+	// +listMapKey=resource
+	DiscoveredCapacity []TauResourceCapacityStatus `json:"discoveredCapacity,omitempty"`
 	// +listType=atomic
 	ManagedResources []TauManagedResourceStatus `json:"managedResources,omitempty"`
 	// +listType=map
@@ -223,6 +266,48 @@ type PrincipalRef struct {
 	// Name is the external group or team reference in the selected provider.
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
+}
+
+type TauTeamSpec struct {
+	// Quota is the team's aggregate administrative allocation. Workspace
+	// guarantees and the team's shared pool are reconciled from this total.
+	// +listType=map
+	// +listMapKey=flavor
+	// +listMapKey=resource
+	// +kubebuilder:validation:MaxItems=256
+	Quota []TauResourceQuota `json:"quota,omitempty"`
+}
+
+type TauTeamStatus struct {
+	// +kubebuilder:validation:Enum=Pending;Ready;Degraded
+	Phase              string `json:"phase,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	Cohort             string `json:"cohort,omitempty"`
+	CohortUID          string `json:"cohortUID,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:path=teams,singular=team,scope=Namespaced,shortName=tt
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Cohort",type=string,JSONPath=`.status.cohort`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+type TauTeam struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   TauTeamSpec   `json:"spec,omitempty"`
+	Status TauTeamStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type TauTeamList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []TauTeam `json:"items"`
 }
 
 type WorkspaceAuthorization struct {
@@ -306,6 +391,15 @@ type WorkspaceWorkloadIdentity struct {
 
 // +kubebuilder:validation:XValidation:rule="(has(self.authorization) && self.authorization.mode == 'cluster-wide') ? (!has(self.principalRef) && !has(self.kubernetesSubject) && !has(self.role)) : (has(self.principalRef) && has(self.kubernetesSubject) && has(self.role))",message="cluster-wide authorization must omit principalRef, kubernetesSubject, and role; workspace-rbac requires them"
 type TauWorkspaceSpec struct {
+	// TeamRef assigns this workspace to a team quota hierarchy. When omitted,
+	// the workspace keeps the legacy externally managed queue contract.
+	TeamRef *TauClusterObjectReference `json:"teamRef,omitempty"`
+	// Quota is the workspace's guaranteed share of its team's allocation.
+	// +listType=map
+	// +listMapKey=flavor
+	// +listMapKey=resource
+	// +kubebuilder:validation:MaxItems=256
+	Quota             []TauResourceQuota      `json:"quota,omitempty"`
 	Authorization     *WorkspaceAuthorization `json:"authorization,omitempty"`
 	PrincipalRef      *PrincipalRef           `json:"principalRef,omitempty"`
 	KubernetesSubject *KubernetesSubject      `json:"kubernetesSubject,omitempty"`
@@ -330,8 +424,9 @@ type WorkspaceTargetStatus struct {
 }
 
 type WorkspaceQueueStatus struct {
-	LocalQueue   string `json:"localQueue,omitempty"`
-	ClusterQueue string `json:"clusterQueue,omitempty"`
+	LocalQueue      string `json:"localQueue,omitempty"`
+	ClusterQueue    string `json:"clusterQueue,omitempty"`
+	ClusterQueueUID string `json:"clusterQueueUID,omitempty"`
 }
 
 type TauWorkspaceStatus struct {
@@ -418,6 +513,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(GroupVersion,
 		&TauCluster{},
 		&TauClusterList{},
+		&TauTeam{},
+		&TauTeamList{},
 		&TauWorkspace{},
 		&TauWorkspaceList{},
 		&TauQuotaRequest{},

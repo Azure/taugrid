@@ -211,8 +211,11 @@ func TestTauClusterDiscoversMinimalGPUFlavorsAndCapacity(t *testing.T) {
 		if !reflect.DeepEqual(nodeTaints, wantNodeTaints) {
 			t.Fatalf("ResourceFlavor %q nodeTaints = %#v, want %#v", name, nodeTaints, wantNodeTaints)
 		}
-		if got := clusterQueueGPUQuota(t, c, "jobqueue", name); got != wantCapacity {
-			t.Fatalf("ClusterQueue flavor %q GPU quota = %q, want %q", name, got, wantCapacity)
+		if got := discoveredCapacity(t, c, cluster.Name, name); got != wantCapacity {
+			t.Fatalf("discovered flavor %q capacity = %q, want %q", name, got, wantCapacity)
+		}
+		if got := clusterQueueGPUQuota(t, c, queue.GetName(), name); got != wantCapacity {
+			t.Fatalf("legacy ClusterQueue flavor %q quota = %q, want %q", name, got, wantCapacity)
 		}
 		wantSlots := map[string]string{"a100-80gb": "1", "h200-141gb": "2"}[gpuClass]
 		if got := clusterQueueResourceQuota(t, c, "jobqueue", name, torchrunHostSlotResource); got != wantSlots {
@@ -278,8 +281,11 @@ func TestTauClusterDiscoversGPUCapacityAsNodesJoin(t *testing.T) {
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {
 		t.Fatalf("Reconcile() after Node GPU capacity is published error = %v", err)
 	}
-	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
-		t.Fatalf("GPU quota after first Node joins = %q, want 8", got)
+	if got := discoveredCapacity(t, c, cluster.Name, flavorName); got != "8" {
+		t.Fatalf("GPU capacity after first Node joins = %q, want 8", got)
+	}
+	if got := clusterQueueGPUQuota(t, c, queue.GetName(), flavorName); got != "8" {
+		t.Fatalf("legacy GPU quota after first Node joins = %q, want 8", got)
 	}
 
 	secondNode := topologyTestNode("h200-b", map[string]string{
@@ -292,12 +298,15 @@ func TestTauClusterDiscoversGPUCapacityAsNodesJoin(t *testing.T) {
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {
 		t.Fatalf("Reconcile() after second Node joins error = %v", err)
 	}
-	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "16" {
-		t.Fatalf("GPU quota after second Node joins = %q, want 16", got)
+	if got := discoveredCapacity(t, c, cluster.Name, flavorName); got != "16" {
+		t.Fatalf("GPU capacity after second Node joins = %q, want 16", got)
+	}
+	if got := clusterQueueGPUQuota(t, c, queue.GetName(), flavorName); got != "16" {
+		t.Fatalf("legacy GPU quota after second Node joins = %q, want 16", got)
 	}
 }
 
-func TestTauClusterDiscoveredGPUQuotaIsMonotonicAndNotPruned(t *testing.T) {
+func TestTauClusterDiscoveredGPUCapacityTracksScaleDownWithoutPruningFlavor(t *testing.T) {
 	ctx := context.Background()
 	cluster := topologyTestCluster()
 	cluster.Spec.Queues = tauv1alpha1.TauClusterQueuesSpec{
@@ -321,8 +330,8 @@ func TestTauClusterDiscoveredGPUQuotaIsMonotonicAndNotPruned(t *testing.T) {
 		t.Fatalf("initial Reconcile() error = %v", err)
 	}
 	flavorName := discoveredGPUFlavorName("h200-141gb")
-	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
-		t.Fatalf("initial GPU quota = %q, want 8", got)
+	if got := discoveredCapacity(t, c, cluster.Name, flavorName); got != "8" {
+		t.Fatalf("initial GPU capacity = %q, want 8", got)
 	}
 
 	if err := c.Delete(ctx, node); err != nil {
@@ -331,13 +340,31 @@ func TestTauClusterDiscoveredGPUQuotaIsMonotonicAndNotPruned(t *testing.T) {
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {
 		t.Fatalf("Reconcile() after scale-to-zero error = %v", err)
 	}
-	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
-		t.Fatalf("GPU quota after scale-to-zero = %q, want persisted 8", got)
+	if got := discoveredCapacity(t, c, cluster.Name, flavorName); got != "" {
+		t.Fatalf("GPU capacity after scale-to-zero = %q, want no discovered capacity", got)
 	}
+	if got := clusterQueueGPUQuota(t, c, queue.GetName(), flavorName); got != "8" {
+		t.Fatalf("legacy GPU quota after scale-to-zero = %q, want retained 8", got)
+	}
+
 	flavor := newQueueObject(resourceFlavorGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); err != nil {
 		t.Fatalf("ResourceFlavor was pruned after scale-to-zero: %v", err)
 	}
+}
+
+func discoveredCapacity(t *testing.T, c client.Client, clusterName, flavor string) string {
+	t.Helper()
+	var cluster tauv1alpha1.TauCluster
+	if err := c.Get(context.Background(), client.ObjectKey{Name: clusterName}, &cluster); err != nil {
+		t.Fatalf("Get TauCluster %q: %v", clusterName, err)
+	}
+	for _, capacity := range cluster.Status.DiscoveredCapacity {
+		if capacity.Flavor == flavor && capacity.Resource == nvidiaGPUResourceName {
+			return capacity.Capacity.String()
+		}
+	}
+	return ""
 }
 
 func TestTauClusterIgnoresClusterQueueWithoutDiscoveryLabel(t *testing.T) {

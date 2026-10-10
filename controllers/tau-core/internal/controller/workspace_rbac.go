@@ -15,13 +15,13 @@ import (
 
 func (r *TauWorkspaceReconciler) reconcileRBAC(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, string, error) {
 	if authorizationMode(workspace) == tauv1alpha1.AuthorizationModeClusterWide {
-		if err := r.cleanupResearcherRBAC(ctx, workspace.Name, targetNamespace); err != nil {
+		if err := r.cleanupResearcherRBAC(ctx, workspace, targetNamespace); err != nil {
 			return false, "failed to remove subject-specific researcher RBAC for cluster-wide authorization", err
 		}
-		if err := r.cleanupClusterQueueReaderRBAC(ctx, workspace.Name); err != nil {
+		if err := r.cleanupClusterQueueReaderRBAC(ctx, workspace); err != nil {
 			return false, "failed to remove subject-specific ClusterQueue reader RBAC for cluster-wide authorization", err
 		}
-		if err := r.cleanupSystemReaderRBAC(ctx, workspace.Name); err != nil {
+		if err := r.cleanupSystemReaderRBAC(ctx, workspace); err != nil {
 			return false, "failed to remove subject-specific workspace reader RBAC for cluster-wide authorization", err
 		}
 		return true, "workspace relies on pre-existing cluster authorization; the controller grants no researcher access", nil
@@ -30,11 +30,12 @@ func (r *TauWorkspaceReconciler) reconcileRBAC(ctx context.Context, workspace *t
 		return false, "workspace-rbac authorization requires principalRef and kubernetesSubject", nil
 	}
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: targetNamespace}}
-	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace.Name); err != nil {
+	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace); err != nil {
 		return false, "refusing to adopt existing researcher RoleBinding", err
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
 		binding.Labels = workspaceLabels(workspace.Name)
+		setOwnerUIDAnnotation(binding, workspace.UID)
 		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}
 		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, targetNamespace)}
 		return nil
@@ -58,9 +59,13 @@ func authorizationMode(workspace *tauv1alpha1.TauWorkspace) string {
 	return workspace.Spec.Authorization.Mode
 }
 
-func (r *TauWorkspaceReconciler) cleanupResearcherRBAC(ctx context.Context, workspaceName, targetNamespace string) error {
+func (r *TauWorkspaceReconciler) cleanupResearcherRBAC(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace string,
+) error {
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: targetNamespace}}
-	return r.deleteOwnedObject(ctx, binding, workspaceName)
+	return r.deleteOwnedObject(ctx, binding, workspace)
 }
 
 func clusterQueueReaderBindingName(workspaceName string) string {
@@ -77,11 +82,12 @@ func (r *TauWorkspaceReconciler) reconcileClusterQueueReaderRBAC(
 	serviceAccountNamespace string,
 ) error {
 	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName(workspace.Name)}}
-	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace.Name); err != nil {
+	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace); err != nil {
 		return err
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
 		binding.Labels = workspaceLabels(workspace.Name)
+		setOwnerUIDAnnotation(binding, workspace.UID)
 		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterQueueReaderRoleName}
 		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, serviceAccountNamespace)}
 		return nil
@@ -89,9 +95,12 @@ func (r *TauWorkspaceReconciler) reconcileClusterQueueReaderRBAC(
 	return err
 }
 
-func (r *TauWorkspaceReconciler) cleanupClusterQueueReaderRBAC(ctx context.Context, workspaceName string) error {
-	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName(workspaceName)}}
-	return r.deleteOwnedObject(ctx, binding, workspaceName)
+func (r *TauWorkspaceReconciler) cleanupClusterQueueReaderRBAC(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
+	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: clusterQueueReaderBindingName(workspace.Name)}}
+	return r.deleteOwnedObject(ctx, binding, workspace)
 }
 
 func (r *TauWorkspaceReconciler) reconcileWorkloadIdentity(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, string, error) {
@@ -100,7 +109,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkloadIdentity(ctx context.Context, 
 	}
 	wi := workspace.Spec.WorkloadIdentity
 	serviceAccount := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: wi.ServiceAccountName, Namespace: targetNamespace}}
-	if err := r.getAndValidateWorkspaceOwnership(ctx, serviceAccount, workspace.Name); err != nil {
+	if err := r.getAndValidateWorkspaceOwnership(ctx, serviceAccount, workspace); err != nil {
 		return false, "refusing to adopt existing workload identity ServiceAccount", err
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, serviceAccount, func() error {
@@ -110,6 +119,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkloadIdentity(ctx context.Context, 
 		for k, v := range workspaceLabels(workspace.Name) {
 			serviceAccount.Labels[k] = v
 		}
+		setOwnerUIDAnnotation(serviceAccount, workspace.UID)
 		serviceAccount.Labels[labelAzureWIUse] = "true"
 		if serviceAccount.Annotations == nil {
 			serviceAccount.Annotations = map[string]string{}
@@ -126,11 +136,12 @@ func (r *TauWorkspaceReconciler) reconcileWorkloadIdentity(ctx context.Context, 
 func (r *TauWorkspaceReconciler) reconcileSystemReaderRBAC(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
 	name := workspaceReaderRBACName(workspace.Name)
 	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: systemNamespace(r.SystemNamespace)}}
-	if err := r.getAndValidateWorkspaceOwnership(ctx, role, workspace.Name); err != nil {
+	if err := r.getAndValidateWorkspaceOwnership(ctx, role, workspace); err != nil {
 		return err
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
 		role.Labels = workspaceLabels(workspace.Name)
+		setOwnerUIDAnnotation(role, workspace.UID)
 		role.Rules = []rbacv1.PolicyRule{
 			{APIGroups: []string{"tau.azure.com"}, Resources: []string{"workspaces", "workspaces/status"}, ResourceNames: []string{workspace.Name}, Verbs: []string{"get"}},
 			{APIGroups: []string{"tau.azure.com"}, Resources: []string{"quotarequests"}, Verbs: []string{"create", "get"}},
@@ -142,11 +153,12 @@ func (r *TauWorkspaceReconciler) reconcileSystemReaderRBAC(ctx context.Context, 
 		return err
 	}
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: systemNamespace(r.SystemNamespace)}}
-	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace.Name); err != nil {
+	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace); err != nil {
 		return err
 	}
 	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
 		binding.Labels = workspaceLabels(workspace.Name)
+		setOwnerUIDAnnotation(binding, workspace.UID)
 		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: name}
 		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, systemNamespace(r.SystemNamespace))}
 		return nil

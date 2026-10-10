@@ -15,9 +15,12 @@ import (
 
 type clusterQueueDoc struct {
 	Metadata struct {
-		Name string `json:"name"`
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Spec struct {
+		Cohort         string `json:"cohort"`
+		CohortName     string `json:"cohortName"`
 		ResourceGroups []struct {
 			CoveredResources []string `json:"coveredResources"`
 			Flavors          []struct {
@@ -30,6 +33,13 @@ type clusterQueueDoc struct {
 		FlavorsReservation []flavorStatus `json:"flavorsReservation"`
 		FlavorsUsage       []flavorStatus `json:"flavorsUsage"`
 	} `json:"status"`
+}
+
+func (cq clusterQueueDoc) cohortName() string {
+	if cq.Spec.CohortName != "" {
+		return cq.Spec.CohortName
+	}
+	return cq.Spec.Cohort
 }
 
 type flavorResourceQuota struct {
@@ -134,4 +144,32 @@ type resourceFlavorDoc struct {
 			Effect   string `json:"effect,omitempty"`
 		} `json:"tolerations"`
 	} `json:"spec"`
+}
+
+type cohortDoc struct {
+	Metadata struct {
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels"`
+	} `json:"metadata"`
+	Spec struct {
+		ResourceGroups []struct {
+			CoveredResources []string `json:"coveredResources"`
+			Flavors          []struct {
+				Name      string                `json:"name"`
+				Resources []flavorResourceQuota `json:"resources"`
+			} `json:"flavors"`
+		} `json:"resourceGroups"`
+	} `json:"spec"`
+}
+
+func (c cohortDoc) flavorNames() []string {
+	cq := clusterQueueDoc{}
+	cq.Spec.ResourceGroups = c.Spec.ResourceGroups
+	return cq.flavorNames()
+}
+
+func (c cohortDoc) quotasFor(flavor string) []flavorResourceQuota {
+	cq := clusterQueueDoc{}
+	cq.Spec.ResourceGroups = c.Spec.ResourceGroups
+	return cq.quotasFor(flavor)
 }

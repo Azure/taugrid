@@ -60,7 +60,12 @@ func TestKustomizeControllerRoleMatchesTopologyAndGPUFlavorPermissions(t *testin
 		{
 			APIGroups: []string{"kueue.x-k8s.io"},
 			Resources: []string{"clusterqueues"},
-			Verbs:     []string{"get", "list", "watch", "update"},
+			Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+		},
+		{
+			APIGroups: []string{"kueue.x-k8s.io"},
+			Resources: []string{"cohorts"},
+			Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 		},
 		{
 			APIGroups: []string{"kueue.x-k8s.io"},

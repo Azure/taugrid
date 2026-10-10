@@ -133,6 +133,12 @@ checked-in descriptor or local assignment and supports `--output json`.
 `clear --yes` removes only the local assignment. Checked-in descriptors always
 take precedence, and `tau run` uses the same resolution automatically.
 
+`tau workspace quota show <workspace>` follows the TauWorkspace status to the
+actual backing ClusterQueue. For a team-backed workspace it also reads the
+`tau-team-<team>` Cohort and renders separate workspace and team-shared
+administrative quota levels. Neither level is a claim about physical node or
+GPU capacity.
+
 ## `tau run`
 
 `tau run [TARGET] [--config tau.yaml]` is the config-first entry point.
@@ -141,6 +147,12 @@ than a subcommand**: `tau run train --dry-run=client` runs the `run` root with
 `TARGET=train` and `--dry-run=client`, resolving `tau/train.yaml`. See
 [run config](../../reference/run-config/) for the field reference and
 [first run](../../developer-guide/first-run/) for the full walkthrough.
+
+In a monorepo, each `tau.projects.yaml` project may set `workspace` alongside
+its existing `connection`. The workspace binds project policy; the connection
+still describes cluster access and may be shared. `policy.workspace` and
+`--workspace` must agree with that catalog binding (and with each other), or Tau
+fails before activating the connection.
 
 | Subcommand | Purpose |
 |---|---|

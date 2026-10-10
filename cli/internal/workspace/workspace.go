@@ -89,7 +89,21 @@ type WorkspaceWorkloadIdentity struct {
 	TenantID           string `json:"tenantId,omitempty" yaml:"tenantId,omitempty"`
 }
 
+type ObjectReference struct {
+	Name string `json:"name" yaml:"name"`
+}
+
+type WorkspaceResourceQuota struct {
+	Flavor         string `json:"flavor" yaml:"flavor"`
+	Resource       string `json:"resource" yaml:"resource"`
+	NominalQuota   string `json:"nominalQuota" yaml:"nominalQuota"`
+	BorrowingLimit string `json:"borrowingLimit,omitempty" yaml:"borrowingLimit,omitempty"`
+	LendingLimit   string `json:"lendingLimit,omitempty" yaml:"lendingLimit,omitempty"`
+}
+
 type WorkspaceSpec struct {
+	TeamRef           *ObjectReference           `json:"teamRef,omitempty" yaml:"teamRef,omitempty"`
+	Quota             []WorkspaceResourceQuota   `json:"quota,omitempty" yaml:"quota,omitempty"`
 	Authorization     *WorkspaceAuthorization    `json:"authorization,omitempty" yaml:"authorization,omitempty"`
 	PrincipalRef      PrincipalRef               `json:"principalRef,omitempty" yaml:"principalRef,omitempty"`
 	KubernetesSubject KubernetesSubject          `json:"kubernetesSubject,omitempty" yaml:"kubernetesSubject,omitempty"`

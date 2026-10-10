@@ -192,13 +192,20 @@ describe('Portal performance guardrails', () => {
       if (url.includes('/api/portal/overview')) return Promise.resolve(json(overviewData()));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json(inventory));
       if (url.includes('/api/portal/cluster')) return Promise.resolve(json(telemetry));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        workspace: {
+          name: 'tau-ws-default', resources: [], pendingWorkloads: 0,
+          reservingWorkloads: 0, admittedWorkloads: 0, usageAvailable: false, reservationAvailable: false,
+        },
+        legacy: true,
+      }));
       return Promise.resolve(json({}));
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const measured = renderMeasured(<Overview persona="platform"/>);
     expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
 
     expect(document.querySelectorAll('.overview-sites button')).toHaveLength(12);
     expect(document.querySelectorAll('.overview-node')).toHaveLength(8);

@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	"github.com/Azure/taugrid/cli/internal/resume"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
@@ -595,6 +596,54 @@ policy:
 	}
 	if routing.TargetOptions.workspace != "legacy-workspace" {
 		t.Fatalf("config workspace was not preserved: %#v", routing.TargetOptions)
+	}
+}
+
+func TestResumeCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace:       "descriptor-workspace",
+		WorkspaceUID:    "descriptor-uid",
+		ContextName:     "catalog-context",
+		SystemNamespace: defaultSystemNamespace(),
+		KubeconfigPath:  filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:       "descriptor-namespace",
+		Queue:           "descriptor-queue",
+	}}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "catalog-context" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"",
+		"",
+		false,
+		false,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if routing.KubeContext != "catalog-context" || routing.Namespace != "alpha-namespace" {
+		t.Fatalf("routing = %#v", routing)
 	}
 }
 
