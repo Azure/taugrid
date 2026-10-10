@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import math
 import os
 import random
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -57,6 +59,17 @@ from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 
 DEFAULT_FINEWEB_VOCAB_SIZE = 65536
+IB_COUNTER_NAMES = (
+    "port_xmit_data",
+    "port_rcv_data",
+    "port_xmit_packets",
+    "port_rcv_packets",
+    "symbol_error",
+    "link_error_recovery",
+    "link_downed",
+    "port_rcv_errors",
+    "port_xmit_discards",
+)
 
 
 @dataclass(frozen=True)
@@ -177,6 +190,36 @@ def env_int(name: str, default: int) -> int:
     if raw == "":
         return default
     return int(raw)
+
+
+def read_infiniband_counters() -> dict[str, int]:
+    counters: dict[str, int] = {}
+    root = Path("/sys/class/infiniband")
+    if not root.is_dir():
+        return counters
+    for device in sorted(root.iterdir()):
+        for port in sorted((device / "ports").glob("*")):
+            counter_dir = port / "counters"
+            for name in IB_COUNTER_NAMES:
+                path = counter_dir / name
+                try:
+                    value = int(path.read_text(encoding="utf-8").strip())
+                except (OSError, ValueError):
+                    continue
+                key = f"{device.name}/{port.name}/{name}"
+                if name in {"port_xmit_data", "port_rcv_data"}:
+                    key += "_bytes"
+                    value *= 4
+                counters[key] = value
+    return counters
+
+
+def counter_deltas(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
+    return {
+        key: max(0, value - before.get(key, value))
+        for key, value in after.items()
+        if key in before
+    }
 
 
 def effective_vocab_size(configured_vocab_size: int) -> int:
@@ -359,6 +402,7 @@ def save_first_checkpoint(
 def train_loop(config: dict) -> None:
     ctx = train.get_context()
     rank = ctx.get_world_rank()
+    local_rank = ctx.get_local_rank()
     world_size = ctx.get_world_size()
     expected_world_size = int(config["num_workers"])
     if world_size != expected_world_size:
@@ -432,6 +476,13 @@ def train_loop(config: dict) -> None:
     )
 
     first_checkpoint_done = False
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+    ib_before = read_infiniband_counters() if local_rank == 0 else {}
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+    torch.cuda.synchronize(device)
+    started = time.perf_counter()
     for step in range(1, steps + 1):
         if data_mode == "synthetic":
             xb, yb = get_synthetic_batch(batch_size, block_size, vocab_size, rank, step, device)
@@ -464,6 +515,50 @@ def train_loop(config: dict) -> None:
 
     if not first_checkpoint_done:
         raise RuntimeError(f"rank={rank} finished {steps} steps without writing a checkpoint")
+
+    torch.cuda.synchronize(device)
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+    duration_seconds = time.perf_counter() - started
+    ib_after = read_infiniband_counters() if local_rank == 0 else {}
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
+    local_ib_metrics = {
+        "rank": rank,
+        "local_rank": local_rank,
+        "hostname": socket.gethostname(),
+        "sampled": bool(ib_before and ib_after),
+        "counters": counter_deltas(ib_before, ib_after),
+    }
+    gathered_ib_metrics: list[dict] = [None] * world_size if rank == 0 else None
+    dist.gather_object(local_ib_metrics, gathered_ib_metrics, dst=0)
+
+    duration_tensor = torch.tensor(duration_seconds, dtype=torch.float64, device=device)
+    dist.all_reduce(duration_tensor, op=dist.ReduceOp.MAX)
+    global_duration_seconds = float(duration_tensor.item())
+    global_tokens = world_size * batch_size * block_size * steps
+    if rank == 0:
+        print(
+            "FINEWEB_PERF_METRICS_JSON "
+            + json.dumps(
+                {
+                    "duration_seconds": global_duration_seconds,
+                    "global_tokens": global_tokens,
+                    "tokens_per_second": global_tokens / global_duration_seconds,
+                    "steps": steps,
+                    "world_size": world_size,
+                    "batch_size_per_rank": batch_size,
+                    "block_size": block_size,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        print(
+            "FINEWEB_IB_METRICS_JSON "
+            + json.dumps({"ranks": gathered_ib_metrics}, sort_keys=True),
+            flush=True,
+        )
 
 
 def final_metrics_from_result(result) -> dict:

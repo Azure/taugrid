@@ -30,13 +30,9 @@
 # blob-training /data PVC (applied separately from applications/taugrid/storage/
 # — pick Premium Blob or Lustre) all have a home.
 #
-# Pod Security: enforce=baseline is the real security floor (blocks privileged,
-# hostNetwork, host mounts, etc.). warn/audit are deliberately set to baseline
-# (not restricted) to match enforce: typical GPU training images run as root
-# and use the device plugin without restricted-level hardening
-# (runAsNonRoot / seccompProfile / dropped caps), so restricted-level warnings
-# would fire on every apply and bury real drift in noise. Raising enforce to
-# restricted here would break normal GPU jobs — keep enforce=baseline.
+# Pod Security: enforce=baseline is the compatibility floor for normal GPU
+# images. warn/audit stay restricted so the shared namespace retains visibility
+# into hardening gaps without blocking those workloads.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -46,9 +42,9 @@ metadata:
     tau.azure.com/gpu-queue: enabled
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/enforce-version: latest
-    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
-    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/audit-version: latest
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
@@ -91,10 +87,8 @@ metadata:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
   nodeLabels:
-    tau.azure.com/provider: azure
     kueue.azure.com/gpu-series: nc-h100-v5
     tau.azure.com/gpu-class: h100-95gb
-    tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
   topologyName: taugrid-gpu-topology
 ---
@@ -309,13 +303,13 @@ spec:
       flavors:
         - name: tau-system-v2
           resources:
-            - { name: cpu,    nominalQuota: "10000" }
+            - { name: cpu,    nominalQuota: 10k     }
             - { name: memory, nominalQuota: 100Ti   }
             - { name: gpu.nvidia.com, nominalQuota: "0" }
             - { name: nvidia.com/gpu, nominalQuota: "0" }
         - name: tau-gpu-a100-80gb-v2
           resources: &gpu-quota
-            - { name: cpu,            nominalQuota: "10000" }
+            - { name: cpu,            nominalQuota: 10k     }
             - { name: memory,         nominalQuota: 100Ti   }
             - { name: gpu.nvidia.com, nominalQuota: "64"    }
             - { name: nvidia.com/gpu, nominalQuota: "64"    }

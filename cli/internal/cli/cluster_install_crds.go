@@ -15,12 +15,13 @@ import (
 	"github.com/Azure/taugrid/cli/internal/installationcheck"
 )
 
-func upgradeTauGridCRDs(cmd *cobra.Command, runner installationcheck.Runner, spec clusterInstallSpec) error {
-	var rendered bytes.Buffer
-	if err := runClusterInstallHelm(cmd, spec, &rendered, clusterInstallRenderArgs(spec)); err != nil {
-		return fmt.Errorf("render TauGrid CRDs before upgrade: %w", err)
-	}
-	crds, err := tauGridCRDManifest(rendered.Bytes())
+func upgradeTauGridCRDs(
+	cmd *cobra.Command,
+	runner installationcheck.Runner,
+	spec clusterInstallSpec,
+	rendered []byte,
+) error {
+	crds, err := tauGridCRDManifest(rendered)
 	if err != nil {
 		return err
 	}

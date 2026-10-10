@@ -277,9 +277,16 @@ The PR-gated chart integration workflow triggers on PRs touching `charts/**`,
 
 The `.pipelines/taugrid-flex-nightly.yml` Azure DevOps pipeline runs nightly
 against the persistent `aks-ai-runtime-flex` cluster on the
-`1es-aks-ai-runtime-ado-eastus2` pool. Its first job is deliberately
-non-mutating: `scripts/ci/taugrid-flex-nightly-preflight.sh` inventories DGX
-Spark, A100, and H200 nodes; subtracts active GPU requests; validates each
+`1es-aks-ai-runtime-ado-eastus2` pool. Its first job reconciles the externally
+owned TauCluster singleton without taking ownership of shared queues: it merges
+the current chart's reviewed GPU VM-size catalog with cluster-specific rules,
+defers workload-profile mutation while an older CRD/controller may still be
+serving, and requires the controller to discover A100, H100, and H200 capacity.
+After the current chart upgrades the Tau CRDs and controller, the deployment
+migrates legacy profile placements, preserves cluster-specific profiles, and
+appends `nightly.cpu.1x`. The following
+non-mutating `scripts/ci/taugrid-flex-nightly-preflight.sh` job inventories DGX
+Spark, A100, H100, and H200 nodes; subtracts active GPU requests; validates each
 target's site, ResourceFlavor, ClusterQueue, and `taugrid-gpu-topology`
 contract; and emits a machine-readable hardware matrix. Topology or queue drift
 is a configuration failure. Missing or busy hardware is represented as an
@@ -301,6 +308,7 @@ hardware target. Every available target runs:
 |--------|------------|------------------|------------|
 | DGX Spark | 1 worker | 2 workers across two one-GPU hosts | n/a |
 | A100 | 1 worker | 8 workers on one host | 16 workers split 8+8 |
+| H100 | 1 worker | 2 workers on the two-GPU H100 NVL host | n/a |
 | H200 | 1 worker | 8 workers on one host | 16 workers split 8+8 |
 
 Each shape runs Ray Serve online inference and Ray Train synthetic distributed
@@ -311,16 +319,23 @@ that a non-empty checkpoint was serialized. Durable remote checkpoint upload is
 covered only by storage-backed extended workloads.
 Kueue TAS assignments and observed pod placement must match the requested
 same-host or same-site/spread contract. A separate test requires available
-hardware targets to be Running concurrently on distinct authoritative sites.
+representatives from each distinct authoritative site to be Running
+concurrently. Hardware classes sharing one site are covered independently by
+their matrix and queue-routing rows rather than being misrepresented as
+separate sites.
 DGX Spark is temporarily disabled by default because the nodes are shared with
 another active test effort. Set the manual `includeDGXSpark=true` parameter only
 after coordinating exclusive capacity; disabled targets are recorded rather
 than silently omitted.
 
 The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
-profile adds all native and cross-node shapes. `rdmaConformance=true` adds the
-existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
-it is not part of the default hardware matrix.
+profile adds all native and cross-node shapes. The default
+`rdmaConformance=true` gate runs the synthetic 16-GPU H200 FSDP/NCCL test with
+positive InfiniBand evidence. Manual diagnostic runs can disable it explicitly.
+The workload records synchronized distributed-training throughput and
+per-H200-node InfiniBand transmit/receive byte, packet, and link-error deltas.
+The run fails if NCCL falls back to sockets, either node lacks counters, traffic
+does not increase, or an InfiniBand error counter increases.
 
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
@@ -331,28 +346,93 @@ eight advertised target GPUs, seven API-visible target requests, and an
 healthy clusters; any different state fails rather than force-binding a pod.
 
 Nightly currently uses `FLEX_NIGHTLY_DEPLOY_MODE=shared-cluster-controllers`.
-It never mutates cluster-scoped queue or topology objects. Before enabling the
-pipeline, apply the topology-aware v2 flavors and `tau-gpu-cq` contract from
-`cluster-overlays/queues/shared-gpu-queue.yaml` using its documented
-HoldAndDrain migration procedure. The legacy A100 and H200 flavors use
-hostname-only topology and intentionally fail preflight. DGX opt-in additionally
-requires an externally managed topology-aware flavor and quota; the checked-in
-overlay deliberately does not publish the environment-specific DGX selector.
+Each run publishes immutable images from current `main`, atomically upgrades
+the existing managed TauGrid Helm release, validates it, and then exercises the
+current `tau` CLI through config validation, client/server dry-runs, Job and
+RayJob submission, status, logs, listing, and cancellation. The upgrade
+explicitly leaves the shared Kueue and KubeRay installations and baseline queue
+policy disabled in the TauGrid release, so it does not take ownership of those
+platform-managed components. Because this installation keeps
+`tauCluster.create=false`, the dedicated reconciliation job updates the actual
+external TauCluster resource rather than relying on inert Helm values. Node
+labels are reconciled before preflight. Workload profiles are reconciled only
+after the CRD/controller upgrade so legacy `independent`,
+`single-node-nvlink`, and `multi-node-nccl` placements can be migrated to the
+current explicit topology model before appending the dedicated
+`nightly.cpu.1x` zero-GPU profile for the `ray/backfill` CLI lane.
+
+After the CPU CLI lifecycle, a dedicated `tau` routing gate submits one-GPU Jobs
+with explicit `policy.gpu_class` requests for `a100-80gb`, `h100-95gb`, and
+`h200-141gb`. It verifies Kueue admission selected the expected ResourceFlavor,
+then checks that the completed Pod landed on a node carrying the matching GPU
+class and platform series. This separates Tau queue-resolution behavior from
+the larger direct hardware fixtures.
+
+The next gate inventories every GPU profile reported by the deployed
+TauCluster. Any declared GPU profile that is not Ready fails the gate. Every
+Ready profile receives config validation plus client- and server-side `tau run`
+dry-runs using its resolved namespace, LocalQueue, team, lane, worker count, and
+GPUs per worker. Live execution is deduplicated by the tuple
+`gpusPerWorker/workerCount/mode/placement/executionTarget`, so equivalent team
+variants are all dry-run but consume GPU capacity only once. Each live
+representative reserves the profile's full GPU cardinality concurrently through
+Ray actors, runs `nvidia-smi`, verifies unique GPU placements, and is canceled
+before the next shape starts.
+
+After the CLI lifecycle, the nightly mounts one platform-owned Blob CSI PVC
+from both the configured A100 and H200 sites. An A100 Job writes a run-scoped
+marker, an H200 Job reads it and writes a response, and a second A100 Job reads
+the response. This proves persistence through the same Azure Blob claim from
+the westeurope and eastus2euap node sites without creating or deleting storage
+accounts, containers, identities, PVs, or PVCs. Cleanup removes only the
+run-scoped files and Jobs.
+
+The hardware matrix and RDMA job also send their structured test
+outcomes to ADX. A final job reaches the Portal through a Kubernetes
+port-forward, checks `/healthz`, Stellar capabilities, and experiment
+discovery, then queries the `TestOutcomes` table for the current Azure DevOps
+build ID. The nightly fails when Portal discovery returns an error or no
+outcomes arrive before the bounded ingestion deadline.
+
+Before enabling the pipeline, apply the topology-aware v2 flavors and
+`tau-gpu-cq` contract from `cluster-overlays/queues/shared-gpu-queue.yaml` using
+its documented HoldAndDrain migration procedure. The legacy A100, H100, and H200
+flavors use hostname-only topology and intentionally fail preflight. DGX opt-in
+additionally requires an externally managed topology-aware flavor and quota;
+the checked-in overlay deliberately does not publish the environment-specific
+DGX selector.
 
 Create the pipeline in the AKS AI Runtime Azure DevOps project from
 `.pipelines/taugrid-flex-nightly.yml`. It uses the existing
-`aks ai runtime - prod` Azure service connection. The selected Ray image must
-include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
-require `linux/arm64` because DGX Spark is arm64.
+`aks ai runtime - corp` Azure service connection for both the Flex cluster and
+the `aksairuntime` registry because both resources are in the Flex subscription.
+The selected Ray image must include `linux/amd64`; manual runs with
+`includeDGXSpark=true` additionally require `linux/arm64` because DGX Spark is
+arm64.
 Configure:
 
 | Name | Secret | Purpose |
 |------|--------|---------|
 | `AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP`, `AKS_AI_RUNTIME_FLEX_CLUSTER_NAME` | no | Persistent Flex target |
-| `AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE` | no | Environment-specific authoritative site-label values for the default targets |
+| `AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_H100_SITE`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE` | no | Environment-specific authoritative site-label values for the required targets |
 | `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE` | no | Environment-specific DGX selector and site; required only when `includeDGXSpark=true` |
 | `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` | no | Temporary exact node name for the guarded single-worker scheduler recovery; leave unset once the managed scheduler defect is fixed |
-| `AKS_AI_RUNTIME_RAY_E2E_IMAGE` | no | Multi-architecture Ray/CUDA image used on amd64 A100/H200 and arm64 DGX Spark; the matrix installs its pinned PyTorch wheel through Ray runtime environments |
+| `AKS_AI_RUNTIME_RAY_E2E_IMAGE` | no | Multi-architecture Ray/CUDA image used on amd64 A100/H100/H200 and arm64 DGX Spark; the matrix installs its pinned PyTorch wheel through Ray runtime environments |
+| `AKS_AI_RUNTIME_FLEX_ACR_NAME`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_IMAGE_REPOSITORY_PREFIX` | no | ACR and repository prefix for immutable nightly images |
+| `AKS_AI_RUNTIME_FLEX_TAUGRID_RELEASE`, `AKS_AI_RUNTIME_FLEX_TAUGRID_SYSTEM_NAMESPACE` | no | Existing managed Helm release and namespace; the nightly refuses to bootstrap an absent release |
+| `AKS_AI_RUNTIME_FLEX_STORAGE_NAMESPACE`, `AKS_AI_RUNTIME_FLEX_STORAGE_PVC` | no | Pre-provisioned Blob CSI PVC consumed by the cross-region storage smoke |
+| `AKS_AI_RUNTIME_FLEX_STORAGE_ACCOUNT`, `AKS_AI_RUNTIME_FLEX_STORAGE_ACCOUNT_REGION` | no | Backing storage account and expected Azure region |
+| `AKS_AI_RUNTIME_FLEX_STORAGE_WESTEUROPE_REGION`, `AKS_AI_RUNTIME_FLEX_STORAGE_EASTUS2EUAP_REGION` | no | Region contract for the A100 and H200 storage validation sites |
+| `AKS_AI_RUNTIME_FLEX_KUSTO_ENDPOINT`, `AKS_AI_RUNTIME_FLEX_KUSTO_QUERY_DATABASE`, `AKS_AI_RUNTIME_FLEX_KUSTO_RESULTS_DATABASE` | no | Portal ADX endpoint/query database and E2E `TestOutcomes` database |
+| `AKS_AI_RUNTIME_FLEX_PORTAL_NAMESPACE`, `AKS_AI_RUNTIME_FLEX_PORTAL_SERVICE`, `AKS_AI_RUNTIME_FLEX_PORTAL_WORKSPACE` | no | In-cluster Portal service and workspace used for health and ADX discovery checks |
+
+The TauCluster, CLI, GPU-routing, GPU-profile, storage, matrix, RDMA, and Kusto jobs publish
+structured results and diagnostic bundles. GPU-profile cleanup is part of the
+result and fails if the active representative cannot be canceled. Storage
+cleanup is part of the result and fails if run-scoped Blob data or Jobs cannot
+be removed. RDMA cleanup is part of the conformance result: the job fails if its
+namespace remains or if the Flex node capability contract does not return to
+the snapshot taken immediately before the RDMA workload.
 
 The Ray image must be version 2.56.1 or newer because older Ray Serve releases
 are incompatible with the protobuf runtime in current images. The verified

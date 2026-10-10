@@ -419,6 +419,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- end }}
+{{- if $portal.service.create }}
 ---
 apiVersion: v1
 kind: Service
@@ -448,4 +449,5 @@ spec:
     - name: http
       port: {{ $portal.service.port }}
       targetPort: http
+{{- end }}
 {{- end }}

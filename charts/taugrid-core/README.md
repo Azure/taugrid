@@ -89,6 +89,14 @@ helm upgrade --install taugrid-core ./taugrid-core --kube-context my-cluster \
 
 Prewarm, Stellar, Portal, and the lifecycle recorder run in the Helm release namespace. This chart does not create that Namespace object; standalone installs must pass `--namespace <name> --create-namespace`, while `tau cluster install` does so automatically for the umbrella release. A Helm release cannot be moved to another namespace in place. Keep the existing namespace during upgrades, or use an explicit migration plan before uninstalling and reinstalling the release.
 
+For a reviewed new-release transition, `portal.service.create=false` omits a
+pre-existing, externally managed Service. Its selector must match the rendered
+Portal pod's `app` and `app.kubernetes.io/instance` labels; this does not adopt
+or modify the Service. Disable ServiceAccount and RBAC creation separately
+when they are also external. Turning creation off in an existing release can
+delete its previously owned resources and is not a safe ownership-transfer
+mechanism.
+
 `lifecycleRecorder.targetNamespace` is never created here. It is the observed workload namespace, owned by `tau-core-controller` through a `TauWorkspace` or by external queue policy. Enabling the recorder against a namespace that does not exist fails with a message naming the value and those owners, instead of surfacing later as `namespaces "<name>" not found` on the recorder's Role.
 
 ### Historical RayJob logs
