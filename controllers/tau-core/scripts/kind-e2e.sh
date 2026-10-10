@@ -239,6 +239,16 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterQueue:
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: field is immutable
+              x-kubernetes-preserve-unknown-fields: true
           x-kubernetes-preserve-unknown-fields: true
     - name: v1beta2
       served: true
@@ -246,6 +256,16 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterQueue:
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: field is immutable
+              x-kubernetes-preserve-unknown-fields: true
           x-kubernetes-preserve-unknown-fields: true
 ---
 apiVersion: apiextensions.k8s.io/v1
@@ -821,6 +841,37 @@ kubectl -n kind-evaluation get localqueue.kueue.x-k8s.io/default \
   -o jsonpath='{.spec.clusterQueue}' | grep -qx tau-ws-kind-evaluation
 kubectl get namespace kind-training -o jsonpath='{.metadata.labels.tau\.azure\.com/team}' | grep -qx kind-research
 kubectl get namespace kind-evaluation -o jsonpath='{.metadata.labels.tau\.azure\.com/team}' | grep -qx kind-research
+
+echo "== migrating an existing workspace LocalQueue to a team-backed ClusterQueue =="
+kubectl -n "${SYSTEM_NAMESPACE}" patch "workspace.tau.azure.com/${WORKSPACE_NAME}" --type=merge -p "$(cat <<JSON
+{
+  "spec": {
+    "teamRef": {"name": "kind-research"},
+    "quota": [{
+      "flavor": "h200",
+      "resource": "nvidia.com/gpu",
+      "nominalQuota": "1",
+      "borrowingLimit": "0",
+      "lendingLimit": "0"
+    }]
+  }
+}
+JSON
+)"
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  cluster_queue="$(kubectl -n "${TARGET_NAMESPACE}" get "localqueue.kueue.x-k8s.io/${WORKSPACE_NAME}" -o jsonpath='{.spec.clusterQueue}' 2>/dev/null || true)"
+  [[ "${phase}" == "Ready" && "${cluster_queue}" == "tau-ws-${WORKSPACE_NAME}" ]] && break
+  sleep 1
+done
+if [[ "${phase:-}" != "Ready" || "${cluster_queue:-}" != "tau-ws-${WORKSPACE_NAME}" ]]; then
+  echo "existing workspace LocalQueue did not complete immutable target replacement" >&2
+  kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" -o yaml >&2 || true
+  kubectl -n "${TARGET_NAMESPACE}" get "localqueue.kueue.x-k8s.io/${WORKSPACE_NAME}" -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  exit 1
+fi
 
 kubectl -n "${SYSTEM_NAMESPACE}" delete workspace.tau.azure.com kind-training --wait=true --timeout="${WAIT_SECONDS}s"
 kubectl get namespace kind-training >/dev/null

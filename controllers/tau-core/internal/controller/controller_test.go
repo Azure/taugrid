@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1432,7 +1433,7 @@ func TestMultipleWorkspacesReconcileIndependently(t *testing.T) {
 	}
 }
 
-func TestWorkspaceReconcileRestoresOwnedLocalQueueClusterQueue(t *testing.T) {
+func TestWorkspaceReconcileReplacesOwnedLocalQueueClusterQueue(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := testWorkspace("aurora")
@@ -1443,7 +1444,8 @@ func TestWorkspaceReconcileRestoresOwnedLocalQueueClusterQueue(t *testing.T) {
 		WithObjects(workspace, localQueue, testClusterQueue("aurora"), testClusterQueue("other-cq")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	reconciler := newTestWorkspaceReconciler(c)
+	recordingClient := &resourceMutationRecordingClient{Client: c}
+	reconciler := newTestWorkspaceReconciler(recordingClient)
 
 	reconcileWorkspace(t, reconciler, ctx, "aurora")
 
@@ -1455,7 +1457,12 @@ func TestWorkspaceReconcileRestoresOwnedLocalQueueClusterQueue(t *testing.T) {
 
 	clusterQueue, _, _ := unstructured.NestedString(got.Object, "spec", "clusterQueue")
 	if clusterQueue != "aurora" {
-		t.Fatalf("owned LocalQueue clusterQueue = %q, want restored to aurora", clusterQueue)
+		t.Fatalf("owned LocalQueue clusterQueue = %q, want replacement targeting aurora", clusterQueue)
+	}
+	deleteIndex := slices.Index(recordingClient.mutations, "delete aurora")
+	if deleteIndex < 0 ||
+		!slices.Contains(recordingClient.mutations[deleteIndex+1:], "create aurora") {
+		t.Fatalf("LocalQueue replacement mutations = %v, want delete then create", recordingClient.mutations)
 	}
 }
 

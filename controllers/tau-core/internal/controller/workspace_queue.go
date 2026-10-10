@@ -120,11 +120,22 @@ func (r *TauWorkspaceReconciler) reconcileQueue(ctx context.Context, workspace *
 
 		changed := false
 		if clusterQueueName != desiredClusterQueue {
-			if err := unstructured.SetNestedField(localQueue.Object, desiredClusterQueue, "spec", "clusterQueue"); err != nil {
-				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
-					fmt.Sprintf("failed to restore workspace LocalQueue: %v", err)
+			deleteOptions := []client.DeleteOption{}
+			if uid := localQueue.GetUID(); uid != "" {
+				deleteOptions = append(deleteOptions, client.Preconditions{UID: &uid})
 			}
-			changed = true
+			if err := r.Delete(ctx, localQueue, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+					fmt.Sprintf("failed to replace workspace LocalQueue: %v", err)
+			}
+			return tauv1alpha1.WorkspaceQueueStatus{
+					LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName,
+				}, false,
+				fmt.Sprintf(
+					"replacing workspace LocalQueue immutable ClusterQueue target %q with %q",
+					clusterQueueName,
+					desiredClusterQueue,
+				)
 		}
 		if workspace.UID != "" && localQueue.GetAnnotations()[annotationOwnerUID] != string(workspace.UID) {
 			setOwnerUIDAnnotation(localQueue, workspace.UID)
