@@ -1498,6 +1498,49 @@ func TestTeamWorkspaceRejectsExternalLocalQueueUsingDifferentClusterQueue(t *tes
 	}
 }
 
+func TestWorkspaceRejectsTeamRemovalBeforeSwitchingLocalQueue(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	managedQueue := desiredWorkspaceClusterQueue(workspace)
+	managedQueue.SetUID(types.UID("managed-queue-uid"))
+	localQueue := testLocalQueue("aurora", workspace.Spec.Queue, managedQueue.GetName())
+	localQueue.SetLabels(workspaceLabels(workspace.Name))
+	setOwnerUIDAnnotation(localQueue, workspace.UID)
+	legacyQueue := testClusterQueue(workspace.Spec.Queue)
+	workspace.Spec.TeamRef = nil
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, managedQueue, localQueue, legacyQueue).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	status, ready, message := reconciler.reconcileQueue(ctx, workspace, "aurora")
+	if ready {
+		t.Fatalf("queue unexpectedly Ready: %#v", status)
+	}
+	if !strings.Contains(message, "cannot remove teamRef while managed ClusterQueue") {
+		t.Fatalf("queue message = %q, want managed ClusterQueue removal refusal", message)
+	}
+	gotLocalQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: localQueue.GetName(), Namespace: localQueue.GetNamespace()}, gotLocalQueue); err != nil {
+		t.Fatalf("Get LocalQueue: %v", err)
+	}
+	if got, _, err := unstructured.NestedString(gotLocalQueue.Object, "spec", "clusterQueue"); err != nil {
+		t.Fatalf("read LocalQueue clusterQueue: %v", err)
+	} else if got != managedQueue.GetName() {
+		t.Fatalf("LocalQueue clusterQueue after rejected team removal = %q, want %q", got, managedQueue.GetName())
+	}
+	gotManagedQueue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: managedQueue.GetName()}, gotManagedQueue); err != nil {
+		t.Fatalf("managed ClusterQueue disappeared: %v", err)
+	}
+}
+
 func TestWorkspaceReconcileDegradesWhenBackingClusterQueueDisappears(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

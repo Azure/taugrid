@@ -182,6 +182,21 @@ func (r *TauWorkspaceReconciler) reconcileQueue(ctx context.Context, workspace *
 
 func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) (string, error) {
 	if workspace.Spec.TeamRef == nil {
+		managedQueue := newQueueObject(clusterQueueGVK)
+		managedQueue.SetName(workspaceClusterQueueName(workspace.Name))
+		if err := r.Get(ctx, client.ObjectKeyFromObject(managedQueue), managedQueue); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return "", err
+			}
+		} else if ownedByWorkspace(managedQueue.GetLabels(), workspace.Name) {
+			if err := validateWorkspaceObjectUID(managedQueue, workspace); err != nil {
+				return "", fmt.Errorf("cannot remove teamRef: %w", err)
+			}
+			return "", fmt.Errorf(
+				"cannot remove teamRef while managed ClusterQueue %q still exists; restore teamRef or delete and recreate the workspace",
+				managedQueue.GetName(),
+			)
+		}
 		return workspace.Spec.Queue, nil
 	}
 	var team tauv1alpha1.TauTeam
