@@ -396,8 +396,8 @@ jobs:
                   diagnostics_dir="${artifact_dir}/diagnostics"
                   result_file="${artifact_dir}/deployment-result.json"
                   values_file="$(Agent.TempDirectory)/flex-values.json"
-                  render_file="$(Agent.TempDirectory)/flex-render.txt"
                   mkdir -p "${diagnostics_dir}"
+                  render_file="${diagnostics_dir}/dry-run-render.txt"
 
                   export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
                   tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
@@ -466,7 +466,7 @@ jobs:
                     if [[ ! -s "${result_file}" ]]; then
                       write_result failed "deployment command failed; Helm atomic rollback was requested"
                     fi
-                    rm -f "${values_file}" "${render_file}" "${KUBECONFIG}"
+                    rm -f "${values_file}" "${KUBECONFIG}"
                     exit "${rc}"
                   }
                   trap cleanup EXIT
@@ -551,7 +551,18 @@ jobs:
                     "${diagnostics_dir}/taucluster-before-deploy.json")"
                   updated_profiles="$(jq -c \
                     --argjson profile "${nightly_profile}" \
-                    'map(select(.name != $profile.name)) + [$profile]' \
+                    'map(
+                       if .placement == "independent" then
+                         .placement = "unconstrained"
+                       elif .placement == "single-node-nvlink" then
+                         .placement = "same-host"
+                       elif .placement == "multi-node-nccl" then
+                         .placement = "same-network-domain"
+                       else
+                         .
+                       end
+                     )
+                     | map(select(.name != $profile.name)) + [$profile]' \
                     <<<"${current_profiles}")"
                   jq --argjson profiles "${updated_profiles}" \
                     '.["tau-core-controller"].tauCluster.workloadProfiles = $profiles' \
@@ -593,8 +604,13 @@ jobs:
                     --set-string "gpu-monitoring.metricsCollector.image.digest="
                   )
 
-                  cli/bin/tau "${install_args[@]}" --dry-run \
-                    >"${render_file}" 2>&1
+                  if ! cli/bin/tau "${install_args[@]}" --dry-run \
+                    >"${render_file}" 2>&1; then
+                    echo "##vso[task.logissue type=error]TauGrid upgrade dry-run failed"
+                    cat "${render_file}"
+                    write_result failed "offline upgrade rendering failed before cluster mutation"
+                    exit 1
+                  fi
                   printf 'Dry-run rendering completed successfully for source %s.\n' \
                     "${source_version}" >"${diagnostics_dir}/render-summary.txt"
                   recover_failed_deployment() {

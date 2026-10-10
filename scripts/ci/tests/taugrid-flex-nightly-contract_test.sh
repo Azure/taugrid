@@ -143,6 +143,14 @@ grep -Fq "current_profiles=\"\$(jq -c" "$PIPELINE" ||
   fail "deployment must preserve the live TauCluster profile catalog"
 grep -Fq 'map(select(.name != $profile.name)) + [$profile]' "$PIPELINE" ||
   fail "deployment must append or replace only the dedicated nightly CPU profile"
+grep -Fq '.placement = "unconstrained"' "$PIPELINE" &&
+  grep -Fq '.placement = "same-host"' "$PIPELINE" &&
+  grep -Fq '.placement = "same-network-domain"' "$PIPELINE" ||
+  fail "deployment dry-run must migrate legacy workload profile placements"
+grep -Fq 'render_file="${diagnostics_dir}/dry-run-render.txt"' "$PIPELINE" ||
+  fail "deployment must preserve dry-run diagnostics as a pipeline artifact"
+grep -Fq "TauGrid upgrade dry-run failed" "$PIPELINE" ||
+  fail "deployment must surface dry-run failures in the task log"
 grep -Fq "value: nightly.cpu.1x" "$PIPELINE" ||
   fail "Tau CLI Job and Ray smoke must use the dedicated zero-GPU profile"
 grep -Fq -- "--atomic" "$PIPELINE" ||

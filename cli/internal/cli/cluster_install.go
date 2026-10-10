@@ -130,9 +130,9 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 				if err != nil {
 					return err
 				}
-				if err := upgradeTauGridCRDs(cmd, installationRunner, spec); err != nil {
-					return err
-				}
+			}
+			if err := upgradeTauGridCRDs(cmd, installationRunner, spec, rendered.Bytes()); err != nil {
+				return err
 			}
 			if !releaseExists {
 				if err := runClusterInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallBootstrapArgs(spec)); err != nil {
