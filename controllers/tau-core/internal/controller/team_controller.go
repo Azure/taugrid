@@ -300,6 +300,14 @@ func (r *TauTeamReconciler) appliedTeamAllocation(
 }
 
 func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alpha1.TauTeam) ([]tauv1alpha1.TauResourceQuota, error) {
+	return r.sharedTeamQuotaForWorkspace(ctx, team, nil)
+}
+
+func (r *TauTeamReconciler) sharedTeamQuotaForWorkspace(
+	ctx context.Context,
+	team *tauv1alpha1.TauTeam,
+	proposed *tauv1alpha1.TauWorkspace,
+) ([]tauv1alpha1.TauResourceQuota, error) {
 	remaining := make(map[string]tauv1alpha1.TauResourceQuota, len(team.Spec.Quota))
 	for _, quota := range team.Spec.Quota {
 		if quota.BorrowingLimit != nil && quota.BorrowingLimit.Sign() != 0 {
@@ -318,42 +326,20 @@ func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alph
 	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
 		return nil, err
 	}
+	proposedFound := false
 	for i := range workspaces.Items {
 		workspace := &workspaces.Items[i]
-		effective := map[string]resource.Quantity{}
-		if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
-			for _, quota := range workspace.Spec.Quota {
-				effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
-			}
+		if proposed != nil && workspace.Name == proposed.Name {
+			workspace = proposed
+			proposedFound = true
 		}
-		appliedCohort, applied, err := r.appliedWorkspaceGuarantees(ctx, workspace)
-		if err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining); err != nil {
 			return nil, err
 		}
-		if appliedCohort == teamCohortName(team.Name) {
-			for key, quantity := range applied {
-				if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
-					effective[key] = quantity.DeepCopy()
-				}
-			}
-		}
-		for key, guarantee := range effective {
-			available, ok := remaining[key]
-			if !ok {
-				resourceName, flavor, _ := strings.Cut(key, "\x00")
-				return nil, fmt.Errorf(
-					"workspace %q has an applied or requested guarantee for flavor %q resource %q outside team quota",
-					workspace.Name,
-					flavor,
-					resourceName,
-				)
-			}
-			available.NominalQuota.Sub(guarantee)
-			if available.NominalQuota.Sign() < 0 {
-				resourceName, flavor, _ := strings.Cut(key, "\x00")
-				return nil, fmt.Errorf("workspace guarantees exceed team quota for flavor %q resource %q", flavor, resourceName)
-			}
-			remaining[key] = available
+	}
+	if proposed != nil && !proposedFound {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining); err != nil {
+			return nil, err
 		}
 	}
 	out := make([]tauv1alpha1.TauResourceQuota, 0, len(remaining))
@@ -361,6 +347,50 @@ func (r *TauTeamReconciler) sharedTeamQuota(ctx context.Context, team *tauv1alph
 		out = append(out, quota)
 	}
 	return out, nil
+}
+
+func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
+	ctx context.Context,
+	team *tauv1alpha1.TauTeam,
+	workspace *tauv1alpha1.TauWorkspace,
+	remaining map[string]tauv1alpha1.TauResourceQuota,
+) error {
+	effective := map[string]resource.Quantity{}
+	if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
+		for _, quota := range workspace.Spec.Quota {
+			effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+		}
+	}
+	appliedCohort, applied, err := r.appliedWorkspaceGuarantees(ctx, workspace)
+	if err != nil {
+		return err
+	}
+	if appliedCohort == teamCohortName(team.Name) {
+		for key, quantity := range applied {
+			if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
+				effective[key] = quantity.DeepCopy()
+			}
+		}
+	}
+	for key, guarantee := range effective {
+		available, ok := remaining[key]
+		if !ok {
+			resourceName, flavor, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf(
+				"workspace %q has an applied or requested guarantee for flavor %q resource %q outside team quota",
+				workspace.Name,
+				flavor,
+				resourceName,
+			)
+		}
+		available.NominalQuota.Sub(guarantee)
+		if available.NominalQuota.Sign() < 0 {
+			resourceName, flavor, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf("workspace guarantees exceed team quota for flavor %q resource %q", flavor, resourceName)
+		}
+		remaining[key] = available
+	}
+	return nil
 }
 
 func (r *TauTeamReconciler) appliedWorkspaceGuarantees(

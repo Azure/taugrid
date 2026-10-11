@@ -383,6 +383,110 @@ func TestTeamReconcileRefreshesAllocationAfterWaitingForQuotaTransfer(t *testing
 	}
 }
 
+func TestWorkspaceReconcileRefreshesQuotaAfterWaitingForTeamLock(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	team := testTeam("vision", "16")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "12", "0", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	cohort := desiredTeamCohort(
+		team,
+		[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+	)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flavor, team, workspace, queue, cohort).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	staleWorkspace := workspace.DeepCopy()
+	unlock := lockTeamQuota(teamQuotaLockKey(team.Namespace, team.Name))
+	done := make(chan error, 1)
+	go func() {
+		_, err := reconciler.reconcileWorkspaceClusterQueue(ctx, staleWorkspace)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("workspace reconcile completed before Team quota lock released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	var updatedWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &updatedWorkspace); err != nil {
+		unlock()
+		t.Fatalf("Get workspace: %v", err)
+	}
+	updatedWorkspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	if err := c.Update(ctx, &updatedWorkspace); err != nil {
+		unlock()
+		t.Fatalf("Update workspace: %v", err)
+	}
+	var updatedTeam tauv1alpha1.TauTeam
+	if err := c.Get(ctx, client.ObjectKeyFromObject(team), &updatedTeam); err != nil {
+		unlock()
+		t.Fatalf("Get Team: %v", err)
+	}
+	updatedTeam.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")}
+	if err := c.Update(ctx, &updatedTeam); err != nil {
+		unlock()
+		t.Fatalf("Update Team: %v", err)
+	}
+	updatedQueue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, updatedQueue); err != nil {
+		unlock()
+		t.Fatalf("Get ClusterQueue: %v", err)
+	}
+	setClusterQueueNominalQuota(t, updatedQueue, "4")
+	if err := c.Update(ctx, updatedQueue); err != nil {
+		unlock()
+		t.Fatalf("Update ClusterQueue: %v", err)
+	}
+	updatedCohort := newQueueObject(cohortGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, updatedCohort); err != nil {
+		unlock()
+		t.Fatalf("Get Cohort: %v", err)
+	}
+	setClusterQueueNominalQuota(t, updatedCohort, "4")
+	if err := c.Update(ctx, updatedCohort); err != nil {
+		unlock()
+		t.Fatalf("Update Cohort: %v", err)
+	}
+	unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("workspace reconcile after Team quota transfer: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("workspace reconcile did not resume after Team quota transfer")
+	}
+	gotQueue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, gotQueue); err != nil {
+		t.Fatalf("Get final ClusterQueue: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotQueue, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "4" {
+		t.Fatalf("workspace quota after interleaved reconcile = %q, want 4", got)
+	}
+	gotCohort := newQueueObject(cohortGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, gotCohort); err != nil {
+		t.Fatalf("Get final Cohort: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "4" {
+		t.Fatalf("Cohort quota after interleaved workspace reconcile = %q, want 4", got)
+	}
+}
+
 func TestWorkspaceReconcileDoesNotReduceTeamBelowReservations(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

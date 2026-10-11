@@ -199,7 +199,10 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		}
 		return workspace.Spec.Queue, nil
 	}
-	lockKeys := []string{teamQuotaLockKey(workspace.Namespace, workspace.Spec.TeamRef.Name)}
+	workspaceKey := client.ObjectKeyFromObject(workspace)
+	workspaceUID := workspace.UID
+	requestedTeam := workspace.Spec.TeamRef.Name
+	lockKeys := []string{teamQuotaLockKey(workspace.Namespace, requestedTeam)}
 	appliedQueue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, appliedQueue); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -210,6 +213,28 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	}
 	unlock := lockTeamQuota(lockKeys...)
 	defer unlock()
+
+	var refreshed tauv1alpha1.TauWorkspace
+	if err := r.Get(ctx, workspaceKey, &refreshed); err != nil {
+		return "", client.IgnoreNotFound(err)
+	}
+	if refreshed.UID != workspaceUID {
+		return "", fmt.Errorf("workspace %q changed identity while waiting for quota locks; retrying", workspace.Name)
+	}
+	if !refreshed.DeletionTimestamp.IsZero() {
+		return "", fmt.Errorf("workspace %q is deleting; retrying", workspace.Name)
+	}
+	if refreshed.Spec.TeamRef == nil || refreshed.Spec.TeamRef.Name != requestedTeam {
+		return "", fmt.Errorf("workspace %q changed teamRef while waiting for quota locks; retrying", workspace.Name)
+	}
+	if strings.TrimSpace(refreshed.Spec.Queue) == "" {
+		resolved, err := r.getDefaultWorkspaceQueue(ctx)
+		if err != nil {
+			return "", err
+		}
+		refreshed.Spec.Queue = resolved
+	}
+	*workspace = refreshed
 
 	var team tauv1alpha1.TauTeam
 	if err := r.Get(ctx, client.ObjectKey{Name: workspace.Spec.TeamRef.Name, Namespace: workspace.Namespace}, &team); err != nil {
@@ -241,7 +266,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if !teamReady && !reductionOnly {
 		return "", fmt.Errorf("team %q is not Ready", workspace.Spec.TeamRef.Name)
 	}
-	sharedQuota, err := teamReconciler.sharedTeamQuota(ctx, &team)
+	sharedQuota, err := teamReconciler.sharedTeamQuotaForWorkspace(ctx, &team, workspace)
 	if err != nil && !reductionOnly {
 		return "", err
 	}
@@ -249,7 +274,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		if err := reconcileManagedUnstructured(ctx, r.Client, queue, labelWorkspace, workspace.Name); err != nil {
 			return "", fmt.Errorf("reconcile workspace ClusterQueue reduction: %w", err)
 		}
-		sharedQuota, err = teamReconciler.sharedTeamQuota(ctx, &team)
+		sharedQuota, err = teamReconciler.sharedTeamQuotaForWorkspace(ctx, &team, workspace)
 		if err != nil {
 			return "", err
 		}
@@ -264,7 +289,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if err := reconcileManagedUnstructured(ctx, r.Client, queue, labelWorkspace, workspace.Name); err != nil {
 		return "", fmt.Errorf("reconcile workspace ClusterQueue: %w", err)
 	}
-	sharedQuota, err = teamReconciler.sharedTeamQuota(ctx, &team)
+	sharedQuota, err = teamReconciler.sharedTeamQuotaForWorkspace(ctx, &team, workspace)
 	if err != nil {
 		return "", err
 	}
