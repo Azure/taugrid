@@ -55,6 +55,16 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	unlock := lockTeamQuota(teamQuotaLockKey(team.Namespace, team.Name))
 	defer unlock()
 
+	if err := r.Get(ctx, req.NamespacedName, &team); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !team.DeletionTimestamp.IsZero() {
+		return r.finalizeTeam(ctx, &team)
+	}
+	if !controllerutil.ContainsFinalizer(&team, teamFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
 	if err := r.validateTeamReservations(ctx, &team); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "ReservationBlocked", err.Error())
 	}

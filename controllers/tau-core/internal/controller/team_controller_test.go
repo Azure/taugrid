@@ -307,7 +307,7 @@ func TestTeamCohortRejectsStaleWorkspaceAccountingSnapshot(t *testing.T) {
 	}
 }
 
-func TestTeamReconcileSerializesWithWorkspaceQuotaTransfer(t *testing.T) {
+func TestTeamReconcileRefreshesAllocationAfterWaitingForQuotaTransfer(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	flavor := newQueueObject(resourceFlavorGVK)
@@ -344,25 +344,15 @@ func TestTeamReconcileSerializesWithWorkspaceQuotaTransfer(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	var updatedWorkspace tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &updatedWorkspace); err != nil {
+	var updatedTeam tauv1alpha1.TauTeam
+	if err := c.Get(ctx, client.ObjectKeyFromObject(team), &updatedTeam); err != nil {
 		unlock()
-		t.Fatalf("Get workspace: %v", err)
+		t.Fatalf("Get Team: %v", err)
 	}
-	updatedWorkspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "12", "0", "0")}
-	if err := c.Update(ctx, &updatedWorkspace); err != nil {
+	updatedTeam.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")}
+	if err := c.Update(ctx, &updatedTeam); err != nil {
 		unlock()
-		t.Fatalf("Update workspace: %v", err)
-	}
-	updatedQueue := newQueueObject(clusterQueueGVK)
-	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, updatedQueue); err != nil {
-		unlock()
-		t.Fatalf("Get ClusterQueue: %v", err)
-	}
-	setClusterQueueNominalQuota(t, updatedQueue, "12")
-	if err := c.Update(ctx, updatedQueue); err != nil {
-		unlock()
-		t.Fatalf("Update ClusterQueue: %v", err)
+		t.Fatalf("Update Team: %v", err)
 	}
 	updatedCohort := newQueueObject(cohortGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, updatedCohort); err != nil {
