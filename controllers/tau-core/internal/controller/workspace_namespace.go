@@ -69,7 +69,7 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	if owner == workspace.Name &&
 		ownerUID == "" &&
 		workspace.UID != "" &&
-		workspace.Status.Target.ResolvedNamespace != targetNamespace {
+		!hasAuthoritativeLegacyNamespaceContinuity(workspace, targetNamespace) {
 		return false, fmt.Errorf(
 			"target namespace %q has legacy ownership metadata without an owner UID; explicit operator adoption is required",
 			targetNamespace,
@@ -119,6 +119,19 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 		}
 	}
 	return true, nil
+}
+
+func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspace, targetNamespace string) bool {
+	if workspace.Status.Target.ResolvedNamespace != targetNamespace ||
+		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		return false
+	}
+	for _, condition := range workspace.Status.Conditions {
+		if condition.Reason == "AdditionalWorkspaceBlocked" {
+			return false
+		}
+	}
+	return true
 }
 
 // reservedNamespaceReason names why a namespace may never be adopted as a

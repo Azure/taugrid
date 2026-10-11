@@ -199,6 +199,18 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		}
 		return workspace.Spec.Queue, nil
 	}
+	lockKeys := []string{teamQuotaLockKey(workspace.Namespace, workspace.Spec.TeamRef.Name)}
+	appliedQueue := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, appliedQueue); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return "", err
+		}
+	} else if appliedTeam := appliedQueue.GetLabels()[labelTeam]; appliedTeam != "" {
+		lockKeys = append(lockKeys, teamQuotaLockKey(workspace.Namespace, appliedTeam))
+	}
+	unlock := lockTeamQuota(lockKeys...)
+	defer unlock()
+
 	var team tauv1alpha1.TauTeam
 	if err := r.Get(ctx, client.ObjectKey{Name: workspace.Spec.TeamRef.Name, Namespace: workspace.Namespace}, &team); err != nil {
 		return "", fmt.Errorf("team %q is not ready: %w", workspace.Spec.TeamRef.Name, err)

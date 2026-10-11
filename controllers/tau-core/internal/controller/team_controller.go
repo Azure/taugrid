@@ -52,6 +52,9 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	unlock := lockTeamQuota(teamQuotaLockKey(team.Namespace, team.Name))
+	defer unlock()
+
 	if err := r.validateTeamReservations(ctx, &team); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "ReservationBlocked", err.Error())
 	}
@@ -208,6 +211,13 @@ func (r *TauTeamReconciler) reconcileTeamCohort(
 	team *tauv1alpha1.TauTeam,
 	sharedQuota []tauv1alpha1.TauResourceQuota,
 ) error {
+	currentSharedQuota, err := r.sharedTeamQuota(ctx, team)
+	if err != nil {
+		return err
+	}
+	if !quotaAllocationsEqual(currentSharedQuota, sharedQuota) {
+		return fmt.Errorf("refusing stale Cohort accounting snapshot for team %q; retry reconciliation", team.Name)
+	}
 	if err := r.validateTeamReservations(ctx, team); err != nil {
 		return err
 	}
@@ -218,6 +228,24 @@ func (r *TauTeamReconciler) reconcileTeamCohort(
 		labelTeam,
 		team.Name,
 	)
+}
+
+func quotaAllocationsEqual(first, second []tauv1alpha1.TauResourceQuota) bool {
+	if len(first) != len(second) {
+		return false
+	}
+	values := make(map[string]resource.Quantity, len(first))
+	for _, quota := range first {
+		values[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+	}
+	for _, quota := range second {
+		value, exists := values[quotaKey(quota)]
+		if !exists || value.Cmp(quota.NominalQuota) != 0 {
+			return false
+		}
+		delete(values, quotaKey(quota))
+	}
+	return len(values) == 0
 }
 
 func (r *TauTeamReconciler) appliedTeamAllocation(

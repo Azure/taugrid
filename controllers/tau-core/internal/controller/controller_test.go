@@ -2164,6 +2164,50 @@ func TestWorkspaceRecreationCannotAdoptUnannotatedLegacyNamespace(t *testing.T) 
 	}
 }
 
+func TestBlockedLegacyWorkspaceStatusCannotAuthorizeNamespaceAdoption(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "aurora",
+		Labels: map[string]string{labelWorkspace: "aurora"},
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("new-workspace-uid")
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:  tauv1alpha1.WorkspacePhaseDegraded,
+		Target: tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: "aurora"},
+		Conditions: []metav1.Condition{{
+			Type:   tauv1alpha1.ConditionRBACReady,
+			Status: metav1.ConditionFalse,
+			Reason: "AdditionalWorkspaceBlocked",
+		}},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, retained).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+	}
+	var got corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: retained.Name}, &got); err != nil {
+		t.Fatalf("Get retained namespace: %v", err)
+	}
+	if _, exists := got.Annotations[annotationOwnerUID]; exists {
+		t.Fatalf("blocked legacy status authorized namespace adoption: %#v", got.Annotations)
+	}
+	var binding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: retained.Name}, &binding); !apierrors.IsNotFound(err) {
+		t.Fatalf("blocked legacy workspace received namespace RBAC: %v", err)
+	}
+}
+
 func TestWorkspaceRejectsNegativeQuotaBeforeCreatingNamespace(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
