@@ -24,6 +24,7 @@ import (
 
 type TauTeamReconciler struct {
 	client.Client
+	APIReader       client.Reader
 	SystemNamespace string
 }
 
@@ -35,7 +36,7 @@ type TauTeamReconciler struct {
 
 func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var team tauv1alpha1.TauTeam
-	if err := r.Get(ctx, req.NamespacedName, &team); err != nil {
+	if err := r.quotaReader().Get(ctx, req.NamespacedName, &team); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if team.Namespace != systemNamespace(r.SystemNamespace) {
@@ -55,7 +56,7 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	unlock := lockTeamQuota(teamQuotaLockKey(team.Namespace, team.Name))
 	defer unlock()
 
-	if err := r.Get(ctx, req.NamespacedName, &team); err != nil {
+	if err := r.quotaReader().Get(ctx, req.NamespacedName, &team); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !team.DeletionTimestamp.IsZero() {
@@ -75,18 +76,26 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "QuotaInvalid", err.Error())
 	}
-	if err := validateQuotaFlavors(ctx, r.Client, team.Spec.Quota); err != nil {
+	if err := validateQuotaFlavors(ctx, r.quotaReader(), team.Spec.Quota); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "FlavorNotReady", err.Error())
 	}
+
 	if err := r.reconcileTeamCohort(ctx, &team, sharedQuota); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "CohortReconcileFailed", err.Error())
 	}
 	return r.reportTeamStatus(ctx, &team, true, "QuotaReady", "team quota hierarchy is reconciled")
 }
 
+func (r *TauTeamReconciler) quotaReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv1alpha1.TauTeam) error {
 	var cluster tauv1alpha1.TauCluster
-	if err := r.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
+	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -97,7 +106,7 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 		capacity[entry.Resource+"\x00"+entry.Flavor] = entry.Capacity.DeepCopy()
 	}
 	var teams tauv1alpha1.TauTeamList
-	if err := r.List(ctx, &teams, client.InNamespace(team.Namespace)); err != nil {
+	if err := r.quotaReader().List(ctx, &teams, client.InNamespace(team.Namespace)); err != nil {
 		return err
 	}
 	reductionOnly, err := r.teamAllocationReductionOnly(ctx, team)
@@ -186,7 +195,7 @@ func (r *TauTeamReconciler) validateTeamReservationsWithAdditional(
 		reserved[key] = quantity.DeepCopy()
 	}
 	var workspaces tauv1alpha1.TauWorkspaceList
-	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+	if err := r.quotaReader().List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
 		return err
 	}
 	for i := range workspaces.Items {
@@ -231,9 +240,10 @@ func (r *TauTeamReconciler) reconcileTeamCohort(
 	if err := r.validateTeamReservations(ctx, team); err != nil {
 		return err
 	}
-	return reconcileManagedUnstructured(
+	return reconcileManagedUnstructuredWithReader(
 		ctx,
 		r.Client,
+		r.quotaReader(),
 		desiredTeamCohort(team, sharedQuota),
 		labelTeam,
 		team.Name,
@@ -265,7 +275,7 @@ func (r *TauTeamReconciler) appliedTeamAllocation(
 	allocation := map[string]resource.Quantity{}
 	cohortName := teamCohortName(team.Name)
 	cohort := newQueueObject(cohortGVK)
-	if err := r.Get(ctx, client.ObjectKey{Name: cohortName}, cohort); err != nil {
+	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: cohortName}, cohort); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return nil, err
 		}
@@ -279,7 +289,7 @@ func (r *TauTeamReconciler) appliedTeamAllocation(
 		}
 	}
 	var workspaces tauv1alpha1.TauWorkspaceList
-	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+	if err := r.quotaReader().List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
 		return nil, err
 	}
 	for i := range workspaces.Items {
@@ -323,7 +333,7 @@ func (r *TauTeamReconciler) sharedTeamQuotaForWorkspace(
 		}
 	}
 	var workspaces tauv1alpha1.TauWorkspaceList
-	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+	if err := r.quotaReader().List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
 		return nil, err
 	}
 	proposedFound := false
@@ -406,7 +416,7 @@ func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	workspace *tauv1alpha1.TauWorkspace,
 ) (string, map[string]resource.Quantity, map[string]resource.Quantity, error) {
 	queue := newQueueObject(clusterQueueGVK)
-	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
+	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
 		if apierrors.IsNotFound(err) {
 			return "", nil, nil, nil
 		}
@@ -439,7 +449,7 @@ func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.
 		return ctrl.Result{}, nil
 	}
 	var workspaces tauv1alpha1.TauWorkspaceList
-	if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+	if err := r.quotaReader().List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
 		return ctrl.Result{}, err
 	}
 	for i := range workspaces.Items {
@@ -459,7 +469,7 @@ func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.
 	}
 	cohort := newQueueObject(cohortGVK)
 	cohort.SetName(teamCohortName(team.Name))
-	if err := r.Get(ctx, client.ObjectKeyFromObject(cohort), cohort); err == nil {
+	if err := r.quotaReader().Get(ctx, client.ObjectKeyFromObject(cohort), cohort); err == nil {
 		if cohort.GetLabels()[labelManagedBy] != labelManagedByValue || cohort.GetLabels()[labelTeam] != team.Name {
 			return ctrl.Result{}, fmt.Errorf("refusing to delete Cohort %q: ownership does not match team %q", cohort.GetName(), team.Name)
 		}
@@ -500,7 +510,7 @@ func (r *TauTeamReconciler) reportTeamStatus(
 	cohortUID := team.Status.CohortUID
 	if ready {
 		cohort := newQueueObject(cohortGVK)
-		if err := r.Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, cohort); err != nil {
+		if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, cohort); err != nil {
 			return ctrl.Result{}, err
 		}
 		cohortUID = string(cohort.GetUID())

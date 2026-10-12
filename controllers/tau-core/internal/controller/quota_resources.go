@@ -263,9 +263,19 @@ func reconcileManagedUnstructured(
 	desired *unstructured.Unstructured,
 	ownerLabel, ownerName string,
 ) error {
+	return reconcileManagedUnstructuredWithReader(ctx, kubeClient, kubeClient, desired, ownerLabel, ownerName)
+}
+
+func reconcileManagedUnstructuredWithReader(
+	ctx context.Context,
+	kubeClient client.Client,
+	reader client.Reader,
+	desired *unstructured.Unstructured,
+	ownerLabel, ownerName string,
+) error {
 	existing := newQueueObject(desired.GroupVersionKind())
 	key := client.ObjectKeyFromObject(desired)
-	if err := kubeClient.Get(ctx, key, existing); err != nil {
+	if err := reader.Get(ctx, key, existing); err != nil {
 		if apierrors.IsNotFound(err) {
 			return kubeClient.Create(ctx, desired)
 		}

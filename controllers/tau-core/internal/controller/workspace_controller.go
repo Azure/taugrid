@@ -49,7 +49,7 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	logger := log.FromContext(ctx).WithValues("tauworkspace", req.NamespacedName.String())
 
 	var workspace tauv1alpha1.TauWorkspace
-	if err := r.Get(ctx, req.NamespacedName, &workspace); err != nil {
+	if err := r.apiReader().Get(ctx, req.NamespacedName, &workspace); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if workspace.Namespace != systemNamespace(r.SystemNamespace) {
@@ -87,6 +87,13 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		workspace.Spec.Queue = resolved
 	}
 	return r.syncWorkspace(ctx, &workspace)
+}
+
+func (r *TauWorkspaceReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *TauWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {

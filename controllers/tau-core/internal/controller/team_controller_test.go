@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -383,7 +385,7 @@ func TestTeamReconcileRefreshesAllocationAfterWaitingForQuotaTransfer(t *testing
 	}
 }
 
-func TestWorkspaceReconcileRefreshesQuotaAfterWaitingForTeamLock(t *testing.T) {
+func TestWorkspaceReconcileRejectsStaleQuotaAfterWaitingForTeamLock(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	flavor := newQueueObject(resourceFlavorGVK)
@@ -465,8 +467,8 @@ func TestWorkspaceReconcileRefreshesQuotaAfterWaitingForTeamLock(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("workspace reconcile after Team quota transfer: %v", err)
+		if !errors.Is(err, errWorkspaceSpecChanged) {
+			t.Fatalf("workspace reconcile after Team quota transfer error = %v, want workspace spec change", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("workspace reconcile did not resume after Team quota transfer")
@@ -484,6 +486,124 @@ func TestWorkspaceReconcileRefreshesQuotaAfterWaitingForTeamLock(t *testing.T) {
 	}
 	if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "4" {
 		t.Fatalf("Cohort quota after interleaved workspace reconcile = %q, want 4", got)
+	}
+}
+
+func TestWorkspaceSyncRestartsWhenSpecChangesWhileWaitingForTeamLock(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	team := testTeam("vision", "16")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 1
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "12", "0", "0")}
+	queue := desiredWorkspaceClusterQueue(workspace)
+	cohort := desiredTeamCohort(
+		team,
+		[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+	)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flavor, team, workspace, queue, cohort).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	staleWorkspace := workspace.DeepCopy()
+	unlock := lockTeamQuota(teamQuotaLockKey(team.Namespace, team.Name))
+	done := make(chan error, 1)
+	go func() {
+		_, err := reconciler.syncWorkspace(ctx, staleWorkspace)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("workspace sync completed before Team quota lock released: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	var updated tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &updated); err != nil {
+		unlock()
+		t.Fatalf("Get workspace: %v", err)
+	}
+	updated.Generation = 2
+	updated.Spec.Target.Namespace = "training-v2"
+	updated.Spec.WorkloadIdentity.ServiceAccountName = "tau-workload-v2"
+	if err := c.Update(ctx, &updated); err != nil {
+		unlock()
+		t.Fatalf("Update workspace: %v", err)
+	}
+	unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("workspace sync after spec change: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("workspace sync did not resume after Team quota lock released")
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workload-v2", Namespace: "training"}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("new workload identity was installed in the old namespace: %v", err)
+	}
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatalf("Get final workspace: %v", err)
+	}
+	if got.Status.ObservedGeneration == 2 {
+		t.Fatalf("workspace status acknowledged changed generation during stale sync: %#v", got.Status)
+	}
+}
+
+func TestWorkspaceQuotaAccountingUsesAuthoritativeTeamAndWorkspaceReads(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	liveTeam := testTeam("vision", "8")
+	liveTeam.UID = types.UID("team-uid")
+	liveTeam.Status.Phase = tauv1alpha1.TeamPhaseReady
+	liveTeam.Status.ObservedGeneration = liveTeam.Generation
+	liveWorkspace := testWorkspace("training")
+	liveWorkspace.UID = types.UID("workspace-uid")
+	liveWorkspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: liveTeam.Name}
+	liveWorkspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	queue := desiredWorkspaceClusterQueue(liveWorkspace)
+	cohort := desiredTeamCohort(
+		liveTeam,
+		[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+	)
+	liveClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(flavor, liveTeam, liveWorkspace, queue, cohort).
+		Build()
+
+	staleTeam := liveTeam.DeepCopy()
+	staleTeam.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "16", "0", "0")}
+	staleReader := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(staleTeam, liveWorkspace.DeepCopy()).
+		Build()
+	cachedClient := &staleTypedCacheClient{Client: liveClient, Reader: staleReader}
+	reconciler := &TauWorkspaceReconciler{Client: cachedClient, APIReader: liveClient}
+
+	if _, err := reconciler.reconcileWorkspaceClusterQueue(ctx, liveWorkspace.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	gotCohort := newQueueObject(cohortGVK)
+	if err := liveClient.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, gotCohort); err != nil {
+		t.Fatalf("Get Cohort: %v", err)
+	}
+	if got := quotaFromResourceGroups(t, gotCohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"); got != "4" {
+		t.Fatalf("Cohort quota with stale Team cache = %q, want 4", got)
 	}
 }
 
@@ -509,6 +629,7 @@ func TestWorkspaceReconcileDoesNotReduceTeamBelowReservations(t *testing.T) {
 	}, "status", "flavorsReservation"); err != nil {
 		t.Fatalf("set reservation status: %v", err)
 	}
+
 	cohort := desiredTeamCohort(team, []tauv1alpha1.TauResourceQuota{
 		testGPUQuota("taugrid-gpu-h200", "12", "0", "0"),
 	})
@@ -998,6 +1119,29 @@ func TestUnreadyTeamRejectsNominalIncreaseExchangedForBorrowing(t *testing.T) {
 
 func setClusterQueueNominalQuota(t *testing.T, queue *unstructured.Unstructured, value string) {
 	setClusterQueueQuotaField(t, queue, "nominalQuota", value)
+}
+
+type staleTypedCacheClient struct {
+	client.Client
+	Reader client.Reader
+}
+
+func (c *staleTypedCacheClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	switch obj.(type) {
+	case *tauv1alpha1.TauTeam, *tauv1alpha1.TauWorkspace:
+		return c.Reader.Get(ctx, key, obj, opts...)
+	default:
+		return c.Client.Get(ctx, key, obj, opts...)
+	}
+}
+
+func (c *staleTypedCacheClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	switch list.(type) {
+	case *tauv1alpha1.TauTeamList, *tauv1alpha1.TauWorkspaceList:
+		return c.Reader.List(ctx, list, opts...)
+	default:
+		return c.Client.List(ctx, list, opts...)
+	}
 }
 
 func setClusterQueueQuotaField(

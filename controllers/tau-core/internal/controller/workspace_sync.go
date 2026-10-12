@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,7 +44,11 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	queueReady := false
 	queueMessage := "waiting for target namespace reconciliation"
 	if namespaceReady {
-		queueStatus, queueReady, queueMessage = r.reconcileQueue(ctx, workspace, targetNamespace)
+		var queueErr error
+		queueStatus, queueReady, queueMessage, queueErr = r.reconcileQueue(ctx, workspace, targetNamespace)
+		if errors.Is(queueErr, errWorkspaceSpecChanged) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 	} else if namespaceErr != nil {
 		queueMessage = namespaceErr.Error()
 	}

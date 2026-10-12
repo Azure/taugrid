@@ -1486,7 +1486,7 @@ func TestTeamWorkspaceRejectsExternalLocalQueueUsingDifferentClusterQueue(t *tes
 		WithObjects(workspace, team, flavor, localQueue, testClusterQueue("external-cq")).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
-	status, ready, message := reconciler.reconcileQueue(ctx, workspace, "aurora")
+	status, ready, message, _ := reconciler.reconcileQueue(ctx, workspace, "aurora")
 	if ready {
 		t.Fatalf("queue unexpectedly Ready: %#v", status)
 	}
@@ -1519,7 +1519,7 @@ func TestWorkspaceRejectsTeamRemovalBeforeSwitchingLocalQueue(t *testing.T) {
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	status, ready, message := reconciler.reconcileQueue(ctx, workspace, "aurora")
+	status, ready, message, _ := reconciler.reconcileQueue(ctx, workspace, "aurora")
 	if ready {
 		t.Fatalf("queue unexpectedly Ready: %#v", status)
 	}
