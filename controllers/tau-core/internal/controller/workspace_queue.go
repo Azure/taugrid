@@ -37,7 +37,7 @@ var (
 // reviewed queue instead of guessing.
 func (r *TauWorkspaceReconciler) getDefaultWorkspaceQueue(ctx context.Context) (string, error) {
 	var cluster tauv1alpha1.TauCluster
-	if err := r.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
 		return "", fmt.Errorf("spec.queue is empty and the TauCluster default is unavailable: %w", err)
 	}
 	queue := strings.TrimSpace(cluster.Spec.WorkspaceDefaults.DefaultQueue)
@@ -231,7 +231,15 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if !refreshed.DeletionTimestamp.IsZero() {
 		return "", fmt.Errorf("workspace %q is deleting; retrying", workspace.Name)
 	}
-	if !apiequality.Semantic.DeepEqual(refreshed.Spec, workspace.Spec) {
+	refreshedSpec := refreshed.Spec.DeepCopy()
+	if strings.TrimSpace(refreshedSpec.Queue) == "" {
+		resolved, err := r.getDefaultWorkspaceQueue(ctx)
+		if err != nil {
+			return "", err
+		}
+		refreshedSpec.Queue = resolved
+	}
+	if !apiequality.Semantic.DeepEqual(*refreshedSpec, workspace.Spec) {
 		return "", fmt.Errorf("%w: workspace %q", errWorkspaceSpecChanged, workspace.Name)
 	}
 

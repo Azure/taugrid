@@ -122,8 +122,7 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 }
 
 func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspace, targetNamespace string) bool {
-	if workspace.Status.Target.ResolvedNamespace != targetNamespace ||
-		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+	if workspace.Status.Target.ResolvedNamespace != targetNamespace {
 		return false
 	}
 	for _, condition := range workspace.Status.Conditions {
@@ -131,7 +130,15 @@ func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspa
 			return false
 		}
 	}
-	return true
+	if workspace.Status.Phase == tauv1alpha1.WorkspacePhaseReady {
+		return true
+	}
+	if workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
+		workspace.Status.ObservedGeneration == 0 {
+		return false
+	}
+	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
+	return drift != nil && drift.Status == metav1.ConditionFalse
 }
 
 // reservedNamespaceReason names why a namespace may never be adopted as a
