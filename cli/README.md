@@ -138,6 +138,23 @@ kubectl --context <admin-context> wait --for=condition=Established \
 CRD changes are not rolled back by Helm's `--atomic` option. Use backward-compatible
 release schemas; manage third-party Kueue/KubeRay CRD migrations separately.
 
+### Multi-workspace rollback boundary
+
+Rolling the controller or chart back to a release that predates `TauTeam` is
+operationally available but is not semantics-preserving. The older controller
+activates only its legacy primary workspace and routes new submissions through
+that workspace's `spec.queue`; it does not enforce Team Cohorts or per-workspace
+GPU guarantees. The current controller therefore retains the legacy LocalQueue
+when a workspace opts into a Team, but operators must not use an older
+controller while Team quota isolation or multiple active workspaces are
+required.
+
+Before such a rollback, stop new submissions, drain or cancel Team-queue
+workloads, select the one workspace that will remain the legacy primary, and
+verify its `spec.queue` LocalQueue and backing ClusterQueue are healthy.
+TauTeam resources and upgraded CRDs remain stored for a later roll-forward, but
+the older controller does not reconcile them.
+
 The updated researcher ClusterRole also grants RayService lifecycle permissions
 in the workspace namespace. Install the updated Helm or Kustomize RBAC before
 connecting with this CLI: workspace-RBAC verification now checks RayService

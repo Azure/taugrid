@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -759,6 +760,137 @@ func TestTeamDeletionWaitsForAppliedWorkspaceCohort(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, remainingCohort); err != nil {
 		t.Fatalf("Team Cohort was deleted while still applied: %v", err)
 	}
+}
+
+func TestTeamDeletionSerializesWithWorkspaceAttachment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheme := testScheme(t)
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Finalizers = []string{teamFinalizer}
+	now := metav1.Now()
+	team.DeletionTimestamp = &now
+	cohort := desiredTeamCohort(team, team.Spec.Quota)
+	cohort.SetUID(types.UID("cohort-uid"))
+	team.Status.CohortUID = string(cohort.GetUID())
+
+	workspace := testWorkspace("training")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, cohort, workspace, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauTeam{}).
+		Build()
+	reader := &blockingWorkspaceSnapshotReader{
+		Reader:   c,
+		captured: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(reader.release)
+		})
+	}
+	defer release()
+	teamReconciler := &TauTeamReconciler{Client: c, APIReader: reader}
+	teamRequest := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(team)}
+	teamDone := make(chan error, 1)
+	go func() {
+		_, err := teamReconciler.Reconcile(ctx, teamRequest)
+		teamDone <- err
+	}()
+
+	select {
+	case <-reader.captured:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Team finalization did not capture its authoritative Workspace snapshot")
+	}
+
+	var updated tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &updated); err != nil {
+		t.Fatalf("Get Workspace: %v", err)
+	}
+	updated.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	if err := c.Update(ctx, &updated); err != nil {
+		t.Fatalf("attach Workspace to deleting Team: %v", err)
+	}
+
+	workspaceReconciler := newTestWorkspaceReconciler(c)
+	workspaceReconciler.APIReader = reader
+	workspaceDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := workspaceReconciler.reconcileQueue(ctx, &updated, updated.Name)
+		workspaceDone <- err
+	}()
+
+	var workspaceErr error
+	workspaceCompleted := false
+	select {
+	case workspaceErr = <-workspaceDone:
+		workspaceCompleted = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	var teamErr error
+	select {
+	case teamErr = <-teamDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Team finalization did not finish after releasing its Workspace snapshot")
+	}
+	if teamErr != nil {
+		t.Fatalf("finalize Team: %v", teamErr)
+	}
+	if workspaceCompleted {
+		t.Fatalf("Workspace reconciliation bypassed Team finalization lock: %v", workspaceErr)
+	}
+	select {
+	case workspaceErr = <-workspaceDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Workspace reconciliation did not finish after Team finalization")
+	}
+	if workspaceErr == nil ||
+		(!strings.Contains(workspaceErr.Error(), "is deleting") && !apierrors.IsNotFound(workspaceErr)) {
+		t.Fatalf("Workspace attachment error = %v, want deleting or not-found Team", workspaceErr)
+	}
+
+	queue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); !apierrors.IsNotFound(err) {
+		t.Fatalf("Workspace ClusterQueue was created during Team deletion: %v", err)
+	}
+}
+
+type blockingWorkspaceSnapshotReader struct {
+	client.Reader
+	captured chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (r *blockingWorkspaceSnapshotReader) List(
+	ctx context.Context,
+	list client.ObjectList,
+	opts ...client.ListOption,
+) error {
+	if err := r.Reader.List(ctx, list, opts...); err != nil {
+		return err
+	}
+	if _, ok := list.(*tauv1alpha1.TauWorkspaceList); ok {
+		r.once.Do(func() {
+			close(r.captured)
+			select {
+			case <-r.release:
+			case <-ctx.Done():
+			}
+		})
+	}
+	return nil
 }
 
 func TestTeamRejectsAggregateAllocationsAboveDiscoveredCapacity(t *testing.T) {

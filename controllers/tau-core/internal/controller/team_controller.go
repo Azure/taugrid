@@ -42,10 +42,10 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if team.Namespace != systemNamespace(r.SystemNamespace) {
 		return ctrl.Result{}, nil
 	}
-	if !team.DeletionTimestamp.IsZero() {
-		return r.finalizeTeam(ctx, &team)
+	if !team.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(&team, teamFinalizer) {
+		return ctrl.Result{}, nil
 	}
-	if !controllerutil.ContainsFinalizer(&team, teamFinalizer) {
+	if team.DeletionTimestamp.IsZero() && !controllerutil.ContainsFinalizer(&team, teamFinalizer) {
 		controllerutil.AddFinalizer(&team, teamFinalizer)
 		if err := r.Update(ctx, &team); err != nil {
 			return ctrl.Result{}, err

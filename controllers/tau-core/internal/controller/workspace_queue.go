@@ -243,6 +243,9 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: workspace.Spec.TeamRef.Name, Namespace: workspace.Namespace}, &team); err != nil {
 		return "", fmt.Errorf("team %q is not ready: %w", workspace.Spec.TeamRef.Name, err)
 	}
+	if !team.DeletionTimestamp.IsZero() {
+		return "", fmt.Errorf("team %q is deleting", workspace.Spec.TeamRef.Name)
+	}
 	teamReconciler := &TauTeamReconciler{Client: r.Client, APIReader: r.apiReader(), SystemNamespace: r.SystemNamespace}
 	appliedCohort, _, incomingReservations, err := teamReconciler.appliedWorkspaceQueue(ctx, workspace)
 	if err != nil {
