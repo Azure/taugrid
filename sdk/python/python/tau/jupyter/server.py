@@ -66,6 +66,11 @@ from tau.jupyter import runs
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
+#: Marker for a deliberately cluster-wide authorization decision. Distinct from
+#: an explicit ``namespace=None`` so a caller that failed to resolve a namespace
+#: cannot silently fall back to the coarse ``taugrid`` grant.
+_COARSE = object()
+
 #: Operator-set caller identity for team/lane-scoped profiles. These are read
 #: from the server process environment, which a request cannot influence.
 TEAM_ENV = "TAUGRID_TEAM"
@@ -195,20 +200,27 @@ class _ClientMixin:
         return load_client(retries=0)
 
     @classmethod
-    def auth_resource(cls, namespace: Optional[str] = None) -> str:
-        """The Authorizer resource for one decision.
+    def auth_resource(cls, namespace: str) -> str:
+        """The Authorizer resource for one namespaced decision.
 
         A namespace the caller names is part of *what* is being authorized, so it
-        is reported to the deployment's Authorizer instead of being hidden behind
-        the single coarse ``taugrid`` string. Handlers with no namespace
-        (capabilities, cluster-wide namespace discovery, server files) keep the
-        coarse resource. This makes a per-namespace policy expressible; it does
-        not authenticate a caller's namespace membership by itself, which only the
-        deployment's Authorizer configuration can supply.
-        """
-        return f"{cls.AUTH_RESOURCE}:{namespace}" if namespace else cls.AUTH_RESOURCE
+        is reported to the deployment's Authorizer as ``taugrid:<namespace>``
+        instead of being hidden behind the single coarse ``taugrid`` string. This
+        makes a per-namespace policy expressible; it does not authenticate a
+        caller's namespace membership by itself, which only the deployment's
+        Authorizer configuration can supply.
 
-    async def authorize(self, action: str, *, namespace: Optional[str] = None) -> None:
+        A missing namespace is *not* mapped to the coarse resource here. The
+        coarse grant is a distinct, deliberately selected decision, so a caller
+        that resolved no namespace must not silently fall back to it;
+        ``authorize`` chooses the coarse resource explicitly and refuses an
+        unresolved namespace.
+        """
+        if not namespace:
+            raise ValueError("a namespaced authorization resource requires a namespace")
+        return f"{cls.AUTH_RESOURCE}:{namespace}"
+
+    async def authorize(self, action: str, *, namespace: object = _COARSE) -> None:
         """Require an explicit Jupyter Authorizer decision for ``action``.
 
         ``@web.authenticated`` proves *who* the caller is; it does not prove the
@@ -217,10 +229,18 @@ class _ClientMixin:
         execution could still submit workloads under the server's Kubernetes
         identity and read cluster state through these handlers.
 
-        ``namespace`` names the namespace the decision covers, when there is one.
-        It is a request value, so it is *not* trusted as authorization input on
-        its own; the submit path additionally verifies it against the namespaces
-        this server can list before a profile may scope on it.
+        Omit ``namespace`` for a deliberately cluster-wide decision
+        (capabilities, namespace discovery, server files); the coarse ``taugrid``
+        resource is authorized. Pass the namespace the operation acts on for a
+        namespaced decision. ``namespace`` is a request value, so it is *not*
+        trusted as authorization input on its own; the submit path additionally
+        verifies it against the namespaces this server can list before a profile
+        may scope on it.
+
+        Passing ``namespace=None`` is a failure rather than a downgrade: ``None``
+        means no namespace was resolved, so the coarse grant must not authorize
+        the operation. That is what keeps a read or submit from reaching a
+        namespace the request never established.
 
         The check fails closed: a missing Authorizer or an anonymous user is a
         403 rather than an implicit allow, and an Authorizer that returns a
@@ -230,7 +250,16 @@ class _ClientMixin:
         user = getattr(self, "current_user", None)
         if authorizer is None or not user:
             raise web.HTTPError(403, "TauGrid API access requires an authenticated Jupyter user")
-        allowed = authorizer.is_authorized(self, user, action, self.auth_resource(namespace))
+        if namespace is _COARSE:
+            resource = self.AUTH_RESOURCE
+        elif not namespace:
+            raise web.HTTPError(
+                403,
+                f"not authorized to {action} TauGrid notebook resources: no namespace was resolved",
+            )
+        else:
+            resource = self.auth_resource(str(namespace))
+        allowed = authorizer.is_authorized(self, user, action, resource)
         if inspect.isawaitable(allowed):
             allowed = await allowed
         if not allowed:
@@ -389,25 +418,29 @@ class CapabilitiesHandler(APIHandler, _ClientMixin):
 class DestinationsHandler(APIHandler, _ClientMixin):
     @web.authenticated
     async def get(self) -> None:
-        from tau.jupyter.destinations import list_destinations, resolve_destination_namespace
+        from tau.jupyter.destinations import list_destinations, resolve_destinations
 
         requested = self.get_argument("namespace", None)
         # Listing namespaces is cluster-wide discovery, so the coarse ``taugrid``
-        # grant covers it. When the request omits ``namespace``, discovery then
-        # reads one resolved namespace's profiles and LocalQueues; that namespace
-        # is not known until it is resolved, so it is authorized as
-        # ``taugrid:<resolved>`` before those reads happen. Otherwise a request
-        # that names no namespace would reach a namespace's queues holding only
-        # the coarse grant.
+        # grant covers it. The namespace whose profiles and LocalQueues are read
+        # is resolved exactly once, and the same discovery snapshot is handed to
+        # the catalog, so the value authorized here and the value read there
+        # cannot come from two independent cluster calls. A request that names no
+        # namespace would otherwise reach a namespace's queues holding only the
+        # coarse grant; a namespace discovery did not find is never read; and a
+        # discovery that legitimately finds none leaves the catalog empty rather
+        # than resolving to a namespace that was never authorized.
         await self.authorize("read")
-        resolved = await self.read(resolve_destination_namespace, namespace=requested)
-        await self.authorize("read", namespace=resolved)
+        resolved, discovery = await self.read(resolve_destinations, namespace=requested)
+        if resolved is not None:
+            await self.authorize("read", namespace=resolved)
         scope = trusted_scope()
         self.set_header("Cache-Control", "no-store")
         self.finish(
             await self.read(
                 list_destinations,
                 namespace=resolved,
+                discovery=discovery,
                 team=scope["team"],
                 lane=scope["lane"],
             )
@@ -451,6 +484,20 @@ class FilesHandler(APIHandler, _ClientMixin):
         if not path:
             raise web.HTTPError(400, "path is required")
         root = server_root(self.settings.get("server_root_dir"))
+        try:
+            directory = notebook_directory(root, path)
+        except FileSelectionError as exc:
+            raise web.HTTPError(exc.status, str(exc)) from exc
+        # The directory that is read is part of *what* is being authorized, so it
+        # is named in the Authorizer resource the same way a namespace is:
+        # ``taugrid:files:<relative-directory>`` (``taugrid:files`` at the server
+        # root). Without this, the constant ``taugrid`` granted every directory
+        # under the root and per-directory policy could not be expressed, so a
+        # request could name any directory while holding only the coarse grant.
+        # ``notebook_directory`` has already confined ``directory`` to the root,
+        # so it is safe to make it relative.
+        relative = directory.relative_to(root).as_posix()
+        await self.authorize("read", namespace="files" if relative == "." else f"files:{relative}")
         try:
             self.finish(list_candidates(root, path))
         except FileSelectionError as exc:

@@ -72,6 +72,17 @@ def _skip(path: Path) -> bool:
     return path.suffix.lower() in SKIP_SUFFIXES
 
 
+def _inside(path: Path, directory: Path) -> bool:
+    """Whether ``path`` is ``directory`` or lives beneath it.
+
+    A parent test rather than a string prefix, so a sibling whose name merely
+    starts with the directory's name (``/root/evil`` beside ``/root/ev``) is
+    never accepted as contained. This is the same containment stance
+    :func:`notebook_directory` takes for the notebook path itself.
+    """
+    return path == directory or directory in path.parents
+
+
 def list_candidates(root: Path, notebook_path: str) -> Dict[str, Any]:
     """Flat files beside the notebook that could ship with it."""
     directory = notebook_directory(root, notebook_path)
@@ -87,7 +98,15 @@ def list_candidates(root: Path, notebook_path: str) -> Dict[str, Any]:
         warnings.append(f"Only the first {MAX_CANDIDATES} directory entries were inspected. Move this notebook and its companion files to a smaller directory if a file is missing.")
     entries = sorted(entries[:MAX_CANDIDATES], key=lambda item: item.name)
     for entry in entries:
-        if not entry.is_file() or _skip(entry) or entry.name == notebook_name:
+        # ``is_file`` follows a link, so a symlink offered here would be a file
+        # whose bytes the server identity reads out of whatever it points at -
+        # including, for the pod's service account, the projected token. Links
+        # are omitted entirely: the picker's contract is flat files in the
+        # notebook's own directory, and a link's target can be repointed between
+        # this listing and the read the review performs.
+        if entry.is_symlink():
+            continue
+        if not _inside(entry.resolve(), directory) or not entry.is_file() or _skip(entry) or entry.name == notebook_name:
             continue
         try:
             size = entry.stat().st_size
@@ -102,6 +121,7 @@ def list_candidates(root: Path, notebook_path: str) -> Dict[str, Any]:
 
 def read_selected(directory: Path, names: Iterable[str]) -> Dict[str, bytes]:
     """Read the chosen files, refusing anything outside the flat, bounded set."""
+    base = Path(directory).resolve()
     selected: Dict[str, bytes] = {}
     total = 0
     for raw in names:
@@ -110,9 +130,23 @@ def read_selected(directory: Path, names: Iterable[str]) -> Dict[str, bytes]:
             continue
         if name != Path(name).name or name in (".", "..") or "\\" in name:
             raise FileSelectionError(f"{name!r} is not a flat file name in the notebook directory")
-        path = directory / name
+        path = base / name
+        # Refuse a link before ``is_file`` follows it. A symlink in the notebook
+        # directory could point at anything the server identity can read, and
+        # the highest-value target is the pod's projected service-account token;
+        # ``is_file`` would report the link as a file and the read below would
+        # embed the target's bytes in the payload. An inside-pointing link is
+        # refused too: its target can be repointed between the preview digest
+        # and the submit read, so no link is a flat file.
+        if path.is_symlink():
+            raise FileSelectionError(f"{name!r} is a symlink, not a file beside the notebook")
         if not path.is_file():
             raise FileSelectionError(f"{name!r} was not found beside the notebook")
+        # Re-assert containment on the resolved path, with a parent test so a
+        # string prefix cannot accept a sibling directory that merely shares the
+        # directory's name prefix.
+        if not _inside(path.resolve(), base):
+            raise FileSelectionError(f"{name!r} resolves outside the notebook directory")
         try:
             # Read one byte past the ceiling so an oversized file is refused
             # without allocating it. The preview endpoint accepts names

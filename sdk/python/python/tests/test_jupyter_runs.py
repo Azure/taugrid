@@ -429,9 +429,11 @@ class FakeHandler:
         from tau.jupyter.server import _ClientMixin
         return _ClientMixin.target(self)
 
-    async def authorize(self, action, *, namespace=None):
+    async def authorize(self, action, **kwargs):
+        # Mirror the mixin: the coarse resource is selected by *omitting*
+        # ``namespace``, so pass only what the handler supplied.
         from tau.jupyter.server import _ClientMixin
-        return await _ClientMixin.authorize(self, action, namespace=namespace)
+        return await _ClientMixin.authorize(self, action, **kwargs)
 
     async def read(self, reader, **kwargs):
         from tau.jupyter.server import _ClientMixin
