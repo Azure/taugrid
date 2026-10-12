@@ -80,48 +80,49 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 	workspace *tauv1alpha1.TauWorkspace,
 	targetNamespace string,
 ) (tauv1alpha1.WorkspaceQueueStatus, bool, string, error) {
+	localQueueName := workspaceLocalQueueName(workspace)
 	desiredClusterQueue, err := r.reconcileWorkspaceClusterQueue(ctx, workspace)
 	if err != nil {
-		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue}, false, err.Error(), err
+		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName}, false, err.Error(), err
 	}
 	localQueue := newQueueObject(localQueueGVK)
-	if err := r.Get(ctx, client.ObjectKey{Name: workspace.Spec.Queue, Namespace: targetNamespace}, localQueue); err != nil {
+	if err := r.Get(ctx, client.ObjectKey{Name: localQueueName, Namespace: targetNamespace}, localQueue); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue}, false, err.Error(), nil
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName}, false, err.Error(), nil
 		}
 		clusterQueue := newQueueObject(clusterQueueGVK)
 		if err := r.Get(ctx, client.ObjectKey{Name: desiredClusterQueue}, clusterQueue); err != nil {
-			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 				fmt.Sprintf("backing ClusterQueue %q is not ready: %v", desiredClusterQueue, err), nil
 		}
-		localQueue = newWorkspaceLocalQueue(workspace, targetNamespace, desiredClusterQueue)
+		localQueue = newWorkspaceLocalQueue(workspace, targetNamespace, localQueueName, desiredClusterQueue, true)
 		if err := r.Create(ctx, localQueue); err != nil {
 			if apierrors.IsAlreadyExists(err) {
-				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 					"workspace LocalQueue changed concurrently; retrying", nil
 			}
-			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 				fmt.Sprintf("failed to reconcile workspace LocalQueue: %v", err), nil
 		}
 		return tauv1alpha1.WorkspaceQueueStatus{
-				LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue, ClusterQueueUID: string(clusterQueue.GetUID()),
+				LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue, ClusterQueueUID: string(clusterQueue.GetUID()),
 			}, true,
 			"workspace LocalQueue is reconciled", nil
 	}
 	clusterQueueName, _, _ := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
 	labels := localQueue.GetLabels()
 	if labels[labelManagedBy] == labelManagedByValue && labels[labelWorkspace] != workspace.Name {
-		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName}, false,
-			fmt.Sprintf("LocalQueue %q is owned by TauWorkspace %q", workspace.Spec.Queue, labels[labelWorkspace]), nil
+		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
+			fmt.Sprintf("LocalQueue %q is owned by TauWorkspace %q", localQueueName, labels[labelWorkspace]), nil
 	}
 	if ownedByWorkspace(labels, workspace.Name) {
 		if ownerUID := localQueue.GetAnnotations()[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
-			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName}, false,
-				fmt.Sprintf("LocalQueue %q belongs to a different TauWorkspace UID %q", workspace.Spec.Queue, ownerUID), nil
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
+				fmt.Sprintf("LocalQueue %q belongs to a different TauWorkspace UID %q", localQueueName, ownerUID), nil
 		}
 		clusterQueue := newQueueObject(clusterQueueGVK)
 		if err := r.Get(ctx, client.ObjectKey{Name: desiredClusterQueue}, clusterQueue); err != nil {
-			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 				fmt.Sprintf("backing ClusterQueue %q is not ready: %v", desiredClusterQueue, err), nil
 		}
 
@@ -132,11 +133,11 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 				deleteOptions = append(deleteOptions, client.Preconditions{UID: &uid})
 			}
 			if err := r.Delete(ctx, localQueue, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
-				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 					fmt.Sprintf("failed to replace workspace LocalQueue: %v", err), nil
 			}
 			return tauv1alpha1.WorkspaceQueueStatus{
-					LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName,
+					LocalQueue: localQueueName, ClusterQueue: clusterQueueName,
 				}, false,
 				fmt.Sprintf(
 					"replacing workspace LocalQueue immutable ClusterQueue target %q with %q",
@@ -150,41 +151,36 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 		}
 		if changed {
 			if err := r.Update(ctx, localQueue); err != nil {
-				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: desiredClusterQueue}, false,
+				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 					fmt.Sprintf("failed to restore workspace LocalQueue: %v", err), nil
 			}
 			clusterQueueName = desiredClusterQueue
 		}
 		return tauv1alpha1.WorkspaceQueueStatus{
-				LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
+				LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
 			}, true,
 			"workspace LocalQueue is reconciled", nil
 	}
 	if strings.TrimSpace(clusterQueueName) == "" {
-		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue}, false,
-			fmt.Sprintf("LocalQueue %q does not reference a ClusterQueue", workspace.Spec.Queue), nil
-	}
-	if workspace.Spec.TeamRef != nil && clusterQueueName != desiredClusterQueue {
-		return tauv1alpha1.WorkspaceQueueStatus{
-				LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName,
-			}, false,
-			fmt.Sprintf(
-				"LocalQueue %q targets ClusterQueue %q, but team-backed TauWorkspace %q requires %q; update or remove the LocalQueue before migration",
-				workspace.Spec.Queue,
-				clusterQueueName,
-				workspace.Name,
-				desiredClusterQueue,
-			), nil
+		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName}, false,
+			fmt.Sprintf("LocalQueue %q does not reference a ClusterQueue", localQueueName), nil
 	}
 	clusterQueue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
-		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName}, false,
+		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
 			fmt.Sprintf("backing ClusterQueue %q is not ready: %v", clusterQueueName, err), nil
 	}
 	return tauv1alpha1.WorkspaceQueueStatus{
-			LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
+			LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
 		}, true,
 		"workspace queue and backing ClusterQueue are readable", nil
+}
+
+func workspaceLocalQueueName(workspace *tauv1alpha1.TauWorkspace) string {
+	if workspace.Spec.TeamRef != nil {
+		return workspaceClusterQueueName(workspace.Name)
+	}
+	return workspace.Spec.Queue
 }
 
 func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) (string, error) {
@@ -365,19 +361,23 @@ func newQueueObject(gvk schema.GroupVersionKind) *unstructured.Unstructured {
 	return queue
 }
 
-func newWorkspaceLocalQueue(workspace *tauv1alpha1.TauWorkspace, targetNamespace, clusterQueue string) *unstructured.Unstructured {
+func newWorkspaceLocalQueue(
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace, localQueueName, clusterQueue string,
+	teamManaged bool,
+) *unstructured.Unstructured {
 	queue := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": localQueueGVK.GroupVersion().String(),
 		"kind":       localQueueGVK.Kind,
 		"metadata": map[string]any{
-			"name":      workspace.Spec.Queue,
+			"name":      localQueueName,
 			"namespace": targetNamespace,
 		},
 		"spec": map[string]any{"clusterQueue": clusterQueue},
 	}}
 	queue.SetGroupVersionKind(localQueueGVK)
 	labels := workspaceLabels(workspace.Name)
-	if workspace.Spec.TeamRef != nil {
+	if teamManaged && workspace.Spec.TeamRef != nil {
 		labels[labelTeam] = workspace.Spec.TeamRef.Name
 	}
 	queue.SetLabels(labels)

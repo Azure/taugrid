@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var errNamespaceOwnershipUnverified = errors.New("namespace ownership is not verified")
 
 func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 	if workspace.Spec.Target.Namespace != "" {
@@ -66,23 +69,33 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 			owner,
 		)
 	}
-	if owner == workspace.Name &&
-		ownerUID == "" &&
+	if ownerUID == "" &&
 		workspace.UID != "" &&
+		!hasExplicitNamespaceAdoptionEvidence(workspace, &namespace) &&
 		!hasAuthoritativeLegacyNamespaceContinuity(workspace, targetNamespace) {
+		ownership := "has no TauWorkspace ownership metadata"
+		if owner == workspace.Name {
+			ownership = "has legacy ownership metadata without an owner UID"
+		}
 		return false, fmt.Errorf(
-			"target namespace %q has legacy ownership metadata without an owner UID; explicit operator adoption is required",
+			"%w: target namespace %q %s; explicit operator adoption is required",
+			errNamespaceOwnershipUnverified,
 			targetNamespace,
+			ownership,
 		)
 	}
 	changed := false
+	localQueueName, err := r.namespaceLocalQueueName(ctx, workspace, targetNamespace)
+	if err != nil {
+		return false, err
+	}
 	requiredLabels := map[string]string{
 		labelWorkspace:              workspace.Name,
-		labelWorkspaceLocalQueue:    workspace.Spec.Queue,
-		labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+		labelWorkspaceLocalQueue:    localQueueName,
+		labelKueueDefaultLocalQueue: localQueueName,
 	}
 	if workspace.Spec.Target.CreateNamespace {
-		requiredLabels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+		requiredLabels = workspaceNamespaceLabels(workspace.Name, localQueueName)
 	}
 	if workspace.Spec.TeamRef != nil {
 		requiredLabels[labelTeam] = workspace.Spec.TeamRef.Name
@@ -121,6 +134,25 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	return true, nil
 }
 
+func (r *TauWorkspaceReconciler) namespaceLocalQueueName(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace string,
+) (string, error) {
+	if workspace.Spec.TeamRef == nil {
+		return workspace.Spec.Queue, nil
+	}
+	name := workspaceLocalQueueName(workspace)
+	queue := newQueueObject(localQueueGVK)
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name, Namespace: targetNamespace}, queue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return workspace.Spec.Queue, nil
+		}
+		return "", fmt.Errorf("read Team-managed LocalQueue %q: %w", name, err)
+	}
+	return name, nil
+}
+
 func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspace, targetNamespace string) bool {
 	if workspace.Status.Target.ResolvedNamespace != targetNamespace {
 		return false
@@ -138,7 +170,18 @@ func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspa
 		return false
 	}
 	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
-	return drift != nil && drift.Status == metav1.ConditionFalse
+	return drift != nil &&
+		(drift.Status == metav1.ConditionFalse || drift.Reason == "NamespaceReconcileFailed")
+}
+
+func hasExplicitNamespaceAdoptionEvidence(
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+) bool {
+	expectedUID := strings.TrimSpace(workspace.Annotations[annotationAdoptionNamespaceUID])
+	return expectedUID != "" &&
+		namespace.UID != "" &&
+		expectedUID == string(namespace.UID)
 }
 
 // reservedNamespaceReason names why a namespace may never be adopted as a

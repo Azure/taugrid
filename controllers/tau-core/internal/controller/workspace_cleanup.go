@@ -222,6 +222,11 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
 			continue
 		}
+		if workspace.Spec.TeamRef != nil &&
+			localQueue.GetNamespace() == keepNamespace &&
+			localQueue.GetName() == workspace.Spec.Queue {
+			continue
+		}
 		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
 			return fmt.Errorf("refusing to delete LocalQueue %q: %w", localQueue.GetName(), err)
 		}

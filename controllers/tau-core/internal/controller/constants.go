@@ -31,13 +31,14 @@ const (
 
 	tauGPUNodeTopologyName = "taugrid-gpu-topology"
 
-	annotationApproved        = labelkeys.AnnotationApproved
-	annotationRejected        = labelkeys.AnnotationRejected
-	annotationReviewedBy      = labelkeys.AnnotationReviewedBy
-	annotationAzureWIClientID = "azure.workload.identity/client-id"
-	annotationResultScope     = labelkeys.AnnotationResultScope
-	annotationV0Primary       = labelkeys.AnnotationV0Primary
-	annotationOwnerUID        = labelkeys.AnnotationOwnerUID
+	annotationApproved             = labelkeys.AnnotationApproved
+	annotationRejected             = labelkeys.AnnotationRejected
+	annotationReviewedBy           = labelkeys.AnnotationReviewedBy
+	annotationAzureWIClientID      = "azure.workload.identity/client-id"
+	annotationResultScope          = labelkeys.AnnotationResultScope
+	annotationV0Primary            = labelkeys.AnnotationV0Primary
+	annotationOwnerUID             = labelkeys.AnnotationOwnerUID
+	annotationAdoptionNamespaceUID = labelkeys.AnnotationAdoptionNamespaceUID
 
 	workspaceFinalizer = labelkeys.FinalizerWorkspaceCleanup
 	teamFinalizer      = labelkeys.FinalizerTeamCleanup
