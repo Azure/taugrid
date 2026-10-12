@@ -11,48 +11,86 @@ from tau.jupyter.runs import LIMIT, ReadError, list_namespaces, listing_items, t
 PROFILE_LIMIT = 200
 
 
+def _visible(namespace, namespaces):
+    """Validate one visible namespace name against a discovery listing.
+
+    A name outside the listing is refused rather than trusted, so a request
+    value never authorizes itself. This is the only place a name is accepted;
+    it never selects a value.
+    """
+    validate_target(namespace)
+    if not any(row["name"] == namespace for row in namespaces):
+        raise ReadError("Namespace is not in the visible list. Refresh destinations or ask the operator for namespace read permission.")
+    return namespace
+
+
 def _pick_namespace(namespace, namespaces):
     """The one namespace the catalog reads, or ``None`` when none is visible.
 
     A request that omits ``namespace`` lets discovery pick the first visible
-    namespace. The caller cannot know which one that is, so the Jupyter handler
-    resolves it here (under the cluster-wide grant) and authorizes
-    ``taugrid:<resolved>`` before this function's caller reads profiles and
-    queues. A namespace outside the visible list is refused rather than trusted,
-    so the request value never authorizes itself.
+    namespace. This selection happens once, in :func:`resolve_destinations`; its
+    result is what the handler authorizes, and the discovery snapshot is then
+    handed to :func:`list_destinations` so the read cannot pick again.
     """
     if namespace:
-        validate_target(namespace)
-        if not any(row["name"] == namespace for row in namespaces):
-            raise ReadError("Namespace is not in the visible list. Refresh destinations or ask the operator for namespace read permission.")
-        return namespace
+        return _visible(namespace, namespaces)
     if namespaces:
         return namespaces[0]["name"]
     return None
 
 
-def resolve_destination_namespace(client, namespace=None):
-    """Resolve the namespace ``list_destinations`` would read, without reading it.
+def _resolved_namespace(namespace, namespaces):
+    """Validate an already-resolved namespace against the listing it came from.
 
-    Discovery is a cluster-wide list, so the coarse ``taugrid`` grant covers
-    this. The returned namespace is the value the handler must authorize as
-    ``taugrid:<namespace>`` before any profile or LocalQueue read.
+    Unlike :func:`_pick_namespace` this never selects a value: ``None`` stays
+    ``None``, so a discovery that legitimately found no namespace keeps the
+    catalog empty instead of a later call silently succeeding into one. A name
+    is validated against the same snapshot it was resolved from, which keeps the
+    authorized value and the read value identical.
     """
-    return _pick_namespace(namespace, list_namespaces(client)["namespaces"])
+    return None if namespace is None else _visible(namespace, namespaces)
 
 
-def list_destinations(client, namespace=None, *, team=None, lane=None):
+def resolve_destinations(client, namespace=None):
+    """Resolve the namespace to authorize together with the listing it came from.
+
+    This is the *only* namespace discovery in the destinations path. The
+    returned namespace is the value the handler must authorize as
+    ``taugrid:<namespace>`` before any profile or LocalQueue read; the returned
+    snapshot is the same listing, handed to :func:`list_destinations` so the read
+    never resolves independently. Discovery itself is a cluster-wide list, so the
+    coarse ``taugrid`` grant covers this call.
+
+    ``None`` is a real result: discovery found no visible namespace, so no
+    namespaced read is authorized and the catalog stays empty. A namespace the
+    request names is validated against this snapshot and refused when it is not
+    visible.
+    """
+    discovery = list_namespaces(client)
+    return _pick_namespace(namespace, discovery["namespaces"]), discovery
+
+
+def list_destinations(client, namespace=None, *, team=None, lane=None, discovery=None):
     """Bounded, read-only destination choices for the native review.
+
+    ``discovery`` is the snapshot ``namespace`` was already resolved from. When
+    the handler supplies it (after authorizing the namespace it resolved), this
+    function performs no namespace discovery of its own and treats ``namespace``
+    as resolved: the read is bound to the value the authorization covered, and a
+    resolved ``None`` keeps the catalog empty. Omitting it resolves standalone,
+    which is only for direct callers with no authorization decision to bind to.
 
     ``team`` and ``lane`` are the caller scope the catalog is authorized
     against. They come from the server's own configuration and must be the same
     values the submission uses, so a profile offered here is the profile that
     can actually be submitted.
     """
-    discovery = list_namespaces(client)
-    namespaces = discovery["namespaces"]
+    if discovery is None:
+        discovery = list_namespaces(client)
+        namespace = _pick_namespace(namespace, discovery["namespaces"])
+    else:
+        namespace = _resolved_namespace(namespace, discovery["namespaces"])
     warnings = list(discovery["warnings"])
-    namespace = _pick_namespace(namespace, namespaces)
     catalog = {"profiles": [], "defaultQueue": None}
     try:
         catalog = destination_profiles(
