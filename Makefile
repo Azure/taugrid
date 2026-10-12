@@ -105,6 +105,10 @@ test:
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh
 	bash scripts/ci/tests/image-build-contract_test.sh
+	@echo "==> review patterns and notebook harness"
+	$(PYTHON) $(REPO_ROOT)/scripts/ci/check-review-patterns.py
+	$(PYTHON) $(REPO_ROOT)/scripts/ci/check-review-patterns.py --self-test
+	node --test tools/notebook-e2e-lifecycle.test.mjs
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"
 	@cd $(CORE_DIR) && go test ./...

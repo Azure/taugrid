@@ -1,0 +1,159 @@
+graph TD
+  classDef activity fill:#e0e7ff,stroke:#4338ca,stroke-width:2px;
+  classDef task fill:#fef3c7,stroke:#b45309,stroke-width:1px;
+  classDef story fill:#ecfdf5,stroke:#047857,stroke-width:1px;
+
+  A_Open_a_ready_notebook["Open a ready notebook"]:::activity
+  A_Submit_the_notebook["Submit the notebook"]:::activity
+  A_Watch_it_converge["Watch it converge"]:::activity
+  A_Inspect_the_cluster["Inspect the cluster"]:::activity
+  A_Recover_or_hand_off["Recover or hand off"]:::activity
+  A_Govern_tenant_capacity_and_access["Govern tenant capacity and access"]:::activity
+  A_Promote_and_operate_the_run["Promote and operate the run"]:::activity
+  A_Non_backbone_Test_isolation_of_the_brows["Non-backbone: Test isolation of the browser harnesses"]:::activity
+  A_Non_backbone_SDK_packaging_and_CI["Non-backbone: SDK packaging and CI"]:::activity
+  A_Non_backbone_Metrics_format_convergence["Non-backbone: Metrics format convergence"]:::activity
+  A_Open_a_ready_notebook --> A_Submit_the_notebook --> A_Watch_it_converge --> A_Inspect_the_cluster --> A_Recover_or_hand_off --> A_Govern_tenant_capacity_and_access --> A_Promote_and_operate_the_run --> A_Non_backbone_Test_isolation_of_the_brows --> A_Non_backbone_SDK_packaging_and_CI --> A_Non_backbone_Metrics_format_convergence
+
+  A_Open_a_ready_notebook_T_Get_the_panel["Get the panel"]:::task
+  A_Open_a_ready_notebook --> A_Open_a_ready_notebook_T_Get_the_panel
+  A_Open_a_ready_notebook_T_Get_the_panel_walking_skeleton_S0["[walking-skeleton] As a platform engineer, I want to ship a notebook template w…"]:::story
+  A_Open_a_ready_notebook_T_Get_the_panel --> A_Open_a_ready_notebook_T_Get_the_panel_walking_skeleton_S0
+  A_Open_a_ready_notebook_T_Get_the_panel_mvp_S0["[mvp] As a researcher, I want to paste a one-line cell into an exi…"]:::story
+  A_Open_a_ready_notebook_T_Get_the_panel --> A_Open_a_ready_notebook_T_Get_the_panel_mvp_S0
+  A_Open_a_ready_notebook_T_Choose_what_to_run["Choose what to run"]:::task
+  A_Open_a_ready_notebook --> A_Open_a_ready_notebook_T_Choose_what_to_run
+  A_Open_a_ready_notebook_T_Choose_what_to_run_walking_skeleton_S0["[walking-skeleton] As a researcher, I want profile and queue dropdowns populate…"]:::story
+  A_Open_a_ready_notebook_T_Choose_what_to_run --> A_Open_a_ready_notebook_T_Choose_what_to_run_walking_skeleton_S0
+  A_Open_a_ready_notebook_T_Choose_what_to_run_mvp_S0["[mvp] As a researcher, I want to see which profile and queue were …"]:::story
+  A_Open_a_ready_notebook_T_Choose_what_to_run --> A_Open_a_ready_notebook_T_Choose_what_to_run_mvp_S0
+  A_Open_a_ready_notebook_T_Choose_what_to_run_mvp_S1["[mvp] As a researcher, I want each offered profile to say whether …"]:::story
+  A_Open_a_ready_notebook_T_Choose_what_to_run --> A_Open_a_ready_notebook_T_Choose_what_to_run_mvp_S1
+  A_Open_a_ready_notebook_T_Pick_the_files_to_ship["Pick the files to ship"]:::task
+  A_Open_a_ready_notebook --> A_Open_a_ready_notebook_T_Pick_the_files_to_ship
+  A_Open_a_ready_notebook_T_Pick_the_files_to_ship_mvp_S0["[mvp] As a researcher, I want to pick companion files sitting besi…"]:::story
+  A_Open_a_ready_notebook_T_Pick_the_files_to_ship --> A_Open_a_ready_notebook_T_Pick_the_files_to_ship_mvp_S0
+  A_Open_a_ready_notebook_T_Pick_the_files_to_ship_mvp_S1["[mvp] As a researcher, I want the picker to bound what it reads an…"]:::story
+  A_Open_a_ready_notebook_T_Pick_the_files_to_ship --> A_Open_a_ready_notebook_T_Pick_the_files_to_ship_mvp_S1
+  A_Submit_the_notebook_T_Package_the_notebook["Package the notebook"]:::task
+  A_Submit_the_notebook --> A_Submit_the_notebook_T_Package_the_notebook
+  A_Submit_the_notebook_T_Package_the_notebook_walking_skeleton_S0["[walking-skeleton] As a researcher, I want the panel to resolve the notebook I …"]:::story
+  A_Submit_the_notebook_T_Package_the_notebook --> A_Submit_the_notebook_T_Package_the_notebook_walking_skeleton_S0
+  A_Submit_the_notebook_T_Package_the_notebook_mvp_S0["[mvp] As a researcher, I want unsupported notebook shapes refused …"]:::story
+  A_Submit_the_notebook_T_Package_the_notebook --> A_Submit_the_notebook_T_Package_the_notebook_mvp_S0
+  A_Submit_the_notebook_T_Render_the_workload["Render the workload"]:::task
+  A_Submit_the_notebook --> A_Submit_the_notebook_T_Render_the_workload
+  A_Submit_the_notebook_T_Render_the_workload_walking_skeleton_S0["[walking-skeleton] As a researcher, I want the panel to render a ray.io/v1 RayJ…"]:::story
+  A_Submit_the_notebook_T_Render_the_workload --> A_Submit_the_notebook_T_Render_the_workload_walking_skeleton_S0
+  A_Submit_the_notebook_T_Render_the_workload_walking_skeleton_S1["[walking-skeleton] As a researcher, I want the work that needs a GPU to execute…"]:::story
+  A_Submit_the_notebook_T_Render_the_workload --> A_Submit_the_notebook_T_Render_the_workload_walking_skeleton_S1
+  A_Submit_the_notebook_T_Render_the_workload_mvp_S0["[mvp] As a platform engineer, I want the Python renderer to match …"]:::story
+  A_Submit_the_notebook_T_Render_the_workload --> A_Submit_the_notebook_T_Render_the_workload_mvp_S0
+  A_Submit_the_notebook_T_Apply_it["Apply it"]:::task
+  A_Submit_the_notebook --> A_Submit_the_notebook_T_Apply_it
+  A_Submit_the_notebook_T_Apply_it_walking_skeleton_S0["[walking-skeleton] As a researcher, I want the panel to apply the workload and …"]:::story
+  A_Submit_the_notebook_T_Apply_it --> A_Submit_the_notebook_T_Apply_it_walking_skeleton_S0
+  A_Submit_the_notebook_T_Apply_it_mvp_S0["[mvp] As a researcher, I want a dry-run that renders without apply…"]:::story
+  A_Submit_the_notebook_T_Apply_it --> A_Submit_the_notebook_T_Apply_it_mvp_S0
+  A_Submit_the_notebook_T_Apply_it_mvp_S1["[mvp] As a researcher, I want the resolved namespace, queue and pr…"]:::story
+  A_Submit_the_notebook_T_Apply_it --> A_Submit_the_notebook_T_Apply_it_mvp_S1
+  A_Watch_it_converge_T_Read_training_progress["Read training progress"]:::task
+  A_Watch_it_converge --> A_Watch_it_converge_T_Read_training_progress
+  A_Watch_it_converge_T_Read_training_progress_walking_skeleton_S0["[walking-skeleton] As a researcher, I want a loss curve read from the run's hou…"]:::story
+  A_Watch_it_converge_T_Read_training_progress --> A_Watch_it_converge_T_Read_training_progress_walking_skeleton_S0
+  A_Watch_it_converge_T_Read_training_progress_mvp_S0["[mvp] As a researcher, I want loss parsed from the job's stdout wh…"]:::story
+  A_Watch_it_converge_T_Read_training_progress --> A_Watch_it_converge_T_Read_training_progress_mvp_S0
+  A_Watch_it_converge_T_Read_training_progress_r2_S0["[r2] As a researcher, I want the portal series API used as a fall…"]:::story
+  A_Watch_it_converge_T_Read_training_progress --> A_Watch_it_converge_T_Read_training_progress_r2_S0
+  A_Watch_it_converge_T_Read_GPU_usage["Read GPU usage"]:::task
+  A_Watch_it_converge --> A_Watch_it_converge_T_Read_GPU_usage
+  A_Watch_it_converge_T_Read_GPU_usage_mvp_S0["[mvp] As a researcher, I want per-device GPU utilization with expl…"]:::story
+  A_Watch_it_converge_T_Read_GPU_usage --> A_Watch_it_converge_T_Read_GPU_usage_mvp_S0
+  A_Watch_it_converge_T_Read_GPU_usage_mvp_S1["[mvp] I want scrape coverage and framebuffer usage shown together,…"]:::story
+  A_Watch_it_converge_T_Read_GPU_usage --> A_Watch_it_converge_T_Read_GPU_usage_mvp_S1
+  A_Watch_it_converge_T_Keep_it_live["Keep it live"]:::task
+  A_Watch_it_converge --> A_Watch_it_converge_T_Keep_it_live
+  A_Watch_it_converge_T_Keep_it_live_mvp_S0["[mvp] As a researcher, I want automatic polling with a visible int…"]:::story
+  A_Watch_it_converge_T_Keep_it_live --> A_Watch_it_converge_T_Keep_it_live_mvp_S0
+  A_Watch_it_converge_T_Keep_it_live_mvp_S1["[mvp] As a researcher, I want a completed run to say that live GPU…"]:::story
+  A_Watch_it_converge_T_Keep_it_live --> A_Watch_it_converge_T_Keep_it_live_mvp_S1
+  A_Inspect_the_cluster_T_Open_Ray["Open Ray"]:::task
+  A_Inspect_the_cluster --> A_Inspect_the_cluster_T_Open_Ray
+  A_Inspect_the_cluster_T_Open_Ray_walking_skeleton_S0["[walking-skeleton] As a researcher, I want a link to the Ray dashboard for my r…"]:::story
+  A_Inspect_the_cluster_T_Open_Ray --> A_Inspect_the_cluster_T_Open_Ray_walking_skeleton_S0
+  A_Inspect_the_cluster_T_Open_Ray_mvp_S0["[mvp] As a researcher, I want the dashboard embedded only when it …"]:::story
+  A_Inspect_the_cluster_T_Open_Ray --> A_Inspect_the_cluster_T_Open_Ray_mvp_S0
+  A_Inspect_the_cluster_T_Check_admission_and_pods["Check admission and pods"]:::task
+  A_Inspect_the_cluster --> A_Inspect_the_cluster_T_Check_admission_and_pods
+  A_Inspect_the_cluster_T_Check_admission_and_pods_mvp_S0["[mvp] As a researcher, I want the admission state and the Kueue me…"]:::story
+  A_Inspect_the_cluster_T_Check_admission_and_pods --> A_Inspect_the_cluster_T_Check_admission_and_pods_mvp_S0
+  A_Inspect_the_cluster_T_Check_admission_and_pods_mvp_S1["[mvp] As a researcher, I want the pod list with phase, node and re…"]:::story
+  A_Inspect_the_cluster_T_Check_admission_and_pods --> A_Inspect_the_cluster_T_Check_admission_and_pods_mvp_S1
+  A_Recover_or_hand_off_T_Read_the_failure["Read the failure"]:::task
+  A_Recover_or_hand_off --> A_Recover_or_hand_off_T_Read_the_failure
+  A_Recover_or_hand_off_T_Read_the_failure_walking_skeleton_S0["[walking-skeleton] As a researcher, I want diagnostics with severity, message a…"]:::story
+  A_Recover_or_hand_off_T_Read_the_failure --> A_Recover_or_hand_off_T_Read_the_failure_walking_skeleton_S0
+  A_Recover_or_hand_off_T_Read_the_failure_mvp_S0["[mvp] As a researcher, I want the suggested next command rendered …"]:::story
+  A_Recover_or_hand_off_T_Read_the_failure --> A_Recover_or_hand_off_T_Read_the_failure_mvp_S0
+  A_Recover_or_hand_off_T_Share_the_evidence["Share the evidence"]:::task
+  A_Recover_or_hand_off --> A_Recover_or_hand_off_T_Share_the_evidence
+  A_Recover_or_hand_off_T_Share_the_evidence_mvp_S0["[mvp] As a reviewer, I want a standalone HTML export of the panel,…"]:::story
+  A_Recover_or_hand_off_T_Share_the_evidence --> A_Recover_or_hand_off_T_Share_the_evidence_mvp_S0
+  A_Recover_or_hand_off_T_Share_the_evidence_r2_S0["[r2] As a reviewer, I want a deep link into the portal experiment…"]:::story
+  A_Recover_or_hand_off_T_Share_the_evidence --> A_Recover_or_hand_off_T_Share_the_evidence_r2_S0
+  A_Govern_tenant_capacity_and_access_T_State_what_is_governed["State what is governed"]:::task
+  A_Govern_tenant_capacity_and_access --> A_Govern_tenant_capacity_and_access_T_State_what_is_governed
+  A_Govern_tenant_capacity_and_access_T_State_what_is_governed_walking_skeleton_S0["[walking-skeleton] As a platform engineer, I want the plugin's scope documented…"]:::story
+  A_Govern_tenant_capacity_and_access_T_State_what_is_governed --> A_Govern_tenant_capacity_and_access_T_State_what_is_governed_walking_skeleton_S0
+  A_Govern_tenant_capacity_and_access_T_State_what_is_governed_mvp_S0["[mvp] As a tenant admin, I want to see which workspace, namespace …"]:::story
+  A_Govern_tenant_capacity_and_access_T_State_what_is_governed --> A_Govern_tenant_capacity_and_access_T_State_what_is_governed_mvp_S0
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct["Keep selection correct"]:::task
+  A_Govern_tenant_capacity_and_access --> A_Govern_tenant_capacity_and_access_T_Keep_selection_correct
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_walking_skeleton_S0["[walking-skeleton] As a tenant admin, I want only ready profiles offered from t…"]:::story
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct --> A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_walking_skeleton_S0
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_walking_skeleton_S1["[walking-skeleton] As a tenant admin, I want profiles filtered by the namespace…"]:::story
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct --> A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_walking_skeleton_S1
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_mvp_S0["[mvp] As a platform engineer, I want the plugin's readiness and ap…"]:::story
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct --> A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_mvp_S0
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_mvp_S1["[mvp] As a tenant admin, I want a submission refused when the prof…"]:::story
+  A_Govern_tenant_capacity_and_access_T_Keep_selection_correct --> A_Govern_tenant_capacity_and_access_T_Keep_selection_correct_mvp_S1
+  A_Govern_tenant_capacity_and_access_T_Keep_it_auditable["Keep it auditable"]:::task
+  A_Govern_tenant_capacity_and_access --> A_Govern_tenant_capacity_and_access_T_Keep_it_auditable
+  A_Govern_tenant_capacity_and_access_T_Keep_it_auditable_r2_S0["[r2] As a platform engineer, I want an auditable record of worksp…"]:::story
+  A_Govern_tenant_capacity_and_access_T_Keep_it_auditable --> A_Govern_tenant_capacity_and_access_T_Keep_it_auditable_r2_S0
+  A_Promote_and_operate_the_run_T_Reproduce_it["Reproduce it"]:::task
+  A_Promote_and_operate_the_run --> A_Promote_and_operate_the_run_T_Reproduce_it
+  A_Promote_and_operate_the_run_T_Reproduce_it_walking_skeleton_S0["[walking-skeleton] As an MLOps engineer, I want the submitted run to carry a re…"]:::story
+  A_Promote_and_operate_the_run_T_Reproduce_it --> A_Promote_and_operate_the_run_T_Reproduce_it_walking_skeleton_S0
+  A_Promote_and_operate_the_run_T_Reproduce_it_mvp_S0["[mvp] As an MLOps engineer, I want the payload digest visible on t…"]:::story
+  A_Promote_and_operate_the_run_T_Reproduce_it --> A_Promote_and_operate_the_run_T_Reproduce_it_mvp_S0
+  A_Promote_and_operate_the_run_T_Promote_the_artifacts["Promote the artifacts"]:::task
+  A_Promote_and_operate_the_run --> A_Promote_and_operate_the_run_T_Promote_the_artifacts
+  A_Promote_and_operate_the_run_T_Promote_the_artifacts_mvp_S0["[mvp] As an MLOps engineer, I want the checkpoints and artifacts a…"]:::story
+  A_Promote_and_operate_the_run_T_Promote_the_artifacts --> A_Promote_and_operate_the_run_T_Promote_the_artifacts_mvp_S0
+  A_Promote_and_operate_the_run_T_Promote_the_artifacts_mvp_S1["[mvp] As an MLOps engineer, I want to promote a checkpoint to a du…"]:::story
+  A_Promote_and_operate_the_run_T_Promote_the_artifacts --> A_Promote_and_operate_the_run_T_Promote_the_artifacts_mvp_S1
+  A_Promote_and_operate_the_run_T_Operate_it["Operate it"]:::task
+  A_Promote_and_operate_the_run --> A_Promote_and_operate_the_run_T_Operate_it
+  A_Promote_and_operate_the_run_T_Operate_it_mvp_S0["[mvp] As an SRE, I want run lifecycle state visible after the RayC…"]:::story
+  A_Promote_and_operate_the_run_T_Operate_it --> A_Promote_and_operate_the_run_T_Operate_it_mvp_S0
+  A_Promote_and_operate_the_run_T_Operate_it_mvp_S1["[mvp] I want the run's metrics history retained beyond the run, so…"]:::story
+  A_Promote_and_operate_the_run_T_Operate_it --> A_Promote_and_operate_the_run_T_Operate_it_mvp_S1
+  A_Promote_and_operate_the_run_T_Operate_it_r2_S0["[r2] As an SRE, I want per-team cost attribution for the run, so …"]:::story
+  A_Promote_and_operate_the_run_T_Operate_it --> A_Promote_and_operate_the_run_T_Operate_it_r2_S0
+  A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harnesses["Test isolation of the browser harnesses"]:::task
+  A_Non_backbone_Test_isolation_of_the_brows --> A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harnesses
+  A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harne["[walking-skeleton] As a platform engineer, I want the browser e2e harnesses to …"]:::story
+  A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harnesses --> A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harne
+  A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harne["[mvp] As a platform engineer, I want each harness to use a unique …"]:::story
+  A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harnesses --> A_Non_backbone_Test_isolation_of_the_brows_T_Test_isolation_of_the_browser_harne
+  A_Non_backbone_SDK_packaging_and_CI_T_SDK_packaging_and_CI["SDK packaging and CI"]:::task
+  A_Non_backbone_SDK_packaging_and_CI --> A_Non_backbone_SDK_packaging_and_CI_T_SDK_packaging_and_CI
+  A_Non_backbone_SDK_packaging_and_CI_T_SDK_packaging_and_CI_walking_skeleton_S0["[walking-skeleton] As a platform engineer, I want the widgets extra to declare …"]:::story
+  A_Non_backbone_SDK_packaging_and_CI_T_SDK_packaging_and_CI --> A_Non_backbone_SDK_packaging_and_CI_T_SDK_packaging_and_CI_walking_skeleton_S0
+  A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence["Metrics format convergence"]:::task
+  A_Non_backbone_Metrics_format_convergence --> A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence
+  A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence_mvp_S0["[mvp] As a platform engineer, I want a written comparison of the t…"]:::story
+  A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence --> A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence_mvp_S0
+  A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence_r2_S0["[r2] As a platform engineer, I want tfevents converted into house…"]:::story
+  A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence --> A_Non_backbone_Metrics_format_convergence_T_Metrics_format_convergence_r2_S0
