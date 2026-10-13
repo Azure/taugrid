@@ -37,41 +37,49 @@ type discoveredGPUFlavor struct {
 func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavors(
 	ctx context.Context,
 	mutate bool,
-) ([]tauv1alpha1.TauManagedResourceStatus, bool, error) {
+) ([]tauv1alpha1.TauManagedResourceStatus, []tauv1alpha1.TauResourceCapacityStatus, bool, error) {
 	queueNames, err := r.discoveredGPUFlavorQueueNames(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if len(queueNames) == 0 {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 
 	flavors, err := r.discoverGPUFlavors(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 
 	managed := make([]tauv1alpha1.TauManagedResourceStatus, 0, len(flavors))
+	capacity := make([]tauv1alpha1.TauResourceCapacityStatus, 0, len(flavors))
 	drifted := false
 	for _, flavor := range flavors {
+		capacity = append(capacity, tauv1alpha1.TauResourceCapacityStatus{
+			Flavor:   flavor.name,
+			Resource: nvidiaGPUResourceName,
+			Capacity: flavor.capacity.DeepCopy(),
+		})
 		object, changed, err := r.reconcileDiscoveredGPUFlavor(ctx, flavor, mutate)
 		if err != nil {
-			return managed, true, err
+			return managed, capacity, true, err
 		}
 		drifted = drifted || changed
 		if object != nil && object.GetLabels()[labelManagedBy] == labelManagedByValue {
 			managed = append(managed, managedResourceStatus(resourceFlavorGVK, object))
 		}
 	}
-
+	// Preserve the v0 baseline queue contract for installations that explicitly
+	// opt into discovery. Team-backed workspaces never use this path: operators
+	// assign their quota through TauTeam and TauWorkspace resources.
 	for _, queueName := range queueNames {
-		changed, err := r.reconcileDiscoveredGPUQuota(ctx, queueName, flavors, mutate)
+		changed, err := r.reconcileLegacyDiscoveredGPUQuota(ctx, queueName, flavors, mutate)
 		if err != nil {
-			return managed, true, err
+			return managed, capacity, true, err
 		}
 		drifted = drifted || changed
 	}
-	return managed, drifted, nil
+	return managed, capacity, drifted, nil
 }
 
 func (r *TauClusterReconciler) discoveredGPUFlavorQueueNames(ctx context.Context) ([]string, error) {
@@ -200,7 +208,7 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavor(
 	return current, false, nil
 }
 
-func (r *TauClusterReconciler) reconcileDiscoveredGPUQuota(
+func (r *TauClusterReconciler) reconcileLegacyDiscoveredGPUQuota(
 	ctx context.Context,
 	queueName string,
 	flavors []discoveredGPUFlavor,
@@ -208,7 +216,10 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUQuota(
 ) (bool, error) {
 	queue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: queueName}, queue); err != nil {
-		return true, fmt.Errorf("get managed ClusterQueue %q for GPU discovery: %w", queueName, err)
+		return true, fmt.Errorf("get legacy ClusterQueue %q for GPU discovery: %w", queueName, err)
+	}
+	if queue.GetLabels()[labelDiscoverGPUFlavors] != "true" {
+		return true, fmt.Errorf("refusing to update ClusterQueue %q without %s=true", queueName, labelDiscoverGPUFlavors)
 	}
 
 	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")

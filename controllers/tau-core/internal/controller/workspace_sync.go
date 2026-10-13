@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,22 +16,20 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	targetNamespace := resolvedNamespace(workspace)
 	conditions := []metav1.Condition{}
 
-	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace)
+	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace, false)
 	if namespaceErr != nil {
+		if errors.Is(namespaceErr, errLegacyNamespaceOwnershipStampFailed) {
+			return ctrl.Result{}, namespaceErr
+		}
 		namespaceReady = false
-		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "NamespaceReconcileFailed", namespaceErr.Error(), workspace.Generation))
+		reason := "NamespaceReconcileFailed"
+		if errors.Is(namespaceErr, errNamespaceOwnershipUnverified) {
+			reason = "NamespaceOwnershipUnverified"
+		}
+		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, reason, namespaceErr.Error(), workspace.Generation))
 	} else if namespaceReady {
 		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, false, "NoDrift", "target namespace is reconciled", workspace.Generation))
 	}
-	if namespaceReady {
-		previousNamespace := workspace.Status.Target.ResolvedNamespace
-		if previousNamespace != "" && previousNamespace != targetNamespace {
-			if err := r.cleanupStaleNamespaceMetadata(ctx, workspace.Name, previousNamespace); err != nil {
-				conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "NamespaceCleanupFailed", err.Error(), workspace.Generation))
-			}
-		}
-	}
-
 	rbacReady := false
 	rbacMessage := "waiting for target namespace reconciliation"
 	var rbacErr error
@@ -48,21 +47,53 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	}
 	conditions = append(conditions, boolCondition(tauv1alpha1.ConditionRBACReady, rbacReady && rbacErr == nil, reasonFor(rbacReady && rbacErr == nil, rbacReason, "AuthorizationNotReady"), rbacMessage, workspace.Generation))
 
-	queueStatus := tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue}
+	queueStatus := workspace.Status.Queue
+	if queueStatus.LocalQueue == "" {
+		queueStatus.LocalQueue = workspaceLocalQueueName(workspace)
+	}
 	queueReady := false
 	queueMessage := "waiting for target namespace reconciliation"
 	if namespaceReady {
-		queueStatus, queueReady, queueMessage = r.reconcileQueue(ctx, workspace, targetNamespace)
+		var queueErr error
+		candidateQueueStatus, candidateQueueReady, candidateQueueMessage, candidateQueueErr :=
+			r.reconcileQueue(ctx, workspace, targetNamespace)
+		queueReady, queueMessage, queueErr = candidateQueueReady, candidateQueueMessage, candidateQueueErr
+		if queueReady || workspace.Status.Queue.LocalQueue == "" {
+			queueStatus = candidateQueueStatus
+		}
+		if errors.Is(queueErr, errWorkspaceSpecChanged) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		if queueReady {
+			var refreshed bool
+			refreshed, namespaceErr = r.reconcileNamespace(ctx, workspace, targetNamespace, true)
+			if namespaceErr != nil || !refreshed {
+				namespaceReady = false
+				queueReady = false
+				if namespaceErr != nil {
+					queueMessage = namespaceErr.Error()
+					conditions = append(conditions, boolCondition(
+						tauv1alpha1.ConditionDriftDetected,
+						true,
+						"NamespaceQueueActivationFailed",
+						namespaceErr.Error(),
+						workspace.Generation,
+					))
+				}
+			}
+		}
 	} else if namespaceErr != nil {
 		queueMessage = namespaceErr.Error()
 	}
 	conditions = append(conditions, boolCondition(tauv1alpha1.ConditionQueueReady, queueReady, reasonFor(queueReady, "QueueReady", "QueueNotReady"), queueMessage, workspace.Generation))
 	queueNamespace, queueName := "", ""
-	if namespaceReady {
-		queueNamespace, queueName = targetNamespace, workspace.Spec.Queue
+	if queueReady {
+		queueNamespace, queueName = targetNamespace, queueStatus.LocalQueue
 	}
-	if err := r.cleanupStaleWorkspaceLocalQueues(ctx, workspace.Name, queueNamespace, queueName); err != nil {
-		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "QueueCleanupFailed", err.Error(), workspace.Generation))
+	if queueReady {
+		if err := r.cleanupStaleWorkspaceLocalQueues(ctx, workspace, queueNamespace, queueName); err != nil {
+			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "QueueCleanupFailed", err.Error(), workspace.Generation))
+		}
 	}
 
 	workloadIdentityReady := false
@@ -88,23 +119,39 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	}
 	conditions = append(conditions, condition(tauv1alpha1.ConditionWorkloadIdentityReady, workloadIdentityStatus, workloadIdentityReason, workloadIdentityMessage, workspace.Generation))
 
+	currentTargetReady := namespaceReady && rbacReady && rbacErr == nil && queueReady
+	if workspace.Spec.WorkloadIdentity != nil {
+		currentTargetReady = currentTargetReady && workloadIdentityReady && workloadIdentityErr == nil
+	}
 	keepNamespace, keepServiceAccount := "", ""
 	keepResearcherBinding := false
-	if namespaceReady {
+	if currentTargetReady {
 		keepNamespace = targetNamespace
 		keepResearcherBinding = authorizationMode(workspace) != tauv1alpha1.AuthorizationModeClusterWide
 		if workspace.Spec.WorkloadIdentity != nil {
 			keepServiceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
 		}
+		if err := r.cleanupStaleTargetRBAC(ctx, workspace, keepNamespace, keepServiceAccount, keepResearcherBinding); err != nil {
+			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+		}
 	}
-	if err := r.cleanupStaleTargetRBAC(ctx, workspace.Name, keepNamespace, keepServiceAccount, keepResearcherBinding); err != nil {
-		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+	if currentTargetReady {
+		previousNamespace := workspace.Status.Target.ResolvedNamespace
+		if previousNamespace != "" && previousNamespace != targetNamespace {
+			if err := r.cleanupStaleNamespaceMetadata(ctx, workspace.Name, previousNamespace); err != nil {
+				conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "NamespaceCleanupFailed", err.Error(), workspace.Generation))
+			}
+		}
 	}
 
+	resolvedTarget := workspace.Status.Target.ResolvedNamespace
+	if namespaceReady {
+		resolvedTarget = targetNamespace
+	}
 	desired := tauv1alpha1.TauWorkspaceStatus{
 		Phase:              workspacePhase(conditions),
 		ObservedGeneration: workspace.Generation,
-		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: targetNamespace},
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: resolvedTarget},
 		Queue:              queueStatus,
 		Conditions:         mergeConditions(workspace.Status.Conditions, conditions),
 	}
