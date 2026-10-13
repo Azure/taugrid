@@ -25,6 +25,7 @@ type runRouting struct {
 	submissionID           string
 	configHash             string
 	workspaceQueueResolved bool
+	workspaceClusterQueue  string
 }
 
 type runRoutingInput struct {

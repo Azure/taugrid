@@ -94,6 +94,21 @@ func applySelectedWorkloadProfile(
 	selection profile.Selection,
 	renderProfile profile.Profile,
 ) (unresolvedRunOptions, error) {
+	profileQueue := strings.TrimSpace(renderProfile.Queue)
+	if o.workspaceQueueResolved {
+		if strings.TrimSpace(o.queue) == "" {
+			return o, fmt.Errorf("verified TauWorkspace routing has no LocalQueue")
+		}
+		if strings.TrimSpace(o.workspaceClusterQueue) == "" && strings.TrimSpace(o.queue) != profileQueue {
+			return o, fmt.Errorf(
+				"verified TauWorkspace LocalQueue %q differs from workload profile %q queue %q but has no resolved ClusterQueue",
+				o.queue,
+				selection.Profile.Name,
+				profileQueue,
+			)
+		}
+		renderProfile.Queue = o.queue
+	}
 	if strings.TrimSpace(o.priorityTier) != "" &&
 		(strings.TrimSpace(o.workloadPriorityClass) != "" ||
 			strings.TrimSpace(o.podPriorityClass) != "" ||
@@ -215,7 +230,9 @@ func applySelectedWorkloadProfile(
 		o.disableDefaultPriorities = renderProfile.Topology.DisableDefaultPriorities
 	}
 	clusterQueue := ""
-	if o.selectedWorkloadProfile != nil {
+	if o.workspaceQueueResolved && strings.TrimSpace(o.workspaceClusterQueue) != "" {
+		clusterQueue = o.workspaceClusterQueue
+	} else if o.selectedWorkloadProfile != nil {
 		clusterQueue = o.selectedWorkloadProfile.ClusterQueue
 	}
 	if clusterQueue == "" {

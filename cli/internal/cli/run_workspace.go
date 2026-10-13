@@ -116,6 +116,7 @@ func applyWorkspaceDefaultsWithConnection(
 	if !queueAuto {
 		o.queue = workspaceQueue
 		o.workspaceQueueResolved = workspaceQueue != ""
+		o.workspaceClusterQueue = placement.ClusterQueue
 	}
 	if o.priorityTier == "" {
 		o.priorityTier = workspacePriorityTier(w.Spec.Defaults.Priority)

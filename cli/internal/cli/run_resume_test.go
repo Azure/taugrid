@@ -26,6 +26,7 @@ import (
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/status"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -216,7 +217,16 @@ policy:
 	currentWorkspace.Spec.Target.Namespace = "catalog-namespace"
 	currentWorkspace.Spec.Defaults.OutputRoot = "/data/workspaces/sample"
 	currentWorkspace.Status.Target.ResolvedNamespace = "catalog-namespace"
-	currentWorkspace.Status.Queue.LocalQueue = "jobqueue"
+	currentWorkspace.Status.Queue.LocalQueue = "tau-ws-sample"
+	currentWorkspace.Status.Queue.ClusterQueue = "tau-ws-sample"
+	resolvedProfile := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
+	resolvedProfile.Name = "test-routing"
+	resolvedProfile.Applicability.Namespaces = []string{"catalog-namespace"}
+	resolvedProfile.Applicability.Teams = nil
+	resolvedProfile.Applicability.Lanes = nil
+	resolvedProfile.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "catalog-namespace", Name: "jobqueue", ClusterQueue: "legacy-cq",
+	}}
 	command := newResumeTestCommand(
 		func(*cobra.Command) runConnectionEnsurer { return ensurer },
 		resumeCommandHooks{
@@ -236,6 +246,13 @@ policy:
 				}
 				return currentWorkspace, nil
 			},
+			resolveProfile: func(ctx context.Context, options unresolvedRunOptions) (unresolvedRunOptions, error) {
+				return selectRunWorkloadProfile(
+					ctx,
+					options,
+					testRunProviderForResolved(t, 11, resolvedProfile),
+				)
+			},
 			validateTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
 				validateCalls++
 				job := resolvedJobRequestForTest(target)
@@ -246,7 +263,9 @@ policy:
 				if options.dryRun != "client" ||
 					options.workspace != "sample" ||
 					options.workspaceResultScope != "/data/workspaces/sample" ||
-					options.queue != "jobqueue" {
+					options.queue != "tau-ws-sample" ||
+					options.selectedWorkloadProfile == nil ||
+					options.selectedWorkloadProfile.ClusterQueue != "tau-ws-sample" {
 					t.Fatalf("preflight Job options = %#v", options)
 				}
 				return nil

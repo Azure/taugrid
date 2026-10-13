@@ -16,7 +16,7 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	targetNamespace := resolvedNamespace(workspace)
 	conditions := []metav1.Condition{}
 
-	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace)
+	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace, false)
 	if namespaceErr != nil {
 		namespaceReady = false
 		reason := "NamespaceReconcileFailed"
@@ -53,9 +53,9 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 		if errors.Is(queueErr, errWorkspaceSpecChanged) {
 			return ctrl.Result{Requeue: true}, nil
 		}
-		if queueReady && workspace.Spec.TeamRef != nil {
+		if queueReady {
 			var refreshed bool
-			refreshed, namespaceErr = r.reconcileNamespace(ctx, workspace, targetNamespace)
+			refreshed, namespaceErr = r.reconcileNamespace(ctx, workspace, targetNamespace, true)
 			if namespaceErr != nil || !refreshed {
 				namespaceReady = false
 				queueReady = false
