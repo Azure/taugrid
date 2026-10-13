@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS microsoft-go
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS microsoft-go
 
 ARG MICROSOFT_GO_COMMIT=5e399a544ddb40d8ae13d077b10dc9a91d8b36e1
 
@@ -22,7 +22,7 @@ RUN git init \
     && ../bin/go version | grep -F "go1.26.9" \
     && GOEXPERIMENT=systemcrypto ../bin/go env GOEXPERIMENT | grep -Fx "systemcrypto"
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS builder
 
 COPY --from=microsoft-go /tmp/microsoft-go/go /usr/local/microsoft-go
 ENV GOROOT=/usr/local/microsoft-go \

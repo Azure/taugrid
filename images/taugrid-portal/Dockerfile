@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY portal/frontend ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.26.8-1-azurelinux3.0 AS builder
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1-azurelinux3.0 AS builder
 
 ENV GOTOOLCHAIN=go1.26.9 \
     MS_GOTOOLCHAIN_ALLOW_NON_LOCAL=1
