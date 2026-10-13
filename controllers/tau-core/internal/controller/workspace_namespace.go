@@ -72,7 +72,7 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	if ownerUID == "" &&
 		workspace.UID != "" &&
 		!hasExplicitNamespaceAdoptionEvidence(workspace, &namespace) &&
-		!hasAuthoritativeLegacyNamespaceContinuity(workspace, targetNamespace) {
+		!hasAuthoritativeLegacyNamespaceContinuity(workspace, &namespace, targetNamespace) {
 		ownership := "has no TauWorkspace ownership metadata"
 		if owner == workspace.Name {
 			ownership = "has legacy ownership metadata without an owner UID"
@@ -153,7 +153,14 @@ func (r *TauWorkspaceReconciler) namespaceLocalQueueName(
 	return name, nil
 }
 
-func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspace, targetNamespace string) bool {
+func hasAuthoritativeLegacyNamespaceContinuity(
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+	targetNamespace string,
+) bool {
+	if namespace.Labels[labelWorkspace] != workspace.Name {
+		return false
+	}
 	if workspace.Status.Target.ResolvedNamespace != targetNamespace {
 		return false
 	}
@@ -170,8 +177,18 @@ func hasAuthoritativeLegacyNamespaceContinuity(workspace *tauv1alpha1.TauWorkspa
 		return false
 	}
 	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
-	return drift != nil &&
-		(drift.Status == metav1.ConditionFalse || drift.Reason == "NamespaceReconcileFailed")
+	if drift == nil {
+		return false
+	}
+	if drift.Status == metav1.ConditionFalse {
+		return true
+	}
+	switch drift.Reason {
+	case "NamespaceReconcileFailed", "RBACCleanupFailed", "QueueCleanupFailed", "NamespaceCleanupFailed":
+		return true
+	default:
+		return false
+	}
 }
 
 func hasExplicitNamespaceAdoptionEvidence(

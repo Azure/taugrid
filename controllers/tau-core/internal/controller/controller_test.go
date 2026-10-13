@@ -1508,6 +1508,47 @@ func TestTeamWorkspacePreservesLegacyLocalQueueAndCreatesManagedQueue(t *testing
 	}
 }
 
+func TestTeamWorkspaceRejectsForeignManagedLocalQueueNameCollision(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	foreign := testLocalQueue("aurora", workspaceClusterQueueName(workspace.Name), "external-cq")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, team, flavor, foreign, testClusterQueue("external-cq")).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	status, ready, message, err := reconciler.reconcileQueue(ctx, workspace, "aurora")
+	if err != nil {
+		t.Fatalf("reconcile queue: %v", err)
+	}
+	if ready {
+		t.Fatalf("foreign LocalQueue unexpectedly Ready: %#v", status)
+	}
+	if !strings.Contains(message, "not owned") ||
+		!strings.Contains(message, `instead of "tau-ws-aurora"`) {
+		t.Fatalf("queue message = %q, want ownership and target conflict", message)
+	}
+	got := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(foreign), got); err != nil {
+		t.Fatalf("Get foreign LocalQueue: %v", err)
+	}
+	if clusterQueue, _, _ := unstructured.NestedString(got.Object, "spec", "clusterQueue"); clusterQueue != "external-cq" {
+		t.Fatalf("foreign LocalQueue target = %q, want external-cq unchanged", clusterQueue)
+	}
+}
+
 func TestTeamWorkspaceLeavesActiveLegacyWorkloadsOnOriginalQueue(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -2378,6 +2419,55 @@ func TestDegradedLegacyWorkspaceCanRecoverNamespaceOwnershipAfterTransientFailur
 	}
 	if got.Annotations[annotationOwnerUID] != string(workspace.UID) {
 		t.Fatalf("namespace owner UID = %q, want %q", got.Annotations[annotationOwnerUID], workspace.UID)
+	}
+}
+
+func TestCleanupFailedLegacyWorkspaceCanRecoverNamespaceOwnership(t *testing.T) {
+	for _, reason := range []string{"RBACCleanupFailed", "QueueCleanupFailed", "NamespaceCleanupFailed"} {
+		t.Run(reason, func(t *testing.T) {
+			ctx := context.Background()
+			scheme := testScheme(t)
+			retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:   "aurora",
+				Labels: map[string]string{labelWorkspace: "aurora"},
+			}}
+			workspace := testWorkspace("aurora")
+			workspace.UID = types.UID("workspace-uid")
+			workspace.Generation = 1
+			workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+				Phase:              tauv1alpha1.WorkspacePhaseDegraded,
+				ObservedGeneration: workspace.Generation,
+				Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: retained.Name},
+				Conditions: []metav1.Condition{{
+					Type:   tauv1alpha1.ConditionDriftDetected,
+					Status: metav1.ConditionTrue,
+					Reason: reason,
+				}},
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(workspace, retained, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+				WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+				Build()
+			reconciler := newTestWorkspaceReconciler(c)
+
+			reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+
+			var gotNamespace corev1.Namespace
+			if err := c.Get(ctx, client.ObjectKey{Name: retained.Name}, &gotNamespace); err != nil {
+				t.Fatalf("Get namespace: %v", err)
+			}
+			if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+			}
+			var gotWorkspace tauv1alpha1.TauWorkspace
+			if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+				t.Fatalf("Get workspace: %v", err)
+			}
+			if gotWorkspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+				t.Fatalf("workspace phase = %q, want Ready; conditions=%#v", gotWorkspace.Status.Phase, gotWorkspace.Status.Conditions)
+			}
+		})
 	}
 }
 

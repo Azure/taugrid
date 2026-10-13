@@ -161,6 +161,28 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			}, true,
 			"workspace LocalQueue is reconciled", nil
 	}
+	if workspace.Spec.TeamRef != nil {
+		if clusterQueueName != desiredClusterQueue {
+			return tauv1alpha1.WorkspaceQueueStatus{
+					LocalQueue: localQueueName, ClusterQueue: clusterQueueName,
+				}, false,
+				fmt.Sprintf(
+					"Team-managed LocalQueue %q is not owned by TauWorkspace %q and targets ClusterQueue %q instead of %q",
+					localQueueName,
+					workspace.Name,
+					clusterQueueName,
+					desiredClusterQueue,
+				), nil
+		}
+		return tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue: localQueueName, ClusterQueue: clusterQueueName,
+			}, false,
+			fmt.Sprintf(
+				"Team-managed LocalQueue %q is not owned by TauWorkspace %q",
+				localQueueName,
+				workspace.Name,
+			), nil
+	}
 	if strings.TrimSpace(clusterQueueName) == "" {
 		return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName}, false,
 			fmt.Sprintf("LocalQueue %q does not reference a ClusterQueue", localQueueName), nil
