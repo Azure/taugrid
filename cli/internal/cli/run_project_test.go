@@ -49,6 +49,7 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if resolution.Project == nil || resolution.Project.Name != "beta" {
 			t.Fatalf("project = %#v", resolution.Project)
 		}
@@ -71,6 +72,24 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 			t.Fatalf("expected duplicate target ambiguity, got %v", err)
 		}
 	})
+}
+
+func TestResolveRunRequestCarriesCatalogWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "beta-workspace"},
+	})
+	resolution, err := resolveRunRequest(root, "beta", "", "train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Project == nil || resolution.Project.Workspace != "beta-workspace" {
+		t.Fatalf("project = %#v", resolution.Project)
+	}
+	if resolution.Connection.Workspace != "beta-workspace" {
+		t.Fatalf("connection source workspace = %q", resolution.Connection.Workspace)
+	}
 }
 
 func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
@@ -471,6 +490,9 @@ func writeRunRoutingCatalog(t *testing.T, root string, projects map[string]proje
 	for _, name := range names {
 		project := projects[name]
 		fmt.Fprintf(&builder, "  %s:\n    path: %s\n    connection: %s\n", name, project.Path, project.Connection)
+		if project.Workspace != "" {
+			fmt.Fprintf(&builder, "    workspace: %s\n", project.Workspace)
+		}
 	}
 	writeRunRoutingFile(t, filepath.Join(root, projectcatalog.Filename), builder.String())
 }

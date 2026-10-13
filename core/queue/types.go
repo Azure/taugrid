@@ -33,11 +33,14 @@ type Snapshot struct {
 
 type Group struct {
 	Namespace        string            `json:"namespace,omitempty"`
+	Workspace        string            `json:"workspace,omitempty"`
 	GPUClass         string            `json:"gpuClass"`
 	Team             string            `json:"team"`
 	Lane             string            `json:"lane"`
 	Queue            string            `json:"queue"`
 	ClusterQueue     string            `json:"clusterQueue"`
+	Cohort           string            `json:"cohort,omitempty"`
+	QuotaScope       string            `json:"quotaScope,omitempty"`
 	ResourceFlavor   string            `json:"resourceFlavor"`
 	Presets          []string          `json:"presets"`
 	QueueFound       bool              `json:"queueFound"`
