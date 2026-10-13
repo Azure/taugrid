@@ -17,7 +17,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var errNamespaceOwnershipUnverified = errors.New("namespace ownership is not verified")
+var (
+	errNamespaceOwnershipUnverified        = errors.New("namespace ownership is not verified")
+	errLegacyNamespaceOwnershipStampFailed = errors.New("legacy namespace ownership stamp failed")
+)
 
 func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 	if workspace.Spec.Target.Namespace != "" {
@@ -72,6 +75,10 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	}
 	explicitAdoption := hasExplicitNamespaceAdoptionEvidence(workspace, &namespace)
 	ownerUID := namespace.Annotations[annotationOwnerUID]
+	legacyPartialContinuity := ownerUID == "" &&
+		workspace.UID != "" &&
+		!explicitAdoption &&
+		hasLegacyPartialReconcileNamespaceContinuity(workspace, &namespace)
 	if ownerUID != "" && ownerUID != string(workspace.UID) && !explicitAdoption {
 		return false, fmt.Errorf(
 			"target namespace %q is retained from a different TauWorkspace UID %q; explicit operator adoption is required",
@@ -142,6 +149,9 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	}
 	if changed {
 		if err := r.Update(ctx, &namespace); err != nil {
+			if legacyPartialContinuity {
+				return false, fmt.Errorf("%w: %w", errLegacyNamespaceOwnershipStampFailed, err)
+			}
 			return false, err
 		}
 	}

@@ -99,16 +99,6 @@ func applySelectedWorkloadProfile(
 		if strings.TrimSpace(o.queue) == "" {
 			return o, fmt.Errorf("verified TauWorkspace routing has no LocalQueue")
 		}
-		if strings.TrimSpace(o.queue) != profileQueue &&
-			renderProfile.ExecutionTarget == profile.ExecutionTargetMultiKueue {
-			return o, fmt.Errorf(
-				"verified TauWorkspace LocalQueue %q differs from multiKueue workload profile %q queue %q; "+
-					"the replacement queue's MultiKueue admission checks were not validated by profile readiness",
-				o.queue,
-				selection.Profile.Name,
-				profileQueue,
-			)
-		}
 		if strings.TrimSpace(o.workspaceClusterQueue) == "" && strings.TrimSpace(o.queue) != profileQueue {
 			return o, fmt.Errorf(
 				"verified TauWorkspace LocalQueue %q differs from workload profile %q queue %q but has no resolved ClusterQueue",

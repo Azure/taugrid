@@ -18,6 +18,9 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 
 	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace, false)
 	if namespaceErr != nil {
+		if errors.Is(namespaceErr, errLegacyNamespaceOwnershipStampFailed) {
+			return ctrl.Result{}, namespaceErr
+		}
 		namespaceReady = false
 		reason := "NamespaceReconcileFailed"
 		if errors.Is(namespaceErr, errNamespaceOwnershipUnverified) {
@@ -44,12 +47,20 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	}
 	conditions = append(conditions, boolCondition(tauv1alpha1.ConditionRBACReady, rbacReady && rbacErr == nil, reasonFor(rbacReady && rbacErr == nil, rbacReason, "AuthorizationNotReady"), rbacMessage, workspace.Generation))
 
-	queueStatus := tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspaceLocalQueueName(workspace)}
+	queueStatus := workspace.Status.Queue
+	if queueStatus.LocalQueue == "" {
+		queueStatus.LocalQueue = workspaceLocalQueueName(workspace)
+	}
 	queueReady := false
 	queueMessage := "waiting for target namespace reconciliation"
 	if namespaceReady {
 		var queueErr error
-		queueStatus, queueReady, queueMessage, queueErr = r.reconcileQueue(ctx, workspace, targetNamespace)
+		candidateQueueStatus, candidateQueueReady, candidateQueueMessage, candidateQueueErr :=
+			r.reconcileQueue(ctx, workspace, targetNamespace)
+		queueReady, queueMessage, queueErr = candidateQueueReady, candidateQueueMessage, candidateQueueErr
+		if queueReady || workspace.Status.Queue.LocalQueue == "" {
+			queueStatus = candidateQueueStatus
+		}
 		if errors.Is(queueErr, errWorkspaceSpecChanged) {
 			return ctrl.Result{Requeue: true}, nil
 		}
