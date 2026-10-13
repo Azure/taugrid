@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -211,16 +212,65 @@ func hasLegacyPartialReconcileNamespaceContinuity(
 	workspace *tauv1alpha1.TauWorkspace,
 	namespace *corev1.Namespace,
 ) bool {
-	if !workspace.Spec.Target.CreateNamespace ||
-		workspace.Status.ObservedGeneration != 0 ||
-		workspace.Status.Target.ResolvedNamespace != "" ||
-		workspace.Status.Phase != "" ||
-		len(workspace.Status.Conditions) != 0 ||
-		workspace.CreationTimestamp.IsZero() ||
-		namespace.CreationTimestamp.IsZero() {
+	if !hasPristineLegacyWorkspaceStatus(workspace) {
 		return false
 	}
-	return !namespace.CreationTimestamp.Before(&workspace.CreationTimestamp)
+	if workspace.Spec.Target.CreateNamespace {
+		if namespace.CreationTimestamp.IsZero() {
+			return false
+		}
+		return !namespace.CreationTimestamp.Before(&workspace.CreationTimestamp)
+	}
+	if authorizationMode(workspace) != tauv1alpha1.AuthorizationModeClusterWide ||
+		namespace.Labels[labelWorkspaceLocalQueue] != workspace.Spec.Queue ||
+		namespace.Labels[labelKueueDefaultLocalQueue] != workspace.Spec.Queue {
+		return false
+	}
+	return managedFieldsOwnLabelAfter(
+		namespace.ManagedFields,
+		labelWorkspace,
+		workspace.CreationTimestamp,
+	)
+}
+
+func hasPristineLegacyWorkspaceStatus(workspace *tauv1alpha1.TauWorkspace) bool {
+	return workspace.Generation == 1 &&
+		workspace.Status.ObservedGeneration == 0 &&
+		workspace.Status.Target.ResolvedNamespace == "" &&
+		workspace.Status.Queue.LocalQueue == "" &&
+		workspace.Status.Queue.ClusterQueue == "" &&
+		workspace.Status.Queue.ClusterQueueUID == "" &&
+		workspace.Status.Phase == "" &&
+		len(workspace.Status.Conditions) == 0 &&
+		!workspace.CreationTimestamp.IsZero()
+}
+
+func managedFieldsOwnLabelAfter(
+	entries []metav1.ManagedFieldsEntry,
+	label string,
+	notBefore metav1.Time,
+) bool {
+	if notBefore.IsZero() {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Operation != metav1.ManagedFieldsOperationUpdate ||
+			entry.Time == nil ||
+			entry.Time.Before(&notBefore) ||
+			entry.FieldsV1 == nil {
+			continue
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(entry.FieldsV1.Raw, &fields); err != nil {
+			continue
+		}
+		metadata, _ := fields["f:metadata"].(map[string]any)
+		labels, _ := metadata["f:labels"].(map[string]any)
+		if _, ok := labels["f:"+label]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func hasExplicitNamespaceAdoptionEvidence(

@@ -260,6 +260,9 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if !apiequality.Semantic.DeepEqual(*refreshedSpec, workspace.Spec) {
 		return "", fmt.Errorf("%w: workspace %q", errWorkspaceSpecChanged, workspace.Name)
 	}
+	if err := r.validateTeamQueueTransitionExecution(ctx, &refreshed); err != nil {
+		return "", err
+	}
 
 	var team tauv1alpha1.TauTeam
 	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: workspace.Spec.TeamRef.Name, Namespace: workspace.Namespace}, &team); err != nil {
@@ -325,6 +328,70 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		return "", fmt.Errorf("reconcile team Cohort after workspace quota: %w", err)
 	}
 	return queue.GetName(), nil
+}
+
+func (r *TauWorkspaceReconciler) validateTeamQueueTransitionExecution(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
+	managedQueueName := workspaceClusterQueueName(workspace.Name)
+	if workspace.Status.Queue.LocalQueue == managedQueueName {
+		return nil
+	}
+	sourceLocalQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
+	if sourceLocalQueue == "" {
+		sourceLocalQueue = strings.TrimSpace(workspace.Spec.Queue)
+	}
+	if sourceLocalQueue == "" || sourceLocalQueue == managedQueueName {
+		return nil
+	}
+	localQueue := newQueueObject(localQueueGVK)
+	if err := r.apiReader().Get(ctx, client.ObjectKey{
+		Name:      sourceLocalQueue,
+		Namespace: resolvedNamespace(workspace),
+	}, localQueue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("read source LocalQueue %q before team migration: %w", sourceLocalQueue, err)
+	}
+	sourceClusterQueue, found, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+	if err != nil {
+		return fmt.Errorf("read source LocalQueue %q ClusterQueue: %w", sourceLocalQueue, err)
+	}
+	sourceClusterQueue = strings.TrimSpace(sourceClusterQueue)
+	if !found || sourceClusterQueue == "" {
+		return fmt.Errorf("source LocalQueue %q has no ClusterQueue before team migration", sourceLocalQueue)
+	}
+	clusterQueue := newQueueObject(clusterQueueGVK)
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: sourceClusterQueue}, clusterQueue); err != nil {
+		return fmt.Errorf("read source ClusterQueue %q before team migration: %w", sourceClusterQueue, err)
+	}
+	admissionChecks, err := clusterQueueAdmissionCheckNames(clusterQueue)
+	if err != nil {
+		return fmt.Errorf("read source ClusterQueue %q admission checks before team migration: %w", sourceClusterQueue, err)
+	}
+	for _, name := range admissionChecks {
+		admissionCheck := newQueueObject(admissionCheckGVK)
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name}, admissionCheck); err != nil {
+			return fmt.Errorf("read source AdmissionCheck %q before team migration: %w", name, err)
+		}
+		controllerName, err := admissionCheckControllerName(admissionCheck)
+		if err != nil {
+			return fmt.Errorf("read source AdmissionCheck %q controller before team migration: %w", name, err)
+		}
+		if controllerName == multiKueueAdmissionCheckController {
+			return fmt.Errorf(
+				"cannot migrate workspace %q to team %q: source ClusterQueue %q uses MultiKueue AdmissionCheck %q, "+
+					"but the Team-managed ClusterQueue does not preserve MultiKueue execution wiring",
+				workspace.Name,
+				workspace.Spec.TeamRef.Name,
+				sourceClusterQueue,
+				name,
+			)
+		}
+	}
+	return nil
 }
 
 func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(
