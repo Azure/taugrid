@@ -461,6 +461,40 @@ func TestRunSelectionUsesVerifiedWorkspaceQueueAfterTeamMigration(t *testing.T) 
 	}
 }
 
+func TestRunSelectionRejectsUnverifiedMultiKueueQueueAfterTeamMigration(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "legacy-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "tau-ws-training"
+	workspace.Status.Queue.ClusterQueue = "tau-ws-training"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	_, err = selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err == nil || !strings.Contains(err.Error(), "MultiKueue admission checks were not validated") {
+		t.Fatalf("select migrated multiKueue workspace profile error = %v", err)
+	}
+}
+
 func TestProfileRefreshDistinguishesConfigAssertionsFromPriorRevisionValues(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.engine = runconfig.EngineJob

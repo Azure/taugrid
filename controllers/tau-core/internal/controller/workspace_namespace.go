@@ -174,6 +174,9 @@ func hasAuthoritativeLegacyNamespaceContinuity(
 	if namespace.Labels[labelWorkspace] != workspace.Name {
 		return false
 	}
+	if hasLegacyPartialReconcileNamespaceContinuity(workspace, namespace) {
+		return true
+	}
 	if workspace.Status.Target.ResolvedNamespace != targetNamespace {
 		return false
 	}
@@ -202,6 +205,22 @@ func hasAuthoritativeLegacyNamespaceContinuity(
 	default:
 		return false
 	}
+}
+
+func hasLegacyPartialReconcileNamespaceContinuity(
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+) bool {
+	if !workspace.Spec.Target.CreateNamespace ||
+		workspace.Status.ObservedGeneration != 0 ||
+		workspace.Status.Target.ResolvedNamespace != "" ||
+		workspace.Status.Phase != "" ||
+		len(workspace.Status.Conditions) != 0 ||
+		workspace.CreationTimestamp.IsZero() ||
+		namespace.CreationTimestamp.IsZero() {
+		return false
+	}
+	return !namespace.CreationTimestamp.Before(&workspace.CreationTimestamp)
 }
 
 func hasExplicitNamespaceAdoptionEvidence(

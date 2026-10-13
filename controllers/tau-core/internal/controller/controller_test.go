@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
@@ -2407,12 +2408,16 @@ func TestWorkspaceRecreationCannotAdoptRetainedNamespaceFromOldUID(t *testing.T)
 func TestWorkspaceRecreationCannotAdoptUnannotatedLegacyNamespace(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
+	namespaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	workspaceCreated := metav1.NewTime(time.Now())
 	retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:   "aurora",
-		Labels: map[string]string{labelWorkspace: "aurora"},
+		Name:              "aurora",
+		CreationTimestamp: namespaceCreated,
+		Labels:            map[string]string{labelWorkspace: "aurora"},
 	}}
 	workspace := testWorkspace("aurora")
 	workspace.UID = types.UID("new-workspace-uid")
+	workspace.CreationTimestamp = workspaceCreated
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(workspace, retained).
@@ -2443,6 +2448,44 @@ func TestWorkspaceRecreationCannotAdoptUnannotatedLegacyNamespace(t *testing.T) 
 	var binding rbacv1.RoleBinding
 	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: retained.Name}, &binding); !apierrors.IsNotFound(err) {
 		t.Fatalf("recreated workspace received legacy retained namespace RBAC: %v", err)
+	}
+}
+
+func TestLegacyPartialReconcileCanRecoverControllerCreatedNamespace(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	namespaceCreated := metav1.NewTime(time.Now())
+	retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "aurora",
+		CreationTimestamp: namespaceCreated,
+		Labels:            map[string]string{labelWorkspace: "aurora"},
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.CreationTimestamp = workspaceCreated
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, retained, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: retained.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get workspace: %v", err)
+	}
+	if gotWorkspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("workspace phase = %q, want Ready; conditions=%#v", gotWorkspace.Status.Phase, gotWorkspace.Status.Conditions)
 	}
 }
 
