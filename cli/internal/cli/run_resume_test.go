@@ -20,11 +20,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	"github.com/Azure/taugrid/cli/internal/resume"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/status"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -215,7 +217,16 @@ policy:
 	currentWorkspace.Spec.Target.Namespace = "catalog-namespace"
 	currentWorkspace.Spec.Defaults.OutputRoot = "/data/workspaces/sample"
 	currentWorkspace.Status.Target.ResolvedNamespace = "catalog-namespace"
-	currentWorkspace.Status.Queue.LocalQueue = "jobqueue"
+	currentWorkspace.Status.Queue.LocalQueue = "tau-ws-sample"
+	currentWorkspace.Status.Queue.ClusterQueue = "tau-ws-sample"
+	resolvedProfile := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
+	resolvedProfile.Name = "test-routing"
+	resolvedProfile.Applicability.Namespaces = []string{"catalog-namespace"}
+	resolvedProfile.Applicability.Teams = nil
+	resolvedProfile.Applicability.Lanes = nil
+	resolvedProfile.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "catalog-namespace", Name: "jobqueue", ClusterQueue: "legacy-cq",
+	}}
 	command := newResumeTestCommand(
 		func(*cobra.Command) runConnectionEnsurer { return ensurer },
 		resumeCommandHooks{
@@ -235,6 +246,13 @@ policy:
 				}
 				return currentWorkspace, nil
 			},
+			resolveProfile: func(ctx context.Context, options unresolvedRunOptions) (unresolvedRunOptions, error) {
+				return selectRunWorkloadProfile(
+					ctx,
+					options,
+					testRunProviderForResolved(t, 11, resolvedProfile),
+				)
+			},
 			validateTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
 				validateCalls++
 				job := resolvedJobRequestForTest(target)
@@ -245,7 +263,9 @@ policy:
 				if options.dryRun != "client" ||
 					options.workspace != "sample" ||
 					options.workspaceResultScope != "/data/workspaces/sample" ||
-					options.queue != "jobqueue" {
+					options.queue != "tau-ws-sample" ||
+					options.selectedWorkloadProfile == nil ||
+					options.selectedWorkloadProfile.ClusterQueue != "tau-ws-sample" {
 					t.Fatalf("preflight Job options = %#v", options)
 				}
 				return nil
@@ -595,6 +615,54 @@ policy:
 	}
 	if routing.TargetOptions.workspace != "legacy-workspace" {
 		t.Fatalf("config workspace was not preserved: %#v", routing.TargetOptions)
+	}
+}
+
+func TestResumeCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace:       "descriptor-workspace",
+		WorkspaceUID:    "descriptor-uid",
+		ContextName:     "catalog-context",
+		SystemNamespace: defaultSystemNamespace(),
+		KubeconfigPath:  filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:       "descriptor-namespace",
+		Queue:           "descriptor-queue",
+	}}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "catalog-context" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"",
+		"",
+		false,
+		false,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if routing.KubeContext != "catalog-context" || routing.Namespace != "alpha-namespace" {
+		t.Fatalf("routing = %#v", routing)
 	}
 }
 
