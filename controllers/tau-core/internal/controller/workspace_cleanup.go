@@ -123,7 +123,9 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Contex
 	if ownerUID == "" && queue.GetUID() != "" && workspace.UID != "" {
 		return fmt.Errorf("refusing to delete ClusterQueue %q without authoritative owner UID", queue.GetName())
 	}
-	if expectedUID := workspace.Status.Queue.ClusterQueueUID; expectedUID != "" && string(queue.GetUID()) != expectedUID {
+	if expectedUID := workspace.Status.Queue.ClusterQueueUID; workspace.Status.Queue.ClusterQueue == queue.GetName() &&
+		expectedUID != "" &&
+		string(queue.GetUID()) != expectedUID {
 		return fmt.Errorf("refusing to delete ClusterQueue %q: UID changed from %q to %q", queue.GetName(), expectedUID, queue.GetUID())
 	}
 	if err := r.Delete(ctx, queue); err != nil && !apierrors.IsNotFound(err) {

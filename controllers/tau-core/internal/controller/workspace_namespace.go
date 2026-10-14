@@ -154,7 +154,7 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	}
 	if changed {
 		if err := r.Update(ctx, &namespace); err != nil {
-			if legacyPartialContinuity {
+			if legacyPartialContinuity || legacyExplicitAdoption {
 				return false, fmt.Errorf("%w: %w", errLegacyNamespaceOwnershipStampFailed, err)
 			}
 			return false, err

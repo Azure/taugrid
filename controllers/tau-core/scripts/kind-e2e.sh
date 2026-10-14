@@ -271,6 +271,27 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  name: admissionchecks.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: AdmissionCheck
+    listKind: AdmissionCheckList
+    plural: admissionchecks
+    singular: admissioncheck
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
   name: clusterqueues.kueue.x-k8s.io
 spec:
   group: kueue.x-k8s.io
@@ -1047,14 +1068,14 @@ while (( SECONDS < deadline )); do
   [[ "${migration_phase}" == "Ready" &&
     "${legacy_migration_queue}" == "migration" &&
     "${managed_migration_queue}" == "tau-ws-kind-migration" &&
-    "${namespace_migration_queue}" == "tau-ws-kind-migration" ]] && break
+    "${namespace_migration_queue}" == "migration" ]] && break
   sleep 1
 done
 if [[ "${migration_phase:-}" != "Ready" ||
   "${legacy_migration_queue:-}" != "migration" ||
   "${managed_migration_queue:-}" != "tau-ws-kind-migration" ||
-  "${namespace_migration_queue:-}" != "tau-ws-kind-migration" ]]; then
-  echo "existing workspace did not preserve its legacy queue and switch new submissions to the managed queue" >&2
+  "${namespace_migration_queue:-}" != "migration" ]]; then
+  echo "existing workspace did not preserve legacy routing while staging the managed queue" >&2
   kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o yaml >&2 || true
   kubectl -n kind-migration get localqueue.kueue.x-k8s.io/migration -o yaml >&2 || true
   kubectl -n kind-migration get localqueue.kueue.x-k8s.io/tau-ws-kind-migration -o yaml >&2 || true
