@@ -773,6 +773,48 @@ func TestLifecycleExplicitContextStillResolvesProjectWorkspace(t *testing.T) {
 	}
 }
 
+func TestLifecycleExplicitContextResolvesImplicitCatalogWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "beta-workspace"},
+	})
+	withRunRoutingCWD(t, filepath.Join(root, "alpha"))
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().String("context", "", "")
+	if err := command.Flags().Set("context", "explicit-context"); err != nil {
+		t.Fatal(err)
+	}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "explicit-context" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithEnsurer(
+		command,
+		"explicit-context",
+		"",
+		true,
+		false,
+		"",
+		&fakeRunConnectionEnsurer{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "explicit-context" || gotNamespace != "alpha-namespace" {
+		t.Fatalf("context=%q namespace=%q", gotContext, gotNamespace)
+	}
+}
+
 func TestWorkspaceControlPlaneResolutionDoesNotFetchWorkloadPlacement(t *testing.T) {
 	root := multiProjectRunRoutingRepo(t)
 	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{

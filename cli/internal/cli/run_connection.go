@@ -529,6 +529,21 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	if contextExplicit && kubeContext != "" && strings.TrimSpace(projectName) == "" {
+		source, err := discoverRunLifecycleConnectionSource(projectName)
+		if err == nil {
+			return resolveRunLifecycleConnectionFromSource(
+				cmd,
+				kubeContext,
+				namespace,
+				contextExplicit,
+				namespaceExplicit,
+				source,
+				ensurer,
+			)
+		}
+		if !strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
+			return "", "", nil, err
+		}
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorForStartDir()); err != nil {
 			return "", "", nil, err
 		}
