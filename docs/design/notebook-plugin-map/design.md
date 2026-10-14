@@ -30,12 +30,12 @@ Mining order and what each source settled.
 | 3 | `tau/jupyter/`, `tau/widgets/` | Implemented surface is real and wide: server extension, submit, runs, metrics, destinations, notebook_files; panel, embed, status, watcher, kube, session. |
 | 4 | `ROADMAP.md:17-21` | **"Today a cluster runs one active workspace, and researcher isolation is still gated on negative-access tests."** Multi-tenancy is a *Next* item, not delivered. |
 | 5 | `site/.../workspaces.md:38` | Concurrent tenant isolation is *"out of scope for this stage."* |
-| 6 | `docs/design/notebook-plugin.md:208-212` | The design already disclaims isolation: the path check is *"a directory-containment check, not a complete filesystem sandbox"* and *"Shared-server operators must not treat either check as tenant isolation."* |
-| 7 | `core/resourceprofile/workload.go:416` | `ProfileApplicability{Namespaces, Teams, Lanes}` exists with a `containsOrGlobal` check. |
-| 8 | `portal/internal/portal/jobs/jobs.go:253` | The portal's Jobs board **already filters profiles by namespace and team applicability** (`TestReadProfilesFiltersApplicabilityByNamespaceAndTeam`). |
-| 9 | `sdk/python/python/tau/_profile.py:48-90` | The Python plugin reads **neither** readiness-from-status **nor** applicability. It filters on `spec.workloadProfiles[].status.state`, a field the CRD does not populate. |
+| 6 | `docs/design/notebook-plugin.md:267-275` | The design already disclaims isolation: the path check is *"a directory-containment check, not a complete filesystem sandbox"* and *"Shared-server operators must not treat either check as tenant isolation."* |
+| 7 | `core/resourceprofile/workload.go:73-79,422-428` | `ProfileApplicability{Namespaces, Teams, Lanes}` exists with a `containsOrGlobal` check. |
+| 8 | `portal/internal/portal/jobs/jobs.go:250-258` | The portal's Jobs board **already filters profiles by namespace and team applicability** (`TestReadProfilesFiltersApplicabilityByNamespaceAndTeam`). |
+| 9 | `[comment: feiskyer PR#300]`; superseded by `sdk/python/python/tau/_profile.py:125-145` | **At the revision feiskyer reviewed** the Python plugin read neither readiness-from-status nor applicability: it filtered on `spec.workloadProfiles[].status.state`, a field the CRD does not populate. That code is gone. `_profile.py` is new in this PR and now reads readiness from the `Ready` condition (`sdk/python/python/tau/_profile.py:125-145`) and enforces applicability through `ProfileScope` (`sdk/python/python/tau/_profile.py:341-369`), proven by the negative control at `sdk/python/python/tests/test_widgets_core.py:163-176`. Recorded here as the defect that was fixed, not as current behaviour. |
 | 10 | `controllers/tau-core/api/v1alpha1/types.go:188` | Readiness actually lives at `status.workloadProfiles.profiles` (`profile.ProfileSetStatus`). |
-| 11 | `sdk/python/python/tau/_render.py:199-207` | Head pod is pinned `num-gpus: "0"` / `num-cpus: "0"`; GPUs exist only on `workerGroupSpecs`. The notebook executes on the **head**. |
+| 11 | `sdk/python/python/tau/_render.py:362-374` | Head pod is pinned `num-gpus: "0"` / `num-cpus: "0"`; GPUs exist only on `workerGroupSpecs`. The notebook executes on the **head**. |
 | 12 | `ROADMAP.md:73-83` | **"Not planned": model code, data-preparation logic, serving application semantics.** TauGrid is "a workflow and lifecycle layer." |
 | 13 | `GOVERNANCE.md:58-66` | Changes "with broad or difficult-to-reverse impact" — including **"new required services or major dependencies"** and **"security or identity models"** — must begin with an issue or design proposal. |
 | 14 | `GOVERNANCE.md:79-85` + `.github/CODEOWNERS:1` | All paths owned by `@Azure/taugrid-maintainers`. One code-owner approval required; authors cannot self-approve. |
@@ -70,8 +70,8 @@ This is the most valuable output of the context loop. Preference is **not unifor
 | **P11** | New required services / major deps need a design proposal and maintainer consensus. | `[code: GOVERNANCE.md:58-66]` | High |
 | **P12** | One maintainer code-owner approval; authors cannot self-approve. | `[code: GOVERNANCE.md:79-85]`, `[code: .github/CODEOWNERS:1]` | High |
 | **P13** | Metrics sidecar does not cover multi-node Indexed Jobs today. | `[code: skills/taugrid/references/run-config.md:182]` | High |
-| **P14** | Authorization must be one policy: applicability is enforced in the CLI and portal already. | `[code: core/resourceprofile/workload.go:416]`, `[code: portal/internal/portal/jobs/jobs.go:253]` | High |
-| **P15** | The notebook kernel has no GPU; GPU capacity is worker-only. | `[code: tau/_render.py:199]`, `[comment: feiskyer PR#300, 2026-10-08]` | High |
+| **P14** | Authorization must be one policy: applicability is enforced in the CLI and portal already. | `[code: core/resourceprofile/workload.go:422-428]`, `[code: portal/internal/portal/jobs/jobs.go:250-258]` | High |
+| **P15** | The notebook kernel has no GPU; GPU capacity is worker-only. | `[code: sdk/python/python/tau/_render.py:362-374]`, `[comment: feiskyer PR#300, 2026-10-08]` | High |
 | **P16** | Browser-harness cleanup must be ownership-scoped and uniquely identified. | `[comment: feiskyer PR#300, 2026-10-08]` | High |
 
 ### 3.2 The two reviewers are asking different things
@@ -95,9 +95,9 @@ The design proposal discussed earlier in this engagement selected *"run TensorBo
 
 **Recommendation:** treat the TensorBoard service as **withdrawn pending P6**. The defensible path is: emit/consume house-format JSONL through `taugrid-metrics-collector`, and treat `tfevents` as an *adapter* to that format — a reader, not a service. Story **S018** encodes this and is deliberately `r2`, gated on the format analysis.
 
-**C2 — the plugin presents profiles the platform would not authorize.**
+**C2 — the plugin presented profiles the platform would not authorize.** *(addressed on this branch)*
 
-`portal/internal/portal/jobs/jobs.go` filters by applicability; `_profile.py` does not. Same platform, two answers to "may this team use this profile?" This is a correctness gap against **P14**, and it is *not* a multi-tenancy feature request — it is one policy being implemented three ways (CLI, portal, plugin).
+At the revision reviewed, `portal/internal/portal/jobs/jobs.go` filtered by applicability and `_profile.py` did not. Same platform, two answers to "may this team use this profile?" This is a correctness gap against **P14**, and it is *not* a multi-tenancy feature request — it is one policy being implemented three ways (CLI, portal, plugin). The branch now enforces all three dimensions in the plugin (`sdk/python/python/tau/_profile.py:341-369`), with coverage at `sdk/python/python/tests/test_widgets_core.py:395-418`.
 
 **C3 — "select a GPU profile" does not mean "this notebook gets a GPU".**
 

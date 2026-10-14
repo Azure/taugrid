@@ -906,3 +906,122 @@ test('capabilities refuse truthy strings and unsafe portal destinations', () => 
   assert.throws(() => parseCapabilities({ submissionEnabled: true }));
   assert.equal(parseCapabilities({ submissionEnabled: false, submissionImplemented: true, portalUrl: 'javascript:alert(1)' }).portalUrl, null);
 });
+
+// --- Regression: a gate misconfiguration on the operator side must not be
+// reported to the researcher as their own sign-in/connectivity/RBAC problem.
+
+test('a missing TauGrid API maps to operator setup copy; a 403 keeps the permission copy', () => {
+  const { endpointFailure } = load('submission.ts');
+  const missing = endpointFailure({ status: 404, message: 'HTTP 404' });
+  assert.match(missing.title, /API is not available/);
+  assert.match(missing.action, /operator/i);
+  assert.match(missing.action, /TAUGRID_SUBMISSION_ENABLED/);
+  assert.match(missing.action, /TAUGRID_RUNTIME_IMAGE/);
+  assert.equal(missing.detail, 'HTTP 404');
+  assert.doesNotMatch(JSON.stringify(missing), /sign in|sign-in|namespace read permission/i);
+  // A non-JSON body (for example an HTML error page) is the same defect class.
+  const html = endpointFailure({ status: 200, nonJson: true, message: 'The Jupyter server did not return status JSON.' });
+  assert.match(html.title, /API is not available/);
+  // A genuine authorization failure is not reclassified as a server problem.
+  const forbidden = endpointFailure({ status: 403, message: 'HTTP 403' });
+  assert.match(forbidden.title, /Access is required/);
+  assert.match(forbidden.action, /permission/i);
+  assert.equal(forbidden.detail, 'HTTP 403');
+  // An empty 403 body is still a permission failure, not a missing API.
+  assert.match(endpointFailure({ status: 403, nonJson: true, message: 'HTTP 403' }).title, /Access is required/);
+});
+
+test('the submit view shows operator setup copy when the server API is absent', async () => {
+  const missing = Object.assign(new Error('HTTP 404'), { status: 404 });
+  const harness = reviewHarness({ catalog: () => Promise.reject(missing), capability: { value: null, cause: missing, error: 'Error: HTTP 404', retry() {} } });
+  await harness.settle(); await harness.settle(); await harness.settle();
+  const failure = harness.all(node => node.type?.name === 'FailureNotice').map(node => node.props.failure)
+    .find(item => /API is not available/.test(item.title));
+  assert.ok(failure, 'the destination failure notice must name the missing API');
+  assert.match(failure.action, /TAUGRID_RUNTIME_IMAGE/);
+  assert.doesNotMatch(failure.action, /namespace read permission/);
+  assert.match(failure.detail, /HTTP 404/);
+  assert.match(harness.text(), /API is not available/);
+  assert.doesNotMatch(harness.text(), /Check your Jupyter connection and try again/);
+  harness.dispose();
+});
+
+// --- Regression: an empty profile picker has several causes and only one of
+// them is the researcher's business. The stock one-server-per-team install is
+// the team/lane case, and it must name TAUGRID_TEAM/TAUGRID_LANE.
+
+test('empty profiles are explained by reason, naming the unconfigured team/lane actor', async () => {
+  const { describeProfileGap } = load('destinations.ts');
+  const scope = ['Profile gpu-a100 is not offered in this scope: does not authorize team: this profile is team-scoped and the caller scope does not identify a team.'];
+  assert.match(describeProfileGap(scope).action, /TAUGRID_TEAM/);
+  assert.match(describeProfileGap(scope).action, /TAUGRID_LANE/);
+  assert.match(describeProfileGap(scope).action, /operator/i);
+  // A lane-scoped reason gets the same actor without naming a team.
+  assert.match(describeProfileGap(['Profile x is not offered in this scope: does not authorize lane: this profile is lane-scoped and the caller scope does not identify a lane.']).action, /TAUGRID_LANE/);
+  assert.match(describeProfileGap(['Profile x is not offered in this scope: invalid profile: unknown key q']).action, /extension|profile definition/i);
+  const readiness = describeProfileGap(['Profile x is not offered in this scope: condition Ready is stale: observedGeneration 1 does not match generation 2']);
+  assert.match(readiness.action, /cluster|controller/i);
+  assert.match(readiness.action, /not a permissions problem/i);
+  assert.match(describeProfileGap(['Profile x is not offered in this scope: workload profiles are stale: observedGeneration 1 does not match metadata.generation 2']).title, /ready/i);
+  assert.match(describeProfileGap([]).title, /No ready worker profiles/);
+  // The stock one-server-per-team install: the sole reason is team scope, and
+  // the view must name TAUGRID_TEAM rather than the blanket publish-a-profile copy.
+  const teamScoped = reviewHarness({ catalog: { ...destinationCatalog, profiles: [], queues: [], warnings: [
+    'Profile gpu-a100 is not offered in this scope: does not authorize team: this profile is team-scoped and the caller scope does not identify a team.'
+  ] } });
+  await teamScoped.settle();
+  assert.match(teamScoped.text(), /TAUGRID_TEAM/);
+  assert.match(teamScoped.text(), /TAUGRID_LANE/);
+  assert.doesNotMatch(teamScoped.text(), /No ready worker profiles are available\. Ask the operator to publish/);
+  // The raw per-profile string is still available, but inside the details.
+  assert.match(teamScoped.text(), /does not authorize team/);
+  teamScoped.dispose();
+  const unreadable = reviewHarness({ catalog: { ...destinationCatalog, profiles: [], warnings: [
+    'Profile gpu-a100 is not offered in this scope: invalid profile: unknown key q'
+  ] } });
+  await unreadable.settle();
+  assert.match(unreadable.text(), /cannot read it/i);
+  unreadable.dispose();
+});
+
+// --- Regression: a TTL-deleted run is not a mistyped name, and a watch that
+// stops because the object disappeared must say why.
+
+test('a run removed after its retention is not reported as a mistyped name', async () => {
+  const { describeRun } = load('model.ts');
+  // A tab that never read the run still gets the name-check copy.
+  const never = describeRun(run({ existing: false, state: 'not_submitted' }));
+  assert.equal(never.label, 'No such run');
+  assert.match(never.detail, /exact resource name/);
+  // A tab that held a snapshot must not.
+  const { RunDetails } = load('view.tsx');
+  const html = renderToStaticMarkup(React.createElement(RunDetails, {
+    status: run({ state: 'complete', terminal: true }), stale: false, retained: true, statusUrl: '/status'
+  }));
+  assert.match(html, /retention/i);
+  assert.match(html, /logs are gone/i);
+  assert.match(html, /Finished/);
+  assert.doesNotMatch(html, /check the kind, namespace and exact resource name/i);
+  const { RunMonitor } = load('monitor.ts');
+  let response = run({ state: 'running', terminal: false });
+  const timers = new Map(); let seq = 0;
+  const monitor = new RunMonitor(async () => response, () => {}, { now: () => 0, set: cb => { timers.set(++seq, cb); return seq; }, clear: id => timers.delete(id) }, true);
+  monitor.lookup({ namespace: 'research', name: 'train-42' });
+  await settle();
+  monitor.setWatching(true);
+  assert.equal(monitor.state.watching, true);
+  response = run({ existing: false, state: 'not_submitted', terminal: false });
+  monitor.refresh();
+  await settle();
+  assert.equal(monitor.state.watching, false);
+  assert.match(monitor.state.watchMessage, /retention|logs/i);
+  assert.equal(monitor.state.retained.state, 'running');
+  // A never-observed missing object must not claim a retention removal.
+  const fresh = new RunMonitor(async () => run({ existing: false, state: 'not_submitted', terminal: false }), () => {}, { now: () => 0, set: () => 1, clear() {} }, true);
+  fresh.lookup({ namespace: 'research', name: 'absent' });
+  await settle();
+  assert.equal(fresh.state.retained, null);
+  assert.equal(fresh.state.watchMessage, undefined);
+  monitor.dispose();
+  fresh.dispose();
+});

@@ -261,8 +261,9 @@ class TauGridPanel:
 
         1. package the notebook bytes into a self-contained staged payload
            (_notebook_pkg.package);
-        2. resolve the worker profile and Kueue queue (_profile.resolve from the
-           TauCluster CRD, or the explicit args);
+        2. resolve the worker profile and Kueue queue
+           (_notebook_submit.build_plan from the TauCluster CRD, or the explicit
+           args);
         3. render the constrained ray.io/v1 RayJob (_render.render_rayjob):
            spec.suspend true, managedBy absent, queue label, control-only head,
            worker sizing from the profile;

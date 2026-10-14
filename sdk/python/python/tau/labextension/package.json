@@ -48,7 +48,7 @@
     "extension": true,
     "outputDir": "../tau/labextension",
     "_build": {
-      "load": "static\\remoteEntry.af75ac6b28c715366d8c.js",
+      "load": "static\\remoteEntry.abc6d4137088208b129c.js",
       "extension": "./extension",
       "style": "./style"
     }

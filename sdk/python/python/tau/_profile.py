@@ -35,7 +35,7 @@ plain dict and stay offline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tau._render import Profile, _worker_resources, default_image
 
@@ -109,20 +109,6 @@ def _normalize_list(values: Any, normalize) -> Tuple[str, ...]:
     if not isinstance(values, (list, tuple)) or not values:
         return ()
     return tuple(sorted({normalize(item) for item in values if str(item or "").strip()}))
-
-
-def contains_or_global(values: Iterable[str], value: str) -> bool:
-    """Mirror ``resourceprofile.containsOrGlobal``: empty means global.
-
-    This answers only "does this known value match?", so it is *not* the
-    fail-closed applicability check: :func:`ready_profiles` must also withhold a
-    scoped profile when the caller value is unknown, which this predicate cannot
-    express.
-    """
-    normalized = tuple(values)
-    if not normalized:
-        return True
-    return value in normalized
 
 
 # --------------------------------------------------------------------------
@@ -390,73 +376,6 @@ def ready_profiles(
     return profiles, skipped
 
 
-def resolve_applicability(cluster: Dict[str, Any], profile_name: str) -> Tuple[str, str]:
-    """Team and lane a named profile declares, for display and CLI parity.
-
-    Mirrors ``cli/internal/cli/serve.go`` ``serveProfileApplicability``: a
-    profile authorizing no team or lane contributes an empty value, exactly one
-    contributes that value, and more than one is ambiguous because a submission
-    can only carry a single team and lane.
-
-    This reads the profile that is about to be authorized, so its result is
-    *not* an authorization input: feeding it back into :func:`ready_profiles`
-    would ask the object being authorized to authorize itself, and any caller
-    could then select capacity reserved for another team. Callers that need a
-    scope for discovery or submission must take it from a trusted server-side
-    source and use that same value for both.
-    """
-    wanted = str(profile_name or "").strip()
-    _generation, resolved, blocking = _catalog(cluster)
-    if blocking is not None:
-        raise ValueError(blocking)
-    for item in resolved:
-        if item.get("name") != wanted:
-            continue
-        applicability = item.get("applicability") or {}
-        if not isinstance(applicability, dict):
-            applicability = {}
-        teams = _normalize_list(applicability.get("teams"), normalize_label)
-        lanes = _normalize_list(applicability.get("lanes"), normalize_label)
-        if len(teams) > 1:
-            raise ValueError(
-                f"workload profile {wanted!r} authorizes multiple teams "
-                f"({', '.join(teams)}); submitting requires a profile with at most one team"
-            )
-        if len(lanes) > 1:
-            raise ValueError(
-                f"workload profile {wanted!r} authorizes multiple lanes "
-                f"({', '.join(lanes)}); submitting requires a profile with at most one lane"
-            )
-        return (teams[0] if teams else ""), (lanes[0] if lanes else "")
-    raise ValueError(f"workload profile {wanted!r} is unavailable")
-
-
-def resolve(
-    cluster: Dict[str, Any],
-    explicit_queue: Optional[str] = None,
-    *,
-    namespace: Optional[str] = None,
-    team: Optional[str] = None,
-    lane: Optional[str] = None,
-) -> Tuple[List[Profile], str]:
-    """Return ``(profiles, effective_queue)`` for the supplied ``TauCluster``.
-
-    Raises :class:`NoTauClusterFound` when ``cluster`` is empty/None. The queue
-    is the explicit one when given, else the workspace default, else fallback.
-    Only ready, authorized profiles are returned.
-    """
-    if not cluster:
-        raise NoTauClusterFound(
-            "no TauCluster found: looked for the cluster-scoped resource "
-            "TauCluster (group tau.azure.com, kind cluster)"
-        )
-    profiles, _skipped = ready_profiles(
-        cluster, scope=ProfileScope(namespace=namespace, team=team, lane=lane)
-    )
-    queue = explicit_queue or default_queue(cluster) or DEFAULT_QUEUE_FALLBACK
-    return profiles, queue
-
-
 def destination_profiles(
     cluster: Dict[str, Any],
     limit: int = 200,
@@ -532,7 +451,6 @@ __all__ = [
     "ProfileScope",
     "SkippedProfile",
     "READY_CONDITION",
-    "contains_or_global",
     "default_queue",
     "destination_profiles",
     "normalize_label",
@@ -540,7 +458,5 @@ __all__ = [
     "profile_provenance",
     "profile_queue",
     "ready_profiles",
-    "resolve",
-    "resolve_applicability",
     "DEFAULT_QUEUE_FALLBACK",
 ]

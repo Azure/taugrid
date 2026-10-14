@@ -11,6 +11,12 @@ export interface MonitorState {
   watching: boolean;
   checkedAt: number | null;
   watchMessage?: string;
+  /**
+   * The last snapshot in which the workload object existed. A run whose TTL
+   * expires answers ``not_submitted`` exactly like a mistyped name, so the view
+   * needs this to tell "removed after it finished" from "never existed".
+   */
+  retained?: RunStatus | null;
 }
 
 interface Clock {
@@ -48,7 +54,7 @@ export class RunMonitor {
     this.request = null;
     this.clearTimer();
     this.state = {
-      target, status: null, error: null, busy: false, watching: false, checkedAt: null
+      target, status: null, error: null, busy: false, watching: false, checkedAt: null, retained: null
     };
     this.refresh();
   }
@@ -62,6 +68,10 @@ export class RunMonitor {
     void this.read(this.state.target, request.signal).then(status => {
       if (this.disposed || this.request !== request) { return; }
       const now = this.clock.now();
+      // Keep the last snapshot that actually existed. A TTL-deleted run returns
+      // the same ``not_submitted`` state as a name that never existed, and only
+      // this history tells the two apart.
+      const retained = status.existing ? status : this.state.retained ?? null;
       let watching = this.state.watching && canWatch(status);
       let watchMessage = this.state.watchMessage;
       if (this.autoWatch && !this.autoStarted && canWatch(status)) {
@@ -73,10 +83,15 @@ export class RunMonitor {
         watching = false;
         watchMessage = 'Watching paused after one hour. Start watching to continue.';
       }
+      if (!status.existing && retained) {
+        // The watch stops here because the object is gone, not because it
+        // finished, so it must say so instead of silently reading "Not watching."
+        watchMessage = 'This run was removed by its post-finish retention; its pod logs are gone. Showing the last observed state.';
+      }
       if (status.terminal) {
         watchMessage = 'Run finished. Automatic watch stopped; review final evidence and refresh to retry unavailable metrics.';
       }
-      this.publish({ status, error: null, checkedAt: now, watching, watchMessage });
+      this.publish({ status, retained, error: null, checkedAt: now, watching, watchMessage });
     }).catch(error => {
       if (this.disposed || this.request !== request) { return; }
       this.publish({

@@ -16,22 +16,26 @@ export interface NotebookHandle {
 }
 
 
-export function useCapabilities(): { value: Capabilities | null; error: string | null; retry: () => void } {
+export function useCapabilities(): { value: Capabilities | null; error: string | null; cause: unknown; retry: () => void } {
   const [value, setValue] = React.useState<Capabilities | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [cause, setCause] = React.useState<unknown>(null);
   const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     const request = new AbortController();
     setValue(null);
     setError(null);
+    setCause(null);
     void apiGet<unknown>('capabilities', undefined, request.signal).then(result => {
       if (!request.signal.aborted) setValue(parseCapabilities(result));
     }).catch(reason => {
-      if (!request.signal.aborted) setError(String(reason));
+      // Keep the raw failure too: a 404 or a non-JSON body means the server API
+      // is not loaded, which must not be reported as a permission problem.
+      if (!request.signal.aborted) { setError(String(reason)); setCause(reason); }
     });
     return () => request.abort();
   }, [attempt]);
-  return { value, error, retry: () => setAttempt(current => current + 1) };
+  return { value, error, cause, retry: () => setAttempt(current => current + 1) };
 }
 
 export function useNamespaces(): { value: NamespaceList | null; error: string | null } {
@@ -119,14 +123,19 @@ function ReadState({ state }: { state: MonitorState }): JSX.Element {
 
 export function RunDetail({ target, onOpenLogs }: { target: RunTarget; onOpenLogs: (target: RunTarget) => void }): JSX.Element {
   const [state, monitor] = useRun(target, true);
+  // A TTL-expired run reads back as ``not_submitted`` exactly like a name that
+  // never existed. Only a tab that already held a snapshot may call it removed.
+  const removed = !!state.retained && !state.status?.existing;
+  const shown = removed ? state.retained! : state.status;
   return <section className="taugrid-panel" data-testid="taugrid-detail" aria-label={'Run ' + target.name}>
     <RunHeading target={target} />
     <div className="taugrid-actions"><button className="taugrid-button" disabled={state.busy} onClick={() => monitor.current?.refresh()}>Refresh run</button>
       <label className="taugrid-watch"><input type="checkbox" checked={state.watching} disabled={!!state.error || !canWatch(state.status)} onChange={event => monitor.current?.setWatching(event.target.checked)} />Watch this run (every 10 seconds)</label>
       <button className="taugrid-button" disabled={!!state.error || !state.status?.existing} onClick={() => onOpenLogs(target)}>Open logs</button></div>
     <ReadState state={state} />
+    {removed && <p role="status" data-testid="taugrid-run-removed">This run was removed by its post-finish retention. Pod logs are gone; the last observed state is shown below.</p>}
     <p role="status" data-testid="taugrid-watch-state">{state.error ? 'Watching stopped after a status error.' : state.watchMessage || (state.watching ? 'Watching status and bounded loss samples.' : 'Not watching.')}</p>
-    {state.status && <RunDetails status={state.status} stale={!!state.error} statusUrl={apiUrl('status', { ...target, includeMetrics: 'true' })} />}
+    {shown && <RunDetails status={shown} stale={!!state.error} retained={removed} statusUrl={apiUrl('status', { ...target, includeMetrics: 'true' })} />}
   </section>;
 }
 

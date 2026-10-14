@@ -6,7 +6,13 @@ import { ServerConnection } from '@jupyterlab/services';
 import { RunTarget } from './model';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  /**
+   * ``nonJson`` records that the body was not a JSON document. A Jupyter server
+   * with the TauGrid extension unloaded answers ``/taugrid/api/*`` with its HTML
+   * error page (404) or its login page, and the caller must not read either as a
+   * verdict about a specific run or a specific permission.
+   */
+  constructor(message: string, readonly status: number, readonly nonJson = false) {
     super(message);
   }
 }
@@ -38,15 +44,16 @@ async function request<T>(path: string, init: RequestInit, target?: ApiQuery): P
       body = text ? JSON.parse(text) : undefined;
     } catch {
       if (response.ok) {
-        throw new Error('The Jupyter server did not return status JSON. Check your sign-in and the TauGrid server extension.');
+        throw new ApiError('The Jupyter server did not return status JSON.', response.status, true);
       }
       body = text;
     }
     if (!response.ok) {
-      const detail = typeof body === 'object' && body !== null && typeof (body as Record<string, unknown>).message === 'string'
+      const json = typeof body === 'object' && body !== null;
+      const detail = json && typeof (body as Record<string, unknown>).message === 'string'
         ? String((body as Record<string, unknown>).message)
         : `HTTP ${response.status}`;
-      throw new ApiError(detail, response.status);
+      throw new ApiError(detail, response.status, !json);
     }
     return body as T;
   } catch (error) {

@@ -70,6 +70,12 @@ DEFAULT_IMAGE = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
 #: The certified runtime image is an operator decision, so it is overridable.
 #: It must ship ray plus the notebook executor (nbformat/nbconvert/ipykernel).
 RUNTIME_IMAGE_ENV = "TAUGRID_RUNTIME_IMAGE"
+#: Operator-configured allow-list of Secret *names* a rendered pod may mount.
+#: A caller-chosen name is refused because Kubernetes resolves a ``secretKeyRef``
+#: with the node/kubelet identity, not the pod's ServiceAccount RBAC, so the
+#: namespace a submission targets does not bound which Secret the notebook can
+#: read. Unset or empty fails closed: no Secret refs are permitted.
+ALLOWED_SECRETS_ENV = "TAUGRID_ALLOWED_SECRETS"
 
 
 def default_image() -> str:
@@ -77,6 +83,47 @@ def default_image() -> str:
     import os
 
     return os.environ.get(RUNTIME_IMAGE_ENV, "").strip() or DEFAULT_IMAGE
+
+
+def allowed_secret_names() -> frozenset:
+    """Operator-configured Secret names a rendered pod may reference.
+
+    Read from ``TAUGRID_ALLOWED_SECRETS`` at call time, so an operator change (or
+    a test) takes effect without re-importing. An unset or empty value is the
+    empty set, which fails closed: no ``secretKeyRef`` may be rendered.
+    """
+    import os
+
+    raw = os.environ.get(ALLOWED_SECRETS_ENV, "")
+    return frozenset(name.strip() for name in raw.split(",") if name.strip())
+
+
+def _secret_refusal(key: str, secret_name: str, allowed: frozenset) -> str:
+    """The refusal for a Secret name the operator did not allow.
+
+    It names the operator action rather than dropping the env entry, because a
+    silently dropped Secret leaves a run that fails confusingly inside the pod.
+    """
+    reason = (
+        "Kubernetes resolves a secretKeyRef with the node/kubelet identity, not the "
+        "pod's ServiceAccount RBAC, so the namespace this submission targets does not "
+        "bound which Secret the notebook can read"
+    )
+    if not allowed:
+        remedy = (
+            f"{ALLOWED_SECRETS_ENV} is unset or empty, so this server currently permits no "
+            f"Secret references. An operator must set {ALLOWED_SECRETS_ENV} to a "
+            "comma-separated list of the Secret names a notebook may mount, and add "
+            f"{secret_name!r} to it if that Secret is intended for notebook use"
+        )
+    else:
+        listed = ",".join(sorted(allowed))
+        remedy = (
+            "only the operator-configured Secrets may be mounted. An operator must add "
+            f"{secret_name!r} to {ALLOWED_SECRETS_ENV} (currently: {listed}) if that Secret "
+            "is intended for notebook use"
+        )
+    return f"env_secret[{key}] references Secret {secret_name!r}, which is not permitted: {remedy}. {reason}."
 
 #: Mirrors the CLI constants exactly.
 RAY_JOB_TTL_SECONDS = 15
@@ -453,11 +500,19 @@ def _env_list(
     out: List[Dict[str, Any]] = []
     for key in sorted(literal):
         out.append({"name": key, "value": str(literal[key])})
+    # The Secret *name* is an operator decision, so it is confined to
+    # TAUGRID_ALLOWED_SECRETS here, at the one place a SECRET:KEY becomes a
+    # secretKeyRef. The key inside an allowed Secret stays caller-chosen: the
+    # Secret is the privilege boundary, because referencing any key makes the
+    # kubelet resolve the whole Secret object.
+    allowed = allowed_secret_names()
     for key in sorted(secret):
         spec = str(secret[key])
         if not _SECRET_REF_RE.match(spec):
             raise UnsupportedShape(f"env_secret[{key}] must use the SECRET:KEY form, got {spec!r}")
         secret_name, _, secret_key = spec.partition(":")
+        if secret_name not in allowed:
+            raise UnsupportedShape(_secret_refusal(key, secret_name, allowed))
         out.append(
             {"name": key, "valueFrom": {"secretKeyRef": {"name": secret_name, "key": secret_key}}}
         )
@@ -580,6 +635,8 @@ __all__ = [
     "TAU_QUEUE_LABEL",
     "default_image",
     "RUNTIME_IMAGE_ENV",
+    "ALLOWED_SECRETS_ENV",
+    "allowed_secret_names",
     "TAU_MANAGED_BY_LABEL",
     "TAU_MANAGED_BY_VALUE",
     "TAU_RUN_ID_LABEL",

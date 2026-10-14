@@ -5,10 +5,12 @@ import * as React from 'react';
 import { describeRun, portalLink, RunStatus } from './model';
 import { LossSection } from './loss';
 
-export function RunDetails({ status, stale, statusUrl }: {
+export function RunDetails({ status, stale, statusUrl, retained = false }: {
   status: RunStatus;
   stale: boolean;
   statusUrl: string;
+  /** The object is gone, but this snapshot is the last one that existed. */
+  retained?: boolean;
 }): JSX.Element {
   const state = describeRun(status);
   const unavailable = stale || state.label === 'Unreachable';
@@ -18,17 +20,19 @@ export function RunDetails({ status, stale, statusUrl }: {
       <header className="taugrid-run-head">
         <div className="taugrid-state-line">
           <span className="taugrid-state-mark" aria-hidden="true" />
-          <strong>{stale ? 'Status unavailable' : state.label}</strong>
+          <strong>{retained ? `Removed after finish: ${state.label}` : stale ? 'Status unavailable' : state.label}</strong>
           {stale && <span>Last known state: {state.label}</span>}
         </div>
         <h2 className="taugrid-run-name">{status.name}</h2>
         <p className="taugrid-run-namespace">Namespace <code>{status.namespace}</code></p>
-        <p className="taugrid-summary">{stale
+        <p className="taugrid-summary">{retained
+          ? 'The workload object was removed by its post-finish retention, so its pod logs are gone. The values below are the last observed state, not the current cluster state.'
+          : stale
           ? 'The last check failed. Values below are from the last successful response, not the current cluster state.'
           : state.detail}</p>
       </header>
 
-      {status.existing && <dl className="taugrid-signals" aria-label={stale ? 'Last known run signals' : 'Run signals'}>
+      {status.existing && <dl className="taugrid-signals" aria-label={stale || retained ? 'Last known run signals' : 'Run signals'}>
         <div className="taugrid-signal">
           <dt>Admission</dt>
           <dd>{status.admitted === true ? 'Admitted' : status.admitted === false ? 'Not admitted' : 'Not reported'}</dd>
