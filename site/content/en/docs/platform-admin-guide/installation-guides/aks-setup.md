@@ -141,8 +141,12 @@ Use this setup path:
    ServiceAccount and security settings as the customer workload.
 
 TauGrid's storage examples and validation commands provide the Kubernetes side
-of this setup. Driver-specific installation values remain tied to the selected
-driver and storage backend rather than to TauGrid.
+of this setup. For Azure Files, start with the checked-in
+[`terraform/aks-flex-azurefile-csi`](https://github.com/Azure/taugrid/tree/main/terraform/aks-flex-azurefile-csi)
+root. It installs a distinctly named upstream driver only on selected Flex
+nodes and can create a StorageClass that references a pre-created credential
+Secret without putting the account key in Terraform state. Driver-specific
+identity, networking, and backend settings still require customer review.
 
 A PVC can be `Bound` while a pod still fails before container startup with an
 event such as `driver name file.csi.azure.com not found in the list of

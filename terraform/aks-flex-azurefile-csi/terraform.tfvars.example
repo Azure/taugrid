@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars. Do not commit kubeconfig files, account keys, or
+# local tfvars.
+
+kube_context = "aks-ai-runtime-flex"
+
+# Select only the external Flex nodes that require this driver. Use the exact
+# label applied by the Flex registration process.
+flex_node_selector = {
+  "kubernetes.azure.com/cluster" = "flex-h200"
+}
+
+# Required after reviewing driver ownership and node targeting in README.md.
+ownership_reviewed = true
+
+# The optional StorageClass uses a pre-created Secret rather than putting a
+# storage account key in Terraform state.
+create_storage_class            = true
+storage_class_name              = "azurefile-flex"
+storage_account_name            = "replace-me"
+storage_account_resource_group  = "replace-me"
+storage_account_subscription_id = "00000000-0000-0000-0000-000000000000"
+storage_secret_name             = "azure-storage-account"

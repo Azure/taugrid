@@ -49,6 +49,11 @@ exclude Azure storage implementations on external nodes. TauGrid helps
 platform operators deploy and validate a compatible CSI implementation using
 the setup path in the
 [AKS installation guide](../../../site/content/en/docs/platform-admin-guide/installation-guides/aks-setup.md#aks-storage-drivers-and-flex-nodes).
+For Azure Files, the checked-in
+[`terraform/aks-flex-azurefile-csi`](../../../terraform/aks-flex-azurefile-csi)
+root installs a distinctly named upstream driver on selected Flex nodes and
+can create a matching StorageClass without storing the account key in
+Terraform state.
 The operator owns the selected backend, credentials, capacity, data lifecycle,
 and driver upgrades. Do not use temporary AKS-label reconciliation as a
 supported storage design.
