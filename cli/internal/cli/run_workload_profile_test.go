@@ -502,32 +502,36 @@ func TestRunSelectionRejectsWorkspaceQueueThatChangesMultiKueueClusterQueue(t *t
 	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
 		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "multikueue-cq",
 	}}
-	workspace := readyWorkspace()
-	workspace.Metadata.Name = "training"
-	workspace.Spec.Target.Namespace = "team-alpha"
-	workspace.Status.Target.ResolvedNamespace = "team-alpha"
-	workspace.Status.Queue.LocalQueue = "tau-ws-training"
-	workspace.Status.Queue.ClusterQueue = "tau-ws-training"
+	for _, workspaceQueue := range []string{"tau-ws-training", "jobqueue"} {
+		t.Run(workspaceQueue, func(t *testing.T) {
+			workspace := readyWorkspace()
+			workspace.Metadata.Name = "training"
+			workspace.Spec.Target.Namespace = "team-alpha"
+			workspace.Status.Target.ResolvedNamespace = "team-alpha"
+			workspace.Status.Queue.LocalQueue = workspaceQueue
+			workspace.Status.Queue.ClusterQueue = "tau-ws-training"
 
-	options := defaultRunDispatchOptions()
-	options.engine = runconfig.EngineRayJob
-	options.profileName = resolved.Name
-	options.profileNameExplicit = true
-	options.team = "research"
-	options.lane = "training"
-	options, err := applyWorkspaceDefaults(options, workspace, "train")
-	if err != nil {
-		t.Fatalf("apply workspace defaults: %v", err)
-	}
-	_, err = selectRunWorkloadProfile(
-		context.Background(),
-		options,
-		testRunProviderForResolved(t, 11, resolved),
-	)
-	if err == nil ||
-		!strings.Contains(err.Error(), `cannot replace MultiKueue workload profile`) ||
-		!strings.Contains(err.Error(), `"multikueue-cq"`) {
-		t.Fatalf("error = %v, want MultiKueue ClusterQueue transition rejection", err)
+			options := defaultRunDispatchOptions()
+			options.engine = runconfig.EngineRayJob
+			options.profileName = resolved.Name
+			options.profileNameExplicit = true
+			options.team = "research"
+			options.lane = "training"
+			options, err := applyWorkspaceDefaults(options, workspace, "train")
+			if err != nil {
+				t.Fatalf("apply workspace defaults: %v", err)
+			}
+			_, err = selectRunWorkloadProfile(
+				context.Background(),
+				options,
+				testRunProviderForResolved(t, 11, resolved),
+			)
+			if err == nil ||
+				!strings.Contains(err.Error(), `cannot replace MultiKueue workload profile`) ||
+				!strings.Contains(err.Error(), `"multikueue-cq"`) {
+				t.Fatalf("error = %v, want MultiKueue ClusterQueue transition rejection", err)
+			}
+		})
 	}
 }
 
