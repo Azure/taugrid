@@ -156,8 +156,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: sdk/python/python/labextension/package-lock.json
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -167,8 +165,15 @@ jobs:
       - name: Install the JupyterLab core the extension builder links against
         run: python -m pip install 'jupyterlab>=4.0.0,<5'
 
+      # `npm install`, not `npm ci`: this package deliberately commits no
+      # lockfile (the one that existed resolved every dependency against an
+      # internal feed). Adding one back would also pull ~500 transitive
+      # JupyterLab packages into the dependency-review surface, which is a
+      # larger change than this job is worth. The install is therefore not
+      # pinned, which is why the bundle comparison below reports rather than
+      # gates.
       - name: Install labextension dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       # The tests import built lib output through the package entry points, so
       # the build runs first.
