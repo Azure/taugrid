@@ -42,6 +42,19 @@ retention, hot-cache duration, identities, and database roles as platform
 policy. The workspace's durable storage lifecycle governs local metric files
 and artifacts.
 
+PVC-backed metric history and artifacts depend on the platform-provided CSI
+driver, not on TauGrid. The driver must register on every node eligible for the
+workload profile. This includes metrics-offload workloads: ADX is an optional
+projection and does not repair a PVC mount that fails before the trainer or
+sidecar starts. On AKS Flex or other external nodes, the deployment must
+operate its own compatible CSI components rather than rely on AKS-managed Azure
+CSI addons; see
+[the AKS storage boundary](../aks-setup/#aks-storage-drivers-and-flex-nodes).
+
+For disposable runs that need neither durable history nor offload, write only
+to pod-local ephemeral storage. Those files disappear with the pod and are not
+available for recovery, `tau run get`, or later experiment comparison.
+
 Use `project`, `run_group_id`, and `run_id` for experiment identity. Use
 `metric_name`, `step`, and `wall_time` to align and compare scalar histories.
 Tags add workspace and workload dimensions without changing those core keys.

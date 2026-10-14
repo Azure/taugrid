@@ -106,8 +106,31 @@ kubectl --context "$TAU_CONTEXT" get nodes
 Confirm the cluster meets the
 [Kubernetes cluster prerequisites](../kubernetes/#2-prepare-a-kubernetes-cluster)
 (Kubernetes 1.30+, GPU drivers and device plugins if workloads need GPUs,
-storage classes if workloads need PVCs), then continue with
+and a compatible CSI driver registered on every eligible node if workloads
+need PVCs), then continue with
 [TauGrid installation](../kubernetes/#3-install-taugrid).
+
+## AKS storage drivers and Flex nodes
+
+Normal AKS agent pools receive AKS node metadata and bootstrap integration used
+by AKS-managed Azure CSI addon DaemonSets. TauGrid supports and expects those
+managed addons only on normal AKS-managed agent pools.
+
+Externally registered nodes, including AKS Flex nodes, do not inherit that
+contract by default. TauGrid does **not** support relying on AKS-managed Azure
+CSI addons on Flex or other external nodes. This is not a claim that Azure
+storage can never run there: a Flex/external-node deployment that needs
+CSI-backed storage must install, configure, operate, and validate its own
+compatible CSI controller and node components. The deployment must prove that
+the driver registers on every node eligible for the workload.
+
+A PVC can be `Bound` while a pod still fails before container startup with an
+event such as `driver name file.csi.azure.com not found in the list of
+registered CSI drivers`, or with `file.csi.azure.com` absent from the node's
+`CSINode` object. See
+[storage readiness](../../reference/workspace/#storage-readiness-is-platform-owned)
+for validation commands. Workloads that do not need persistence or offload can
+avoid this dependency by using pod-local ephemeral storage.
 
 ## GPU software stack models
 

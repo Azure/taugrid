@@ -36,7 +36,22 @@ storage:
 `storage.data_pvc` names an existing Bound PVC in the resolved workload
 namespace. TauGrid references and mounts that claim; the platform owner provisions
 and owns the PVC, StorageClass, CSI configuration, and backing storage,
-choosing the backend and managing its lifecycle.
+choosing the backend and managing its lifecycle. The compatible CSI node
+component must register on every node eligible for the selected workload
+profile. A `Bound` claim alone does not prove that pods can mount it.
+
+TauGrid's PVC fields are Kubernetes abstractions, not a promise that a cloud
+provider's managed CSI addon supports every node type. In particular,
+AKS-managed Azure CSI addons are expected on normal AKS agent pools but are not
+supported by TauGrid as the storage implementation for Flex or other externally
+registered nodes. Those deployments must operate and validate their own
+compatible driver. See
+[AKS storage drivers and Flex nodes](../../platform-admin-guide/aks-setup/#aks-storage-drivers-and-flex-nodes).
+
+When durable output, checkpoint recovery, and metrics/artifact offload are not
+needed, omit `storage.data_pvc`. TauGrid still provides the pod-local `/mnt`
+`emptyDir` scratch path through `TAU_HOT_DIR`; its contents disappear with the
+pod.
 
 Direct batch Jobs can stage an immutable reference directory from another image,
 skipping ConfigMap creation:

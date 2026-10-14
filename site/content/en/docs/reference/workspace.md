@@ -49,13 +49,38 @@ The overall phase currently requires `RBACReady` and `QueueReady`; `DriftDetecte
 | `QueueReady=False` | Restore the named LocalQueue and its accessible backing ClusterQueue; fix that queue directly rather than creating a second queue with a different name to bypass the workspace spec. |
 | `DriftDetected=True` | Fix the dependency or workspace spec named in the message, then let the controller restore its owned namespace/RBAC objects. |
 
+### Storage readiness is platform-owned
+
 `Ready` proves RBAC and queue reconciliation only, not storage. TauGrid 0.1 has no `StorageReady` condition on `TauWorkspace` or `TauCluster`, so a workspace can reach `Ready` while a workload's configured PVC is missing or unbound. Verify the platform-managed claim directly before handing the workspace to a researcher:
 
 ```bash
 kubectl get pvc blob-training -n <workspace-namespace> --context <context>
 ```
 
-Even `Bound` proves existence only; write validation happens at mount time on the workload's own pod, so failures such as wrong BlobFuse credentials or a read-only mount surface there rather than in workspace status.
+Even `Bound` proves existence only; write validation happens at mount time on
+the workload's own pod. The platform must also verify that the selected CSI
+driver is registered on every node eligible for the workload profile:
+
+```bash
+kubectl get csidrivers
+kubectl get csinode <eligible-node> \
+  -o jsonpath='{range .spec.drivers[*]}{.name}{"\n"}{end}'
+```
+
+Repeat the `CSINode` check for every eligible node, then run a mount/read/write
+canary with the workload's profile, ServiceAccount, and security settings.
+Wrong credentials or read-only mounts surface in the canary or workload.
+Missing node registration fails earlier, before container startup, with pod
+events such as `driver name file.csi.azure.com not found in the list of
+registered CSI drivers`; `file.csi.azure.com` will also be absent from that
+node's `CSINode` object.
+
+AKS-managed Azure CSI addons are supported and expected on normal AKS agent
+pools, but TauGrid does not support relying on those managed addons on Flex or
+other externally registered nodes. Such deployments own installation,
+configuration, operation, and validation of a compatible CSI driver and node
+components. See
+[AKS storage drivers and Flex nodes](../../platform-admin-guide/aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 `WorkloadIdentityReady` is diagnostic; the overall phase gate currently
 excludes it. Resolve it before handing off workloads that rely on Azure
