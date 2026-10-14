@@ -319,10 +319,13 @@ func hasLegacyExplicitAdoptionStatus(workspace *tauv1alpha1.TauWorkspace) bool {
 	if workspace.Generation != 1 ||
 		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
 		workspace.Status.ObservedGeneration == 0 ||
-		workspace.Status.Target.ResolvedNamespace != "" ||
 		workspace.Status.Queue.ClusterQueue != "" ||
 		workspace.Status.Queue.ClusterQueueUID != "" ||
 		workspace.CreationTimestamp.IsZero() {
+		return false
+	}
+	if recordedTarget := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace); recordedTarget != "" &&
+		recordedTarget != resolvedNamespace(workspace) {
 		return false
 	}
 	if localQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue); localQueue != "" && localQueue != workspace.Spec.Queue {

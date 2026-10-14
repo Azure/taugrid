@@ -2383,6 +2383,87 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspacePreservesAcceptedRoutingAcrossDefaultQueueLookupFailure(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 2
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:              tauv1alpha1.WorkspacePhaseReady,
+		ObservedGeneration: 1,
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: workspace.Name},
+		Queue: tauv1alpha1.WorkspaceQueueStatus{
+			LocalQueue:      "jobqueue",
+			ClusterQueue:    "jobqueue",
+			ClusterQueueUID: "legacy-queue-uid",
+		},
+	}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: workspace.Name,
+		Labels: map[string]string{
+			labelWorkspace:              workspace.Name,
+			labelWorkspaceLocalQueue:    "jobqueue",
+			labelKueueDefaultLocalQueue: "jobqueue",
+		},
+		Annotations: map[string]string{annotationOwnerUID: string(workspace.UID)},
+	}}
+	legacyQueue := testLocalQueue(workspace.Name, "jobqueue", "jobqueue")
+	legacyClusterQueue := testClusterQueue("jobqueue")
+	legacyClusterQueue.SetUID(types.UID("legacy-queue-uid"))
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, legacyQueue, legacyClusterQueue, team, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile with missing default queue: %v", err)
+	}
+	var degraded tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &degraded); err != nil {
+		t.Fatalf("Get degraded workspace: %v", err)
+	}
+	if degraded.Status.Queue != workspace.Status.Queue {
+		t.Fatalf("unresolved default queue erased accepted routing: got %#v, want %#v", degraded.Status.Queue, workspace.Status.Queue)
+	}
+
+	cluster := topologyTestCluster()
+	cluster.Spec.WorkspaceDefaults.DefaultQueue = "jobqueue"
+	if err := c.Create(ctx, cluster); err != nil {
+		t.Fatalf("Create TauCluster default: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile after default queue recovery: %v", err)
+	}
+	var recovered tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &recovered); err != nil {
+		t.Fatalf("Get recovered workspace: %v", err)
+	}
+	if recovered.Status.Queue != workspace.Status.Queue {
+		t.Fatalf("recovery switched accepted routing: got %#v, want %#v", recovered.Status.Queue, workspace.Status.Queue)
+	}
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != "jobqueue" {
+		t.Fatalf("namespace routing = %q, want jobqueue", got)
+	}
+}
+
 func TestUnresolvedQueueDoesNotAuthorizeRetainedNamespaceAdoption(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -3224,6 +3305,52 @@ func TestLegacyAdoptionRetryPreservesEligibilityAfterNamespaceGetFailure(t *test
 	var gotNamespace corev1.Namespace
 	if err := baseClient.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
 		t.Fatalf("Get namespace after retry: %v", err)
+	}
+	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+}
+
+func TestPreUpgradeLegacyAdoptionFailureWithRecordedTargetCanRecover(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	namespaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	workspaceCreated := metav1.NewTime(time.Now())
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "aurora",
+		UID:               types.UID("namespace-uid"),
+		CreationTimestamp: namespaceCreated,
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 1
+	workspace.CreationTimestamp = workspaceCreated
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:              tauv1alpha1.WorkspacePhaseDegraded,
+		ObservedGeneration: 1,
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: namespace.Name},
+		Queue:              tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue},
+		Conditions: []metav1.Condition{{
+			Type:   tauv1alpha1.ConditionDriftDetected,
+			Status: metav1.ConditionTrue,
+			Reason: "NamespaceReconcileFailed",
+		}},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace: %v", err)
 	}
 	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
 		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
