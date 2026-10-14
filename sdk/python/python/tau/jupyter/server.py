@@ -21,7 +21,12 @@ Two boundaries are load-bearing:
   restrictive Authorizer can deny cluster reads and submission even though the
   caller is authenticated. When a handler acts on a namespace, the Authorizer
   resource carries that namespace (``taugrid:<namespace>``) instead of the single
-  coarse ``taugrid`` string, so per-namespace policy is expressible.
+  coarse ``taugrid`` string, so per-namespace policy is expressible. The same is
+  true of the companion files a notebook ships: every surface that lists or reads
+  them authorizes ``taugrid:files:<directory>`` through :func:`files_resource`, so
+  a per-directory policy is not expressible on one surface and bypassable on
+  another, and the directory that is authorized is the one directory the reader
+  consumes.
 * **Caller scope.** The team/lane a submission is authorized against comes from
   this server's own configuration (``TAUGRID_TEAM``/``TAUGRID_LANE``), never from
   the request body and never from the profile being authorized. A notebook
@@ -42,6 +47,7 @@ import hmac
 import inspect
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from jupyter_server.base.handlers import APIHandler
@@ -190,6 +196,22 @@ def _call_with_client(handler, reader, **kwargs):
         close = getattr(client, "close", None)
         if close:
             close()
+
+
+def files_resource(root: Path, directory: Path) -> str:
+    """The Authorizer namespace for one companion directory, for every surface.
+
+    The directory that is read is part of *what* is being authorized, so it is
+    named the same way a workload namespace is: ``files`` at the server root and
+    ``files:<relative-directory>`` below it. ``FilesHandler`` lists those flat
+    files and the preview/submit POST paths read them, so both must publish the
+    one resource this function returns; deriving it in a single place is what
+    stops a per-directory policy from being expressible on one surface and
+    bypassable on the other. ``notebook_directory`` has already confined
+    ``directory`` to ``root``, so it is safe to make it relative.
+    """
+    relative = directory.relative_to(root).as_posix()
+    return "files" if relative == "." else f"files:{relative}"
 
 
 class _ClientMixin:
@@ -352,27 +374,66 @@ class _SubmitMixin(_ClientMixin):
             raise web.HTTPError(400, "path must be a string")
         return body
 
-    def selected_files(self, body: Mapping[str, Any]) -> Dict[str, bytes]:
-        """Read the files the review asked to ship, from the notebook's directory."""
-        names = body.get("files") or []
-        if not names:
-            return {}
+    async def authorize_companion_files(self, body: Mapping[str, Any]) -> Optional[Path]:
+        """Resolve and authorize the companion directory this request will read.
+
+        ``FilesHandler`` names the notebook directory ``files:<directory>``
+        before listing it; the preview and submit POST paths read the same files,
+        so they must make the same decision. Without it, a caller allowed to
+        preview or submit into a namespace but denied a directory could name that
+        directory's files in the request and have them packaged into the run
+        payload.
+
+        The request path is resolved exactly once, here, and the resolved
+        directory is returned so the read consumes the very value that was
+        authorized; re-resolving the path in the reader is what would let the two
+        diverge. ``None`` means the request ships no companion files, so there is
+        no directory to authorize.
+        """
+        if not (body.get("files") or []):
+            return None
         path = body.get("path")
         if not isinstance(path, str) or not path.strip():
             raise web.HTTPError(400, "path is required to select files to ship with the notebook")
         root = server_root(self.settings.get("server_root_dir"))
         try:
-            return read_selected(notebook_directory(root, path), names)
+            directory = notebook_directory(root, path)
+        except FileSelectionError as exc:
+            raise web.HTTPError(exc.status, str(exc)) from exc
+        await self.authorize("read", namespace=files_resource(root, directory))
+        return directory
+
+    def selected_files(
+        self, body: Mapping[str, Any], directory: Optional[Path] = None
+    ) -> Dict[str, bytes]:
+        """Read the selected files from the directory the handler authorized.
+
+        ``directory`` is required whenever the request names files: re-resolving
+        the request path here would be the second resolution that lets the
+        authorized value and the read value diverge, so a missing directory fails
+        closed instead of reading an unauthorized one.
+        """
+        names = body.get("files") or []
+        if not names:
+            return {}
+        if directory is None:
+            raise web.HTTPError(
+                500, "companion directory was not authorized before reading notebook files"
+            )
+        try:
+            return read_selected(directory, names)
         except FileSelectionError as exc:
             raise web.HTTPError(exc.status, str(exc)) from exc
 
-    def build(self, body: Mapping[str, Any]) -> SubmitPlan:
+    def build(
+        self, body: Mapping[str, Any], files_directory: Optional[Path] = None
+    ) -> SubmitPlan:
         notebook = body.get("notebook")
         if not isinstance(notebook, str) or not notebook.strip():
             raise web.HTTPError(
                 400, "notebook is required: send the saved .ipynb content as a UTF-8 string"
             )
-        extra_files = self.selected_files(body)
+        extra_files = self.selected_files(body, files_directory)
         scope = trusted_scope()
         namespace = str(body.get("namespace") or "default")
         try:
@@ -489,17 +550,21 @@ class FilesHandler(APIHandler, _ClientMixin):
         except FileSelectionError as exc:
             raise web.HTTPError(exc.status, str(exc)) from exc
         # The directory that is read is part of *what* is being authorized, so it
-        # is named in the Authorizer resource the same way a namespace is:
-        # ``taugrid:files:<relative-directory>`` (``taugrid:files`` at the server
-        # root). Without this, the constant ``taugrid`` granted every directory
-        # under the root and per-directory policy could not be expressed, so a
-        # request could name any directory while holding only the coarse grant.
-        # ``notebook_directory`` has already confined ``directory`` to the root,
-        # so it is safe to make it relative.
-        relative = directory.relative_to(root).as_posix()
-        await self.authorize("read", namespace="files" if relative == "." else f"files:{relative}")
+        # is named in the Authorizer resource the same way a namespace is, via
+        # ``files_resource``: ``taugrid:files:<relative-directory>``
+        # (``taugrid:files`` at the server root). Without this, the constant
+        # ``taugrid`` granted every directory under the root and per-directory
+        # policy could not be expressed, so a request could name any directory
+        # while holding only the coarse grant. The preview and submit POST paths
+        # read these same files and publish the same resource through the same
+        # helper, so one directory policy covers both surfaces.
+        await self.authorize("read", namespace=files_resource(root, directory))
         try:
-            self.finish(list_candidates(root, path))
+            # ``directory`` is the value just authorized, resolved exactly once by
+            # ``notebook_directory``. Passing it (rather than ``root``/``path``)
+            # keeps the listed directory the authorized one; a second resolution
+            # inside ``list_candidates`` is what would let the two diverge.
+            self.finish(list_candidates(directory, path))
         except FileSelectionError as exc:
             raise web.HTTPError(exc.status, str(exc)) from exc
 
@@ -537,7 +602,13 @@ class PreviewHandler(APIHandler, _SubmitMixin):
         # before the decision. Parsing the bounded body is not cluster access.
         body = self.json_body()
         await self.authorize("read", namespace=str(body.get("namespace") or "default"))
-        plan = await asyncio.to_thread(self.build, body)
+        # The companion directory is also part of what is authorized: the plan
+        # embeds the selected files, so a caller denied the directory must be
+        # refused before the read, exactly as ``FilesHandler`` refuses the
+        # listing. Resolving once and handing the value to ``build`` keeps the
+        # authorized directory and the read directory the same value.
+        files_directory = await self.authorize_companion_files(body)
+        plan = await asyncio.to_thread(self.build, body, files_directory)
         self.finish(
             {
                 "submittable": True,
@@ -552,6 +623,11 @@ class SubmitHandler(APIHandler, _SubmitMixin):
     async def post(self) -> None:
         body = self.json_body()
         await self.authorize("execute", namespace=str(body.get("namespace") or "default"))
+        # The submitted run payload embeds the selected files, so this path needs
+        # the same companion-directory grant preview does; it is checked before
+        # the release gate so a denial is never masked by configuration state,
+        # and before ``build`` so no file is read without it.
+        files_directory = await self.authorize_companion_files(body)
         if not SUBMISSION_ENABLED:
             raise web.HTTPError(
                 409,
@@ -566,7 +642,7 @@ class SubmitHandler(APIHandler, _SubmitMixin):
         digest = body.get("planDigest")
         if not isinstance(digest, str) or len(digest) != 64:
             raise web.HTTPError(400, "planDigest from preview is required")
-        plan = await asyncio.to_thread(self.build, body)
+        plan = await asyncio.to_thread(self.build, body, files_directory)
         if not hmac.compare_digest(digest, plan.summary()["planDigest"]):
             raise web.HTTPError(409, "Submission plan changed; review the notebook and plan again")
         try:

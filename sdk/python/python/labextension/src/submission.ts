@@ -36,12 +36,50 @@ export interface SubmissionFailure {
   detail: string;
 }
 
+/** The failure voice for a genuine authorization refusal. */
+function accessRequired(detail: string): SubmissionFailure {
+  return { title: 'Access is required', action: 'Sign in to Jupyter or ask the operator for the missing permission. Then refresh and review again.', detail };
+}
+
+/**
+ * A server API that is not loaded is an operator's gate misconfiguration, not a
+ * researcher's sign-in, connectivity, or RBAC problem. A 404 (or a body that is
+ * not JSON at all: Jupyter's HTML error and login pages) must say so and name the
+ * actor that can fix it, rather than blaming the person looking at the form.
+ */
+function apiUnavailable(detail: string): SubmissionFailure {
+  return {
+    title: 'The TauGrid server API is not available on this Jupyter server',
+    action: "Ask the operator to check the Jupyter server log for a 'tau.jupyter | extension failed loading' warning - usually TAUGRID_SUBMISSION_ENABLED is set without TAUGRID_RUNTIME_IMAGE.",
+    detail
+  };
+}
+
+interface FailureCause { status?: number; nonJson?: boolean; message?: string; }
+
+const failureCause = (error: unknown): FailureCause =>
+  typeof error === 'object' && error !== null ? error as FailureCause : {};
+
+/**
+ * Map an endpoint failure to the copy both the destinations and the capabilities
+ * surfaces show, so the two call sites cannot drift. The raw server text stays in
+ * ``detail`` (rendered inside the expandable block only).
+ */
+export function endpointFailure(error: unknown): SubmissionFailure {
+  const cause = failureCause(error);
+  const detail = cause.message || String(error);
+  if (cause.status === 401 || cause.status === 403) { return accessRequired(detail); }
+  if (cause.status === 404 || cause.nonJson === true) { return apiUnavailable(detail); }
+  return { title: 'The Jupyter server could not be reached', action: 'Check the Jupyter connection and retry. If this keeps failing, ask the operator to check the server log.', detail };
+}
+
 export function submissionFailure(error: unknown, uncertain = false): SubmissionFailure {
   const cause = error as { status?: number; message?: string } | null;
   const detail = cause?.message || String(error);
   if (uncertain) return { title: 'Submission outcome not confirmed', action: 'Inspect planned run before trying again. Closing this tab does not cancel a server-side submission.', detail };
   if (cause?.status === 413) return { title: 'Notebook package is too large', action: 'Remove selected files, clear notebook outputs, or put larger assets in the runtime image. Then review again.', detail };
-  if (cause?.status === 401 || cause?.status === 403) return { title: 'Access is required', action: 'Sign in to Jupyter or ask the operator for the missing permission. Then refresh and review again.', detail };
+  if (cause?.status === 401 || cause?.status === 403) return accessRequired(detail);
+  if (cause?.status === 404 || (error as FailureCause | null)?.nonJson === true) return apiUnavailable(detail);
   if (cause?.status === 409) {
     if (/disabled|enable/i.test(detail)) return { title: 'Submission is disabled', action: 'Ask the operator to enable submission after validating the runtime, then check availability again.', detail };
     if (/already exists/i.test(detail)) return { title: 'Run name is already in use', action: 'Inspect the existing run in Runs. Choose a different name only if you intend a new run, then review again.', detail };

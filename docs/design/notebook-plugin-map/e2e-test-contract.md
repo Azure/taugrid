@@ -20,7 +20,7 @@ Existing coverage to build on (do not duplicate): `tests/e2e/` for cluster paths
 | — | Non-backbone: test isolation | S045 | 1 browser-harness isolation scenario |
 | — | Non-backbone: SDK packaging and CI | S047 | CI collection gate (no E2E scenario; the job *is* the test) |
 
-**Gap to close first:** activity 6 has no existing coverage at all. The portal has `TestReadProfilesFiltersApplicabilityByNamespaceAndTeam` and the CLI has applicability tests, but nothing asserts the *plugin* agrees with them. Scenario E2E-A6-01 is the highest-value new test in this contract.
+**Gap to close first:** activity 6 has no coverage of agreement *across* the three implementations. The portal has `TestReadProfilesFiltersApplicabilityByNamespaceAndTeam`, the CLI has applicability tests, and the plugin now withholds on namespace/team/lane (`sdk/python/python/tests/test_widgets_core.py:395-418`), but nothing asserts the three agree with each other. Scenario E2E-A6-01 is the highest-value new test in this contract.
 
 ---
 

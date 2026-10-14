@@ -3,9 +3,9 @@
 
 import * as React from 'react';
 import { apiGet, apiPost } from './api';
-import { DestinationSession, DestinationState, namespaceLabel } from './destinations';
+import { describeProfileGap, DestinationSession, DestinationState, namespaceLabel } from './destinations';
 import { NamespaceRow, RunTarget, SubmitPlanSummary } from './model';
-import { SubmissionSession, SubmissionState, SubmissionFailure, submissionFailure } from './submission';
+import { SubmissionSession, SubmissionState, SubmissionFailure, endpointFailure, submissionFailure } from './submission';
 import { bytes, FailureNotice, FileList, parseFileList, possibleImports, SubmissionOutcome, SubmissionReceipt, SubmissionStatus } from './submissionui';
 import { NotebookHandle, useCapabilities } from './widget';
 
@@ -81,6 +81,11 @@ export function SubmissionReview({ notebook, onConfirm, onOpenRun, onAbout }: {
   const locked = state.busy || confirming || !!state.submitted || state.uncertain;
   const options = destinations.value;
   const chosen = options?.profiles.find(option => option.name === profile);
+  const profileGap = options ? describeProfileGap(options.warnings) : null;
+  // Both endpoint failures share one mapping so the two call sites cannot drift;
+  // the raw failure is preferred so a 404/non-JSON body is classified correctly.
+  const destinationsFailure = destinations.error ? endpointFailure(destinations.cause ?? destinations.error) : null;
+  const capabilitiesFailure = capabilities.error ? endpointFailure(capabilities.cause ?? capabilities.error) : null;
   const selectedNamespace = namespaces.find(option => option.name === namespace);
   const fileBytes = candidates.value?.files.filter(file => selected.includes(file.name)).reduce((total, file) => total + file.size, 0) || 0;
   const overBudget = fileBytes > (candidates.value?.budgetBytes || 1048576);
@@ -143,7 +148,7 @@ export function SubmissionReview({ notebook, onConfirm, onOpenRun, onAbout }: {
         <div className="taugrid-heading"><h2>Choose destination</h2><button className="taugrid-button" disabled={locked || destinations.busy} onClick={() => refresh()}>Refresh destinations</button></div>
         <p>The Jupyter server lists destinations with its credentials. Review is read-only; submitting creates a cluster workload.</p>
         {destinations.busy && <p role="status">Loading destinations…</p>}
-        {destinations.error && <FailureNotice failure={{ title: 'Destinations are unavailable', action: 'Check sign-in, cluster connectivity, and namespace read permission with the operator. Refresh destinations to try again.', detail: destinations.error }} />}
+        {destinationsFailure && <FailureNotice failure={destinationsFailure} />}
         <div className="taugrid-destination-fields">
           <label className="taugrid-field" htmlFor={id + '-namespace'}><span>Namespace</span><select id={id + '-namespace'} data-testid="taugrid-submit-namespace" className="taugrid-input" value={namespace} disabled={locked || destinations.busy} onChange={event => { setNamespace(event.target.value); setQueue(''); refresh(event.target.value); }}>
             <option value="" disabled>Choose a namespace</option>{namespaces.map(option => <option key={option.name} value={option.name}>{namespaceLabel(option)}</option>)}
@@ -157,11 +162,15 @@ export function SubmissionReview({ notebook, onConfirm, onOpenRun, onAbout }: {
         </div>
         {options && <>
           {!options.namespaces.length && <p role="status">No namespaces are visible. Ask the operator for namespace list permission or a Tau workspace, then refresh destinations.</p>}
-          {!options.profiles.length && <p role="status">No ready worker profiles are available. Ask the operator to publish a ready TauCluster profile, then refresh destinations.</p>}
+          {!options.profiles.length && profileGap && <div className="taugrid-error" role="status" data-testid="taugrid-profile-gap">
+            <strong>{profileGap.title}</strong><p>{profileGap.action}</p>
+            {options.warnings.length > 0 && <details className="taugrid-details"><summary>Per-profile reasons</summary>
+              {options.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
+          </div>}
           {!options.queues.length && <p role="status">No queues are visible in this namespace. Choose another namespace or ask the operator to configure a LocalQueue and its read permission, then refresh destinations.</p>}
           {selectedNamespace && <p className="taugrid-muted">{selectedNamespace.tauEnabled ? 'This namespace is Tau-labelled; queue admission is not guaranteed.' : 'This namespace is not labelled for Tau work. Check queue setup with the operator before submitting.'}</p>}
           <p className="taugrid-muted">Workspace default queue: <strong>{options.defaultQueue || 'Not resolved'}</strong>. {chosen ? <>The <strong>{chosen.name}</strong> profile resolves queue <strong>{chosen.queue}</strong>; the server refuses a different queue because a LocalQueue is the quota-bearing object.</> : 'This is the TauCluster workspace default, not a namespace-specific admission guarantee.'}</p>
-          {options.warnings.map((warning, index) => <p className="taugrid-submit-warning" key={index}>{warning}</p>)}
+          {options.profiles.length > 0 && options.warnings.map((warning, index) => <p className="taugrid-submit-warning" key={index}>{warning}</p>)}
           <p className="taugrid-muted">One bounded read: up to {options.limits.namespaces} namespaces, {options.limits.profiles} profiles, and {options.limits.queues} queues for this namespace. Missing an option? Ask the operator; this view does not walk more pages.</p>
         </>}
         {chosen && <div className="taugrid-profile-facts" data-testid="taugrid-profile-consequences"><p>{chosen.description || `The ${chosen.name} profile requests the following worker resources.`}</p>
@@ -198,7 +207,7 @@ export function SubmissionReview({ notebook, onConfirm, onOpenRun, onAbout }: {
       {plan && <SubmissionReceipt plan={plan} notebookName={notebook.name} />}
       <section className="taugrid-submit-section taugrid-write-boundary" aria-label="Submit reviewed notebook"><h2>Submit notebook</h2>
         <p>Creates the reviewed RayJob only after you confirm. No automatic retries.</p>
-        {capabilities.error ? <div role="alert"><p>Submission availability could not be checked. Check your Jupyter connection and try again.</p><details><summary>Technical details</summary><p>{capabilities.error}</p></details><button className="taugrid-button" onClick={capabilities.retry} disabled={locked}>Retry capabilities</button></div> : !capabilities.value ? <p>Checking submission availability…</p> : !available ? <div><p>Submission is disabled on this server. You can still review the plan. Ask the operator to enable submission after runtime validation.</p><button className="taugrid-button" disabled={locked} onClick={capabilities.retry}>Check submission availability</button></div> : null}
+        {capabilitiesFailure ? <div role="alert"><strong>{capabilitiesFailure.title}</strong><p>{capabilitiesFailure.action}</p><details className="taugrid-details"><summary>Technical details</summary><p>{capabilitiesFailure.detail}</p></details><button className="taugrid-button" onClick={capabilities.retry} disabled={locked}>Retry capabilities</button></div> : !capabilities.value ? <p>Checking submission availability…</p> : !available ? <div><p>Submission is disabled on this server. You can still review the plan. Ask the operator to enable submission after runtime validation.</p><button className="taugrid-button" disabled={locked} onClick={capabilities.retry}>Check submission availability</button></div> : null}
         <button className="taugrid-button taugrid-primary" data-testid="taugrid-submit-notebook" disabled={locked || !state.preview?.submittable || !state.preview.submissionEnabled || !available} onClick={() => void submit()}>{state.busy && state.attempted ? 'Submitting notebook…' : 'Submit notebook'}</button>
       </section>
     </>}

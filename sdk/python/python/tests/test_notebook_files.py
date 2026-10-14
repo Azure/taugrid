@@ -50,7 +50,7 @@ def workspace(tmp_path: Path) -> Path:
 def test_candidates_offer_flat_source_files_and_skip_noise(tmp_path):
     root = workspace(tmp_path)
 
-    result = list_candidates(root, NOTEBOOK)
+    result = list_candidates(notebook_directory(root, NOTEBOOK), NOTEBOOK)
 
     names = [row["name"] for row in result["files"]]
     assert names == ["config.json", "helpers.py", "notes.md"]
@@ -61,7 +61,7 @@ def test_candidates_offer_flat_source_files_and_skip_noise(tmp_path):
 
 
 def test_candidates_mark_unreadable_directory_for_explicit_recovery(tmp_path):
-    result = list_candidates(tmp_path, "missing/notebook.ipynb")
+    result = list_candidates(notebook_directory(tmp_path, "missing/notebook.ipynb"), "missing/notebook.ipynb")
     assert result["files"] == []
     assert result["readable"] is False
     assert "permissions" in result["warnings"][0]
@@ -71,7 +71,7 @@ def test_candidates_report_directory_scan_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(notebook_files, "MAX_CANDIDATES", 2)
     for name in ["one.py", "two.py", "three.py"]:
         (tmp_path / name).write_text("pass", encoding="utf-8")
-    result = list_candidates(tmp_path, NOTEBOOK)
+    result = list_candidates(notebook_directory(tmp_path, NOTEBOOK), NOTEBOOK)
     assert len(result["files"]) == 2
     assert any("first 2 directory entries" in warning for warning in result["warnings"])
 
@@ -80,7 +80,7 @@ def test_candidates_warn_about_a_file_too_large_to_embed(tmp_path):
     root = workspace(tmp_path)
     (root / "big.py").write_bytes(b"x" * (MAX_FILE_BYTES + 1))
 
-    result = list_candidates(root, NOTEBOOK)
+    result = list_candidates(notebook_directory(root, NOTEBOOK), NOTEBOOK)
 
     assert "big.py" not in [row["name"] for row in result["files"]]
     assert any("big.py" in warning for warning in result["warnings"])

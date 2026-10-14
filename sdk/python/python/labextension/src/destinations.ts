@@ -33,6 +33,47 @@ export function preferredNamespace(namespaces: NamespaceRow[]): string {
   return (namespaces.find(namespace => namespace.tauEnabled) || namespaces[0])?.name || '';
 }
 
+export interface ProfileGapNotice { title: string; action: string; }
+
+/**
+ * An empty profile picker has several distinct causes, and only one of them is
+ * the researcher's problem. The server's ``warnings`` carry the per-profile
+ * reason (``tau/_profile.py`` prefixes each with "is not offered in this scope",
+ * which wrongly implies authorization for readiness and renderer failures too),
+ * so classify on the reason and name the actor who can actually act.
+ */
+export function describeProfileGap(warnings: string[]): ProfileGapNotice {
+  const text = warnings.join('\n').toLowerCase();
+  if (/does not identify a (team|lane)|does not authorize (team|lane)|team-scoped|lane-scoped/.test(text)) {
+    return {
+      title: 'This Jupyter server is not configured for the team or lane these worker profiles require.',
+      action: 'Ask the operator to set TAUGRID_TEAM and TAUGRID_LANE for this Jupyter server, then refresh destinations. Until then, team- and lane-scoped profiles are withheld.'
+    };
+  }
+  if (/invalid profile:/.test(text)) {
+    return {
+      title: 'A worker profile is ready, but this extension cannot read it.',
+      action: 'Ask the operator to update the TauGrid extension or the profile definition, then refresh destinations. The profile itself is ready; this is not a permissions problem.'
+    };
+  }
+  if (/stale|missing condition|observedgeneration|has not published a resolved profile set|is not a mapping|is not a list/.test(text)) {
+    return {
+      title: 'No worker profile is ready yet.',
+      action: 'Ask the operator to check the TauCluster controller and its Ready condition, then refresh destinations. This is a cluster or controller problem, not a permissions problem.'
+    };
+  }
+  if (/does not authorize namespace/.test(text)) {
+    return {
+      title: 'No worker profiles are available in this namespace.',
+      action: 'Ask the operator to publish a ready TauCluster profile for this namespace or grant read permission, then refresh destinations.'
+    };
+  }
+  return {
+    title: 'No ready worker profiles are available.',
+    action: 'Ask the operator to publish a ready TauCluster profile, then refresh destinations.'
+  };
+}
+
 export function parseDestinations(value: unknown): Destinations {
   const record = (item: unknown): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item);
   const text = (item: unknown): item is string => typeof item === 'string' && item.length > 0;
@@ -59,6 +100,8 @@ export interface DestinationState {
   value: Destinations | null;
   busy: boolean;
   error: string | null;
+  /** The raw failure, kept so the view can classify a 404 or a non-JSON body. */
+  cause?: unknown;
 }
 
 export class DestinationSession {
@@ -73,13 +116,13 @@ export class DestinationSession {
     this.request?.abort();
     const request = new AbortController();
     this.request = request;
-    this.publish({ value: null, busy: true, error: null });
+    this.publish({ value: null, busy: true, error: null, cause: null });
     try {
       const value = parseDestinations(await this.get(namespace, request.signal));
       if (namespace && value.namespace !== namespace) throw new Error('The catalog belongs to a different namespace. Refresh destinations.');
-      if (!this.disposed && this.request === request) this.publish({ value, busy: false, error: null });
+      if (!this.disposed && this.request === request) this.publish({ value, busy: false, error: null, cause: null });
     } catch (error) {
-      if (!this.disposed && this.request === request) this.publish({ value: null, busy: false, error: String(error) });
+      if (!this.disposed && this.request === request) this.publish({ value: null, busy: false, error: String(error), cause: error });
     }
   }
 

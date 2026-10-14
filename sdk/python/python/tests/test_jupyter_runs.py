@@ -435,6 +435,13 @@ class FakeHandler:
         from tau.jupyter.server import _ClientMixin
         return await _ClientMixin.authorize(self, action, **kwargs)
 
+    async def authorize_companion_files(self, body):
+        # The preview/submit paths resolve and authorize the companion directory
+        # through this mixin method; mirror it so the stand-in matches the real
+        # handler surface.
+        from tau.jupyter.server import _SubmitMixin
+        return await _SubmitMixin.authorize_companion_files(self, body)
+
     async def read(self, reader, **kwargs):
         from tau.jupyter.server import _ClientMixin
         return await _ClientMixin.read(self, reader, **kwargs)

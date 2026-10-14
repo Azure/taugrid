@@ -14,9 +14,8 @@ from tau._notebook_pkg import PayloadTooLarge, package
 from tau._profile import (
     NoTauClusterFound,
     ProfileScope,
+    default_queue,
     ready_profiles,
-    resolve,
-    resolve_applicability,
 )
 from tau._render import (
     GPU_EXECUTION_RAY,
@@ -153,8 +152,8 @@ def test_profile_resolution_uses_the_resolved_status_catalog():
         ],
         default_queue="research-gpu",
     )
-    profiles, queue = resolve(cluster, namespace="ray")
-    assert queue == "research-gpu"
+    profiles, _skipped = ready_profiles(cluster, scope=ProfileScope(namespace="ray"))
+    assert default_queue(cluster) == "research-gpu"
     names = {p.name for p in profiles}
     assert names == {"training-8gpu", "training-1gpu"}
     eight = next(p for p in profiles if p.name == "training-8gpu")
@@ -419,32 +418,9 @@ def test_an_unknown_scoped_dimension_fails_closed():
     assert "does not authorize lane" in {i.name: i.reason for i in partial_skipped}["gpu"]
 
 
-def test_resolve_applicability_mirrors_the_cli_but_is_not_authorization():
-    """``resolve_applicability`` reads the profile, so it must not feed a scope.
-
-    It stays for display and CLI parity only. The authorization-boundary test
-    lives in ``_notebook_submit``: a scoped profile is refused when the caller
-    scope is unknown, and deriving the team from the profile cannot un-refuse it.
-    """
-    cluster = ready_cluster([
-        {"name": "one", "compute": {"workerCount": 1, "gpusPerWorker": 0},
-         "applicability": {"teams": ["research"], "lanes": ["training"]}},
-        {"name": "multi", "compute": {"workerCount": 1, "gpusPerWorker": 0},
-         "applicability": {"teams": ["a", "b"]}},
-    ])
-    assert resolve_applicability(cluster, "one") == ("research", "training")
-    with pytest.raises(ValueError, match="multiple teams"):
-        resolve_applicability(cluster, "multi")
-    # And the value it returns is exactly what ready_profiles withholds when the
-    # caller scope is unknown, which is why it cannot be an authorization input.
-    profiles, skipped = ready_profiles(cluster, scope=ProfileScope(namespace="ray"))
-    assert [p.name for p in profiles] == []
-    assert "does not authorize team" in {i.name: i.reason for i in skipped}["one"]
-
-
-def test_resolve_no_cluster_raises():
+def test_ready_profiles_no_cluster_raises():
     with pytest.raises(NoTauClusterFound):
-        resolve({})
+        ready_profiles({})
 
 
 def test_package_is_self_contained_and_capped():

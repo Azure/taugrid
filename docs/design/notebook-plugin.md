@@ -265,10 +265,14 @@ encoding overhead impose the stricter final budgets in section 7. Reserved
 generated-file names cannot be overwritten by a companion file.
 
 This is a directory-containment check, **not a complete filesystem sandbox**.
-Selected files are opened by joining their names to that directory; normal file
-operations follow symlinks, without separately confining each resolved target.
-The picker's suffix exclusions are not a server-side file-type authorization
-rule. Shared-server operators must not treat either check as tenant isolation.
+Selected files are opened by joining their names to that directory, and the
+directory that is read is the same resolved directory the Authorizer approved
+(`taugrid:files:<directory>`): the request path is resolved once, authorized,
+and that resolved value is what the reader consumes. Symbolic links are refused
+outright, including links that point inside the notebook directory, because a
+link can be repointed between the review and the read. The picker's suffix
+exclusions are not a server-side file-type authorization rule. Shared-server
+operators must not treat either check as tenant isolation.
 
 The runner copies non-hidden companion files from the payload into its working
 directory before execution, so relative imports and file reads can find them.

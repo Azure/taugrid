@@ -83,9 +83,19 @@ def _inside(path: Path, directory: Path) -> bool:
     return path == directory or directory in path.parents
 
 
-def list_candidates(root: Path, notebook_path: str) -> Dict[str, Any]:
-    """Flat files beside the notebook that could ship with it."""
-    directory = notebook_directory(root, notebook_path)
+def list_candidates(directory: Path, notebook_path: str) -> Dict[str, Any]:
+    """Flat files beside the notebook that could ship with it.
+
+    ``directory`` is the already-resolved notebook directory the caller
+    authorized; it is consumed as-is. Resolving ``notebook_path`` again here would
+    be the second ``Path.resolve()`` on a caller-supplied path, and a symlink
+    repoint or a parent rename landing between the two resolutions would make the
+    directory *listed* differ from the directory *authorized*.
+    :func:`notebook_directory` stays the single resolver, and every caller
+    resolves once and passes the value down - the same shape
+    ``_SubmitMixin.selected_files`` uses for the read path. ``notebook_path`` is
+    used only to exclude the notebook itself from the listing.
+    """
     notebook_name = Path(notebook_path).name
     rows: List[Dict[str, Any]] = []
     warnings: List[str] = []
