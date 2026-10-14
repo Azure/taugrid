@@ -495,6 +495,81 @@ func TestRunSelectionUsesVerifiedWorkspaceQueueAfterTeamMigration(t *testing.T) 
 	}
 }
 
+func TestRunSelectionRejectsWorkspaceQueueThatChangesMultiKueueClusterQueue(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "multikueue-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "tau-ws-training"
+	workspace.Status.Queue.ClusterQueue = "tau-ws-training"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	_, err = selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `cannot replace MultiKueue workload profile`) ||
+		!strings.Contains(err.Error(), `"multikueue-cq"`) {
+		t.Fatalf("error = %v, want MultiKueue ClusterQueue transition rejection", err)
+	}
+}
+
+func TestRunSelectionAllowsWorkspaceQueueThatPreservesMultiKueueClusterQueue(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "multikueue-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "workspace-jobqueue"
+	workspace.Status.Queue.ClusterQueue = "multikueue-cq"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err != nil {
+		t.Fatalf("select MultiKueue profile with preserved ClusterQueue: %v", err)
+	}
+	if selected.queue != "workspace-jobqueue" ||
+		selected.selectedWorkloadProfile == nil ||
+		selected.selectedWorkloadProfile.ClusterQueue != "multikueue-cq" {
+		t.Fatalf("MultiKueue workspace selection = %#v", selected)
+	}
+}
+
 func TestProfileRefreshDistinguishesConfigAssertionsFromPriorRevisionValues(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.engine = runconfig.EngineJob

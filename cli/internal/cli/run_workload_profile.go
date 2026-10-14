@@ -97,18 +97,37 @@ func applySelectedWorkloadProfile(
 ) (unresolvedRunOptions, error) {
 	profileQueue := strings.TrimSpace(renderProfile.Queue)
 	if o.workspaceQueueResolved {
-		if strings.TrimSpace(o.queue) == "" {
+		workspaceQueue := strings.TrimSpace(o.queue)
+		if workspaceQueue == "" {
 			return o, fmt.Errorf("verified TauWorkspace routing has no LocalQueue")
 		}
-		if strings.TrimSpace(o.workspaceClusterQueue) == "" && strings.TrimSpace(o.queue) != profileQueue {
+		workspaceClusterQueue := strings.TrimSpace(o.workspaceClusterQueue)
+		if workspaceClusterQueue == "" && workspaceQueue != profileQueue {
 			return o, fmt.Errorf(
 				"verified TauWorkspace LocalQueue %q differs from workload profile %q queue %q but has no resolved ClusterQueue",
-				o.queue,
+				workspaceQueue,
 				selection.Profile.Name,
 				profileQueue,
 			)
 		}
-		renderProfile.Queue = o.queue
+		if selection.Profile.ExecutionTarget == profile.ExecutionTargetMultiKueue &&
+			workspaceQueue != profileQueue {
+			profileClusterQueue, err := selection.Profile.ClusterQueueFor(o.namespace, profileQueue)
+			if err != nil {
+				return o, fmt.Errorf("resolve MultiKueue workload profile queue binding: %w", err)
+			}
+			if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) {
+				return o, fmt.Errorf(
+					"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace MultiKueue workload profile %q queue %q bound to ClusterQueue %q",
+					workspaceQueue,
+					workspaceClusterQueue,
+					selection.Profile.Name,
+					profileQueue,
+					profileClusterQueue,
+				)
+			}
+		}
+		renderProfile.Queue = workspaceQueue
 	}
 	if strings.TrimSpace(o.priorityTier) != "" &&
 		(strings.TrimSpace(o.workloadPriorityClass) != "" ||
