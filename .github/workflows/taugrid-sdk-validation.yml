@@ -179,19 +179,31 @@ jobs:
         run: npm test
 
       # The wheel ships tau/labextension/**, so a bundle that was never rebuilt
-      # after a src/ change reaches users with no other CI signal.  The build
-      # above regenerates it; any difference from the committed bundle fails.
-      - name: Fail if the committed bundle is stale
+      # after a src/ change would reach users with no other CI signal. The build
+      # above regenerates it and the difference is reported here.
+      #
+      # NOT a hard failure yet, because the committed bundle is not reproducible:
+      # the build embeds JupyterLab's shared modules, the extension declares
+      # `@jupyterlab/*: ^4.0.0`, and the builder resolves its core path from
+      # whatever `jupyterlab` pip resolves (4.6.4 at the time of writing), so a
+      # different JupyterLab version yields different content hashes for
+      # `293.*.js` / `remoteEntry.*.js`. The committed bundle was also produced on
+      # Windows, so `_build.load` in the generated package.json uses backslashes.
+      # A byte-equality gate would therefore fail for every contributor rather
+      # than detect drift. Making it hard requires pinning JupyterLab exactly and
+      # generating the bundle on the same platform CI uses; until then this step
+      # reports the difference so drift is visible without blocking the PR.
+      - name: Report whether the committed bundle matches a fresh build
         working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          if [[ -n "$(git status --porcelain -- sdk/python/python/tau/labextension)" ]]; then
-            echo "The committed labextension bundle is stale; run 'npm run build' in sdk/python/python/labextension and include the output." >&2
-            git status --porcelain -- sdk/python/python/tau/labextension
-            git diff --stat -- sdk/python/python/tau/labextension
-            exit 1
+          if [[ -z "$(git status --porcelain -- sdk/python/python/tau/labextension)" ]]; then
+            echo "The committed labextension bundle matches a fresh build."
+            exit 0
           fi
-          git diff --exit-code -- sdk/python/python/tau/labextension
+          echo "::warning title=labextension bundle differs from a fresh build::The committed bundle is not byte-identical to one built here. This is expected while the build is environment-dependent (see the comment above); inspect the diff and commit a rebuild only if the difference is a real source change."
+          git status --porcelain -- sdk/python/python/tau/labextension
+          git diff --stat -- sdk/python/python/tau/labextension
 
   required:
     name: Required
