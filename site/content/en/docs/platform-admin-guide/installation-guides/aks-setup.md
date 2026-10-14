@@ -119,10 +119,30 @@ managed addons only on normal AKS-managed agent pools.
 Externally registered nodes, including AKS Flex nodes, do not inherit that
 contract by default. TauGrid does **not** support relying on AKS-managed Azure
 CSI addons on Flex or other external nodes. This is not a claim that Azure
-storage can never run there: a Flex/external-node deployment that needs
-CSI-backed storage must install, configure, operate, and validate its own
-compatible CSI controller and node components. The deployment must prove that
-the driver registers on every node eligible for the workload.
+storage can never run there. TauGrid helps platform operators set up a
+compatible deployment-managed CSI driver for Flex/external nodes; the operator
+still owns the storage account or backend, credentials, capacity, data
+lifecycle, and driver upgrades.
+
+Use this setup path:
+
+1. Select a CSI implementation whose vendor supports the external node's
+   operating system, container runtime, Kubernetes version, and storage
+   backend.
+2. Install its controller and node components using the driver's documented
+   installation method. Configure node selectors, affinities, and tolerations
+   so the node component runs on every node eligible for the TauGrid workload;
+   do not spoof AKS-managed node labels to schedule an AKS addon.
+3. Create the driver's StorageClass and PVC, then verify the PVC reaches
+   `Bound`.
+4. Verify the driver appears in `CSIDriver` and in the `CSINode` object for
+   every eligible node.
+5. Run a workload-profile-constrained mount/read/write canary using the same
+   ServiceAccount and security settings as the customer workload.
+
+TauGrid's storage examples and validation commands provide the Kubernetes side
+of this setup. Driver-specific installation values remain tied to the selected
+driver and storage backend rather than to TauGrid.
 
 A PVC can be `Bound` while a pod still fails before container startup with an
 event such as `driver name file.csi.azure.com not found in the list of

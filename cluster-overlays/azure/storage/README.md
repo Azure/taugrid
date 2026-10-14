@@ -45,10 +45,13 @@ AKS-managed Azure CSI addons are the expected integration for normal
 AKS-managed agent pools. TauGrid does not support relying on those managed
 addons on Flex or other externally registered nodes, which do not inherit the
 normal AKS node metadata/bootstrap contract by default. This boundary does not
-exclude Azure storage implementations on external nodes: the deployment must
-install, configure, operate, and validate its own compatible CSI controller and
-node components. Do not use temporary AKS-label reconciliation as a supported
-storage design.
+exclude Azure storage implementations on external nodes. TauGrid helps
+platform operators deploy and validate a compatible CSI implementation using
+the setup path in the
+[AKS installation guide](../../../site/content/en/docs/platform-admin-guide/installation-guides/aks-setup.md#aks-storage-drivers-and-flex-nodes).
+The operator owns the selected backend, credentials, capacity, data lifecycle,
+and driver upgrades. Do not use temporary AKS-label reconciliation as a
+supported storage design.
 
 On current shared research clusters the live PVC names may differ from the
 generic `blob-training` default:

@@ -47,8 +47,9 @@ driver, not on TauGrid. The driver must register on every node eligible for the
 workload profile. This includes metrics-offload workloads: ADX is an optional
 projection and does not repair a PVC mount that fails before the trainer or
 sidecar starts. On AKS Flex or other external nodes, the deployment must
-operate its own compatible CSI components rather than rely on AKS-managed Azure
-CSI addons; see
+use a compatible deployment-managed CSI implementation rather than rely on
+AKS-managed Azure CSI addons. TauGrid provides the customer setup and
+validation path; see
 [the AKS storage boundary](../aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 For disposable runs that need neither durable history nor offload, write only

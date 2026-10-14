@@ -90,8 +90,8 @@ and Kubernetes can place an admitted pod on a node where it fails before
 container startup. Validate each node's `CSINode` registration and run a
 profile-constrained mount canary before advertising the profile for
 PVC-backed workloads. For AKS Flex or other external nodes, do not rely on
-AKS-managed Azure CSI addons; operate a deployment-owned compatible driver as
-described in
+AKS-managed Azure CSI addons; follow TauGrid's customer setup path for a
+compatible deployment-managed driver as described in
 [the AKS storage boundary](../aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 ## Connected and offline rendering

@@ -178,8 +178,8 @@ kubectl get csinode <node> \
 missing `file.csi.azure.com` entry, means the CSI node component is not
 registered there. Validate every node eligible for the workload profile. On
 AKS Flex or other external nodes, do not try to make TauGrid depend on the
-AKS-managed Azure CSI addon by reconciling AKS-only labels; the deployment must
-install and own a compatible CSI implementation. See
+AKS-managed Azure CSI addon by reconciling AKS-only labels. Follow TauGrid's
+customer setup path to deploy and validate a compatible CSI implementation. See
 [AKS storage drivers and Flex nodes](../aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 **What failure means:** `Pending` or `Degraded` phase means one or more

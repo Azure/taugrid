@@ -44,8 +44,8 @@ TauGrid's PVC fields are Kubernetes abstractions, not a promise that a cloud
 provider's managed CSI addon supports every node type. In particular,
 AKS-managed Azure CSI addons are expected on normal AKS agent pools but are not
 supported by TauGrid as the storage implementation for Flex or other externally
-registered nodes. Those deployments must operate and validate their own
-compatible driver. See
+registered nodes. TauGrid helps operators deploy and validate a compatible
+deployment-managed driver for those nodes. See
 [AKS storage drivers and Flex nodes](../../platform-admin-guide/aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 When durable output, checkpoint recovery, and metrics/artifact offload are not

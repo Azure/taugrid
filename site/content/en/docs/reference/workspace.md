@@ -77,9 +77,10 @@ node's `CSINode` object.
 
 AKS-managed Azure CSI addons are supported and expected on normal AKS agent
 pools, but TauGrid does not support relying on those managed addons on Flex or
-other externally registered nodes. Such deployments own installation,
-configuration, operation, and validation of a compatible CSI driver and node
-components. See
+other externally registered nodes. TauGrid helps operators set up and validate
+a compatible deployment-managed CSI driver; operators retain ownership of the
+storage backend, credentials, capacity, data lifecycle, and driver upgrades.
+See
 [AKS storage drivers and Flex nodes](../../platform-admin-guide/aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 `WorkloadIdentityReady` is diagnostic; the overall phase gate currently

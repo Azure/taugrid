@@ -32,9 +32,10 @@ Prepare:
 
 The sidecar runs the standalone collector with the fixed `collector-v1`
 runtime, `adx-required` delivery mode, and `adx-queued-v1` sink.
-On AKS Flex or other external nodes, this requires a deployment-owned CSI
-implementation; TauGrid does not support relying on AKS-managed Azure CSI
-addons there. See
+On AKS Flex or other external nodes, this requires a compatible
+deployment-managed CSI implementation. TauGrid provides the operator setup and
+validation path but does not support relying on AKS-managed Azure CSI addons
+there. See
 [the AKS storage boundary](../../platform-admin-guide/aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 ## Inspect the evidence contract
