@@ -141,6 +141,58 @@ jobs:
       - name: Test bounded reads on the declared floors
         run: python -m pytest tests/test_kube_io.py tests/test_jupyter_metrics.py tests/test_jupyter_runs.py tests/test_jupyter_destinations.py -q
 
+  labextension:
+    name: Python SDK / Labextension (build, test, freshness)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: sdk/python/python/labextension
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/python/python/labextension/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.x
+
+      - name: Install the JupyterLab core the extension builder links against
+        run: python -m pip install 'jupyterlab>=4.0.0,<5'
+
+      - name: Install labextension dependencies
+        run: npm ci
+
+      # The tests import built lib output through the package entry points, so
+      # the build runs first.
+      - name: Build the labextension
+        run: npm run build
+
+      - name: Test the labextension
+        run: npm test
+
+      # The wheel ships tau/labextension/**, so a bundle that was never rebuilt
+      # after a src/ change reaches users with no other CI signal.  The build
+      # above regenerates it; any difference from the committed bundle fails.
+      - name: Fail if the committed bundle is stale
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain -- sdk/python/python/tau/labextension)" ]]; then
+            echo "The committed labextension bundle is stale; run 'npm run build' in sdk/python/python/labextension and include the output." >&2
+            git status --porcelain -- sdk/python/python/tau/labextension
+            git diff --stat -- sdk/python/python/tau/labextension
+            exit 1
+          fi
+          git diff --exit-code -- sdk/python/python/tau/labextension
+
   required:
     name: Required
     if: always()
@@ -148,6 +200,7 @@ jobs:
       - lint
       - test
       - floors
+      - labextension
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
@@ -155,7 +208,9 @@ jobs:
           LINT_RESULT: ${{ needs.lint.result }}
           TEST_RESULT: ${{ needs.test.result }}
           FLOORS_RESULT: ${{ needs.floors.result }}
+          LABEXTENSION_RESULT: ${{ needs.labextension.result }}
         run: |
           test "${LINT_RESULT}" = success
           test "${TEST_RESULT}" = success
           test "${FLOORS_RESULT}" = success
+          test "${LABEXTENSION_RESULT}" = success
