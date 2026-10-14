@@ -158,10 +158,11 @@ type adoptManifest struct {
 }
 
 type adoptObjectMeta struct {
-	Name            string `yaml:"name"`
-	Namespace       string `yaml:"namespace"`
-	UID             string `yaml:"uid,omitempty"`
-	ResourceVersion string `yaml:"resourceVersion,omitempty"`
+	Name            string            `yaml:"name"`
+	Namespace       string            `yaml:"namespace"`
+	UID             string            `yaml:"uid,omitempty"`
+	ResourceVersion string            `yaml:"resourceVersion,omitempty"`
+	Annotations     map[string]string `yaml:"annotations,omitempty"`
 }
 
 type adoptSpec struct {
@@ -197,6 +198,16 @@ func desiredAdoption(o AdoptOptions) Workspace {
 }
 
 func renderAdoption(o AdoptOptions, metadata ObjectMeta) ([]byte, error) {
+	annotations := make(map[string]string, len(metadata.Annotations)+1)
+	for key, value := range metadata.Annotations {
+		annotations[key] = value
+	}
+	if o.NamespaceUID != "" {
+		annotations[workloadmeta.AnnotationAdoptionNamespaceUID] = o.NamespaceUID
+	}
+	if len(annotations) == 0 {
+		annotations = nil
+	}
 	manifest := adoptManifest{
 		APIVersion: APIVersion,
 		Kind:       KindWorkspace,
@@ -205,6 +216,7 @@ func renderAdoption(o AdoptOptions, metadata ObjectMeta) ([]byte, error) {
 			Namespace:       o.SystemNamespace,
 			UID:             metadata.UID,
 			ResourceVersion: metadata.ResourceVersion,
+			Annotations:     annotations,
 		},
 		Spec: adoptSpec{
 			Authorization: WorkspaceAuthorization{Mode: AuthorizationModeClusterWide},
@@ -352,6 +364,7 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 			o.SystemNamespace,
 		)
 	}
+	existingLocalQueue := ""
 	if len(list.Items) == 1 {
 		existing := list.Items[0]
 		if err := requireNotTerminating("TauWorkspace", o.SystemNamespace+"/"+existing.Metadata.Name, existing.Metadata.DeletionTimestamp); err != nil {
@@ -363,6 +376,7 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 				existing.Metadata.Name,
 			)
 		}
+		existingLocalQueue = strings.TrimSpace(existing.Status.Queue.LocalQueue)
 	}
 
 	var ns namespaceDocument
@@ -378,7 +392,9 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 	if owner := ns.Metadata.Labels[workloadmeta.LabelWorkspace]; owner != "" && owner != o.Name {
 		return AdoptionPreflight{}, fmt.Errorf("preflight: Namespace %q is assigned to TauWorkspace %q, not %q", o.Namespace, owner, o.Name)
 	}
-	if queue := ns.Metadata.Labels[defaultLocalQueueLabel]; queue != "" && queue != o.Queue {
+	if queue := ns.Metadata.Labels[defaultLocalQueueLabel]; queue != "" &&
+		queue != o.Queue &&
+		queue != existingLocalQueue {
 		return AdoptionPreflight{}, fmt.Errorf("preflight: Namespace %q default LocalQueue is %q, want exactly %q", o.Namespace, queue, o.Queue)
 	}
 
@@ -535,7 +551,7 @@ func verifyStablePreflight(before, after AdoptionPreflight) error {
 
 // ApplyAdoption repeats preflight, verifies observed identities are stable,
 // then server-side dry-runs and conditionally creates only the TauWorkspace.
-// A compatible existing workspace is an idempotent no-op.
+// A compatible existing workspace receives refreshed identity-bound evidence.
 func ApplyAdoption(ctx context.Context, runner AdoptRunner, options AdoptOptions, initial AdoptionPreflight) (string, error) {
 	o := options.withDefaults()
 	current, err := PreflightAdoption(ctx, runner, o)
@@ -545,14 +561,29 @@ func ApplyAdoption(ctx context.Context, runner AdoptRunner, options AdoptOptions
 	if err := verifyStablePreflight(initial, current); err != nil {
 		return "", err
 	}
-	if current.ExistingWorkspace {
-		return fmt.Sprintf(
-			"TauWorkspace %s/%s already exists with compatible intent; no changes applied\n",
-			o.SystemNamespace,
-			o.Name,
-		), nil
+	adoptionAnnotations := map[string]string{
+		workloadmeta.AnnotationAdoptionNamespaceUID: current.NamespaceUID,
 	}
-	manifest, err := renderAdoption(o, ObjectMeta{})
+	if current.ExistingWorkspace {
+		patch, err := json.Marshal(map[string]any{"metadata": map[string]any{
+			"resourceVersion": current.ExistingWorkspaceRV,
+			"annotations":     adoptionAnnotations,
+		}})
+		if err != nil {
+			return "", fmt.Errorf("encode TauWorkspace adoption evidence: %w", err)
+		}
+		out, err := runner.Raw(ctx, []string{
+			"-n", o.SystemNamespace,
+			"patch", tauWorkspaceResource, o.Name,
+			"--type=merge",
+			"-p", string(patch),
+		}, nil)
+		if err != nil {
+			return out, fmt.Errorf("TauWorkspace adoption evidence patch failed; re-run adoption preflight before retrying: %w", err)
+		}
+		return out, nil
+	}
+	manifest, err := renderAdoption(o, ObjectMeta{Annotations: adoptionAnnotations})
 	if err != nil {
 		return "", err
 	}
