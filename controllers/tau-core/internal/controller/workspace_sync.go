@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +15,18 @@ import (
 
 func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) (ctrl.Result, error) {
 	targetNamespace := resolvedNamespace(workspace)
+	if workspace.Spec.TeamRef != nil &&
+		workspace.Status.Target.ResolvedNamespace != "" &&
+		workspace.Status.Target.ResolvedNamespace != targetNamespace &&
+		workspace.Status.Queue.LocalQueue != "" &&
+		workspace.Status.Queue.LocalQueue != workspaceLocalQueueName(workspace) {
+		return ctrl.Result{}, fmt.Errorf(
+			"cannot change target namespace from %q to %q while Team opt-in retains legacy LocalQueue %q",
+			workspace.Status.Target.ResolvedNamespace,
+			targetNamespace,
+			workspace.Status.Queue.LocalQueue,
+		)
+	}
 	conditions := []metav1.Condition{}
 
 	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace, false)

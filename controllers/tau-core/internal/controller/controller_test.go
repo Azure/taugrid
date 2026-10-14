@@ -1727,6 +1727,63 @@ func TestTeamWorkspaceRetainsLegacyRoutingUntilConsumersCanUseManagedQueue(t *te
 	}
 }
 
+func TestTeamOptInRejectsNamespaceRetargetWhileLegacyRoutingIsRetained(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Target.Namespace = "new-aurora"
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:              tauv1alpha1.WorkspacePhaseReady,
+		ObservedGeneration: 1,
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: "old-aurora"},
+		Queue: tauv1alpha1.WorkspaceQueueStatus{
+			LocalQueue:   workspace.Spec.Queue,
+			ClusterQueue: workspace.Spec.Queue,
+		},
+	}
+	oldNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "old-aurora",
+		Labels: map[string]string{
+			labelWorkspace:              workspace.Name,
+			labelWorkspaceLocalQueue:    workspace.Spec.Queue,
+			labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+		},
+		Annotations: map[string]string{annotationOwnerUID: string(workspace.UID)},
+	}}
+	newNamespace := testNamespace("new-aurora")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, oldNamespace, newNamespace).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err == nil ||
+		!strings.Contains(err.Error(), "cannot change target namespace") {
+		t.Fatalf("sync error = %v, want retained-routing retarget rejection", err)
+	}
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get workspace: %v", err)
+	}
+	if gotWorkspace.Status.Target.ResolvedNamespace != oldNamespace.Name ||
+		gotWorkspace.Status.Queue.LocalQueue != workspace.Spec.Queue {
+		t.Fatalf("working placement was discarded: %#v", gotWorkspace.Status)
+	}
+	var gotNew corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: newNamespace.Name}, &gotNew); err != nil {
+		t.Fatalf("Get new namespace: %v", err)
+	}
+	if len(gotNew.Labels) != 0 || len(gotNew.Annotations) != 0 {
+		t.Fatalf("rejected target namespace was mutated: labels=%v annotations=%v", gotNew.Labels, gotNew.Annotations)
+	}
+}
+
 func TestWorkspaceRejectsTeamRemovalBeforeSwitchingLocalQueue(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -2119,6 +2176,21 @@ type namespaceMutationFailingClient struct {
 	client.Client
 	createErr error
 	updateErr error
+}
+
+type namespaceGetFailingClient struct {
+	client.Client
+	namespace string
+	remaining int
+	err       error
+}
+
+func (c *namespaceGetFailingClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*corev1.Namespace); ok && key.Name == c.namespace && c.remaining > 0 {
+		c.remaining--
+		return c.err
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
 }
 
 func (c *namespaceMutationFailingClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
@@ -2741,6 +2813,58 @@ func TestLegacyPartialReconcileCanRecoverControllerCreatedNamespace(t *testing.T
 	}
 }
 
+func TestLegacyWorkspaceRBACPartialReconcileRecoversExistingNamespace(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	namespaceCreated := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	workspaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	labelManaged := metav1.NewTime(time.Now())
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "aurora",
+		UID:               types.UID("namespace-uid"),
+		CreationTimestamp: namespaceCreated,
+		Labels: map[string]string{
+			labelWorkspace:              "aurora",
+			labelWorkspaceLocalQueue:    "aurora",
+			labelKueueDefaultLocalQueue: "aurora",
+		},
+		ManagedFields: []metav1.ManagedFieldsEntry{{
+			Manager:    "tau-core-controller",
+			Operation:  metav1.ManagedFieldsOperationUpdate,
+			APIVersion: "v1",
+			Time:       &labelManaged,
+			FieldsType: "FieldsV1",
+			FieldsV1:   managedLabelFields(t, labelWorkspace),
+		}},
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 1
+	workspace.CreationTimestamp = workspaceCreated
+	workspace.Spec.Target.CreateNamespace = false
+	baseClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	c := &namespaceManagedFieldsClient{
+		Client:        baseClient,
+		namespace:     namespace.Name,
+		managedFields: namespace.ManagedFields,
+	}
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+}
+
 func TestLegacyPartialReconcileRetryPreservesMigrationEligibility(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -3041,6 +3165,59 @@ func TestLegacyAdoptionRetryPreservesEligibilityAfterNamespaceUpdateFailure(t *t
 	}
 
 	c.updateErr = nil
+	if _, err := reconciler.syncWorkspace(ctx, &afterFailure); err != nil {
+		t.Fatalf("retry sync: %v", err)
+	}
+	var gotNamespace corev1.Namespace
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace after retry: %v", err)
+	}
+	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+}
+
+func TestLegacyAdoptionRetryPreservesEligibilityAfterNamespaceGetFailure(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	namespaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	workspaceCreated := metav1.NewTime(time.Now())
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "aurora",
+		UID:               types.UID("namespace-uid"),
+		CreationTimestamp: namespaceCreated,
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 1
+	workspace.CreationTimestamp = workspaceCreated
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.WorkloadIdentity = nil
+	baseClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	c := &namespaceGetFailingClient{
+		Client:    baseClient,
+		namespace: namespace.Name,
+		remaining: 1,
+		err:       errors.New("injected namespace get failure"),
+	}
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	var afterFailure tauv1alpha1.TauWorkspace
+	if err := baseClient.Get(ctx, client.ObjectKeyFromObject(workspace), &afterFailure); err != nil {
+		t.Fatalf("Get workspace after failed read: %v", err)
+	}
+	if !hasLegacyExplicitAdoptionStatus(&afterFailure) {
+		t.Fatalf("failed read consumed adoption eligibility: %#v", afterFailure.Status)
+	}
+
 	if _, err := reconciler.syncWorkspace(ctx, &afterFailure); err != nil {
 		t.Fatalf("retry sync: %v", err)
 	}

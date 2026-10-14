@@ -239,8 +239,7 @@ func hasLegacyPartialReconcileNamespaceContinuity(
 		}
 		return !namespace.CreationTimestamp.Before(&workspace.CreationTimestamp)
 	}
-	if authorizationMode(workspace) != tauv1alpha1.AuthorizationModeClusterWide ||
-		namespace.Labels[labelWorkspaceLocalQueue] != workspace.Spec.Queue ||
+	if namespace.Labels[labelWorkspaceLocalQueue] != workspace.Spec.Queue ||
 		namespace.Labels[labelKueueDefaultLocalQueue] != workspace.Spec.Queue {
 		return false
 	}
@@ -307,10 +306,39 @@ func hasLegacyExplicitNamespaceAdoptionEvidence(
 ) bool {
 	return workspace.Spec.Target.CreateNamespace == false &&
 		authorizationMode(workspace) == tauv1alpha1.AuthorizationModeClusterWide &&
-		hasPristineLegacyWorkspaceStatus(workspace) &&
+		hasLegacyExplicitAdoptionStatus(workspace) &&
 		!workspace.CreationTimestamp.IsZero() &&
 		!namespace.CreationTimestamp.IsZero() &&
 		!namespace.CreationTimestamp.After(workspace.CreationTimestamp.Time)
+}
+
+func hasLegacyExplicitAdoptionStatus(workspace *tauv1alpha1.TauWorkspace) bool {
+	if hasPristineLegacyWorkspaceStatus(workspace) {
+		return true
+	}
+	if workspace.Generation != 1 ||
+		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
+		workspace.Status.ObservedGeneration == 0 ||
+		workspace.Status.Target.ResolvedNamespace != "" ||
+		workspace.Status.Queue.ClusterQueue != "" ||
+		workspace.Status.Queue.ClusterQueueUID != "" ||
+		workspace.CreationTimestamp.IsZero() {
+		return false
+	}
+	if localQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue); localQueue != "" && localQueue != workspace.Spec.Queue {
+		return false
+	}
+	for _, condition := range workspace.Status.Conditions {
+		if condition.Reason == "AdditionalWorkspaceBlocked" {
+			return false
+		}
+	}
+	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
+	if drift == nil || drift.Status != metav1.ConditionTrue {
+		return false
+	}
+	return drift.Reason == "NamespaceReconcileFailed" ||
+		drift.Reason == "NamespaceOwnershipUnverified"
 }
 
 // reservedNamespaceReason names why a namespace may never be adopted as a
