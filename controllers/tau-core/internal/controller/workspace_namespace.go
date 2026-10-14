@@ -230,7 +230,7 @@ func hasLegacyPartialReconcileNamespaceContinuity(
 	workspace *tauv1alpha1.TauWorkspace,
 	namespace *corev1.Namespace,
 ) bool {
-	if !hasPristineLegacyWorkspaceStatus(workspace) {
+	if !hasLegacyPartialReconcileStatus(workspace) {
 		return false
 	}
 	if workspace.Spec.Target.CreateNamespace {
@@ -248,6 +248,33 @@ func hasLegacyPartialReconcileNamespaceContinuity(
 		labelWorkspace,
 		workspace.CreationTimestamp,
 	)
+}
+
+func hasLegacyPartialReconcileStatus(workspace *tauv1alpha1.TauWorkspace) bool {
+	if hasPristineLegacyWorkspaceStatus(workspace) {
+		return true
+	}
+	if workspace.Generation != 1 ||
+		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
+		workspace.Status.ObservedGeneration == 0 ||
+		workspace.Status.Target.ResolvedNamespace != "" ||
+		workspace.Status.Queue.ClusterQueue != "" ||
+		workspace.Status.Queue.ClusterQueueUID != "" ||
+		workspace.CreationTimestamp.IsZero() {
+		return false
+	}
+	if localQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue); localQueue != "" && localQueue != workspace.Spec.Queue {
+		return false
+	}
+	for _, condition := range workspace.Status.Conditions {
+		if condition.Reason == "AdditionalWorkspaceBlocked" {
+			return false
+		}
+	}
+	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
+	return drift != nil &&
+		drift.Status == metav1.ConditionTrue &&
+		drift.Reason == "NamespaceReconcileFailed"
 }
 
 func hasPristineLegacyWorkspaceStatus(workspace *tauv1alpha1.TauWorkspace) bool {

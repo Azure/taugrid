@@ -1725,6 +1725,54 @@ func TestTeamWorkspaceRetainsLegacyRoutingUntilConsumersCanUseManagedQueue(t *te
 	}, managedQueue); err != nil {
 		t.Fatalf("Get staged Team-managed LocalQueue: %v", err)
 	}
+
+	legacyQueueKey := client.ObjectKey{Name: workspace.Spec.Queue, Namespace: workspace.Name}
+	if err := c.Delete(ctx, legacyQueue); err != nil {
+		t.Fatalf("Delete legacy LocalQueue: %v", err)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &gotWorkspace); err != nil {
+		t.Fatalf("sync workspace after legacy LocalQueue deletion: %v", err)
+	}
+	restoredLegacyQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, legacyQueueKey, restoredLegacyQueue); err != nil {
+		t.Fatalf("Get restored legacy LocalQueue: %v", err)
+	}
+	if got, _, _ := unstructured.NestedString(restoredLegacyQueue.Object, "spec", "clusterQueue"); got != workspace.Spec.Queue {
+		t.Fatalf("restored legacy LocalQueue target = %q, want %q", got, workspace.Spec.Queue)
+	}
+
+	legacyClusterQueue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Spec.Queue}, legacyClusterQueue); err != nil {
+		t.Fatalf("Get legacy ClusterQueue: %v", err)
+	}
+	if err := c.Delete(ctx, legacyClusterQueue); err != nil {
+		t.Fatalf("Delete legacy ClusterQueue: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get workspace before missing ClusterQueue sync: %v", err)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &gotWorkspace); err != nil {
+		t.Fatalf("sync workspace after legacy ClusterQueue deletion: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get workspace after missing ClusterQueue sync: %v", err)
+	}
+	if condition := findCondition(gotWorkspace.Status.Conditions, tauv1alpha1.ConditionQueueReady); condition == nil || condition.Status != metav1.ConditionFalse {
+		t.Fatalf("QueueReady = %#v, want False while retained ClusterQueue is missing", gotWorkspace.Status.Conditions)
+	}
+	replacementClusterQueue := testClusterQueue(workspace.Spec.Queue)
+	if err := c.Create(ctx, replacementClusterQueue); err != nil {
+		t.Fatalf("Restore legacy ClusterQueue: %v", err)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &gotWorkspace); err != nil {
+		t.Fatalf("sync workspace after legacy ClusterQueue recovery: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get workspace after ClusterQueue recovery: %v", err)
+	}
+	if condition := findCondition(gotWorkspace.Status.Conditions, tauv1alpha1.ConditionQueueReady); condition == nil || condition.Status != metav1.ConditionTrue {
+		t.Fatalf("QueueReady = %#v, want True after retained ClusterQueue recovery", gotWorkspace.Status.Conditions)
+	}
 }
 
 func TestTeamOptInRejectsNamespaceRetargetWhileLegacyRoutingIsRetained(t *testing.T) {
@@ -2869,24 +2917,42 @@ func TestLegacyPartialReconcileCanRecoverControllerCreatedNamespace(t *testing.T
 	workspace.UID = types.UID("workspace-uid")
 	workspace.Generation = 1
 	workspace.CreationTimestamp = workspaceCreated
-	c := fake.NewClientBuilder().
+	baseClient := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(workspace, retained, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
+	c := &namespaceGetFailingClient{
+		Client:    baseClient,
+		namespace: retained.Name,
+		remaining: 1,
+		err:       errors.New("injected namespace get failure"),
+	}
 	reconciler := newTestWorkspaceReconciler(c)
 
-	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	var afterFailure tauv1alpha1.TauWorkspace
+	if err := baseClient.Get(ctx, client.ObjectKeyFromObject(workspace), &afterFailure); err != nil {
+		t.Fatalf("Get workspace after failed read: %v", err)
+	}
+	if !hasLegacyPartialReconcileStatus(&afterFailure) {
+		t.Fatalf("failed read consumed partial-reconcile eligibility: %#v", afterFailure.Status)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &afterFailure); err != nil {
+		t.Fatalf("retry sync: %v", err)
+	}
 
 	var gotNamespace corev1.Namespace
-	if err := c.Get(ctx, client.ObjectKey{Name: retained.Name}, &gotNamespace); err != nil {
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: retained.Name}, &gotNamespace); err != nil {
 		t.Fatalf("Get namespace: %v", err)
 	}
 	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
 		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
 	}
 	var gotWorkspace tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+	if err := baseClient.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
 	if gotWorkspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
@@ -2928,17 +2994,35 @@ func TestLegacyWorkspaceRBACPartialReconcileRecoversExistingNamespace(t *testing
 		WithObjects(workspace, namespace, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
-	c := &namespaceManagedFieldsClient{
+	managedFieldsClient := &namespaceManagedFieldsClient{
 		Client:        baseClient,
 		namespace:     namespace.Name,
 		managedFields: namespace.ManagedFields,
 	}
+	c := &namespaceGetFailingClient{
+		Client:    managedFieldsClient,
+		namespace: namespace.Name,
+		remaining: 1,
+		err:       errors.New("injected namespace get failure"),
+	}
 	reconciler := newTestWorkspaceReconciler(c)
 
-	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	var afterFailure tauv1alpha1.TauWorkspace
+	if err := baseClient.Get(ctx, client.ObjectKeyFromObject(workspace), &afterFailure); err != nil {
+		t.Fatalf("Get workspace after failed read: %v", err)
+	}
+	if !hasLegacyPartialReconcileStatus(&afterFailure) {
+		t.Fatalf("failed read consumed partial-reconcile eligibility: %#v", afterFailure.Status)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &afterFailure); err != nil {
+		t.Fatalf("retry sync: %v", err)
+	}
 
 	var gotNamespace corev1.Namespace
-	if err := c.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
+	if err := baseClient.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
 		t.Fatalf("Get namespace: %v", err)
 	}
 	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
