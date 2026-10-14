@@ -183,6 +183,8 @@ portal:
     # Allow browser workspace switching without per-user identity only for
     # directory entries whose authorization.mode is cluster-wide and that omit
     # users/groups. Workspace-rbac entries always require trusted identity.
+    # Enable only with a Portal image that supports this directory field; the
+    # chart omits it while false so older strict JSON decoders remain compatible.
     allowUnauthenticatedClusterWide: false
     localCluster: ""
     endpoints: []
