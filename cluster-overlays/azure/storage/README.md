@@ -51,9 +51,9 @@ the setup path in the
 [AKS installation guide](../../../site/content/en/docs/platform-admin-guide/installation-guides/aks-setup.md#aks-storage-drivers-and-flex-nodes).
 For Azure Files, the checked-in
 [`terraform/aks-flex-azurefile-csi`](../../../terraform/aks-flex-azurefile-csi)
-root installs a distinctly named upstream driver on selected Flex nodes and
-can create a matching StorageClass without storing the account key in
-Terraform state.
+root installs a distinctly named upstream driver on every Linux node eligible
+to mount the PVC, including Ray heads and Flex workers, and can create a
+matching StorageClass without storing the account key in Terraform state.
 The operator owns the selected backend, credentials, capacity, data lifecycle,
 and driver upgrades. Do not use temporary AKS-label reconciliation as a
 supported storage design.

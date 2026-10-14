@@ -43,14 +43,10 @@ variable "driver_name" {
   }
 }
 
-variable "flex_node_selector" {
-  description = "Labels selecting only the Flex/external Linux nodes that need the customer-managed node plugin."
+variable "eligible_node_selector" {
+  description = "Optional labels shared by every Linux node that may mount this driver's volumes. Empty installs the node plugin on all Linux nodes."
   type        = map(string)
-
-  validation {
-    condition     = length(var.flex_node_selector) > 0
-    error_message = "flex_node_selector must select the intended Flex/external nodes."
-  }
+  default     = {}
 }
 
 variable "linux_tolerations" {
@@ -108,6 +104,28 @@ variable "storage_sku_name" {
   description = "Azure Files storage SKU for the optional StorageClass."
   type        = string
   default     = "Premium_LRS"
+}
+
+variable "storage_mount_uid" {
+  description = "UID presented as the owner of files on the SMB mount. TauGrid restricted workloads use 65532."
+  type        = number
+  default     = 65532
+
+  validation {
+    condition     = var.storage_mount_uid >= 0 && var.storage_mount_uid <= 4294967295 && floor(var.storage_mount_uid) == var.storage_mount_uid
+    error_message = "storage_mount_uid must be an integer between 0 and 4294967295."
+  }
+}
+
+variable "storage_mount_gid" {
+  description = "GID presented as the group owner of files on the SMB mount. TauGrid restricted workloads use 65532."
+  type        = number
+  default     = 65532
+
+  validation {
+    condition     = var.storage_mount_gid >= 0 && var.storage_mount_gid <= 4294967295 && floor(var.storage_mount_gid) == var.storage_mount_gid
+    error_message = "storage_mount_gid must be an integer between 0 and 4294967295."
+  }
 }
 
 variable "reclaim_policy" {

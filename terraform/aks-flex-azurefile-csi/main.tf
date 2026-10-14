@@ -74,7 +74,7 @@ resource "helm_release" "azurefile_csi" {
       }
       linux = {
         dsName       = local.linux_ds_name
-        nodeSelector = merge(var.flex_node_selector, { "kubernetes.io/os" = "linux" })
+        nodeSelector = merge(var.eligible_node_selector, { "kubernetes.io/os" = "linux" })
         tolerations  = local.linux_tolerations
       }
       windows = {
@@ -116,6 +116,8 @@ resource "kubernetes_storage_class_v1" "azurefile_flex" {
   mount_options = [
     "dir_mode=0770",
     "file_mode=0660",
+    "uid=${var.storage_mount_uid}",
+    "gid=${var.storage_mount_gid}",
     "mfsymlinks",
     "cache=strict",
     "nosharesock",

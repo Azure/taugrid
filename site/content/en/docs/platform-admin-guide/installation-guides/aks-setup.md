@@ -143,10 +143,13 @@ Use this setup path:
 TauGrid's storage examples and validation commands provide the Kubernetes side
 of this setup. For Azure Files, start with the checked-in
 [`terraform/aks-flex-azurefile-csi`](https://github.com/Azure/taugrid/tree/main/terraform/aks-flex-azurefile-csi)
-root. It installs a distinctly named upstream driver only on selected Flex
-nodes and can create a StorageClass that references a pre-created credential
-Secret without putting the account key in Terraform state. Driver-specific
-identity, networking, and backend settings still require customer review.
+root. It installs a distinctly named upstream driver on every Linux node by
+default and can be narrowed only to a label shared by every node eligible to
+mount the same PVC. It can also create a StorageClass that references a
+pre-created credential Secret without putting the account key in Terraform
+state. For managed RayJobs, eligibility includes head, CPU worker, and GPU
+worker node pools. Driver-specific identity, networking, and backend settings
+still require customer review.
 
 A PVC can be `Bound` while a pod still fails before container startup with an
 event such as `driver name file.csi.azure.com not found in the list of

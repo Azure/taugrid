@@ -15,8 +15,10 @@ Normal AKS agent pools can use the AKS-managed `file.csi.azure.com` addon. A
 second Helm release using that same CSI identity would conflict with the
 managed addon. This root therefore installs the upstream driver as
 `file.flex.csi.azure.com`, gives its Kubernetes resources distinct names and
-ports, disables Windows components, and targets its node DaemonSet only to the
-labels in `flex_node_selector`.
+ports, and disables Windows components. Its node DaemonSet runs on all Linux
+nodes by default because a Ray head, CPU worker, and Flex GPU worker may all
+mount the same PVC. `eligible_node_selector` may narrow placement only when
+every possible pod set shares the selected labels.
 
 PVCs for Flex nodes must use a StorageClass whose `provisioner` is
 `file.flex.csi.azure.com`. Existing AKS StorageClasses using
@@ -28,8 +30,8 @@ this release.
 - Terraform 1.9 or later
 - Helm and kubectl access to the existing AKS cluster
 - A verified kubeconfig context
-- Linux Flex nodes with a stable label that distinguishes them from normal AKS
-  agent pools
+- Linux nodes for every pod set that may mount the PVC, including Ray heads,
+  CPU workers, and Flex GPU workers
 - Network connectivity from every selected node to the Azure Files endpoint
 - An existing Azure Storage account and file-share authentication plan
 
@@ -60,7 +62,8 @@ the namespace of each claim.
 ```bash
 cd terraform/aks-flex-azurefile-csi
 cp terraform.tfvars.example terraform.tfvars
-# Set the exact kube context, Flex node label, and storage inputs.
+# Set the exact kube context and storage inputs. Keep the all-Linux node-plugin
+# default unless every eligible Ray head and worker shares one stable label.
 
 terraform init
 terraform plan -out=azurefile-flex.tfplan
@@ -74,7 +77,8 @@ does not contain the storage account key.
 
 ## Validate every eligible node
 
-Confirm the distinct driver exists and its DaemonSet covers every Flex node:
+Confirm the distinct driver exists and its DaemonSet covers every Linux node
+that can host a pod mounting this StorageClass:
 
 ```bash
 kubectl --context <aks-context> get csidriver file.flex.csi.azure.com
@@ -82,27 +86,54 @@ kubectl --context <aks-context> get daemonset csi-azurefile-flex-node \
   -n kube-system -o wide
 
 for node in $(kubectl --context <aks-context> get nodes \
-  -l 'kubernetes.azure.com/cluster=flex-h200' -o name); do
+  -l 'kubernetes.io/os=linux' -o name); do
   kubectl --context <aks-context> get csinode "${node#node/}" \
     -o jsonpath='{range .spec.drivers[*]}{.name}{"\n"}{end}' |
     grep -Fx file.flex.csi.azure.com
 done
 ```
 
+If `eligible_node_selector` is set, use that selector instead and separately
+prove that every Ray head, CPU-worker, and GPU-worker placement allowed by the
+TauGrid workload profiles is included.
+
 Then create a PVC using `storageClassName: azurefile-flex` and run a pod pinned
 through the intended TauGrid workload profile. The StorageClass uses
 `Immediate` binding because TauGrid validates that platform-managed PVCs are
 already Bound before workload submission. After the claim binds, the canary
-must mount it, write a file, read it back, and delete it using the same
-ServiceAccount and security settings as the customer workload. A `Bound` PVC
-alone is not enough.
+must include an init container using TauGrid's restricted UID/GID 65532 with
+all capabilities dropped. That init container must create, read, and delete a
+sentinel on the mount before the main container starts. Repeat the canary for
+each distinct head and worker placement. A `Bound` PVC alone is not enough.
+
+The checked-in canary exercises that non-root initializer:
+
+```bash
+kubectl --context <aks-context> -n <workspace-namespace> apply -f canary.yaml
+kubectl --context <aks-context> -n <workspace-namespace> wait \
+  --for=jsonpath='{.status.phase}'=Succeeded pod/azurefile-flex-canary \
+  --timeout=10m
+kubectl --context <aks-context> -n <workspace-namespace> logs \
+  pod/azurefile-flex-canary -c result
+```
+
+Before each run, add the same node selector, affinity, and tolerations as one
+eligible Ray head or worker placement. Delete the Pod between placements; keep
+or recreate the PVC according to the storage validation plan.
+
+The default SMB mount options present files as UID/GID 65532 with directory
+mode `0770` and file mode `0660`, matching TauGrid's restricted workload and
+metrics-offload initializer. Change `storage_mount_uid` or
+`storage_mount_gid` only when all customer workload identities and canaries
+have been updated together.
 
 ## Safe customization
 
 - Keep `driver_name` distinct from `file.csi.azure.com` while the AKS-managed
   addon is enabled.
-- Keep `flex_node_selector` narrow. Do not use AKS-only label spoofing to make
-  the managed addon schedule on external nodes.
+- Keep the all-Linux default unless one common label covers every possible Ray
+  head, CPU worker, and Flex worker that mounts the claim. Do not use AKS-only
+  label spoofing to make the managed addon schedule on external nodes.
 - Add the actual Flex taints to `linux_tolerations`; the default tolerates all
   taints because CSI registration must cover every selected workload node.
 - The module disables the upstream Azure File proxy, AZNFS installation, and

@@ -3,11 +3,13 @@
 
 kube_context = "aks-ai-runtime-flex"
 
-# Select only the external Flex nodes that require this driver. Use the exact
-# label applied by the Flex registration process.
-flex_node_selector = {
-  "kubernetes.azure.com/cluster" = "flex-h200"
-}
+# The safe default installs the isolated node plugin on all Linux nodes because
+# Ray heads and CPU workers may mount the same PVC as Flex GPU workers. Set
+# eligible_node_selector only if every possible head and worker node shares one
+# stable label.
+# eligible_node_selector = {
+#   "tau.azure.com/storage-domain" = "azurefile-flex"
+# }
 
 # Required after reviewing driver ownership and node targeting in README.md.
 ownership_reviewed = true

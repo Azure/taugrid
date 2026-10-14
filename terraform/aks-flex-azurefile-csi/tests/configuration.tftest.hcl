@@ -2,10 +2,7 @@ mock_provider "helm" {}
 mock_provider "kubernetes" {}
 
 variables {
-  kube_context = "test-flex"
-  flex_node_selector = {
-    "kubernetes.azure.com/cluster" = "flex-test"
-  }
+  kube_context       = "test-flex"
   ownership_reviewed = true
 }
 
@@ -23,8 +20,8 @@ run "installs_distinct_flex_driver" {
   }
 
   assert {
-    condition     = yamldecode(helm_release.azurefile_csi.values[0]).linux.nodeSelector["kubernetes.azure.com/cluster"] == "flex-test"
-    error_message = "The node plugin must retain the caller's Flex node selector."
+    condition     = yamldecode(helm_release.azurefile_csi.values[0]).linux.nodeSelector == { "kubernetes.io/os" = "linux" }
+    error_message = "By default the node plugin must cover every Linux node that may host a Ray head or worker."
   }
 
   assert {
@@ -69,5 +66,33 @@ run "creates_matching_storage_class" {
       kubernetes_storage_class_v1.azurefile_flex[0].parameters["csi.storage.k8s.io/controller-expand-secret-namespace"] == "$${pvc.namespace}",
     ])
     error_message = "The external provisioner must resolve credentials from each PVC namespace."
+  }
+
+  assert {
+    condition = alltrue([
+      contains(kubernetes_storage_class_v1.azurefile_flex[0].mount_options, "uid=65532"),
+      contains(kubernetes_storage_class_v1.azurefile_flex[0].mount_options, "gid=65532"),
+      contains(kubernetes_storage_class_v1.azurefile_flex[0].mount_options, "dir_mode=0770"),
+      contains(kubernetes_storage_class_v1.azurefile_flex[0].mount_options, "file_mode=0660"),
+    ])
+    error_message = "The default SMB mount must be writable by TauGrid's restricted UID/GID 65532."
+  }
+}
+
+run "retains_common_eligible_node_selector" {
+  command = plan
+
+  variables {
+    eligible_node_selector = {
+      "tau.azure.com/storage-domain" = "azurefile-flex"
+    }
+  }
+
+  assert {
+    condition = yamldecode(helm_release.azurefile_csi.values[0]).linux.nodeSelector == {
+      "kubernetes.io/os"             = "linux"
+      "tau.azure.com/storage-domain" = "azurefile-flex"
+    }
+    error_message = "A caller selector must apply to every eligible node in addition to the Linux OS selector."
   }
 }
