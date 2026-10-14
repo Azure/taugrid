@@ -52,12 +52,17 @@ resource "helm_release" "azurefile_csi" {
         }
       }
       node = {
-        metricsPort = 39615
+        enableManagedIdentityAuth = false
+        metricsPort               = 39615
         livenessProbe = {
           healthPort = 39613
         }
         nodeDriverRegistrar = {
           healthPort = 39617
+        }
+        azurefileProxy = {
+          enabled           = false
+          installAznfsMount = false
         }
       }
       rbac = {
@@ -91,7 +96,7 @@ resource "kubernetes_storage_class_v1" "azurefile_flex" {
 
   storage_provisioner    = var.driver_name
   reclaim_policy         = var.reclaim_policy
-  volume_binding_mode    = "WaitForFirstConsumer"
+  volume_binding_mode    = "Immediate"
   allow_volume_expansion = true
 
   parameters = {
@@ -101,11 +106,11 @@ resource "kubernetes_storage_class_v1" "azurefile_flex" {
     resourceGroup                                           = var.storage_account_resource_group
     subscriptionID                                          = var.storage_account_subscription_id
     "csi.storage.k8s.io/provisioner-secret-name"            = var.storage_secret_name
-    "csi.storage.k8s.io/provisioner-secret-namespace"       = "$${pvc.metadata.namespace}"
+    "csi.storage.k8s.io/provisioner-secret-namespace"       = "$${pvc.namespace}"
     "csi.storage.k8s.io/node-stage-secret-name"             = var.storage_secret_name
-    "csi.storage.k8s.io/node-stage-secret-namespace"        = "$${pvc.metadata.namespace}"
+    "csi.storage.k8s.io/node-stage-secret-namespace"        = "$${pvc.namespace}"
     "csi.storage.k8s.io/controller-expand-secret-name"      = var.storage_secret_name
-    "csi.storage.k8s.io/controller-expand-secret-namespace" = "$${pvc.metadata.namespace}"
+    "csi.storage.k8s.io/controller-expand-secret-namespace" = "$${pvc.namespace}"
   }
 
   mount_options = [

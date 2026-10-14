@@ -31,6 +31,15 @@ run "installs_distinct_flex_driver" {
     condition     = yamldecode(helm_release.azurefile_csi.values[0]).windows.enabled == false
     error_message = "The Flex driver root supports Linux nodes only."
   }
+
+  assert {
+    condition = alltrue([
+      yamldecode(helm_release.azurefile_csi.values[0]).node.azurefileProxy.enabled == false,
+      yamldecode(helm_release.azurefile_csi.values[0]).node.azurefileProxy.installAznfsMount == false,
+      yamldecode(helm_release.azurefile_csi.values[0]).node.enableManagedIdentityAuth == false,
+    ])
+    error_message = "Secret-backed SMB must not mutate node-global proxy/AZNFS services or start managed-identity helpers."
+  }
 }
 
 run "creates_matching_storage_class" {
@@ -49,7 +58,16 @@ run "creates_matching_storage_class" {
   }
 
   assert {
-    condition     = kubernetes_storage_class_v1.azurefile_flex[0].parameters["csi.storage.k8s.io/node-stage-secret-namespace"] == "$${pvc.metadata.namespace}"
-    error_message = "The StorageClass must resolve credentials from each PVC namespace."
+    condition     = kubernetes_storage_class_v1.azurefile_flex[0].volume_binding_mode == "Immediate"
+    error_message = "TauGrid requires platform-managed PVCs to bind before workload submission."
+  }
+
+  assert {
+    condition = alltrue([
+      kubernetes_storage_class_v1.azurefile_flex[0].parameters["csi.storage.k8s.io/provisioner-secret-namespace"] == "$${pvc.namespace}",
+      kubernetes_storage_class_v1.azurefile_flex[0].parameters["csi.storage.k8s.io/node-stage-secret-namespace"] == "$${pvc.namespace}",
+      kubernetes_storage_class_v1.azurefile_flex[0].parameters["csi.storage.k8s.io/controller-expand-secret-namespace"] == "$${pvc.namespace}",
+    ])
+    error_message = "The external provisioner must resolve credentials from each PVC namespace."
   }
 }

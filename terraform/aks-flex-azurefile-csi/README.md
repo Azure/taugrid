@@ -51,7 +51,9 @@ kubectl --context <aks-context> -n <workspace-namespace> create secret generic \
 
 Treat the command as an example delivery mechanism only. Prefer the customer's
 approved secret-management workflow and avoid recording the key in shell
-history. The Secret name and namespace must match the Terraform inputs.
+history. The Secret name must match the Terraform input. The StorageClass uses
+the external provisioner's `${pvc.namespace}` token to read that Secret from
+the namespace of each claim.
 
 ## Plan and apply
 
@@ -88,9 +90,12 @@ done
 ```
 
 Then create a PVC using `storageClassName: azurefile-flex` and run a pod pinned
-through the intended TauGrid workload profile. The canary must mount the claim,
-write a file, read it back, and delete it using the same ServiceAccount and
-security settings as the customer workload. A `Bound` PVC alone is not enough.
+through the intended TauGrid workload profile. The StorageClass uses
+`Immediate` binding because TauGrid validates that platform-managed PVCs are
+already Bound before workload submission. After the claim binds, the canary
+must mount it, write a file, read it back, and delete it using the same
+ServiceAccount and security settings as the customer workload. A `Bound` PVC
+alone is not enough.
 
 ## Safe customization
 
@@ -100,6 +105,10 @@ security settings as the customer workload. A `Bound` PVC alone is not enough.
   the managed addon schedule on external nodes.
 - Add the actual Flex taints to `linux_tolerations`; the default tolerates all
   taints because CSI registration must cover every selected workload node.
+- The module disables the upstream Azure File proxy, AZNFS installation, and
+  managed-identity helper defaults. The checked-in Secret-backed SMB path does
+  not need them, and enabling them can mutate node-global host services shared
+  with another Azure File driver.
 - Review upstream release notes before changing `azurefile_csi_version`.
 - For identities, NFS, private endpoints, or dynamic storage-account creation,
   extend the module only after reviewing the upstream driver's Azure
