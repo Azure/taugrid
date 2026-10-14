@@ -64,7 +64,7 @@ tests:
           value: External
       - lengthEqual:
           path: spec.workloadProfiles
-          count: 15
+          count: 16
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
