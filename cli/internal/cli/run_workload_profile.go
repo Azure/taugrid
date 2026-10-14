@@ -110,8 +110,7 @@ func applySelectedWorkloadProfile(
 				profileQueue,
 			)
 		}
-		if selection.Profile.ExecutionTarget == profile.ExecutionTargetMultiKueue &&
-			workspaceQueue != profileQueue {
+		if selection.Profile.ExecutionTarget == profile.ExecutionTargetMultiKueue {
 			profileClusterQueue, err := selection.Profile.ClusterQueueFor(o.namespace, profileQueue)
 			if err != nil {
 				return o, fmt.Errorf("resolve MultiKueue workload profile queue binding: %w", err)

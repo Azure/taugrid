@@ -664,6 +664,54 @@ func TestResumeCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
 	if routing.KubeContext != "catalog-context" || routing.Namespace != "alpha-namespace" {
 		t.Fatalf("routing = %#v", routing)
 	}
+	if routing.TargetOptions.workspace != "alpha-workspace" {
+		t.Fatalf("catalog workspace was not propagated: %#v", routing.TargetOptions)
+	}
+}
+
+func TestResumeCatalogProjectWithExplicitContextPropagatesWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "taugrid-flex" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"taugrid-flex",
+		"",
+		true,
+		false,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if ensurer.calls != 0 {
+		t.Fatalf("explicit context activated connection %d times", ensurer.calls)
+	}
+	if routing.KubeContext != "taugrid-flex" ||
+		routing.Namespace != "alpha-namespace" ||
+		routing.TargetOptions.workspace != "alpha-workspace" {
+		t.Fatalf("routing = %#v", routing)
+	}
 }
 
 func TestResumeExternalSymlinkToNoCatalogRepoCannotUseAmbientCluster(t *testing.T) {
