@@ -224,7 +224,8 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 		}
 		if workspace.Spec.TeamRef != nil &&
 			localQueue.GetNamespace() == keepNamespace &&
-			localQueue.GetName() == workspace.Spec.Queue {
+			(localQueue.GetName() == workspace.Spec.Queue ||
+				localQueue.GetName() == workspaceClusterQueueName(workspace.Name)) {
 			continue
 		}
 		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {

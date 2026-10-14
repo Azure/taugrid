@@ -75,6 +75,10 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	}
 	explicitAdoption := hasExplicitNamespaceAdoptionEvidence(workspace, &namespace)
 	ownerUID := namespace.Annotations[annotationOwnerUID]
+	legacyExplicitAdoption := owner == "" &&
+		ownerUID == "" &&
+		!explicitAdoption &&
+		hasLegacyExplicitNamespaceAdoptionEvidence(workspace, &namespace)
 	legacyPartialContinuity := ownerUID == "" &&
 		workspace.UID != "" &&
 		!explicitAdoption &&
@@ -89,6 +93,7 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	if ownerUID == "" &&
 		workspace.UID != "" &&
 		!explicitAdoption &&
+		!legacyExplicitAdoption &&
 		!hasAuthoritativeLegacyNamespaceContinuity(workspace, &namespace, targetNamespace) {
 		ownership := "has no TauWorkspace ownership metadata"
 		if owner == workspace.Name {
@@ -165,6 +170,9 @@ func (r *TauWorkspaceReconciler) namespaceLocalQueueName(
 ) (string, error) {
 	if workspace.Spec.TeamRef == nil {
 		return workspace.Spec.Queue, nil
+	}
+	if current := strings.TrimSpace(workspace.Status.Queue.LocalQueue); current != "" {
+		return current, nil
 	}
 	name := workspaceLocalQueueName(workspace)
 	queue := newQueueObject(localQueueGVK)
@@ -291,6 +299,18 @@ func hasExplicitNamespaceAdoptionEvidence(
 	return expectedUID != "" &&
 		namespace.UID != "" &&
 		expectedUID == string(namespace.UID)
+}
+
+func hasLegacyExplicitNamespaceAdoptionEvidence(
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+) bool {
+	return workspace.Spec.Target.CreateNamespace == false &&
+		authorizationMode(workspace) == tauv1alpha1.AuthorizationModeClusterWide &&
+		hasPristineLegacyWorkspaceStatus(workspace) &&
+		!workspace.CreationTimestamp.IsZero() &&
+		!namespace.CreationTimestamp.IsZero() &&
+		!namespace.CreationTimestamp.After(workspace.CreationTimestamp.Time)
 }
 
 // reservedNamespaceReason names why a namespace may never be adopted as a

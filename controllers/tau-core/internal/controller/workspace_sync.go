@@ -58,7 +58,10 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 		candidateQueueStatus, candidateQueueReady, candidateQueueMessage, candidateQueueErr :=
 			r.reconcileQueue(ctx, workspace, targetNamespace)
 		queueReady, queueMessage, queueErr = candidateQueueReady, candidateQueueMessage, candidateQueueErr
-		if queueReady || workspace.Status.Queue.LocalQueue == "" {
+		preserveLegacyRouting := workspace.Spec.TeamRef != nil &&
+			workspace.Status.Queue.LocalQueue != "" &&
+			workspace.Status.Queue.LocalQueue != candidateQueueStatus.LocalQueue
+		if queueReady && !preserveLegacyRouting || workspace.Status.Queue.LocalQueue == "" {
 			queueStatus = candidateQueueStatus
 		}
 		if errors.Is(queueErr, errWorkspaceSpecChanged) {

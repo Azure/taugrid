@@ -1627,6 +1627,75 @@ func TestTeamWorkspaceLeavesActiveLegacyWorkloadsOnOriginalQueue(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspaceRetainsLegacyRoutingUntilConsumersCanUseManagedQueue(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 2
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:              tauv1alpha1.WorkspacePhaseReady,
+		ObservedGeneration: 1,
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: workspace.Name},
+		Queue: tauv1alpha1.WorkspaceQueueStatus{
+			LocalQueue:   workspace.Spec.Queue,
+			ClusterQueue: workspace.Spec.Queue,
+		},
+	}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: workspace.Name,
+		Labels: map[string]string{
+			labelWorkspace:              workspace.Name,
+			labelWorkspaceLocalQueue:    workspace.Spec.Queue,
+			labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+		},
+		Annotations: map[string]string{annotationOwnerUID: string(workspace.UID)},
+	}}
+	legacyQueue := testLocalQueue(workspace.Name, workspace.Spec.Queue, workspace.Spec.Queue)
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, legacyQueue, testClusterQueue(workspace.Spec.Queue), team, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("sync workspace: %v", err)
+	}
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get workspace: %v", err)
+	}
+	if gotWorkspace.Status.Queue.LocalQueue != workspace.Spec.Queue ||
+		gotWorkspace.Status.Queue.ClusterQueue != workspace.Spec.Queue {
+		t.Fatalf("workspace routing = %#v, want legacy queue retained", gotWorkspace.Status.Queue)
+	}
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: namespace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspace.Spec.Queue {
+		t.Fatalf("namespace default queue = %q, want %q", got, workspace.Spec.Queue)
+	}
+	managedQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{
+		Name: workspaceClusterQueueName(workspace.Name), Namespace: workspace.Name,
+	}, managedQueue); err != nil {
+		t.Fatalf("Get staged Team-managed LocalQueue: %v", err)
+	}
+}
+
 func TestWorkspaceRejectsTeamRemovalBeforeSwitchingLocalQueue(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -2859,6 +2928,41 @@ func TestExplicitAdoptionEvidenceMustMatchNamespaceUID(t *testing.T) {
 
 	var got corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: retained.Name}, &got); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if got.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("namespace owner UID = %q, want %q", got.Annotations[annotationOwnerUID], workspace.UID)
+	}
+}
+
+func TestLegacyAdoptionManifestClaimsUnownedNamespace(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	namespaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	workspaceCreated := metav1.NewTime(time.Now())
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              "aurora",
+		UID:               types.UID("namespace-uid"),
+		CreationTimestamp: namespaceCreated,
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 1
+	workspace.CreationTimestamp = workspaceCreated
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.WorkloadIdentity = nil
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+
+	var got corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: namespace.Name}, &got); err != nil {
 		t.Fatalf("Get namespace: %v", err)
 	}
 	if got.Annotations[annotationOwnerUID] != string(workspace.UID) {
