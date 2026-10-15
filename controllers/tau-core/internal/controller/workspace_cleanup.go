@@ -262,6 +262,69 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 	return nil
 }
 
+func (r *TauWorkspaceReconciler) staleWorkspaceLocalQueuesDrained(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	keepNamespace, keepName string,
+) (bool, string, error) {
+	queues := &unstructured.UnstructuredList{}
+	queues.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: localQueueGVK.Group, Version: localQueueGVK.Version, Kind: localQueueGVK.Kind + "List",
+	})
+	if err := r.List(ctx, queues, client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return false, "", err
+	}
+	for i := range queues.Items {
+		localQueue := &queues.Items[i]
+		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
+			continue
+		}
+		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
+			return false, "", fmt.Errorf("cannot verify stale LocalQueue %q: %w", localQueue.GetName(), err)
+		}
+		workloads := &unstructured.UnstructuredList{}
+		workloads.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: workloadGVK.Group, Version: workloadGVK.Version, Kind: workloadGVK.Kind + "List",
+		})
+		if err := r.List(ctx, workloads, client.InNamespace(localQueue.GetNamespace())); err != nil {
+			return false, "", err
+		}
+		for j := range workloads.Items {
+			workload := &workloads.Items[j]
+			queueName, _, err := unstructured.NestedString(workload.Object, "spec", "queueName")
+			if err != nil {
+				return false, "", fmt.Errorf("read Workload %s queueName: %w", client.ObjectKeyFromObject(workload), err)
+			}
+			if queueName != localQueue.GetName() || workloadFinished(workload) {
+				continue
+			}
+			return false, fmt.Sprintf(
+				"waiting for Workload %s to finish before removing LocalQueue %q",
+				client.ObjectKeyFromObject(workload),
+				localQueue.GetName(),
+			), nil
+		}
+	}
+	return true, "", nil
+}
+
+func workloadFinished(workload *unstructured.Unstructured) bool {
+	conditions, found, err := unstructured.NestedSlice(workload.Object, "status", "conditions")
+	if err != nil || !found {
+		return false
+	}
+	for _, rawCondition := range conditions {
+		condition, ok := rawCondition.(map[string]any)
+		if ok && condition["type"] == "Finished" && condition["status"] == "True" {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,

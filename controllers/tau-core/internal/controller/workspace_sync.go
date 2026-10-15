@@ -97,6 +97,23 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 		currentTargetReady = currentTargetReady && workloadIdentityReady && workloadIdentityErr == nil
 	}
 	if currentTargetReady {
+		drained, drainMessage, drainErr := r.staleWorkspaceLocalQueuesDrained(
+			ctx,
+			workspace,
+			targetNamespace,
+			queueStatus.LocalQueue,
+		)
+		if drainErr != nil || !drained {
+			currentTargetReady = false
+			queueReady = false
+			if drainErr != nil {
+				queueMessage = drainErr.Error()
+			} else {
+				queueMessage = drainMessage
+			}
+		}
+	}
+	if currentTargetReady {
 		refreshed, activationErr := r.reconcileNamespace(ctx, workspace, targetNamespace, true)
 		if activationErr != nil || !refreshed {
 			currentTargetReady = false
