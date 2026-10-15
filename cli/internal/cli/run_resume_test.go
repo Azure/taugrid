@@ -218,7 +218,7 @@ policy:
 	currentWorkspace.Spec.Defaults.OutputRoot = "/data/workspaces/sample"
 	currentWorkspace.Status.Target.ResolvedNamespace = "catalog-namespace"
 	currentWorkspace.Status.Queue.LocalQueue = "tau-ws-sample"
-	currentWorkspace.Status.Queue.ClusterQueue = "tau-ws-sample"
+	currentWorkspace.Status.Queue.ClusterQueue = "legacy-cq"
 	resolvedProfile := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
 	resolvedProfile.Name = "test-routing"
 	resolvedProfile.Applicability.Namespaces = []string{"catalog-namespace"}
@@ -265,7 +265,7 @@ policy:
 					options.workspaceResultScope != "/data/workspaces/sample" ||
 					options.queue != "tau-ws-sample" ||
 					options.selectedWorkloadProfile == nil ||
-					options.selectedWorkloadProfile.ClusterQueue != "tau-ws-sample" {
+					options.selectedWorkloadProfile.ClusterQueue != "legacy-cq" {
 					t.Fatalf("preflight Job options = %#v", options)
 				}
 				return nil

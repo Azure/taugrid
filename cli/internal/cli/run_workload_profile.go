@@ -110,16 +110,17 @@ func applySelectedWorkloadProfile(
 				profileQueue,
 			)
 		}
-		if selection.Profile.ExecutionTarget == profile.ExecutionTargetMultiKueue {
+		if workspaceClusterQueue != "" {
 			profileClusterQueue, err := selection.Profile.ClusterQueueFor(o.namespace, profileQueue)
 			if err != nil {
-				return o, fmt.Errorf("resolve MultiKueue workload profile queue binding: %w", err)
+				return o, fmt.Errorf("resolve workload profile queue binding: %w", err)
 			}
 			if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) {
 				return o, fmt.Errorf(
-					"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace MultiKueue workload profile %q queue %q bound to ClusterQueue %q",
+					"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace %s workload profile %q queue %q bound to ClusterQueue %q",
 					workspaceQueue,
 					workspaceClusterQueue,
+					selection.Profile.ExecutionTarget,
 					selection.Profile.Name,
 					profileQueue,
 					profileClusterQueue,
