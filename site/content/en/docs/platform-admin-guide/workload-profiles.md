@@ -75,6 +75,14 @@ TauGrid accepts a profile set only when all of the following are true:
 4. the selected profile's `Ready` condition is `True` for that generation; and
 5. namespace, team, and lane applicability authorize the caller.
 
+When a run doesn't name `policy.profile`, TauGrid selects the unique profile that
+passes these checks. If the run sets an explicit GPU count (Job `compute.gpus`
+or RayJob `gpus_per_worker`), implicit selection also skips profiles with a
+different `gpusPerWorker`. That way a CPU-only run and a GPU run can't resolve
+to each other's profile. The default catalog includes `azure.workspace.cpu`,
+which has no team or lane restriction, so the CPU-only `smoke` and `train`
+targets from `tau workspace init-repo` resolve it without naming a profile.
+
 Missing, stale, drifted, forbidden, ambiguous, or unready data stops rendering.
 TauGrid stamps successful output with
 `tau.azure.com/tau-cluster-generation`,
