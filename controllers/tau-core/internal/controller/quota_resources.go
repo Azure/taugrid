@@ -226,6 +226,38 @@ func desiredTeamCohort(team *tauv1alpha1.TauTeam, sharedQuota []tauv1alpha1.TauR
 	return cohort
 }
 
+func desiredWorkspaceClusterQueue(workspace *tauv1alpha1.TauWorkspace) *unstructured.Unstructured {
+	name := workspaceClusterQueueName(workspace.Name)
+	queue := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": clusterQueueGVK.GroupVersion().String(),
+		"kind":       clusterQueueGVK.Kind,
+		"metadata": map[string]any{
+			"name": name,
+		},
+		"spec": map[string]any{
+			"cohortName":       teamCohortName(workspace.Spec.TeamRef.Name),
+			"queueingStrategy": "BestEffortFIFO",
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+			},
+			"preemption": map[string]any{
+				"withinClusterQueue":  "LowerPriority",
+				"reclaimWithinCohort": "Never",
+				"borrowWithinCohort": map[string]any{
+					"policy": "Never",
+				},
+			},
+			"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
+		},
+	}}
+	queue.SetGroupVersionKind(clusterQueueGVK)
+	labels := workspaceLabels(workspace.Name)
+	labels[labelTeam] = workspace.Spec.TeamRef.Name
+	queue.SetLabels(labels)
+	setOwnerUIDAnnotation(queue, workspace.UID)
+	return queue
+}
+
 func reconcileManagedUnstructuredWithReader(
 	ctx context.Context,
 	kubeClient client.Client,
@@ -271,6 +303,11 @@ func reconcileManagedUnstructuredWithReader(
 		reflect.DeepEqual(existing.GetAnnotations(), desired.GetAnnotations()) {
 		return nil
 	}
+	if desired.GroupVersionKind() == clusterQueueGVK {
+		if err := validateClusterQueueQuotaReduction(existing, desired); err != nil {
+			return err
+		}
+	}
 	if err := unstructured.SetNestedMap(existing.Object, desiredSpec, "spec"); err != nil {
 		return err
 	}
@@ -279,7 +316,40 @@ func reconcileManagedUnstructuredWithReader(
 	return kubeClient.Update(ctx, existing)
 }
 
+func validateClusterQueueQuotaReduction(existing, desired *unstructured.Unstructured) error {
+	reservations, err := clusterQueueReservations(existing)
+	if err != nil {
+		return err
+	}
+	if len(reservations) == 0 {
+		return nil
+	}
+	maximums, err := clusterQueueMaximumQuota(desired)
+	if err != nil {
+		return err
+	}
+	for key, total := range reservations {
+		maximum := maximums[key]
+		if total.Cmp(maximum) > 0 {
+			resourceName, flavorName, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf(
+				"refusing to reduce ClusterQueue %q flavor %q resource %q below active reservation %s (new maximum %s)",
+				existing.GetName(), flavorName, resourceName, total.String(), maximum.String(),
+			)
+		}
+	}
+	return nil
+}
+
+func clusterQueueMaximumQuota(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	return clusterQueueQuota(queue, true)
+}
+
 func clusterQueueNominalQuota(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	return clusterQueueQuota(queue, false)
+}
+
+func clusterQueueQuota(queue *unstructured.Unstructured, includeBorrowing bool) (map[string]resource.Quantity, error) {
 	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
 	if err != nil || !found {
 		return nil, fmt.Errorf("ClusterQueue %q has no readable resourceGroups", queue.GetName())
@@ -313,6 +383,18 @@ func clusterQueueNominalQuota(queue *unstructured.Unstructured) (map[string]reso
 				nominal, err := resource.ParseQuantity(fmt.Sprint(quota["nominalQuota"]))
 				if err != nil {
 					return nil, fmt.Errorf("ClusterQueue %q has invalid nominal quota: %w", queue.GetName(), err)
+				}
+				if includeBorrowing {
+					borrowing := strings.TrimSpace(fmt.Sprint(quota["borrowingLimit"]))
+					if borrowing == "" || borrowing == "<nil>" {
+						maximums[resourceName+"\x00"+flavorName] = nominal
+						continue
+					}
+					limit, err := resource.ParseQuantity(borrowing)
+					if err != nil {
+						return nil, fmt.Errorf("ClusterQueue %q has invalid borrowing limit: %w", queue.GetName(), err)
+					}
+					nominal.Add(limit)
 				}
 				maximums[resourceName+"\x00"+flavorName] = nominal
 			}

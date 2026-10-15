@@ -93,6 +93,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 	}
 	for _, key := range []string{
 		labelManagedBy,
+		labelTeam,
 		labelWorkspace,
 		labelWorkspaceLocalQueue,
 		labelKueueDefaultLocalQueue,
@@ -116,7 +117,46 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	if err := r.cleanupStaleWorkspaceLocalQueues(ctx, workspace, "", ""); err != nil {
 		return err
 	}
+	if err := r.cleanupWorkspaceClusterQueue(ctx, workspace); err != nil {
+		return err
+	}
 	return r.cleanupSystemReaderRBAC(ctx, workspace)
+}
+
+func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
+	queue := newQueueObject(clusterQueueGVK)
+	queue.SetName(workspaceClusterQueueName(workspace.Name))
+	if err := r.Get(ctx, client.ObjectKeyFromObject(queue), queue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
+		return fmt.Errorf("refusing to delete ClusterQueue %q: object is not owned by workspace %q", queue.GetName(), workspace.Name)
+	}
+	if err := validateWorkspaceObjectUID(queue, workspace); err != nil {
+		return fmt.Errorf("refusing to delete ClusterQueue %q: %w", queue.GetName(), err)
+	}
+	if expectedUID := workspace.Status.Queue.ClusterQueueUID; workspace.Status.Queue.ClusterQueue == queue.GetName() &&
+		expectedUID != "" && string(queue.GetUID()) != expectedUID {
+		return fmt.Errorf("refusing to delete ClusterQueue %q: UID changed from %q to %q", queue.GetName(), expectedUID, queue.GetUID())
+	}
+	if err := r.deleteWithPreconditions(ctx, queue); err != nil {
+		return err
+	}
+	remaining := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(queue), remaining); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf(
+		"waiting for ClusterQueue %q deletion to complete; finalizers=%v",
+		remaining.GetName(),
+		remaining.GetFinalizers(),
+	)
 }
 
 func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
@@ -216,6 +256,33 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 			return fmt.Errorf("refusing to delete LocalQueue %q: %w", localQueue.GetName(), err)
 		}
 		if err := r.deleteWithPreconditions(ctx, localQueue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace, keepServiceAccount string,
+) error {
+	var accounts corev1.ServiceAccountList
+	if err := r.List(ctx, &accounts, client.InNamespace(targetNamespace), client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range accounts.Items {
+		account := &accounts.Items[i]
+		if keepServiceAccount != "" && account.Name == keepServiceAccount {
+			continue
+		}
+		if err := validateWorkspaceObjectUID(account, workspace); err != nil {
+			return fmt.Errorf("refusing to delete stale workload identity ServiceAccount: %w", err)
+		}
+		if err := r.deleteWithPreconditions(ctx, account); err != nil {
 			return err
 		}
 	}

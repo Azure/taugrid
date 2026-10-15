@@ -12,7 +12,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -27,7 +29,7 @@ type TauWorkspaceReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=tau.azure.com,resources=workspaces,verbs=get;list;watch
-// +kubebuilder:rbac:groups=tau.azure.com,resources=clusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=tau.azure.com,resources=clusters;teams,verbs=get;list;watch
 // +kubebuilder:rbac:groups=tau.azure.com,resources=workspaces,verbs=update;patch
 // +kubebuilder:rbac:groups=tau.azure.com,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
@@ -36,14 +38,14 @@ type TauWorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=localqueues,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=clusterqueues,verbs=get
+// +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=clusterqueues,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=workloads,verbs=get;list;watch
 
 func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("tauworkspace", req.NamespacedName.String())
 
 	var workspace tauv1alpha1.TauWorkspace
-	if err := r.Get(ctx, req.NamespacedName, &workspace); err != nil {
+	if err := r.apiReader().Get(ctx, req.NamespacedName, &workspace); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if workspace.Namespace != systemNamespace(r.SystemNamespace) {
@@ -114,5 +116,23 @@ func (r *TauWorkspaceReconciler) apiReader() client.Reader {
 func (r *TauWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tauv1alpha1.TauWorkspace{}).
+		Watches(&tauv1alpha1.TauTeam{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+			team, ok := obj.(*tauv1alpha1.TauTeam)
+			if !ok {
+				return nil
+			}
+			var workspaces tauv1alpha1.TauWorkspaceList
+			if err := r.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+				return nil
+			}
+			requests := make([]reconcile.Request, 0, len(workspaces.Items))
+			for i := range workspaces.Items {
+				workspace := &workspaces.Items[i]
+				if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
+					requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(workspace)})
+				}
+			}
+			return requests
+		})).
 		Complete(r)
 }
