@@ -2393,6 +2393,8 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	workspace := testWorkspace("aurora")
 	workspace.UID = types.UID("workspace-uid")
 	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
 	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
 	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
 	team := testTeam("vision", "8")
@@ -2419,28 +2421,50 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(workspace, team, flavor, namespace, previousQueue, workload, testClusterQueue(workspace.Spec.Queue)).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	status, ready, message, err := reconciler.reconcileQueue(ctx, workspace, workspace.Name)
-	if err != nil || !ready {
-		t.Fatalf("managed queue creation: status=%#v ready=%v message=%q err=%v", status, ready, message, err)
-	}
-	if ready, err := reconciler.reconcileNamespace(ctx, workspace, workspace.Name, true); err != nil || !ready {
-		t.Fatalf("activate namespace queue: ready=%v err=%v", ready, err)
-	}
-	if err := reconciler.cleanupStaleWorkspaceLocalQueues(ctx, workspace, workspace.Name, status.LocalQueue); err != nil {
-		t.Fatalf("cleanup stale LocalQueue: %v", err)
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("sync workspace before drain: %v", err)
 	}
 	var gotNamespace corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
 		t.Fatalf("Get namespace: %v", err)
 	}
+	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspace.Spec.Queue {
+		t.Fatalf("namespace default queue advanced before old workloads drained: %q", got)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), newQueueObject(localQueueGVK)); err != nil {
+		t.Fatalf("old LocalQueue disappeared before workload drain: %v", err)
+	}
+	var waiting tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
+		t.Fatalf("Get waiting workspace: %v", err)
+	}
+	queueCondition := findCondition(waiting.Status.Conditions, tauv1alpha1.ConditionQueueReady)
+	if queueCondition == nil || queueCondition.Status != metav1.ConditionFalse ||
+		!strings.Contains(queueCondition.Message, "waiting for Workload") {
+		t.Fatalf("QueueReady = %#v, want workload drain wait", queueCondition)
+	}
+
+	workload.Object["status"] = map[string]any{"conditions": []any{
+		map[string]any{"type": "Finished", "status": "True"},
+	}}
+	if err := c.Update(ctx, workload); err != nil {
+		t.Fatalf("finish workload: %v", err)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &waiting); err != nil {
+		t.Fatalf("sync workspace after drain: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get activated namespace: %v", err)
+	}
 	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspaceLocalQueueName(workspace) {
 		t.Fatalf("namespace default queue = %q, want %q", got, workspaceLocalQueueName(workspace))
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), newQueueObject(localQueueGVK)); !apierrors.IsNotFound(err) {
-		t.Fatalf("old LocalQueue remains after cutover: %v", err)
+		t.Fatalf("old LocalQueue remains after drained cutover: %v", err)
 	}
 	gotWorkload := newQueueObject(workload.GroupVersionKind())
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workload), gotWorkload); err != nil {
