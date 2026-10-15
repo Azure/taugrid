@@ -18,6 +18,9 @@ const (
 	AnnotationResultScope      = "tau.azure.com/result-scope"
 	AnnotationClusterName      = "tau.azure.com/cluster-name"
 	AnnotationControllerVerion = "tau.azure.com/controller-version"
+	// AnnotationAdoptionNamespaceUID records the exact Namespace identity
+	// validated by an explicit workspace adoption operation.
+	AnnotationAdoptionNamespaceUID = "tau.azure.com/adoption-namespace-uid"
 
 	AnnotationV0PrimaryWorkspace = "tau.azure.com/v0-primary-workspace"
 

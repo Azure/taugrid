@@ -21,8 +21,9 @@ const cliMetadataPath = "../../../../core/workloadmeta/keys.go"
 var tauTokenRe = regexp.MustCompile(regexp.QuoteMeta(Domain) + `[A-Za-z0-9._-]*`)
 
 var sharedKeys = map[string]string{
-	"LabelWorkspace":        "LabelWorkspace",
-	"AnnotationResultScope": "AnnotationResultScope",
+	"LabelWorkspace":                 "LabelWorkspace",
+	"AnnotationResultScope":          "AnnotationResultScope",
+	"AnnotationAdoptionNamespaceUID": "AnnotationAdoptionNamespaceUID",
 }
 
 func TestSharedLabelKeysAgreeWithTauCLI(t *testing.T) {
