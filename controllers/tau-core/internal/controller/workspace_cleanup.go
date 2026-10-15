@@ -60,7 +60,7 @@ func validateWorkspaceObjectUIDForCleanup(obj client.Object, workspace *tauv1alp
 	objectCreated := obj.GetCreationTimestamp()
 	if workspace.DeletionTimestamp == nil ||
 		workspace.UID == "" ||
-		!hasPristineLegacyWorkspaceStatus(workspace) ||
+		!hasLegacyPartialReconcileStatus(workspace) ||
 		obj.GetLabels()[labelManagedBy] != labelManagedByValue ||
 		obj.GetLabels()[labelWorkspace] != workspace.Name ||
 		workspace.CreationTimestamp.IsZero() ||

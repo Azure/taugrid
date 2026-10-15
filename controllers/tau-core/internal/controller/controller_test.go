@@ -1436,6 +1436,52 @@ func TestWorkspaceDeletionDoesNotCleanOlderLegacyAccess(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDeletionCleansLegacyAccessAfterQueueResolutionFailure(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+	accessCreated := metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 1
+	workspace.CreationTimestamp = workspaceCreated
+	workspace.Spec.Queue = ""
+	binding := testRoleBinding("aurora", defaultRoleName, workspace.Name)
+	binding.CreationTimestamp = accessCreated
+	binding.Annotations = nil
+
+	statusClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	statusReconciler := newTestWorkspaceReconciler(statusClient)
+	if _, err := statusReconciler.reportUnresolvedQueue(ctx, workspace, "default queue unavailable"); err != nil {
+		t.Fatalf("report unresolved queue: %v", err)
+	}
+	var deletingWorkspace tauv1alpha1.TauWorkspace
+	if err := statusClient.Get(ctx, client.ObjectKeyFromObject(workspace), &deletingWorkspace); err != nil {
+		t.Fatalf("Get workspace after queue failure: %v", err)
+	}
+	deleting := metav1.NewTime(time.Now())
+	deletingWorkspace.DeletionTimestamp = &deleting
+	deletingWorkspace.Finalizers = []string{workspaceFinalizer}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(&deletingWorkspace, binding).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&deletingWorkspace)}); err != nil {
+		t.Fatalf("Reconcile deletion: %v", err)
+	}
+	var gotBinding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &gotBinding); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy RoleBinding remains after finalization: %v", err)
+	}
+}
+
 func TestWorkspaceClusterQueueCleanupDoesNotDeleteReplacement(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
