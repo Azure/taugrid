@@ -31,10 +31,11 @@ Companion: the notebook plugin itself, `notebook-plugin.md`.
 | R8 | The typed projection does not emit `_step`/`_timestamp` house rows; it emits canonical `MetricEvent` NDJSON, and both spool replay and queued delivery validate that form | §5 names the real type at each boundary: history-shaped scalar records -> typed projection (`ProjectJSONLHistoryRow`) -> canonical `MetricEvent` NDJSON (`tau.experiment.metric.v1`) -> ADX, with a boundary table and code references. §2.1, §3.1 and §4.1 no longer label the projection's output or the ADX payload "house JSONL". |
 | R9 | The cited store fixture registers an event-file artifact; it does not establish automatic retention of files consumed by the proposed adapter | §2.4 no longer argues that "already classified as artifacts" preserves dropped non-scalars. The promise is now conditional on durable retention **and** run-associated registration of the original event files, with the fallback stated when either is absent. §6.1, §8 and §10.2 are qualified the same way, and §9 Q6 records the open dependency. |
 | R10 (4235906850) | The source checkpoint layer cannot be reused unchanged: `readSource` truncates at the last newline and tracks line counts, while `Runner.project` splits those bytes on newlines and decodes JSON objects, so a framed `tfevents` source can checkpoint mid-frame and make restart fail or misdecode | §5's "reused unchanged" claim is withdrawn. §5.1 adds the framing-aware source/checkpoint abstraction: advance only across a complete TFRecord frame, retain a truncated tail and retry it on the next pass, never checkpoint past it. §5's boundary table and §8 risk 3 are updated to match. |
-| R11 (4235906853) | TensorBoard's run identity lives in the event-file directory hierarchy while Tau's deterministic event ID folds in `MetricFileID`, so Tune trial directories can merge into one Tau series and rotation can evade dedup | §2.4.1 maps the relative logdir hierarchy onto Tau project/experiment/group/run and the metric prefix, keeps Tune trial directories distinct, and §2.4.2 defines a run-scoped stable source identity that survives event-file rotation. |
+| R11 (4235906853) | TensorBoard's run identity lives in the event-file directory hierarchy while Tau's deterministic event ID folds in `MetricFileID`, so Tune trial directories can merge into one Tau series and rotation can evade dedup | §2.4.1 maps the relative logdir hierarchy onto Tau project/experiment/group/run and the metric prefix, keeps Tune trial directories distinct, and §2.4.2 defines a run-scoped stable source identity that survives event-file rotation. §2.4.1 additionally requires the adapter to **refuse** when trial separation cannot be proven (R15). |
 | R12 (4235906856) | The collector path is opt-in and needs a history path, project/experiment identity, durable storage and ADX configuration; the companion plugin emits `{"step":3,"loss":1.25}` but online rows require `_step`/`_timestamp` | §3.2 specifies the submission contract: what enables and mounts the offload sidecar, which identity is resolved and stamped, and the explicit normalizer that rewrites the plugin's conventions into history-shaped rows. §3 D5 no longer claims the loss pane "works with no opt-in" for the collector path. |
 | R13 (4235906860) | "TensorBoard-compatible" overstates the evidence: the cited test only pins Tau card classification for `train/loss`, not run identity, dtype conversion, duplicates, ordering, or non-scalars | §2.4.3 narrows the claim to "scalar events can be normalized into the canonical `MetricEvent` pipeline" and lists the verified rules: finite `float64` values, microsecond timestamps, nonnegative `int64` steps, non-scalars dropped. §2.1 and §2.5 are narrowed to match. |
 | R14 (4236026694) | The notebook read path cannot use the legacy series projection, which does not read the canonical `MetricEvent` rows delivered to ADX | §5.2 replaces the legacy reference with `GET /api/v2/stellar/runs/{run_id}/series`, documents the scoped request and its `points` response, and notes that the legacy route is served `Deprecation: true`. The §5 diagram points at the v2 route. |
+| R15 (this revision) | §2.4.1's identity mapping assumes the logdir yields one directory per trial arm, but nothing establishes that the platform guarantees it. A flattened tree, or several arms writing into one directory, collapses distinct trials onto one `run_group_id`, and the ADX dedup view then merges them into a single series that looks valid | **Decided: the adapter refuses rather than merges.** §2.4.1 now specifies the fail-closed rule and the three conditions under which a read is rejected without projecting rows. The design therefore no longer depends on an unverifiable platform guarantee: it needs no maintainer answer to proceed. §9 Q7 records the decision and §11 item 10 is closed. A submission convention that declares trial-arm multiplicity would let the adapter verify instead of refuse, and is a documentation task, not a blocker. |
 
 The original proposal (per-job TensorBoard sidecar + portal proxy) is preserved in
 §10.1 as a documented alternative with its costs. It is **deferred, not
@@ -190,6 +191,34 @@ Tags remain attached to the event for display (`tau.metric.card`,
 `jsonl.history_path` and friends, `core/exptelemetry/history.go:105-116`), but
 they are not part of `event_id`. The trial separation must therefore live in a
 field that *is* part of the identity — `run_group_id` — and not in a tag.
+
+**Trial separation is enforced by refusal, not by assumption.** The mapping above
+is implementable only where the adapter can *prove* that each trial arm owns a
+distinct directory. Where it cannot, the adapter **refuses the read** instead of
+projecting the rows, because the failure it would otherwise produce — two arms
+merged under one `run_group_id` — is a silently wrong loss curve, indistinguishable
+from a valid one. The adapter refuses when:
+
+1. the configured `metrics.history` glob resolves event files with **no
+   run-relative path segment** below the configured root, so no directory value
+   exists to carry `run_group_id`; or
+2. the submission contract (§3.2) declares a trial-arm multiplicity and discovery
+   finds **fewer distinct trial directories** than declared, which means at least
+   two arms wrote into one directory; or
+3. the contract declares **no** multiplicity, so there is nothing for (2) to
+   check against.
+
+Case 3 is a limitation worth stating plainly rather than papering over. TensorBoard
+rotation segments *legitimately* share one directory (§2.4.2), so a directory
+receiving writes from two trial arms is **not** distinguishable from a rotating
+single run by path alone. The adapter therefore cannot detect the multi-writer case
+structurally; it can only refuse when the declaration that would let it check for
+(2) is absent. A documented submission convention that always declares trial
+multiplicity removes the need for case 3 entirely.
+
+Refusal costs runs a permissive adapter would have accepted — including flat,
+single-run layouts that are perfectly unambiguous to a human. That is the intended
+trade, because the alternative is a series that looks correct and is not.
 
 #### 2.4.2 Stable source identity across event-file rotation
 
@@ -700,8 +729,15 @@ Reported because they affect how a reviewer reads the evidence:
    directory to `run_id`, which requires the configured `metrics.history` glob to
    preserve a run-relative path segment per trial. If Tune or another framework
    flattens the tree, or writes several trials into one directory, the mapping
-   cannot keep trials distinct and the dedup view will merge them. A maintainer
-   answer or a documented submission convention is needed before implementation.
+   cannot keep trials distinct and the dedup view will merge them.
+
+   **Decided: the adapter refuses rather than merges.** §2.4.1 now specifies the
+   fail-closed rule — a read is rejected and no rows are projected when trial
+   separation cannot be proven. That settles the question for implementation: it no
+   longer blocks, because the design no longer depends on a platform guarantee it
+   cannot verify. What remains is a documentation task rather than a blocker: a
+   submission convention that declares trial-arm multiplicity lets the adapter
+   perform check (2) in §2.4.1 instead of falling back to refusal under (3).
 
 ---
 
@@ -782,5 +818,9 @@ reviewable.
 9. **Answer §9 Q6** — whether `tfevents` event files will be durably retained and
    registered against the run, which is what makes §2.4's non-scalar fallback
    survivable.
-10. **Answer §9 Q7** — whether the logdir hierarchy that §2.4.1 depends on is
-    guaranteed by the submission convention.
+10. ~~**Answer §9 Q7** — whether the logdir hierarchy that §2.4.1 depends on is
+    guaranteed by the submission convention.~~ **Decided: §2.4.1 now requires the
+    adapter to refuse when trial separation cannot be proven, so the design no
+    longer depends on the guarantee.** A submission convention that declares
+    trial-arm multiplicity would let the adapter verify instead of refuse; that is
+    a documentation task, not a blocker.
