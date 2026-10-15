@@ -12,8 +12,15 @@ on:
       - images/tau/**
       - images/tau-core-controller/**
       - images/taugrid-portal/**
+      - images/taugrid-metrics-collector/**
+      - images/gpu-metrics-collector/**
+      - images/adx-mon/**
+      - metrics/experiment-metrics-collector/**
+      - monitoring/gpu-metrics-collector/**
       - portal/**
+      - scripts/ci/tests/image-build-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
+      - scripts/lib/image-specs.sh
       - .github/workflows/taugrid-image-validation.yml
   push:
     branches:
@@ -26,8 +33,15 @@ on:
       - images/tau/**
       - images/tau-core-controller/**
       - images/taugrid-portal/**
+      - images/taugrid-metrics-collector/**
+      - images/gpu-metrics-collector/**
+      - images/adx-mon/**
+      - metrics/experiment-metrics-collector/**
+      - monitoring/gpu-metrics-collector/**
       - portal/**
+      - scripts/ci/tests/image-build-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
+      - scripts/lib/image-specs.sh
       - .github/workflows/taugrid-image-validation.yml
   schedule:
     - cron: "0 9 * * *"
@@ -47,7 +61,7 @@ env:
 
 jobs:
   image:
-    name: Image / ${{ matrix.name }}
+    name: Image / ${{ matrix.name }} / linux/${{ matrix.architecture }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -56,19 +70,40 @@ jobs:
         include:
           - name: Tau
             image: tau
+            architecture: amd64
             make_directory: images/tau
             context: .
             dockerfile: images/tau/Dockerfile
           - name: TauGrid Portal
             image: taugrid-portal
+            architecture: amd64
             make_directory: images/taugrid-portal
             context: .
             dockerfile: images/taugrid-portal/Dockerfile
           - name: Tau core controller
             image: tau-core-controller
+            architecture: amd64
             make_directory: images/tau-core-controller
             context: .
             dockerfile: images/tau-core-controller/Dockerfile
+          - name: TauGrid metrics collector
+            image: taugrid-metrics-collector
+            architecture: amd64
+            make_directory: images/taugrid-metrics-collector
+            context: .
+            dockerfile: images/taugrid-metrics-collector/Dockerfile
+          - name: GPU metrics collector
+            image: gpu-metrics-collector
+            architecture: amd64
+            make_directory: images/gpu-metrics-collector
+            context: .
+            dockerfile: images/gpu-metrics-collector/Dockerfile
+          - name: GPU metrics collector
+            image: gpu-metrics-collector
+            architecture: arm64
+            make_directory: images/gpu-metrics-collector
+            context: .
+            dockerfile: images/gpu-metrics-collector/Dockerfile
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -79,23 +114,59 @@ jobs:
           MAKE_DIRECTORY: ${{ matrix.make_directory }}
         run: scripts/ci/validate-image-build-contract.sh "$MAKE_DIRECTORY" "$IMAGE"
 
+      - name: Set up QEMU
+        if: matrix.architecture != 'amd64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: ${{ matrix.architecture }}
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
       - name: Build image
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           load: true
-          platforms: linux/amd64
+          platforms: linux/${{ matrix.architecture }}
           pull: true
           push: false
-          tags: taugrid/${{ matrix.image }}:validation
+          tags: taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation
+
+      - name: Validate collector entrypoint during build
+        if: matrix.image == 'gpu-metrics-collector'
+        run: >-
+          docker buildx build
+          --platform "linux/${{ matrix.architecture }}"
+          --target validation
+          --file "${{ matrix.dockerfile }}"
+          "${{ matrix.context }}"
 
       - name: Smoke test image
-        run: docker run --rm "taugrid/${{ matrix.image }}:validation" --help
+        run: >-
+          docker run --rm
+          --platform "linux/${{ matrix.architecture }}"
+          "taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation"
+          --help
+
+      - name: Verify static collector binary
+        if: matrix.image == 'gpu-metrics-collector'
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          IMAGE: taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation
+        run: |
+          container_id="$(docker create --platform "linux/${ARCHITECTURE}" "${IMAGE}")"
+          trap 'docker rm -f "${container_id}" >/dev/null 2>&1 || true' EXIT
+          docker cp "${container_id}:/gpu-metrics-collector" "./gpu-metrics-collector-${ARCHITECTURE}"
+          file_output="$(file "./gpu-metrics-collector-${ARCHITECTURE}")"
+          echo "${file_output}"
+          grep -Fq "statically linked" <<<"${file_output}"
+          case "${ARCHITECTURE}" in
+            amd64) grep -Eq "x86-64|x86_64" <<<"${file_output}" ;;
+            arm64) grep -Eq "ARM aarch64|aarch64" <<<"${file_output}" ;;
+          esac
 
       - name: Scan image for critical vulnerabilities
         run: |
@@ -109,7 +180,7 @@ jobs:
             --ignore-unfixed \
             --scanners vuln \
             --severity CRITICAL \
-            "taugrid/${{ matrix.image }}:validation"
+            "taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation"
 
       - name: Generate Trivy SARIF report
         id: sarif
@@ -124,29 +195,113 @@ jobs:
             image \
             --format sarif \
             --ignore-unfixed \
-            --output "/workspace/trivy-${{ matrix.image }}.sarif" \
+            --output "/workspace/trivy-${{ matrix.image }}-${{ matrix.architecture }}.sarif" \
             --scanners vuln \
             --severity HIGH,CRITICAL \
-            "taugrid/${{ matrix.image }}:validation"
+            "taugrid/${{ matrix.image }}:${{ matrix.architecture }}-validation"
 
       - name: Upload Trivy SARIF report
         if: >-
           always() && !cancelled() && steps.sarif.outcome == 'success' &&
           (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
-          sarif_file: trivy-${{ matrix.image }}.sarif
-          category: trivy-${{ matrix.image }}
+          sarif_file: trivy-${{ matrix.image }}-${{ matrix.architecture }}.sarif
+          category: trivy-${{ matrix.image }}-${{ matrix.architecture }}
+
+  adx-collector:
+    name: ADX collector / linux/${{ matrix.architecture }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: images/adx-mon
+          file: images/adx-mon/Dockerfile.collector
+          load: true
+          platforms: linux/${{ matrix.architecture }}
+          pull: true
+          push: false
+          tags: taugrid/adx-mon-collector:${{ matrix.architecture }}-validation
+
+      - name: Smoke test image
+        run: >-
+          docker run --rm
+          --platform "linux/${{ matrix.architecture }}"
+          "taugrid/adx-mon-collector:${{ matrix.architecture }}-validation"
+          --help
+
+      - name: Scan image for critical vulnerabilities
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${{ runner.temp }}/trivy-cache:/root/.cache/trivy" \
+            "${TRIVY_IMAGE}" \
+            image \
+            --exit-code 1 \
+            --format table \
+            --ignore-unfixed \
+            --scanners vuln \
+            --severity CRITICAL \
+            "taugrid/adx-mon-collector:${{ matrix.architecture }}-validation"
+
+      - name: Generate Trivy SARIF report
+        id: sarif
+        if: always() && !cancelled() && steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          docker run --rm \
+            --volume /var/run/docker.sock:/var/run/docker.sock \
+            --volume "${{ runner.temp }}/trivy-cache:/root/.cache/trivy" \
+            --volume "${{ github.workspace }}:/workspace" \
+            "${TRIVY_IMAGE}" \
+            image \
+            --format sarif \
+            --ignore-unfixed \
+            --output "/workspace/trivy-adx-mon-collector-${{ matrix.architecture }}.sarif" \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            "taugrid/adx-mon-collector:${{ matrix.architecture }}-validation"
+
+      - name: Upload Trivy SARIF report
+        if: >-
+          always() && !cancelled() && steps.sarif.outcome == 'success' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-adx-mon-collector-${{ matrix.architecture }}.sarif
+          category: trivy-adx-mon-collector-${{ matrix.architecture }}
 
   required:
     name: Required
     if: always()
     needs:
+      - adx-collector
       - image
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
         env:
+          ADX_COLLECTOR_RESULT: ${{ needs.adx-collector.result }}
           IMAGE_RESULT: ${{ needs.image.result }}
-        run: test "${IMAGE_RESULT}" = success
+        run: |
+          test "${ADX_COLLECTOR_RESULT}" = success
+          test "${IMAGE_RESULT}" = success

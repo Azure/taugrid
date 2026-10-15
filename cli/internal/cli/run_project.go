@@ -141,7 +141,11 @@ func resolveRunRequest(
 		ConfigPath:     input.ConfigPath,
 		ExplicitConfig: input.ExplicitConfig,
 	}
-	resolution.Connection.Discovery = &project.Connection
+	discovery, err := assignedCatalogProjectConnection(repository.Catalog, project)
+	if err != nil {
+		return runRequestResolution{}, err
+	}
+	resolution.Connection.Discovery = discovery
 	if explicit.Resolved != "" {
 		resolution.Connection.StartDir = explicit.Resolved
 	} else if input.ConfigPath != "" {

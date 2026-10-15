@@ -16,22 +16,19 @@ links:
   during the renderer's short post-completion grace period; it is not durable
   run history.
 - **"Open in Experiments" (Stellar)**: the trainer publishes immutable
-  `metrics-history-attempt-0/*.jsonl` chunks; the Tau metrics-offload sidecar watches them,
-  remote-writes rows to adx-mon/Kusto, and — critically — publishes a terminal
+  `metrics-history-attempt-0/*.jsonl` chunks; the standalone collector watches them,
+  delivers typed events to ADX, and — critically — publishes a terminal
   `tau/run_status` marker on shutdown. The portal only lights the Stellar link
   once that marker lands in Kusto.
 
 ## Prerequisites
 
-1. **A pinned metrics-offload image.** `metrics.offload.enabled: true` requires
-   `TAU_METRICS_OFFLOAD_IMAGE` (or `--metrics-offload-image`) set to a
-   **taugrid-portal** image pinned by digest. The sidecar runs
-   `taugrid-portal experiment offload metrics`, a verb only the taugrid-portal
-   image installs (at `/usr/local/bin/taugrid-portal`); the plain `tau` image
-   does **not** contain it and the container would fail to exec. It must be
-   pinned by `@sha256:` — a `:latest` tag is rejected.
+1. **A pinned metrics-offload image.** Pin the
+   **taugrid-metrics-collector** image by digest. `collector-v1` is the sole
+   runtime contract and `adx-required` is the sole delivery mode. A `:latest`
+   tag is rejected.
 2. **A namespace with a Ready TauWorkspace and a writable `/data` PVC.** The
-   offload sidecar remote-writes to adx-mon and writes a small SQLite buffer;
+   collector queues typed events to ADX and writes its restart-safe spool;
    the trainer publishes immutable JSONL chunks under `/data`. The canonical
    selected workspace namespace must hold a pre-provisioned `blob-training`
    PVC.
@@ -45,12 +42,21 @@ transient SQLite/spool buffers resolve under the `/var/run/tau` emptyDir, not
 ```bash
 # from the repository root
 make install-tau-cli
-export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-portal@sha256:digest>
+export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
+export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
+export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
+export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
 # Keep the offloader checkpoint on its emptyDir. Azure File RWX volumes reject
 # the chmod used for atomic checkpoint writes.
 export TAU_METRICS_OFFLOAD_OUT=/var/run/tau/metrics-offload
 tau run --workspace taugrid-default --config examples/portal-ray-stellar/tau.yaml --dry-run=client
 ```
+
+`collector-v1` normalizes the immutable history chunks into typed
+`tau.experiment.metric.v1` NDJSON, with manifests, checkpoints, and delivery
+receipts in the configured spool. Completion requires the ADX queued-ingestion
+receipt. The client ID must match the federated identity on the workspace
+ServiceAccount; no client secret belongs in the workload.
 
 The rendered RayJob must carry
 `tau.azure.com/stellar-experiment-id: ray-plus-stellar` and

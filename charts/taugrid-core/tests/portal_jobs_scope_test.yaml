@@ -175,10 +175,20 @@ tests:
           path: rules
           content:
             apiGroups:
+             - ""
+            resources:
+             - pods/log
+            verbs:
+             - get
+      - contains:
+          path: rules
+          content:
+            apiGroups:
              - ray.io
             resources:
              - rayjobs
              - rayclusters
+             - rayservices
             verbs:
              - get
              - list

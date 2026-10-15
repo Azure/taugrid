@@ -15,7 +15,7 @@ page shows both the "Ray dashboard" link AND the "Open in Experiments"
   ``metrics-history-attempt-0/*.jsonl`` chunks (``_step`` + ``_timestamp`` +
   scalar fields) under ``$TAU_OUTPUT_DIR``. The Tau metrics-offload sidecar
   watches those chunks,
-  remote-writes rows to adx-mon/Kusto (``ExperimentMetrics``), and — critically
+  delivers typed metric events to ADX, and — critically
   — publishes a terminal ``tau/run_status`` marker on shutdown. The portal only
   lights the Stellar link once that terminal marker lands.
 

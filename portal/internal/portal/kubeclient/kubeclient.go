@@ -18,9 +18,11 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -58,6 +60,9 @@ var (
 	rayJobGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayjobs",
 	}
+	rayServiceGVR = schema.GroupVersionResource{
+		Group: "ray.io", Version: "v1", Resource: "rayservices",
+	}
 	rayClusterGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayclusters",
 	}
@@ -74,7 +79,8 @@ var (
 
 // Client reads Kubernetes objects for the portal via the dynamic client.
 type Client struct {
-	dyn dynamic.Interface
+	dyn  dynamic.Interface
+	core corev1client.CoreV1Interface
 }
 
 // New builds a Client. It prefers in-cluster config (the mounted ServiceAccount
@@ -90,7 +96,11 @@ func New(kubeconfig string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build dynamic client: %w", err)
 	}
-	return NewForDynamic(dyn), nil
+	core, err := corev1client.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build typed client: %w", err)
+	}
+	return &Client{dyn: dyn, core: core}, nil
 }
 
 // NewForDynamic builds a Client around an existing dynamic client. It is the
@@ -194,6 +204,25 @@ func (c *Client) ListEvents(ctx context.Context, namespace string) ([]byte, erro
 	return c.listRaw(ctx, eventGVR, namespace)
 }
 
+// GetPodLogs returns one bounded current or previous container log snapshot.
+func (c *Client) GetPodLogs(ctx context.Context, namespace, pod, container string, previous bool, tailLines, limitBytes int64) ([]byte, error) {
+	if c.core == nil {
+		return nil, fmt.Errorf("typed Kubernetes client is unavailable")
+	}
+	opts := &corev1.PodLogOptions{
+		Container:  container,
+		Previous:   previous,
+		TailLines:  &tailLines,
+		LimitBytes: &limitBytes,
+		Timestamps: true,
+	}
+	data, err := c.core.Pods(namespace).GetLogs(pod, opts).DoRaw(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get pod logs %s/%s container %s: %w", namespace, pod, container, err)
+	}
+	return data, nil
+}
+
 // GetJob returns a single batch/v1 Job as raw JSON. The job detail page reads the
 // object directly rather than filtering a list.
 func (c *Client) GetJob(ctx context.Context, namespace, name string) ([]byte, error) {
@@ -204,6 +233,12 @@ func (c *Client) GetJob(ctx context.Context, namespace, name string) ([]byte, er
 // not installed) surfaces as a get error, which the detail page tolerates.
 func (c *Client) GetRayJob(ctx context.Context, namespace, name string) ([]byte, error) {
 	return c.getRaw(ctx, rayJobGVR, namespace, name)
+}
+
+// GetRayService returns a single ray.io RayService so workload detail can
+// resolve Kueue Workloads whose canonical controller owner is a RayService.
+func (c *Client) GetRayService(ctx context.Context, namespace, name string) ([]byte, error) {
+	return c.getRaw(ctx, rayServiceGVR, namespace, name)
 }
 
 // GetRayCluster returns one RayCluster so Job detail can verify that the

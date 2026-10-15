@@ -292,7 +292,7 @@ func TestServeSnapshotProvenanceOnDeploymentChildren(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := snapshot.Profiles[0]
-	p.WorkerCount, p.Placement = 1, profile.PlacementIndependent
+	p.WorkerCount, p.Placement = 1, profile.PlacementUnconstrained
 	snapshot, err = profile.NewProfileSetSnapshot(snapshot.TauClusterGeneration, []profile.ResolvedWorkloadProfile{p})
 	if err != nil {
 		t.Fatal(err)

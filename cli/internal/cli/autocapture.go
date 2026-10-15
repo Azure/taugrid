@@ -112,6 +112,17 @@ func addLaunchTag(tags map[string]string, metadata experiment.Metadata) map[stri
 	return out
 }
 
+func addStableMetricsLaunchTag(tags map[string]string, metadata experiment.Metadata) map[string]string {
+	if metadata.Launch == nil {
+		return addLaunchTag(tags, metadata)
+	}
+	stable := metadata
+	launch := *metadata.Launch
+	launch.TauCommand = ""
+	stable.Launch = &launch
+	return addLaunchTag(tags, stable)
+}
+
 func directJobPayloadAnnotation(scriptPath string, source *runconfig.Source) (string, string, error) {
 	if source != nil {
 		identity := strings.Join([]string{source.Image, source.Path, scriptPath}, "\n")

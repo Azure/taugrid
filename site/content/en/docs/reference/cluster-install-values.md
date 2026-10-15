@@ -48,19 +48,66 @@ A portable Kueue queue bootstrapped on first install. These quotas bound concurr
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `baselineQueue.enabled` | bool | `true` | Create the ClusterQueue, LocalQueue, ResourceFlavors, and Topology |
+| `baselineQueue.enabled` | bool | `true` | Create the ClusterQueue, LocalQueue, and CPU ResourceFlavor |
 | `baselineQueue.name` | string | `jobqueue` | LocalQueue name (DNS label) |
 | `baselineQueue.namespaceSelector` | object | `matchExpressions: [{key: tau.azure.com/workspace, operator: Exists}]` | Namespaces that receive the LocalQueue |
-| `baselineQueue.topology.enabled` | bool | `true` | Create a Topology object for hostname-level scheduling |
-| `baselineQueue.topology.name` | string | `default-node-topology` | Topology object name |
-| `baselineQueue.topology.requiredLevel` | string | `kubernetes.io/hostname` | Required topology level copied from managed GPU flavors to generated pod templates; custom levels are rendered above the always-present hostname leaf |
+| `baselineQueue.topology.enabled` | bool | `true` | Reference the controller-owned Topology from GPU flavors |
+| `baselineQueue.topology.name` | string | `taugrid-gpu-topology` | Controller-owned Topology object name |
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory flavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti | CPU/memory admission quota |
-| `baselineQueue.gpu.enabled` | bool | `true` | Add GPU resources and flavors to the node-resource group |
-| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resources covered by the node-resource group |
-| `baselineQueue.gpu.flavors` | list | generic `taugrid-default-gpu` | GPU flavors and per-flavor quotas |
+| `baselineQueue.gpu.enabled` | bool | `true` | Cover GPU resources and enable controller discovery |
+| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu`, `tau.azure.com/torchrun-host-slot` | GPU and one-per-node torchrun slot resources covered by the node-resource group |
+| `baselineQueue.gpu.flavors` | list | `[]` | Optional externally configured GPU flavors |
 
-CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all of its requested resources. `taugrid-default-cpu` has zero GPU quota, while the generic `taugrid-default-gpu` has CPU/memory plus GPU quota and supports `gpu_class: any` on a fresh install. When hardware is known, replace the GPU flavor list with class-specific flavors and label matching nodes with the canonical A10, A100, H100, H200, GB200, or GB300 class from `policy.gpu_class`. Only GPU flavors carry `topologyName` and the managed `kueue.x-k8s.io/podset-required-topology` metadata annotation. Connected TauGrid submission copies that requirement onto generated GPU pod templates when no explicit placement policy is present. Raw Kubernetes manifests remain expert-controlled. The CPU/memory flavor remains non-TAS. For upgrades with saved legacy values, remove GPU resources from `baselineQueue.resources` and move all GPU class/series labels and GPU-node tolerations out of `baselineQueue.flavor` before adding their replacements under `baselineQueue.gpu.flavors`. Declare GPU-node taints under each flavor's `nodeTaints`. TauGrid fails template rendering if the old mixed values would duplicate GPU coverage or constrain CPU-only admission. Replace the generic GPU flavor with class-specific flavors rather than keeping both: exact class quota must not fall back to an unlabeled ResourceFlavor.
+CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all requested resources. `taugrid-default-cpu` has zero GPU quota. When GPU admission, topology, and `tau-core-controller` are enabled, the controller discovers Nodes with both `tau.azure.com/gpu-class` and allocatable `nvidia.com/gpu`, creates one topology-aware ResourceFlavor per observed GPU class, and appends its summed allocatable GPU capacity plus one ready `tau.azure.com/torchrun-host-slot` per GPU Node to the ClusterQueue. Each discovered flavor declares `sku=gpu:NoSchedule` as an admission taint so CPU-only workloads cannot consume its quota. Node creation, GPU-class label changes, and allocatable GPU or host-slot capacity changes trigger reconciliation; a new pool may initially contribute zero capacity and receive quota once kubelet reports its GPUs and the slot. GPU capacity grows monotonically: scaling a pool to zero does not remove the flavor or reduce its last known GPU quota, while slot quota tracks ready slot capacity. Explicitly configured flavors remain supported and are not pruned by controller discovery. Only GPU flavors carry `topologyName`; each workload's `policy.topology` selects `unconstrained`, `same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`. Raw Kubernetes manifests remain expert-controlled.
+
+The baseline ClusterQueue opts into discovery with
+`tau.azure.com/discover-gpu-flavors=true` only while GPU admission, topology,
+and the controller are enabled. Custom ClusterQueues can use the same label;
+queues without it are never mutated by discovery and labeled queues must cover
+`nvidia.com/gpu`. Explicit chart-configured GPU flavors should set
+`tau.azure.com/torchrun-host-slot` quota to their GPU Node count. Omitting it is
+accepted for upgrade compatibility and renders zero slot quota, leaving
+multi-node torchrun pending until the quota is configured.
+
+`tau-core-controller` assigns every Node a conservative topology identity and
+reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
+`tau.azure.com/network-domain` → `tau.azure.com/accelerator-domain` →
+`kubernetes.io/hostname`. Nodes without authoritative shared-site, fabric, or
+accelerator-island metadata receive deterministic singleton labels.
+`tau.azure.com/region` remains normalized metadata but is not a Kueue topology
+level.
+
+The controller recognizes Azure from `aks.azure.com/cloud=azure`, the Azure
+provider ID, or managed AKS labels, and derives region from
+`topology.kubernetes.io/region` or `aks.azure.com/region`. Managed Azure Nodes
+share a regional site. Only Azure ND-series Nodes with an authoritative
+agent-pool label share a network domain, scoped by region, agent pool, and VM
+size. Other capacity uses singleton non-IB domains.
+
+Externally joined Azure Flex nodes are detected from
+`kubernetes.azure.com/managed=false` or `aks.azure.com/stretch-managed=true`.
+Their provisioning template must stamp
+`net.unbounded-cloud.io/site=<globally-unique-site>`. Nodes share the top-level
+Flex site. Nodes may additionally stamp
+`net.unbounded-cloud.io/network-domain=<provider-authoritative-fabric-id>` to
+share a fabric. NVL72/GB200/GB300 nodes may stamp
+`net.unbounded-cloud.io/accelerator-domain=<provider-authoritative-island-id>`
+to share an accelerator island. Without those inputs, each Node receives
+singleton domains; TauGrid never infers accelerator sharing from GPU model or
+SKU alone. Zone is omitted because it is not consistently available across
+providers.
+
+The topology name is fixed because the controller owns this object and Kueue
+makes `ResourceFlavor.spec.topologyName` immutable. Discovered flavors use
+deterministic names based on GPU class.
+
+```yaml
+kubeadm:
+  nodeLabels:
+    net.unbounded-cloud.io/site: research-flex
+    net.unbounded-cloud.io/network-domain: research-fabric-a
+```
 
 ## Portal
 
@@ -95,6 +142,8 @@ baselineQueue:
         tolerations: []
         resources:
           - name: nvidia.com/gpu
+            nominalQuota: "1"
+          - name: tau.azure.com/torchrun-host-slot
             nominalQuota: "1"
 ```
 
@@ -141,6 +190,8 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "8"
+          - name: tau.azure.com/torchrun-host-slot
+            nominalQuota: "1"
 ```
 
 ## See Also

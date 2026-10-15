@@ -40,11 +40,12 @@ metrics:
     - metrics-history-attempt-0/*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2
     out: /var/run/tau/metrics-offload
 
 policy:
   workspace: default
   gpu_class: h200-141gb
-  topology: single-node-nvlink
+  # Use same-accelerator-domain for multi-host NVL72/GB200/GB300 workloads
+  # only when the provider publishes a shared accelerator-domain identity.
+  topology: same-host
   disable_default_priorities: true

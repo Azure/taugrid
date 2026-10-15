@@ -46,17 +46,16 @@ resourceFlavors:
       nodeLabels:
         tau.azure.com/gpu-class: h200-141gb
       topologyName: default-node-topology
-      requiredTopology: kubernetes.io/hostname
 ```
 
-Keep placement/interconnect in workload topology (`independent`,
-`single-node-nvlink`, `multi-node-nccl`, or `elastic-workers`), not in the
+Keep placement/interconnect in workload topology (`unconstrained`,
+`same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`), not in the
 class label. The sibling `tau-core-controller` chart continuously derives class
 and series labels for its reviewed AKS GPU VM-size catalog. Install an
 equivalent node-label reconciler when deploying this services chart alone.
-For TAS-only flavors, `requiredTopology` renders the ResourceFlavor metadata
-annotation Tau uses to make generated workloads admissible without a hidden
-user-side annotation. Expert-authored raw manifests are not modified.
+For TAS-capable flavors, `topologyName` advertises the available hierarchy;
+each workload chooses its own placement level. Expert-authored raw manifests
+are not modified.
 
 ## What this chart does NOT install
 
@@ -258,7 +257,9 @@ With `lifecycleRecorder.schemaManagement.enabled=true`, the chart creates an
 adx-mon `ManagementCommand` in
 `lifecycleRecorder.schemaManagement.namespace` (default `adx-mon`). adx-mon
 idempotently creates the `TauExpRunLifecycle` table, its named JSON ingestion
-mapping, and the dashboard function. Install and authorize adx-mon before this
+mapping, and the dashboard function. The lifecycle contract persists
+`experiment_id`, allowing queued, running, failed, and other lifecycle-only runs
+to appear in the typed run catalog before metric evidence arrives. Install and authorize adx-mon before this
 chart: its identity needs database-management permission on the recorder's ADX
 database. The recorder retains only `Ingestor` permission and does not execute
 database-management commands itself. This is opt-in so existing recorder
@@ -336,10 +337,24 @@ shared connections fail rendering. Inheriting the identity requires
 set its name and client-ID annotation to match the externally managed object.
 The chart derives `azure.workload.identity/use: "true"` on the pod.
 `portal.kusto.queryCommand` remains an optional adapter override, and
-`portal.kusto.costDatabase` remains independent (Viewer access there is needed
+`portal.kusto.costDatabase` remains unconstrained (Viewer access there is needed
 for Cost). Empty shared values preserve existing degraded behavior; local/auto
 sources do not inherit them. Workspace scope, ClusterIP exposure, and disabled
 workspace-directory defaults are unchanged.
+
+Portal canonical v2 experiment, run, and series reads require the stable typed
+ADX Functions. Deploy `TauExpMetricEventRows()`,
+`TauExpSeriesCatalogRows()`, and `TauExpRunCatalogRows()` before routing Portal
+traffic. Function or ADX failures surface to clients; the chart has no legacy,
+dual, shadow-read, or read-source switch.
+
+The standalone `taugrid-metrics-collector` is not deployed by this chart. It is
+the fixed `collector-v1` sidecar rendered into eligible `tau run` workloads,
+with required `adx-required` delivery through the `adx-queued-v1` sink. Release
+owners provide its immutable image digest and the workspace ADX ingestion
+endpoint, database, and Workload Identity client ID to the Tau CLI/run config.
+Do not add a chart-side collector selector, fallback image, or delivery-mode
+switch.
 
 ### Explicit Portal-only configuration
 

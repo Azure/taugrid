@@ -603,6 +603,13 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isAPI := strings.HasPrefix(r.URL.Path, "/api/")
 		routeAllowed := expapi.WorkspaceRouteAllowed(r.Method, r.URL.Path)
+		writeV2BoundaryError := func(status int, code, message string) bool {
+			if !expapi.IsCanonicalV2Read(r.URL.Path) {
+				return false
+			}
+			expapi.WriteV2Error(w, status, code, message)
+			return true
+		}
 		if strings.HasSuffix(r.URL.Path, "/artifacts") || strings.HasSuffix(r.URL.Path, "/artifact") {
 			target := strings.TrimSpace(r.URL.Query().Get("target"))
 			routeAllowed = routeAllowed && target != ""
@@ -618,33 +625,58 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 		}
 		if s.workspaceDirectory == nil {
 			if isAPI && !routeAllowed {
+				if writeV2BoundaryError(http.StatusForbidden, "ROUTE_FORBIDDEN", "this Stellar route is not available in Portal") {
+					return
+				}
 				writeJSONError(w, http.StatusForbidden, "this Stellar route is not available in Portal")
 				return
 			}
 			for _, workspace := range r.URL.Query()["workspace"] {
 				if workspace != "" && workspace != s.singleWorkspaceScope.WorkspaceID {
+					if writeV2BoundaryError(http.StatusForbidden, "WORKSPACE_FORBIDDEN", "workspace query conflicts with configured workspace") {
+						return
+					}
 					writeJSONError(w, http.StatusForbidden, "workspace query conflicts with configured workspace")
 					return
 				}
 			}
-			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, s.singleWorkspaceScope.WorkspaceID, s.singleWorkspaceScope.Source)))
+			source := s.singleWorkspaceScope.Source
+			if expapi.IsCanonicalV2Read(r.URL.Path) {
+				source = canonicalStellarSource(source, s.stellarKustoAvailable)
+			}
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, s.singleWorkspaceScope.WorkspaceID, source)))
 			return
 		}
 		scope, err := s.resolveWorkspaceScope(r)
 		if err != nil {
 			switch {
 			case errors.Is(err, errViewerClaimsTooLarge):
+				if writeV2BoundaryError(http.StatusRequestHeaderFieldsTooLarge, "VIEWER_CLAIMS_TOO_LARGE", err.Error()) {
+					return
+				}
 				writeJSONError(w, http.StatusRequestHeaderFieldsTooLarge, err.Error())
 			case errors.Is(err, errViewerUnauthenticated):
+				if writeV2BoundaryError(http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", err.Error()) {
+					return
+				}
 				writeJSONError(w, http.StatusUnauthorized, err.Error())
 			case errors.Is(err, errWorkspaceNotFound):
+				if writeV2BoundaryError(http.StatusNotFound, "WORKSPACE_NOT_FOUND", err.Error()) {
+					return
+				}
 				writeJSONError(w, http.StatusNotFound, err.Error())
 			default:
+				if writeV2BoundaryError(http.StatusBadRequest, "INVALID_WORKSPACE_SCOPE", err.Error()) {
+					return
+				}
 				writeJSONError(w, http.StatusBadRequest, err.Error())
 			}
 			return
 		}
 		if !routeAllowed {
+			if writeV2BoundaryError(http.StatusForbidden, "ROUTE_FORBIDDEN", "this Stellar route is not workspace-scoped in managed Portal mode") {
+				return
+			}
 			writeScopedJSON(w, http.StatusForbidden, map[string]string{
 				"reason": "this Stellar route is not workspace-scoped in managed Portal mode",
 			}, scope, "forbidden")
@@ -660,6 +692,9 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 		}
 		if isAPI && (scope.Availability != workspaceAvailabilityAvailable ||
 			(scope.ExperimentsURL != "" && !isSafeLocalAbsolutePath(scope.ExperimentsURL))) {
+			if writeV2BoundaryError(http.StatusServiceUnavailable, "SOURCE_UNAVAILABLE", "native experiments are unavailable: configure a trusted experimentsBackend connection") {
+				return
+			}
 			writeScopedJSON(w, http.StatusConflict, map[string]string{
 				"reason": "native experiments are unavailable: configure a trusted experimentsBackend connection",
 			}, scope, "unavailable")
@@ -670,12 +705,18 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 			return
 		}
 		if scope.Availability != workspaceAvailabilityAvailable {
+			if writeV2BoundaryError(http.StatusServiceUnavailable, "SOURCE_UNAVAILABLE", "experiment source is unavailable for this workspace") {
+				return
+			}
 			writeScopedJSON(w, http.StatusConflict, map[string]string{
 				"reason": "experiment source is unavailable for this workspace",
 			}, scope, scope.Availability)
 			return
 		}
 		if scope.ExperimentsURL == "" {
+			if writeV2BoundaryError(http.StatusServiceUnavailable, "SOURCE_UNTRACKED", "experiment tracking is untracked for this workspace") {
+				return
+			}
 			writeScopedJSON(w, http.StatusConflict, map[string]string{
 				"reason": "experiment tracking is untracked for this workspace",
 			}, scope, "untracked")
@@ -683,13 +724,20 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 		}
 		target, err := url.Parse(scope.ExperimentsURL)
 		if err != nil {
+			if writeV2BoundaryError(http.StatusServiceUnavailable, "SOURCE_UNAVAILABLE", "experiment endpoint is invalid") {
+				return
+			}
 			writeScopedJSON(w, http.StatusConflict, map[string]string{
 				"reason": "experiment endpoint is invalid",
 			}, scope, workspaceAvailabilityUnsupported)
 			return
 		}
 		if target.Host == "" {
-			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, target.Query(), scope.WorkspaceID, scope.Source)))
+			source := scope.Source
+			if expapi.IsCanonicalV2Read(r.URL.Path) {
+				source = canonicalStellarSource(source, s.stellarKustoAvailable)
+			}
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, target.Query(), scope.WorkspaceID, source)))
 			return
 		}
 		http.Redirect(w, r, workspaceExperimentRedirectURL(target, r, scope.WorkspaceID, scope.Source), http.StatusTemporaryRedirect)

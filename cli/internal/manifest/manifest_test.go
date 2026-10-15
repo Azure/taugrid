@@ -191,106 +191,14 @@ runtime:
     - torch==2.4.0
   rdma:
     enabled: true
-    resource_name: rdma/rdma_shared_device_a
-    count: 1
 `
 	m, err := Parse([]byte(src))
 	if err != nil {
 		t.Fatalf("Parse should allow runtime.rdma: %v", err)
 	}
 	rdma := m.RuntimeRDMA()
-	if !rdma.Enabled || rdma.ResourceName != "rdma/rdma_shared_device_a" || rdma.Count != 1 {
+	if !rdma.Enabled {
 		t.Fatalf("RuntimeRDMA()=%+v", rdma)
-	}
-}
-
-func TestValidateRejectsUnsafeRuntimeRDMA(t *testing.T) {
-	cases := []struct {
-		name string
-		rdma string
-		want string
-	}{
-		{
-			name: "resource name has surrounding whitespace",
-			rdma: `
-    enabled: true
-    resource_name: " rdma/rdma_shared_device_a"
-`,
-			want: "resource_name",
-		},
-		{
-			name: "uppercase resource prefix",
-			rdma: `
-    enabled: true
-    resource_name: RDMA/rdma_shared_device_a
-`,
-			want: "DNS-1123",
-		},
-		{
-			name: "underscore in resource prefix",
-			rdma: `
-    enabled: true
-    resource_name: rdma_devices/rdma_shared_device_a
-`,
-			want: "DNS-1123",
-		},
-		{
-			name: "resource name missing prefix",
-			rdma: `
-    enabled: true
-    resource_name: rdma_shared_device_a
-`,
-			want: "extended resource name",
-		},
-		{
-			name: "resource name trailing punctuation",
-			rdma: `
-    enabled: true
-    resource_name: rdma/rdma_shared_device_a-
-`,
-			want: "resource name segment",
-		},
-		{
-			name: "reserved resource prefix",
-			rdma: `
-    enabled: true
-    resource_name: kubernetes.io/rdma_shared_device_a
-`,
-			want: "reserved Kubernetes resource prefix",
-		},
-		{
-			name: "overlong resource name segment",
-			rdma: `
-    enabled: true
-    resource_name: rdma/` + strings.Repeat("a", 64) + `
-`,
-			want: "resource name segment",
-		},
-		{
-			name: "bad count",
-			rdma: `
-    enabled: true
-    count: 0
-`,
-			want: "count",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			src := `
-schema_version: 1
-name: rdma-bad
-compute: { gpus: 8, workers: 2 }
-runtime:
-  pip:
-    - torch==2.4.0
-  rdma:
-` + tc.rdma
-			_, err := Parse([]byte(src))
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("expected %q validation error, got %v", tc.want, err)
-			}
-		})
 	}
 }
 

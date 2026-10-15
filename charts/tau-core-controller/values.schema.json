@@ -195,9 +195,11 @@
           "placement": {
             "type": "string",
             "enum": [
-              "independent",
-              "single-node-nvlink",
-              "multi-node-nccl"
+              "unconstrained",
+              "same-host",
+              "same-accelerator-domain",
+              "same-network-domain",
+              "same-site"
             ]
           },
           "defaultLocalQueue": {

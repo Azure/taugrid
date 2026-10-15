@@ -390,6 +390,7 @@ def _orchestrate_submit(
     data_pvc: Optional[str],
     queue: Optional[str],
     gpu_class: Optional[str],
+    priority_tier: Optional[str] = None,
     disable_default_priorities: bool,
     node_selector: Optional[list[str]],
     timeout: str,
@@ -469,6 +470,7 @@ def _orchestrate_submit(
             data_pvc=data_pvc,
             queue=queue,
             gpu_class=gpu_class,
+            priority_tier=priority_tier,
             node_selector=node_selector,
             profiler=profiler,
             profile_rank=profile_rank,
@@ -527,6 +529,7 @@ def _orchestrate_submit(
             kube_context=kube_context,
             data_pvc=data_pvc,
             gpu_class=gpu_class,
+            priority_tier=priority_tier,
             node_selector=node_selector,
             disable_default_priorities=disable_default_priorities,
             **(resource_overrides or {}),
@@ -566,6 +569,12 @@ def _add_workload_override_args(parser: argparse.ArgumentParser) -> None:
         "--gpu-class",
         default=None,
         help="GPU class override, e.g. any, a100-80gb, h200-141gb, gb300-288gb (written to generated run config policy.gpu_class)",
+    )
+    parser.add_argument(
+        "--priority-tier",
+        choices=("default", "priority"),
+        default=None,
+        help="TauGrid-owned workload and pod priority tier",
     )
     parser.add_argument(
         "--disable-default-priorities",
@@ -651,6 +660,7 @@ def _build_overrides_from_args(args: argparse.Namespace) -> BuildOverrides:
         data_pvc=args.data_pvc,
         queue=args.queue,
         gpu_class=args.gpu_class,
+        priority_tier=args.priority_tier,
         node_selector=args.node_selector,
         disable_default_priorities=args.disable_default_priorities,
         cpu_request=args.cpu_request,
@@ -810,6 +820,7 @@ def main(argv: list[str] | None = None, *, prog: str = "tau python") -> int:
                 data_pvc=args.data_pvc,
                 queue=args.queue,
                 gpu_class=args.gpu_class,
+                priority_tier=args.priority_tier,
                 disable_default_priorities=args.disable_default_priorities,
                 node_selector=args.node_selector,
                 resource_overrides=resource_overrides,

@@ -16,13 +16,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/fileutil"
 	"github.com/Azure/taugrid/portal/internal/portalbin"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+)
+
+const timestampCollation = "tau_rfc3339_nano"
+
+var (
+	registerTimestampCollationOnce sync.Once
+	registerTimestampCollationErr  error
 )
 
 type Store struct {
@@ -1007,6 +1015,12 @@ func defaultManifestPaths(manifest Manifest) Manifest {
 }
 
 func openDB(path string) (*sql.DB, error) {
+	registerTimestampCollationOnce.Do(func() {
+		registerTimestampCollationErr = sqlite.RegisterCollationUtf8(timestampCollation, compareRFC3339Nano)
+	})
+	if registerTimestampCollationErr != nil {
+		return nil, fmt.Errorf("register timestamp collation: %w", registerTimestampCollationErr)
+	}
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
@@ -1016,6 +1030,21 @@ func openDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	return db, nil
+}
+
+func compareRFC3339Nano(left, right string) int {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
+	switch {
+	case leftErr == nil && rightErr == nil:
+		return leftTime.Compare(rightTime)
+	case leftErr == nil:
+		return 1
+	case rightErr == nil:
+		return -1
+	default:
+		return strings.Compare(left, right)
+	}
 }
 
 const (

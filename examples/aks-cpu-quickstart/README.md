@@ -312,7 +312,7 @@ does not require ADX/Kusto:
 # NOTE: the chart takes a tag only. templates/stellar.yaml renders
 # "{{ .repository }}:{{ .tag }}" and has no digest support. Use the release tag
 # matching the taugrid-core chart and verify it resolves before installing.
-STELLAR_TAG="0.4.2"
+STELLAR_TAG="0.4.4"
 
 # Verify the public image before starting the rollout.
 curl --fail --silent --show-error --output /dev/null \
@@ -817,8 +817,8 @@ Two things to expect during teardown, both harmless here:
   with `kubectl get rayjob -n taugrid-default` (should be empty) rather than trusting
   the exit code alone.
 - `tau cluster uninstall` can leave three cluster-scoped Kueue objects
-  (`ClusterQueue/jobqueue`, `ResourceFlavor/taugrid-default`,
-  `Topology/default-node-topology`) stuck `Terminating` with an orphaned
+  (`ClusterQueue/jobqueue`, `ResourceFlavor/taugrid-default-cpu`,
+  `Topology/taugrid-gpu-topology`) stuck `Terminating` with an orphaned
   `kueue.x-k8s.io/resource-in-use` finalizer, if its first phase could not
   remove them while Kueue was still running, for example when the chart
   reference cannot be resolved. Uninstall reports that when it happens and

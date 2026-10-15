@@ -578,7 +578,7 @@ func rdmaProfile() profile.Profile {
 	return p
 }
 
-func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
+func TestRender_RDMAInjectsSecurityContextAndNetworkTopology(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "train.py")
 	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\nprint('hello')\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -589,16 +589,18 @@ func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
 		ScriptPath:       script,
 		Launcher:         "torchrun",
 		ProcessesPerNode: 8,
-		RDMA: RDMAOptions{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		RDMA:             RDMAOptions{Enabled: true},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	job := parseYAML(t, out)
+	template := job["spec"].(map[string]any)["template"].(map[string]any)
+	annotations := template["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := annotations[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Fatalf("RDMA required topology=%v, want tau.azure.com/network-domain", got)
+	}
+	pod := template["spec"].(map[string]any)
 	c := pod["containers"].([]any)[0].(map[string]any)
 
 	// Verify securityContext capabilities.
@@ -621,15 +623,14 @@ func TestRender_RDMAInjectsSecurityContextAndResources(t *testing.T) {
 		t.Errorf("expected allowPrivilegeEscalation=false")
 	}
 
-	// Verify RDMA device resources.
 	resources := c["resources"].(map[string]any)
 	requests := resources["requests"].(map[string]any)
 	limits := resources["limits"].(map[string]any)
-	if requests["rdma/rdma_shared_device_a"] != "1" {
-		t.Errorf("requests missing RDMA resource: %v", requests)
+	if got := len(requests); got != 3 {
+		t.Errorf("resource requests=%v, want cpu, memory, and GPU only", requests)
 	}
-	if limits["rdma/rdma_shared_device_a"] != "1" {
-		t.Errorf("limits missing RDMA resource: %v", limits)
+	if got := len(limits); got != 1 {
+		t.Errorf("resource limits=%v, want GPU only", limits)
 	}
 
 	// Verify /dev/shm size is 32Gi.
@@ -661,11 +662,7 @@ func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 		Name:      "rdma-merge",
 		Namespace: "tau",
 		Command:   []string{"python", "train.py"},
-		RDMA: RDMAOptions{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		RDMA:      RDMAOptions{Enabled: true},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -706,11 +703,7 @@ func TestRender_RDMARejectsRunAsNonRootProfile(t *testing.T) {
 		Name:      "rdma-nonroot-conflict",
 		Namespace: "tau",
 		Command:   []string{"python", "train.py"},
-		RDMA: RDMAOptions{
-			Enabled:      true,
-			ResourceName: "rdma/rdma_shared_device_a",
-			Count:        1,
-		},
+		RDMA:      RDMAOptions{Enabled: true},
 	})
 	if err == nil || !strings.Contains(err.Error(), "runAsNonRoot=true") {
 		t.Fatalf("expected runAsNonRoot conflict, got %v", err)
@@ -729,31 +722,11 @@ func TestNormalizeRDMA(t *testing.T) {
 		if !opts.Enabled {
 			t.Fatal("expected enabled")
 		}
-		if opts.ResourceName != "rdma/rdma_shared_device_a" {
-			t.Errorf("resource name = %q", opts.ResourceName)
-		}
-		if opts.Count != 1 {
-			t.Errorf("count = %d", opts.Count)
-		}
-	})
-	t.Run("custom", func(t *testing.T) {
-		count := 2
-		opts := runconfig.NormalizeRDMA(runconfig.RDMA{
-			Enabled:      true,
-			ResourceName: "rdma/hca_shared_devices_a",
-			Count:        &count,
-		})
-		if opts.ResourceName != "rdma/hca_shared_devices_a" {
-			t.Errorf("resource name = %q", opts.ResourceName)
-		}
-		if opts.Count != 2 {
-			t.Errorf("count = %d", opts.Count)
-		}
 	})
 }
 
 // podTolerations returns the rendered pod tolerations as key|operator|value|effect
-// strings, which keeps the assertions below readable and order-independent.
+// strings, which keeps the assertions below readable and order-unconstrained.
 func podTolerations(t *testing.T, out []byte) []string {
 	t.Helper()
 	m := parseYAML(t, out)
@@ -1134,7 +1107,7 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 		Team:      "research",
 		Lane:      "training",
 		Mode:      "fixed",
-		Topology:  "single-node-nvlink",
+		Topology:  "same-host",
 		Shape:     "8xa100-80gb",
 		GPUClass:  "a100-80gb",
 	})
@@ -1177,20 +1150,20 @@ func TestRender_TopologyContractAddsKueueMetadata(t *testing.T) {
 	}
 }
 
-func TestRender_ResourceFlavorRequiredTopologyWithoutUserPlacement(t *testing.T) {
+func TestRender_SameSitePlacement(t *testing.T) {
 	out, err := Render(trainProfile(), Options{
-		Name:             "managed-tas",
-		Namespace:        "tau",
-		Command:          []string{"true"},
-		QueueName:        "jobqueue",
-		RequiredTopology: "kubernetes.io/hostname",
+		Name:      "managed-tas",
+		Namespace: "tau",
+		Command:   []string{"true"},
+		QueueName: "jobqueue",
+		Topology:  profile.PlacementSameSite,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	job := parseYAML(t, out)
-	if got := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)[runtopology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
-		t.Fatalf("pod required topology=%v, want kubernetes.io/hostname", got)
+	if got := job["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/site" {
+		t.Fatalf("pod required topology=%v, want tau.azure.com/site", got)
 	}
 }
 
@@ -1200,7 +1173,7 @@ func TestRender_LegacyGPUClassAliasRendersCanonicalContract(t *testing.T) {
 		Namespace: "tau",
 		Command:   []string{"true"},
 		QueueName: "jobqueue",
-		GPUClass:  "a100-nvlink-80gb",
+		GPUClass:  "a100-80gb",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1318,22 +1291,28 @@ func TestRender_WorkloadProfilePlacementTASContract(t *testing.T) {
 		value      string
 	}{
 		{
-			name:       "independent Job uses unconstrained TAS",
-			placement:  profile.PlacementIndependent,
+			name:       "unconstrained Job uses unconstrained TAS",
+			placement:  profile.PlacementUnconstrained,
 			annotation: "kueue.x-k8s.io/podset-unconstrained-topology",
 			value:      "true",
 		},
 		{
 			name:       "large-memory Job requires one hostname",
-			placement:  profile.PlacementSingleNodeNVLink,
+			placement:  profile.PlacementSameHost,
 			annotation: "kueue.x-k8s.io/podset-required-topology",
 			value:      "kubernetes.io/hostname",
 		},
 		{
-			name:       "multi-node Job uses unconstrained TAS",
-			placement:  profile.PlacementMultiNodeNCCL,
-			annotation: "kueue.x-k8s.io/podset-unconstrained-topology",
-			value:      "true",
+			name:       "accelerator-domain Job requires one island",
+			placement:  profile.PlacementSameAcceleratorDomain,
+			annotation: "kueue.x-k8s.io/podset-required-topology",
+			value:      "tau.azure.com/accelerator-domain",
+		},
+		{
+			name:       "network-domain Job requires one fabric",
+			placement:  profile.PlacementSameNetworkDomain,
+			annotation: "kueue.x-k8s.io/podset-required-topology",
+			value:      "tau.azure.com/network-domain",
 		},
 	}
 	for _, tc := range tests {
@@ -1373,7 +1352,7 @@ func TestRender_DRAProfileOptionsOmitTASAnnotations(t *testing.T) {
 	}
 	ApplyTopologyOptions(&opts, runtopology.Options{
 		QueueName:                       runtopology.SharedDRAQueueName,
-		Placement:                       profile.PlacementIndependent,
+		Placement:                       profile.PlacementUnconstrained,
 		DisableKueueTopologyAnnotations: true,
 	})
 
@@ -1410,7 +1389,7 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 		Team:            "experimental",
 		Lane:            "elastic",
 		Mode:            "elastic",
-		Topology:        "independent",
+		Topology:        "unconstrained",
 		GPUClass:        "h100-95gb",
 		Shape:           "1xh100-95gb",
 		CheckpointEvery: "15m",
@@ -1439,6 +1418,28 @@ func TestRender_ElasticUsesLowPriorityAndSharedQueue(t *testing.T) {
 	annotations := meta["annotations"].(map[string]any)
 	if annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" {
 		t.Fatalf("elastic topology annotation missing: %v", annotations)
+	}
+}
+
+func TestRender_PriorityTierUsesTauGridManagedClasses(t *testing.T) {
+	out, err := Render(trainProfile(), Options{
+		Name:         "priority-job",
+		Namespace:    "tau",
+		Command:      []string{"true"},
+		QueueName:    "jobqueue",
+		PriorityTier: "priority",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := parseYAML(t, out)
+	labels := manifest["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels["kueue.x-k8s.io/priority-class"] != "taugrid-priority" {
+		t.Fatalf("workload priority = %v", labels["kueue.x-k8s.io/priority-class"])
+	}
+	pod := manifest["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if pod["priorityClassName"] != "taugrid-priority" {
+		t.Fatalf("pod priority = %v", pod["priorityClassName"])
 	}
 }
 
@@ -1521,6 +1522,22 @@ func TestRender_GracePeriod_OptionOverride(t *testing.T) {
 	gi64, _ := g.(int64)
 	if gi != 300 && gi64 != 300 {
 		t.Errorf("terminationGracePeriodSeconds=%v want 300", g)
+	}
+}
+
+func TestRender_GracePeriod_CoversMetricsShutdown(t *testing.T) {
+	runtime := testMetricsRuntime("/data/completion", "/data/ready", time.Second)
+	runtime.DoneTimeout = 15 * time.Minute
+	out, err := Render(trainProfile(), Options{
+		Name: "j", Namespace: "tau", Command: []string{"true"}, PVCMount: "data",
+		TerminationGracePeriodSeconds: 300, MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := pod["terminationGracePeriodSeconds"]; got != 930 {
+		t.Fatalf("terminationGracePeriodSeconds=%v, want 930", got)
 	}
 }
 
@@ -2336,22 +2353,25 @@ func TestRender_Torchrun_ProfilerRejected(t *testing.T) {
 func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 	script := torchrunScript(t)
 	runtime := metricsoffload.Runtime{
-		Image:               "registry.example.com/taugrid/tau:v0.6.0",
-		RunID:               "modernbert-bounded",
-		Project:             "pretraining",
-		Experiment:          "modernbert-fineweb",
-		Group:               "fwe100",
-		Tags:                map[string]string{"tau_workspace": "research-workspace", "tau_namespace": "research-workspace", "tau_cluster": "sample-gpu-cluster"},
-		Source:              "stellar-online",
-		Store:               "/data/research-workspace/modernbert-bounded/.tau/metrics-expstore",
-		Out:                 "/data/research-workspace/modernbert-bounded/.tau/metrics-offload",
-		History:             []string{"/data/research-workspace/modernbert-bounded/metrics-history-attempt-*/*.jsonl"},
-		CompletionFile:      "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint: "http://${NODE_IP}:3100/receive",
-		Interval:            10 * time.Second,
-		ArtifactURI:         "/data/research-workspace/modernbert-bounded",
-		CheckpointURI:       "/data/research-workspace/modernbert-bounded/checkpoints",
+		Image:          "registry.example.com/taugrid/collector:v0.6.0",
+		RunID:          "modernbert-bounded",
+		Project:        "pretraining",
+		Experiment:     "modernbert-fineweb",
+		Group:          "fwe100",
+		Tags:           map[string]string{"tau_workspace": "research-workspace", "tau_namespace": "research-workspace", "tau_cluster": "sample-gpu-cluster"},
+		Source:         "stellar-online",
+		Store:          "/data/research-workspace/modernbert-bounded/.tau/metrics-expstore",
+		Out:            "/data/research-workspace/modernbert-bounded/.tau/metrics-offload",
+		History:        []string{"/data/research-workspace/modernbert-bounded/metrics-history-attempt-*/*.jsonl"},
+		CompletionFile: "/var/run/tau/metrics-completion.json",
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       10 * time.Second,
+		ArtifactURI:    "/data/research-workspace/modernbert-bounded",
+		CheckpointURI:  "/data/research-workspace/modernbert-bounded/checkpoints",
 	}
+
 	out, err := Render(trainProfile(), Options{
 		Name:           "modernbert-bounded",
 		Namespace:      "research-workspace",
@@ -2383,15 +2403,16 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 	if sidecar["name"] != "metrics-offload" || sidecar["image"] != runtime.Image {
 		t.Fatalf("unexpected sidecar: %+v", sidecar)
 	}
-	if got := sidecar["command"].([]any); len(got) != 1 || got[0] != metricsoffload.SidecarCommand {
+	if got := sidecar["command"].([]any); len(got) != 1 || got[0] != metricsoffload.CollectorSidecarCommand {
 		t.Fatalf("sidecar command = %v", got)
 	}
 	args := fmt.Sprint(sidecar["args"])
 	for _, want := range []string{
-		"experiment offload metrics --watch",
+		"collect --watch",
 		"--history " + runtime.History[0],
 		"--completion-file " + runtime.CompletionFile,
-		"--remote-write-endpoint " + runtime.RemoteWriteEndpoint,
+		"--delivery-mode adx-required",
+		"--adx-cluster-uri " + runtime.ADXClusterURI,
 		"--tag tau_workspace=research-workspace",
 		"--tag tau_namespace=research-workspace",
 		"--tag tau_cluster=sample-gpu-cluster",
@@ -2426,20 +2447,65 @@ func TestRender_DirectJobMetricsOffloadContract(t *testing.T) {
 	}
 }
 
+func TestRender_DirectJobCollectorMetricsOffloadCommand(t *testing.T) {
+	script := torchrunScript(t)
+	runtime := metricsoffload.Runtime{
+		Runtime:        metricsoffload.RuntimeCollectorV1,
+		Image:          "registry.example.com/taugrid/collector:v1",
+		RunID:          "collector-job",
+		Project:        "pretraining",
+		Experiment:     "collector",
+		Group:          "default",
+		Store:          "/var/run/tau/metrics/store",
+		Out:            "/data/collector/offload",
+		History:        []string{"/data/collector/metrics.jsonl"},
+		CompletionFile: "/var/run/tau/metrics-completion.json",
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       10 * time.Second,
+	}
+	out, err := Render(trainProfile(), Options{
+		Name:           "collector-job",
+		Namespace:      "tau",
+		ScriptPath:     script,
+		PVCMount:       "data",
+		MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := parseYAML(t, out)
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	containers := pod["containers"].([]any)
+	if len(containers) != 2 {
+		t.Fatalf("containers = %d, want main + one metrics sidecar", len(containers))
+	}
+	sidecar := containers[1].(map[string]any)
+	if got := sidecar["command"]; fmt.Sprint(got) != fmt.Sprint([]any{metricsoffload.CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %v", got)
+	}
+	if got := fmt.Sprint(sidecar["args"]); !strings.Contains(got, "collect --watch") {
+		t.Fatalf("collector args = %s", got)
+	}
+}
+
 func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 	script := torchrunScript(t)
 	valid := metricsoffload.Runtime{
-		Image:               "registry.example.com/taugrid/tau:v0.6.0",
-		RunID:               "bounded",
-		Project:             "pretraining",
-		Experiment:          "bounded-experiment",
-		Group:               "fwe100",
-		Store:               "/data/bounded/.tau/store",
-		Out:                 "/data/bounded/.tau/offload",
-		History:             []string{"/data/bounded/metrics-history.jsonl"},
-		CompletionFile:      "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint: "http://${NODE_IP}:3100/receive",
-		Interval:            10 * time.Second,
+		Image:          "registry.example.com/taugrid/collector:v0.6.0",
+		RunID:          "bounded",
+		Project:        "pretraining",
+		Experiment:     "bounded-experiment",
+		Group:          "fwe100",
+		Store:          "/data/bounded/.tau/store",
+		Out:            "/data/bounded/.tau/offload",
+		History:        []string{"/data/bounded/metrics-history.jsonl"},
+		CompletionFile: "/var/run/tau/metrics-completion.json",
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       10 * time.Second,
 	}
 	tests := []struct {
 		name    string
@@ -2479,19 +2545,21 @@ func TestRender_DirectJobMetricsOffloadSafety(t *testing.T) {
 
 func testMetricsRuntime(completion, ready string, readyTimeout time.Duration) metricsoffload.Runtime {
 	return metricsoffload.Runtime{
-		Image:               "example.test/tau:v1",
-		RunID:               "run-1",
-		Project:             "project-1",
-		Experiment:          "experiment-1",
-		Group:               "group-1",
-		Store:               "/data/store",
-		Out:                 "/data/out",
-		History:             []string{"/data/history.jsonl"},
-		CompletionFile:      completion,
-		RemoteWriteEndpoint: "http://127.0.0.1:3100/receive",
-		Interval:            time.Second,
-		ReadyFile:           ready,
-		ReadyTimeout:        readyTimeout,
+		Image:          "example.test/collector:v1",
+		RunID:          "run-1",
+		Project:        "project-1",
+		Experiment:     "experiment-1",
+		Group:          "group-1",
+		Store:          "/data/store",
+		Out:            "/data/out",
+		History:        []string{"/data/history.jsonl"},
+		CompletionFile: completion,
+		ADXClusterURI:  "https://example.kusto.windows.net",
+		ADXDatabase:    "TauGrid",
+		ADXClientID:    "00000000-0000-0000-0000-000000000001",
+		Interval:       time.Second,
+		ReadyFile:      ready,
+		ReadyTimeout:   readyTimeout,
 	}
 }
 
@@ -2661,7 +2729,12 @@ func parseMultiDocYAML(t *testing.T, b []byte) []map[string]any {
 
 func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	script := torchrunScript(t)
-	out, err := Render(multiGPUProfile(8), Options{
+	p := multiGPUProfile(8)
+	p.Topology = profile.Topology{
+		Mode:      "fixed",
+		Placement: profile.PlacementSameNetworkDomain,
+	}
+	out, err := Render(p, Options{
 		Name:             "ddp-multi",
 		Namespace:        "tau",
 		ScriptPath:       script,
@@ -2725,11 +2798,39 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	if fmt.Sprint(jobSpec["parallelism"]) != "2" {
 		t.Errorf("parallelism=%v, want 2", jobSpec["parallelism"])
 	}
+	if jobSpec["suspend"] != true {
+		t.Errorf("suspend=%v, want true for Kueue admission", jobSpec["suspend"])
+	}
+
+	template := jobSpec["template"].(map[string]any)
+	templateAnnotations := template["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := templateAnnotations[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Errorf("required topology=%v, want tau.azure.com/network-domain", got)
+	}
 
 	// Verify pod subdomain.
-	pod := jobSpec["template"].(map[string]any)["spec"].(map[string]any)
+	pod := template["spec"].(map[string]any)
 	if pod["subdomain"] != "ddp-multi-headless" {
 		t.Errorf("subdomain=%v, want ddp-multi-headless", pod["subdomain"])
+	}
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	for _, key := range []string{"requests", "limits"} {
+		if got := resources[key].(map[string]any)[workloadmeta.ResourceTorchrunHostSlot]; fmt.Sprint(got) != "1" {
+			t.Errorf("%s host slot=%v, want 1", key, got)
+		}
+	}
+	affinity := pod["affinity"].(map[string]any)
+	required := affinity["podAntiAffinity"].(map[string]any)["requiredDuringSchedulingIgnoredDuringExecution"].([]any)
+	if len(required) != 1 {
+		t.Fatalf("required pod anti-affinity terms = %d, want 1", len(required))
+	}
+	term := required[0].(map[string]any)
+	if got := term["topologyKey"]; got != "kubernetes.io/hostname" {
+		t.Errorf("anti-affinity topologyKey=%v, want kubernetes.io/hostname", got)
+	}
+	matchLabels := term["labelSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if got := matchLabels["batch.kubernetes.io/job-name"]; got != "ddp-multi" {
+		t.Errorf("anti-affinity job selector=%v, want ddp-multi", got)
 	}
 
 	// Verify torchrun command args.
@@ -2855,6 +2956,38 @@ func TestRender_MultiNode_SingleNode_NoIndexedJob(t *testing.T) {
 	s := string(out)
 	if !strings.Contains(s, "--standalone") {
 		t.Errorf("Nodes=1 should use --standalone:\n%s", s)
+	}
+	pod := jobSpec["template"].(map[string]any)["spec"].(map[string]any)
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	for _, key := range []string{"requests", "limits"} {
+		if _, ok := resources[key].(map[string]any)[workloadmeta.ResourceTorchrunHostSlot]; ok {
+			t.Errorf("Nodes=1 should not set %s host slot", key)
+		}
+	}
+	if _, ok := pod["affinity"]; ok {
+		t.Error("Nodes=1 should not set pod affinity")
+	}
+}
+
+func TestRender_PythonJob_NoTorchrunHostSlot(t *testing.T) {
+	out, err := Render(multiGPUProfile(1), Options{
+		Name:      "python-job",
+		Namespace: "tau",
+		Command:   []string{"python", "train.py"},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	job := parseMultiDocYAML(t, out)[0]
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	for _, key := range []string{"requests", "limits"} {
+		if _, ok := resources[key].(map[string]any)[workloadmeta.ResourceTorchrunHostSlot]; ok {
+			t.Errorf("ordinary Python Job should not set %s host slot", key)
+		}
+	}
+	if _, ok := pod["affinity"]; ok {
+		t.Error("ordinary Python Job should not set pod affinity")
 	}
 }
 

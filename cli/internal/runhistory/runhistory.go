@@ -159,6 +159,7 @@ type Record struct {
 	WorkspaceID        string            `json:"workspace_id,omitempty"`
 	ResultScope        string            `json:"result_scope,omitempty"`
 	Project            string            `json:"project,omitempty"`
+	ExperimentID       string            `json:"experiment_id,omitempty"`
 	Group              string            `json:"run_group_id,omitempty"`
 	Tags               map[string]string `json:"tags,omitempty"`
 	OwnerKind          string            `json:"owning_resource_kind"`
@@ -832,6 +833,7 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		WorkspaceID:     first(annotations[experiment.AnnotationWorkspaceID], labels[workloadmeta.LabelWorkspace], defaultWorkspaceID),
 		ResultScope:     first(annotations[experiment.AnnotationResultScope], defaultResultScope),
 		Project:         project,
+		ExperimentID:    experimentID,
 		Group:           text(annotations[experiment.AnnotationStellarGroup]),
 		Tags:            stellarTags(annotations[experiment.AnnotationStellarTags]),
 		OwnerKind:       ownerKindValue,

@@ -22,6 +22,9 @@ const (
 	preferredTopologyAnnotation = "kueue.x-k8s.io/podset-preferred-topology"
 	unconstrainedTopologyAnnot  = "kueue.x-k8s.io/podset-unconstrained-topology"
 	hostnameTopology            = "kubernetes.io/hostname"
+	acceleratorDomainTopology   = "tau.azure.com/accelerator-domain"
+	networkDomainTopology       = "tau.azure.com/network-domain"
+	siteTopology                = "tau.azure.com/site"
 	defaultElasticPodPriority   = "taugrid-default"
 	DefaultElasticWorkloadPrio  = "taugrid-default"
 	DefaultTrainPodPriority     = "taugrid-default"
@@ -112,19 +115,6 @@ func WithoutKueueTopologyAnnotations(annotations map[string]string) map[string]s
 
 var labelValueRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9_.]*[a-z0-9])?$`)
 
-// legacyGPUClassAliases maps pre-canonical gpu_class spellings -- which
-// folded interconnect/placement terms (NVLink, standalone) into the
-// hardware name -- to their canonical, hardware-only replacement. These
-// aliases exist only for one compatibility window: NormalizeGPUClass accepts
-// them as input so existing profiles/configs/presets keep working, but every
-// validation, rendering, status, and explain surface operates on the
-// canonical value, and no new aliases should be added here.
-var legacyGPUClassAliases = map[string]string{
-	"a100-nvlink-80gb":     GPUClassA10080GB,
-	"h100-standalone-95gb": GPUClassH10095GB,
-	"h200-nvlink-141gb":    GPUClassH200141GB,
-}
-
 var supportedGPUClasses = []string{
 	GPUClassAny,
 	GPUClassA104GB,
@@ -145,23 +135,14 @@ func SupportedGPUClasses() []string {
 	return append([]string(nil), supportedGPUClasses...)
 }
 
-// NormalizeGPUClass maps a researcher-supplied gpu_class value (from a CLI
-// flag, run config, preset, or profile Topology.GPUClass) to its
-// canonical hardware-only spelling. It returns the canonical value and
-// whether the input was a deprecated legacy alias that should be migrated.
-// Unrecognized values (including "any" and already-canonical values) are
-// returned unchanged with deprecatedAlias=false; callers still run the
-// result through validEnum to reject truly invalid classes.
-func NormalizeGPUClass(v string) (canonical string, deprecatedAlias bool) {
-	normalized := normalizeLabelValue(v)
-	if mapped, ok := legacyGPUClassAliases[normalized]; ok {
-		return mapped, true
-	}
-	return normalized, false
+// NormalizeGPUClass normalizes researcher-supplied gpu_class spelling before
+// callers validate it against SupportedGPUClasses.
+func NormalizeGPUClass(v string) string {
+	return normalizeLabelValue(v)
 }
 
 func IsSupportedGPUClass(v string) bool {
-	canonical, _ := NormalizeGPUClass(v)
+	canonical := NormalizeGPUClass(v)
 	for _, supported := range supportedGPUClasses {
 		if canonical == supported {
 			return true
@@ -171,7 +152,7 @@ func IsSupportedGPUClass(v string) bool {
 }
 
 func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) error {
-	canonical, _ := NormalizeGPUClass(gpuClass)
+	canonical := NormalizeGPUClass(gpuClass)
 	selected := strings.TrimSpace(selector[workloadmeta.NodeLabelGPUClass])
 	if selected == "" || canonical == "" {
 		return nil
@@ -187,7 +168,7 @@ func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) e
 
 // ResolveGPUClass returns the effective canonical gpu_class after applying an
 // explicit override to a profile's topology contract.
-func ResolveGPUClass(p profile.Profile, override string) (string, bool) {
+func ResolveGPUClass(p profile.Profile, override string) string {
 	gpuClass := p.Topology.GPUClass
 	if override != "" {
 		gpuClass = override
@@ -213,9 +194,6 @@ type Options struct {
 	// PriorityTier is a user-facing shorthand for Tau-managed priority classes.
 	// Supported values are "default" and "priority".
 	PriorityTier string
-	// RequiredTopology is a platform-owned ResourceFlavor requirement copied to
-	// generated GPU pod templates after live queue resolution.
-	RequiredTopology string
 	// DisableKueueTopologyAnnotations keeps Tau's topology labels/explainability
 	// while omitting Kueue TAS podset annotations. Use this when the selected
 	// ResourceFlavor does not define spec.topologyName; Kueue rejects podset
@@ -224,6 +202,26 @@ type Options struct {
 	// DisableDefaultPriorities omits TauGrid default priority classes unless the
 	// caller/preset supplied explicit priority names.
 	DisableDefaultPriorities bool
+}
+
+// WithNetworkDomainRequirement makes a network fabric the broadest placement
+// allowed for a workload. Explicit host or accelerator-domain placement is
+// preserved because those domains are narrower than a network domain. The TAS
+// annotation cannot be disabled for a workload that requires a network domain.
+func WithNetworkDomainRequirement(p profile.Profile, o Options) Options {
+	placement := o.Placement
+	if strings.TrimSpace(placement) == "" {
+		placement = p.Topology.Placement
+	}
+	switch normalizeLabelValue(placement) {
+	case profile.PlacementSameHost,
+		profile.PlacementSameAcceleratorDomain,
+		profile.PlacementSameNetworkDomain:
+	case "", profile.PlacementUnconstrained, profile.PlacementSameSite:
+		o.Placement = profile.PlacementSameNetworkDomain
+	}
+	o.DisableKueueTopologyAnnotations = false
+	return o
 }
 
 // Plan is the topology-aware scheduling decoration Render should apply.
@@ -241,6 +239,12 @@ type Plan struct {
 func Build(p profile.Profile, o Options) (Plan, error) {
 	if p.Topology == (profile.Topology{}) && p.Lane == "" && !o.hasValues() {
 		return Plan{}, nil
+	}
+	if o.PriorityTier != "" &&
+		(o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.DisableDefaultPriorities) {
+		return Plan{}, fmt.Errorf(
+			"priority tier cannot be combined with explicit priority classes or disabled default priorities",
+		)
 	}
 
 	spec := contractFromProfile(p)
@@ -282,33 +286,16 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	}
 
 	if !spec.disableKueueTopology {
-		if spec.requiredTopology != "" {
-			plan.Annotations[requiredTopologyAnnotation] = spec.requiredTopology
-		}
 		switch spec.placement {
-		case "single-node-nvlink":
-			if spec.requiredTopology != "" && spec.requiredTopology != hostnameTopology {
-				return Plan{}, fmt.Errorf(
-					"profile %q topology: ResourceFlavor requires %s=%q, but placement=single-node-nvlink requires %q",
-					p.Name, requiredTopologyAnnotation, spec.requiredTopology, hostnameTopology)
-			}
+		case profile.PlacementSameHost:
 			plan.Annotations[requiredTopologyAnnotation] = hostnameTopology
-		case "multi-node-nccl":
-			if spec.requiredTopology != "" {
-				return Plan{}, fmt.Errorf(
-					"profile %q topology: ResourceFlavor requires %s=%q, which conflicts with placement=multi-node-nccl",
-					p.Name, requiredTopologyAnnotation, spec.requiredTopology)
-			}
-			// Multi-node gangs must span hosts. The managed worker Topologies
-			// expose hostname only, so an explicit hostname preference would
-			// first try to co-locate the gang and broader levels are invalid.
-			plan.Annotations[unconstrainedTopologyAnnot] = "true"
-		case "independent", "elastic-workers":
-			if spec.requiredTopology != "" {
-				return Plan{}, fmt.Errorf(
-					"profile %q topology: ResourceFlavor requires %s=%q, which conflicts with placement=%s",
-					p.Name, requiredTopologyAnnotation, spec.requiredTopology, spec.placement)
-			}
+		case profile.PlacementSameAcceleratorDomain:
+			plan.Annotations[requiredTopologyAnnotation] = acceleratorDomainTopology
+		case profile.PlacementSameNetworkDomain:
+			plan.Annotations[requiredTopologyAnnotation] = networkDomainTopology
+		case profile.PlacementSameSite:
+			plan.Annotations[requiredTopologyAnnotation] = siteTopology
+		case profile.PlacementUnconstrained:
 			plan.Annotations[unconstrainedTopologyAnnot] = "true"
 		}
 	}
@@ -328,7 +315,6 @@ type contract struct {
 	podPriorityClassName      string
 	workloadPriorityClassName string
 	priorityTier              string
-	requiredTopology          string
 	disableKueueTopology      bool
 	disableDefaultPriorities  bool
 }
@@ -378,9 +364,6 @@ func (c *contract) apply(o Options) {
 		c.workloadPriorityClassName = ""
 		c.podPriorityClassName = ""
 	}
-	if o.RequiredTopology != "" {
-		c.requiredTopology = strings.TrimSpace(o.RequiredTopology)
-	}
 	if o.WorkloadPriorityClassName != "" {
 		c.workloadPriorityClassName = o.WorkloadPriorityClassName
 	}
@@ -401,7 +384,7 @@ func (c *contract) normalize() {
 	c.mode = normalizeLabelValue(c.mode)
 	c.placement = normalizeLabelValue(c.placement)
 	c.shape = normalizeLabelValue(c.shape)
-	c.gpuClass, _ = NormalizeGPUClass(c.gpuClass)
+	c.gpuClass = NormalizeGPUClass(c.gpuClass)
 	c.queue = normalizeLabelValue(c.queue)
 	c.podPriorityClassName = normalizeLabelValue(c.podPriorityClassName)
 	c.workloadPriorityClassName = normalizeLabelValue(c.workloadPriorityClassName)
@@ -488,7 +471,15 @@ func (c contract) validate(profileName string) error {
 		}
 	}
 	if c.placement != "" {
-		if err := validEnum("placement", c.placement, "independent", "single-node-nvlink", "multi-node-nccl", "elastic-workers"); err != nil {
+		if err := validEnum(
+			"placement",
+			c.placement,
+			profile.PlacementUnconstrained,
+			profile.PlacementSameHost,
+			profile.PlacementSameAcceleratorDomain,
+			profile.PlacementSameNetworkDomain,
+			profile.PlacementSameSite,
+		); err != nil {
 			return fmt.Errorf("profile %q topology: %w", profileName, err)
 		}
 	}
@@ -521,8 +512,8 @@ func (c contract) validate(profileName string) error {
 		if c.gpuClass == GPUClassH200141GB {
 			return fmt.Errorf("profile %q topology: elastic jobs cannot request scarce %s", profileName, GPUClassH200141GB)
 		}
-		if c.placement != "" && c.placement != "independent" && c.placement != "elastic-workers" {
-			return fmt.Errorf("profile %q topology: mode=elastic must use independent or elastic-workers placement, got %q", profileName, c.placement)
+		if c.placement != "" && c.placement != profile.PlacementUnconstrained {
+			return fmt.Errorf("profile %q topology: mode=elastic must use unconstrained placement, got %q", profileName, c.placement)
 		}
 	}
 	if c.lane == "elastic" && c.mode != "elastic" {
@@ -551,7 +542,7 @@ func (o Options) hasValues() bool {
 	return o.Team != "" || o.Lane != "" || o.Mode != "" || o.Placement != "" ||
 		o.Shape != "" || o.GPUClass != "" || o.CheckpointEvery != "" || o.QueueName != "" ||
 		o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.PriorityTier != "" ||
-		o.RequiredTopology != "" || o.DisableKueueTopologyAnnotations || o.DisableDefaultPriorities
+		o.DisableKueueTopologyAnnotations || o.DisableDefaultPriorities
 }
 
 func normalizeLabelValue(v string) string {

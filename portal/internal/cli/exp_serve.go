@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -46,6 +47,7 @@ type expServeOptions struct {
 	maxRuns                int
 	maxMetricRows          int
 	timeout                time.Duration
+	cursorSigningKey       []byte
 	open                   bool
 }
 
@@ -111,6 +113,7 @@ func defaultExpServeOptions() expServeOptions {
 		maxRuns:                expapi.DefaultMaxRuns,
 		maxMetricRows:          expapi.DefaultMaxMetricRows,
 		timeout:                expapi.DefaultRequestTimeout,
+		cursorSigningKey:       []byte(os.Getenv("TAUGRID_STELLAR_CURSOR_SIGNING_KEY")),
 	}
 }
 
@@ -158,9 +161,7 @@ func (opts expServeOptions) nativeKustoQuery() func(ctx context.Context, query s
 		return nil
 	}
 	database := strings.TrimSpace(opts.kustoDatabase)
-	return func(ctx context.Context, query string) (string, error) {
-		return kustoquery.RunADXQuery(ctx, endpoint, database, query)
-	}
+	return kustoquery.NewRawSDKQuery(endpoint, database)
 }
 
 func newExpServerFromOptions(storePath *string, opts expServeOptions) (*expapi.Server, error) {
@@ -196,6 +197,7 @@ func (opts expServeOptions) toExpapiOptions(storePath *string) expapi.Options {
 		MaxRuns:                opts.maxRuns,
 		MaxMetricRows:          opts.maxMetricRows,
 		RequestTimeout:         opts.timeout,
+		CursorSigningKey:       opts.cursorSigningKey,
 	}
 }
 

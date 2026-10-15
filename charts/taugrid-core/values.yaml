@@ -24,9 +24,8 @@ logging:
 # class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class
 # to a canonical policy.gpu_class value, and matching GPU nodes must carry the
 # same label. ResourceFlavor metadata.name is platform-owned and is never parsed
-# as the researcher gpu_class API. TAS-only flavors must declare both
-# topologyName and requiredTopology; Tau copies the latter to generated GPU pod
-# templates as kueue.x-k8s.io/podset-required-topology.
+# as the researcher gpu_class API. TAS-capable flavors declare topologyName;
+# each workload's policy.topology selects its own required topology level.
 resourceFlavors:
   enabled: false
   items: []
@@ -116,7 +115,7 @@ stellar:
     # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
     # Release image tags follow this chart's version.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: "0.4.2"
+    tag: "0.4.4"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   deploymentAnnotations: {}
@@ -235,7 +234,7 @@ lifecycleRecorder:
     # Release image tags follow this chart's version. Set tag to "" when
     # overriding digest with an immutable sha256 reference.
     repository: mcr.microsoft.com/aks/ai-runtime/tau
-    tag: "0.4.2"
+    tag: "0.4.4"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -433,7 +432,7 @@ portal:
     # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     # Release image tags follow this chart's version.
-    tag: "0.4.2"
+    tag: "0.4.4"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []

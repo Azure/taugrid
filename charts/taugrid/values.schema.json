@@ -66,10 +66,6 @@
             "name": {
               "type": "string",
               "minLength": 1
-            },
-            "requiredLevel": {
-              "type": "string",
-              "minLength": 1
             }
           }
         },

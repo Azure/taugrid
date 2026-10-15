@@ -27,13 +27,24 @@ run "adx_without_recorder" {
   command = plan
 
   variables {
-    enable_adx = true
+    enable_adx      = true
+    install_taugrid = false
   }
 
   assert {
     condition     = length(azapi_resource.lifecycle_recorder_principal_assignment) == 0 && length(azurerm_user_assigned_identity.lifecycle_recorder) == 0
     error_message = "ADX alone must not enable lifecycle recording."
   }
+}
+
+run "taugrid_adx_requires_recorder" {
+  command = plan
+
+  variables {
+    enable_adx = true
+  }
+
+  expect_failures = [var.enable_lifecycle_recorder]
 }
 
 run "fresh_recorder" {

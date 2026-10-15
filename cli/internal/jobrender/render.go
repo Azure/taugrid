@@ -176,7 +176,7 @@ type Options struct {
 	// SecurityMode applies the typed runtime.security contract.
 	SecurityMode string
 
-	// RDMA opts the Job into RDMA device resources and injects the
+	// RDMA opts the Job into network-domain topology placement and injects the
 	// IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities NCCL NET/IB needs.
 	RDMA RDMAOptions
 
@@ -210,7 +210,7 @@ type Options struct {
 	// CLI callers can override the researcher-facing intent here. Render turns
 	// this into protected Kueue queue/topology metadata and rejects unsafe
 	// combinations (for example elastic jobs without checkpoints, or eval on
-	// scarce H200 NVLink capacity).
+	// scarce H200 capacity).
 	Team            string
 	Lane            string
 	Mode            string
@@ -224,7 +224,6 @@ type Options struct {
 	// gpu.nvidia.com). It does not alter rendered pod resources.
 	GPUResourceName                 string
 	PriorityTier                    string
-	RequiredTopology                string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
 	DisableKueueTopologyAnnotations bool
@@ -281,7 +280,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	topologyPlan, err := topology.Build(p, topology.Options{
+	topologyOptions := topology.Options{
 		Team:                            o.Team,
 		Lane:                            o.Lane,
 		Mode:                            o.Mode,
@@ -291,12 +290,15 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		CheckpointEvery:                 o.CheckpointEvery,
 		QueueName:                       o.QueueName,
 		PriorityTier:                    o.PriorityTier,
-		RequiredTopology:                o.RequiredTopology,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,
 		DisableDefaultPriorities:        o.DisableDefaultPriorities,
-	})
+	}
+	if o.RDMA.Enabled {
+		topologyOptions = topology.WithNetworkDomainRequirement(p, topologyOptions)
+	}
+	topologyPlan, err := topology.Build(p, topologyOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -776,6 +778,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if o.TerminationGracePeriodSeconds > 0 {
 		grace = o.TerminationGracePeriodSeconds
 	}
+	if o.MetricsOffload.Enabled() {
+		grace = metricsoffload.ShutdownGracePeriodSeconds(o.MetricsOffload.DoneTimeout, grace)
+	}
 	pod["terminationGracePeriodSeconds"] = grace
 	if tols := gpuTolerations(gpu.Count); len(tols) > 0 {
 		pod["tolerations"] = tols
@@ -868,8 +873,8 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	applyContainerResourceOverrides(resources, o)
 	profile.AddGPUResources(resources, gpu.Count)
-	if o.RDMA.Enabled {
-		addRDMAResources(resources, o.RDMA)
+	if o.Launcher == "torchrun" && o.Nodes > 1 {
+		addIntegerResource(resources, workloadmeta.ResourceTorchrunHostSlot, 1)
 	}
 	if len(resources) > 0 {
 		container["resources"] = resources
@@ -1011,6 +1016,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	if o.Nodes > 1 {
 		pod["subdomain"] = o.Name + HeadlessSuffix
+	}
+	if o.Launcher == "torchrun" && o.Nodes > 1 {
+		pod["affinity"] = torchrunHostAntiAffinity(o.Name)
 	}
 
 	jobSpec := map[string]any{
@@ -1234,14 +1242,29 @@ func applyContainerResourceOverrides(resources map[string]any, o Options) {
 	}
 }
 
-func addRDMAResources(resources map[string]any, rdma RDMAOptions) {
-	requests := copyResourceQuantities(resources["requests"])
-	limits := copyResourceQuantities(resources["limits"])
-	count := strconv.Itoa(rdma.Count)
-	requests[rdma.ResourceName] = count
-	limits[rdma.ResourceName] = count
-	resources["requests"] = requests
-	resources["limits"] = limits
+func addIntegerResource(resources map[string]any, name string, value int) {
+	for _, key := range []string{"requests", "limits"} {
+		values := copyResourceQuantities(resources[key])
+		values[name] = value
+		resources[key] = values
+	}
+}
+
+func torchrunHostAntiAffinity(jobName string) map[string]any {
+	return map[string]any{
+		"podAntiAffinity": map[string]any{
+			"requiredDuringSchedulingIgnoredDuringExecution": []any{
+				map[string]any{
+					"labelSelector": map[string]any{
+						"matchLabels": map[string]any{
+							"batch.kubernetes.io/job-name": jobName,
+						},
+					},
+					"topologyKey": "kubernetes.io/hostname",
+				},
+			},
+		},
+	}
 }
 
 func copyResourceQuantities(existing any) map[string]any {

@@ -14,7 +14,6 @@ import (
 const (
 	defaultRemoteWriteMetricName         = exptelemetry.RemoteWriteMetricName
 	DefaultRemoteWriteTable              = exptelemetry.RemoteWriteTable
-	defaultRemoteWriteDashboardFunction  = exptelemetry.RemoteWriteDashboardFunction
 	DefaultProjectionTable               = exptelemetry.ProjectionTable
 	defaultProjectionDashboardFunction   = exptelemetry.ProjectionDashboardFunction
 	DefaultRunLifecycleTable             = exptelemetry.RunLifecycleTable
@@ -55,6 +54,7 @@ var runLifecycleIngestionColumns = []RunLifecycleIngestionColumn{
 	{Column: "workspace_id", DataType: "string", Path: "$.workspace_id"},
 	{Column: "result_scope", DataType: "string", Path: "$.result_scope"},
 	{Column: "project", DataType: "string", Path: "$.project"},
+	{Column: "experiment_id", DataType: "string", Path: "$.experiment_id"},
 	{Column: "run_group_id", DataType: "string", Path: "$.run_group_id"},
 	{Column: "tags", DataType: "dynamic", Path: "$.tags"},
 	{Column: "owning_resource_kind", DataType: "string", Path: "$.owning_resource_kind"},
@@ -124,19 +124,12 @@ func BuildRemoteWriteSchemaKQL(opts SchemaOptions) (string, error) {
 	if !isKQLIdentifier(table) {
 		return "", fmt.Errorf("--remote-write-table must be a Kusto identifier")
 	}
-	return fmt.Sprintf(`// Tau exp adx-mon remote-write contract.
+	return fmt.Sprintf(`// Tau exp adx-mon remote-write table contract.
 // adx-mon creates this table from the Prometheus metric %s.
-// Dashboard queries expect the adx-mon normalized metric schema plus Labels:dynamic with Tau labels.
+// Direct legacy queries expect the adx-mon normalized metric schema plus Labels:dynamic with Tau labels.
 // The special metric_name %q is a Stellar-only run terminal-state marker.
 .create-merge table %s (Timestamp: datetime, SeriesId: long, Labels: dynamic, Value: real, Container: string, Namespace: string, Pod: string, Cluster: string, Host: string)
-
-.create-or-alter function with (folder = 'Tau/experiments', docstring = 'Normalize adx-mon %s rows to the Tau dashboard metric contract.', skipvalidation = 'true') %s()
-{
-%s
-| extend workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), source_store_id=tostring(Labels.source_store_id), ['project']=tostring(Labels['project']), experiment_id=coalesce(tostring(Labels.experiment_id), tostring(Labels.question_id), ''), run_group_id=tostring(Labels.run_group_id), run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), source=tostring(Labels.source), unit=tostring(Labels.unit), split=tostring(Labels.split), metric_file_id=tostring(Labels.metric_file_id), metric_file_path=tostring(Labels.metric_file_path), tags=tostring(Labels.tags), step=tolong(Labels.step), wall_time=Timestamp, value=todouble(Value)
-| project exported_at=Timestamp, workspace_id, cluster, source_store_id, metric_file_id, metric_file_path, ['project'], experiment_id, run_group_id, run_id, metric_name, step, wall_time, value, unit, source, split, tags
-}
-`, defaultRemoteWriteMetricName, RunStatusMetricName, table, defaultRemoteWriteMetricName, defaultRemoteWriteDashboardFunction, table), nil
+`, defaultRemoteWriteMetricName, RunStatusMetricName, table), nil
 }
 
 func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
@@ -163,6 +156,7 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
     workspace_id: string,
     result_scope: string,
     ['project']: string,
+    experiment_id: string,
     run_group_id: string,
     tags: dynamic,
     owning_resource_kind: string,
@@ -211,7 +205,7 @@ func BuildRunLifecycleSchemaKQL(opts SchemaOptions) (string, error) {
 | summarize arg_max(observed_at, *) by cluster, namespace, durable_identity, is_terminal
 | extend terminal_rank=iff(is_terminal, 1, 0)
 | summarize arg_max(terminal_rank, *) by cluster, namespace, durable_identity
-| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
+| project observed_at, observation_id, run_id, durable_id=durable_identity, workspace_id, result_scope, ['project'], experiment_id, run_group_id, tags, owning_resource_kind, owning_resource_name, namespace, cluster, local_queue, cluster_queue, workload_kind, resource_uid, resource_version, generation, submit_time, created_time, kueue_admitted_time, pod_start_time, first_metric_time, latest_metric_time, completion_time, state, reason, message, artifact_uri, checkpoint_uri, image, image_digest, config_hash, code_sha, tau_command, result_path, result_pvc, experiment_tracking, experiment_source, controller_version
 }
 `, defaultRunLifecycleDashboardFunction, table)
 	return prefix + mapping + "\n" + suffix, nil

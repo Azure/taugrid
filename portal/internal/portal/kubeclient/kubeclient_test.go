@@ -22,7 +22,7 @@ func TestProfileSetGetsSingletonTauClusterThroughDynamicClient(t *testing.T) {
 	resolved := profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{
 			Name: "research", GPUsPerWorker: 1, WorkerCount: 1,
-			Mode: profile.ModeFixed, Placement: profile.PlacementIndependent,
+			Mode: profile.ModeFixed, Placement: profile.PlacementUnconstrained,
 			DefaultLocalQueue: "jobqueue", ExecutionTarget: profile.ExecutionTargetSingleCluster,
 			Priorities: profile.ProfilePriorities{DisableDefaultPriorities: true},
 		},

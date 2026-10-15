@@ -124,9 +124,14 @@ default and needs `--apply` to take effect. Workspace desired state is a native
 
 `tau workspace create` requires `--principal-name <external-group-or-team>`;
 `--subject-name` defaults to that principal when it is omitted.
-`tau workspace connection` verifies and pins the current project's configured
-workspace access. Add `--offline` to validate only the repository mapping and
-descriptor; `tau run` also discovers and configures the connection automatically.
+`tau workspace connection` verifies and pins the current project's effective
+workspace access. `tau workspace connection assign [workspace]` creates a
+machine-local assignment from an already verified connection or a workspace
+visible through `--context`; `assign --current` reuses the last repository
+connection Tau activated. `inspect` reports whether the effective source is a
+checked-in descriptor or local assignment and supports `--output json`.
+`clear --yes` removes only the local assignment. Checked-in descriptors always
+take precedence, and `tau run` uses the same resolution automatically.
 
 ## `tau run`
 
@@ -202,6 +207,11 @@ experiment`; only the binary name differs.
 
 `taugrid-portal portal serve` serves the unified observability portal
 (Experiments, Jobs/Queue, Cluster Health) from the same binary.
+The native `/portal/experiments` workflow is the supported browser UI.
+`experiment stellar -o html`, `experiment open`, the `dashboard` alias, and the
+snapshot-shaped APIs remain compatibility surfaces while CLI/TUI/report
+consumers migrate; new browser integrations should use the canonical narrow
+`/api/v2/stellar` reads.
 
 `taugrid-portal experiment` and the hidden compatibility alias `exp` share the
 same command tree, so `--help` also surfaces `offload`, `kusto`, `autocapture`,

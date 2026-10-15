@@ -94,6 +94,14 @@ func applySelectedWorkloadProfile(
 	selection profile.Selection,
 	renderProfile profile.Profile,
 ) (unresolvedRunOptions, error) {
+	if strings.TrimSpace(o.priorityTier) != "" &&
+		(strings.TrimSpace(o.workloadPriorityClass) != "" ||
+			strings.TrimSpace(o.podPriorityClass) != "" ||
+			o.disableDefaultPriorities) {
+		return o, fmt.Errorf(
+			"priority tier cannot be combined with explicit priority classes or disabled default priorities",
+		)
+	}
 	conflicts := []struct {
 		field    string
 		key      string
@@ -130,12 +138,6 @@ func applySelectedWorkloadProfile(
 			o.disableDefaultPriorities,
 			selection.Profile.Name,
 			renderProfile.Topology.DisableDefaultPriorities,
-		)
-	}
-	if policyFieldWasExplicit(o, "priority_tier", strings.TrimSpace(o.priorityTier) != "") {
-		return o, fmt.Errorf(
-			"policy.priority_tier cannot be combined with authoritative priority classes from workload profile %q; remove policy.priority_tier",
-			selection.Profile.Name,
 		)
 	}
 	for _, unsupported := range []struct {
@@ -203,10 +205,15 @@ func applySelectedWorkloadProfile(
 	o.queue = renderProfile.Queue
 	o.mode = renderProfile.Topology.Mode
 	o.topology = renderProfile.Topology.Placement
-	o.priorityTier = ""
-	o.workloadPriorityClass = renderProfile.Topology.WorkloadPriorityClassName
-	o.podPriorityClass = renderProfile.Topology.PodPriorityClassName
-	o.disableDefaultPriorities = renderProfile.Topology.DisableDefaultPriorities
+	if strings.TrimSpace(o.priorityTier) != "" {
+		o.workloadPriorityClass = ""
+		o.podPriorityClass = ""
+		o.disableDefaultPriorities = false
+	} else {
+		o.workloadPriorityClass = renderProfile.Topology.WorkloadPriorityClassName
+		o.podPriorityClass = renderProfile.Topology.PodPriorityClassName
+		o.disableDefaultPriorities = renderProfile.Topology.DisableDefaultPriorities
+	}
 	clusterQueue := ""
 	if o.selectedWorkloadProfile != nil {
 		clusterQueue = o.selectedWorkloadProfile.ClusterQueue

@@ -535,6 +535,16 @@ main directly and builds this repository's `images/gpu-metrics-collector`.
 Publication is restricted to merged main so a chart cannot activate collector
 behavior from an unmerged or pre-rebase source commit. That repository holds no
 copy of the collector source, so there is no second source tree to keep in sync.
+The external repository is the publication boundary and is not an additional
+deployment reference in this repository. Within TauGrid, the image is rendered
+only as the `metrics-collector` sidecar in each GPU monitoring DaemonSet,
+alongside node-problem-detector; there is no separate NPD overlay here.
+
+The default digest
+`sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef`
+was verified with `docker buildx imagetools inspect` on 2026-10-05 and contains
+both `linux/amd64` and `linux/arm64`. Future digest updates must repeat that
+inspection before rollout; a mutable tag is not sufficient evidence.
 
 Release ordering:
 

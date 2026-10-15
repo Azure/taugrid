@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -282,7 +283,7 @@ func TestRayJobShapeAndKueueAdmission(t *testing.T) {
 	if record.LocalQueue != "jobqueue" || record.ClusterQueue != "taugrid-cq" || !record.AdmittedAt.Equal(admitted) {
 		t.Fatalf("Kueue data = %+v", record)
 	}
-	if record.ExperimentTracking != "tracked" || record.ExperimentSource != "stellar" || record.WorkspaceID != "sample" || record.ResultScope != "az://results/research" || record.Tags["dataset"] != "fineweb" {
+	if record.ExperimentID != "q-42" || record.ExperimentTracking != "tracked" || record.ExperimentSource != "stellar" || record.WorkspaceID != "sample" || record.ResultScope != "az://results/research" || record.Tags["dataset"] != "fineweb" {
 		t.Fatalf("Stellar metadata = %+v", record)
 	}
 }
@@ -462,7 +463,7 @@ func TestResourceVersionOnlyUpdateIsNotATransition(t *testing.T) {
 
 func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 	record := Record{
-		Group: "group", OwnerKind: "Job", OwnerName: "run",
+		ExperimentID: "experiment", Group: "group", OwnerKind: "Job", OwnerName: "run",
 		SubmittedAt: time.Unix(1, 0).UTC(), CreatedAt: time.Unix(2, 0).UTC(),
 		AdmittedAt: time.Unix(3, 0).UTC(), PodStartedAt: time.Unix(4, 0).UTC(),
 		CompletionAt: time.Unix(5, 0).UTC(),
@@ -473,7 +474,7 @@ func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 	}
 	encoded := string(data)
 	for _, field := range []string{
-		`"run_group_id"`, `"owning_resource_kind"`,
+		`"experiment_id"`, `"run_group_id"`, `"owning_resource_kind"`,
 		`"owning_resource_name"`, `"submit_time"`, `"created_time"`,
 		`"kueue_admitted_time"`, `"pod_start_time"`, `"completion_time"`,
 	} {
@@ -486,7 +487,7 @@ func TestRecordJSONMatchesLifecycleSchema(t *testing.T) {
 func TestLifecycleMappingReferencesRecordFields(t *testing.T) {
 	record := Record{
 		ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "observation", DurableID: "durable", RunID: "run",
-		WorkspaceID: "workspace", ResultScope: "scope", Project: "project",
+		WorkspaceID: "workspace", ResultScope: "scope", Project: "project", ExperimentID: "experiment",
 		Group: "group", Tags: map[string]string{"key": "value"},
 		OwnerKind: "Job", OwnerName: "job", Namespace: "ray", Cluster: "cluster",
 		ResourceUID: "uid", ResourceVersion: "1", Generation: 1,
@@ -508,17 +509,26 @@ func TestLifecycleMappingReferencesRecordFields(t *testing.T) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, mapping := range expkusto.RunLifecycleIngestionMapping() {
+	mappingColumns := lifecycleIngestionMapping()
+	for _, mapping := range mappingColumns {
 		path := strings.TrimPrefix(mapping.Path, "$.")
 		if _, ok := fields[path]; !ok {
 			t.Fatalf("ingestion mapping column %q references missing record field %q", mapping.Column, path)
 		}
 	}
+	if !slices.ContainsFunc(mappingColumns, func(mapping expkusto.RunLifecycleIngestionColumn) bool {
+		return mapping.Column == "experiment_id" && mapping.DataType == "string" && mapping.Path == "$.experiment_id"
+	}) {
+		t.Fatalf("inline lifecycle mapping does not persist experiment_id: %#v", mappingColumns)
+	}
+	if got := fields["experiment_id"]; got != "experiment" {
+		t.Fatalf("lifecycle payload experiment_id = %v, want experiment", got)
+	}
 }
 
 func TestMarshalLifecycleRecordsUsesNDJSON(t *testing.T) {
 	data, err := marshalLifecycleRecords([]Record{
-		{ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "one", State: StateQueued},
+		{ObservedAt: time.Unix(1, 0).UTC(), ObservationID: "one", ExperimentID: "experiment", State: StateQueued},
 		{ObservedAt: time.Unix(2, 0).UTC(), ObservationID: "two", State: StateSucceeded},
 	})
 	if err != nil {
@@ -532,6 +542,9 @@ func TestMarshalLifecycleRecordsUsesNDJSON(t *testing.T) {
 		var row map[string]any
 		if err := json.Unmarshal([]byte(line), &row); err != nil {
 			t.Fatalf("NDJSON line %q is not a JSON object: %v", line, err)
+		}
+		if row["observation_id"] == "one" && row["experiment_id"] != "experiment" {
+			t.Fatalf("queued lifecycle payload dropped experiment_id: %v", row)
 		}
 	}
 	if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {

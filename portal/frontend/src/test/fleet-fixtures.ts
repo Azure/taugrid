@@ -63,7 +63,6 @@ export const fleetNodes: Nodes = {
       gpuProduct: 'NVIDIA H200',
       ready: true,
       schedulable: true,
-      rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
       operationalConditions: observedConditions(),
     },
     {
@@ -86,7 +85,6 @@ export const fleetNodes: Nodes = {
       gpuProduct: 'NVIDIA H200',
       ready: true,
       schedulable: true,
-      rdmaResources: [{ name: 'rdma/rdma_shared_device_a', capacity: 1, allocatable: 1 }],
       operationalConditions: observedConditions('GPUNVLinkReplayErrors')
         .filter(condition => condition.type !== 'NvidiaDeviceFilesProblem')
         .reverse(),
@@ -162,3 +160,57 @@ export const fleetNodeUtil: NodeUtil = {
     },
   ],
 };
+
+export function largeFleetFixture(nodeCount: number, gpusPerNode = 8) {
+  const siteCount = 8;
+  const poolsPerSite = 4;
+  const nodes = Array.from({ length: nodeCount }, (_, index) => {
+    const siteIndex = index % siteCount;
+    const poolIndex = Math.floor(index / siteCount) % poolsPerSite;
+    return {
+      ...fleetNodes.nodes[0],
+      name: `gpu-node-${String(index).padStart(4, '0')}`,
+      agentPool: `pool-${poolIndex}`,
+      site: `site-${siteIndex}`,
+      region: `region-${siteIndex % 2}`,
+      zone: `zone-${siteIndex % 4}`,
+      gpuCapacity: gpusPerNode,
+      gpuAllocatable: gpusPerNode,
+      gpuAllocated: index % 2 ? gpusPerNode : 0,
+      gpuAvailable: index % 2 ? 0 : gpusPerNode,
+      operationalConditions: observedConditions(),
+    };
+  });
+  const totalGPUs = nodeCount * gpusPerNode;
+  const allocatedGPUs = Math.floor(nodeCount / 2) * gpusPerNode;
+  return {
+    nodes: {
+      ...fleetNodes,
+      totalNodes: nodeCount,
+      readyNodes: nodeCount,
+      gpuNodes: nodeCount,
+      totalGPUs,
+      gpuAllocatable: totalGPUs,
+      gpuSchedulable: totalGPUs,
+      gpuAllocated: allocatedGPUs,
+      gpuAvailable: totalGPUs - allocatedGPUs,
+      totalCPUCores: nodeCount * 40,
+      totalMemoryGiB: nodeCount * 314.7,
+      rdmaAdvertisedGpuNodes: nodeCount,
+      nodes,
+    } satisfies Nodes,
+    gpuHealth: {
+      ...fleetGPUHealth,
+      totalGPUs: 0,
+      errorGPUs: 0,
+      utilizationObservedGPUs: 0,
+      healthObservedGPUs: 0,
+      models: [],
+      gpus: [],
+    } satisfies Cluster,
+    nodeUtil: {
+      ...fleetNodeUtil,
+      nodes: [],
+    } satisfies NodeUtil,
+  };
+}

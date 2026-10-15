@@ -121,6 +121,64 @@ policy:
 `)
 	installFakeRoutingKubectl(t, "catalog-namespace")
 	configDir := installCachedRoutingConnection(t, root, "catalog-namespace")
+	t.Run("local project assignment lifecycle", func(t *testing.T) {
+		localRoot := t.TempDir()
+		if output, err := exec.Command("git", "-C", localRoot, "init", "--quiet").CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, output)
+		}
+		assign := runTauRoutingSubprocess(
+			t,
+			localRoot,
+			"workspace",
+			"connection",
+			"assign",
+			"sample",
+		)
+		if assign.err != nil {
+			t.Fatalf("assign: %v\nstderr:\n%s", assign.err, assign.stderr)
+		}
+		if !strings.Contains(assign.stdout, "Assigned.") ||
+			!strings.Contains(assign.stdout, "Workspace:     sample") {
+			t.Fatalf("assign output:\n%s", assign.stdout)
+		}
+		if _, err := os.Stat(filepath.Join(localRoot, "tau", "workspace.connection.yaml")); !os.IsNotExist(err) {
+			t.Fatalf("assignment wrote repository descriptor: %v", err)
+		}
+
+		inspect := runTauRoutingSubprocess(
+			t,
+			localRoot,
+			"workspace",
+			"connection",
+			"inspect",
+			"--output",
+			"json",
+		)
+		if inspect.err != nil {
+			t.Fatalf("inspect: %v\nstderr:\n%s", inspect.err, inspect.stderr)
+		}
+		var inspection workspaceConnectionInspection
+		if err := json.Unmarshal([]byte(inspect.stdout), &inspection); err != nil {
+			t.Fatalf("parse inspection: %v\n%s", err, inspect.stdout)
+		}
+		if inspection.Source != "local assignment" ||
+			inspection.Workspace != "sample" ||
+			inspection.Context != "aks-ai-runtime-flex" {
+			t.Fatalf("inspection = %#v", inspection)
+		}
+
+		clear := runTauRoutingSubprocess(
+			t,
+			localRoot,
+			"workspace",
+			"connection",
+			"clear",
+			"--yes",
+		)
+		if clear.err != nil {
+			t.Fatalf("clear: %v\nstderr:\n%s", clear.err, clear.stderr)
+		}
+	})
 	symlinkConfig := filepath.Join(root, "alpha", "experiments", "actual", "tau.yaml")
 	writeRunRoutingFile(t, symlinkConfig, fmt.Sprintf(`name: symlink-job
 engine: job

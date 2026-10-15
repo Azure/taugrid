@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Azure/taugrid/portal/internal/expapi"
 )
 
 func testWorkspaceDirectory(t *testing.T) WorkspaceDirectory {
@@ -132,6 +134,56 @@ func TestWorkspaceAwareStellarDelegatesLocalRouteWithScope(t *testing.T) {
 	}
 	if gotPath != "/api/stellar/experiments" || gotWorkspace != "alpha" || gotProject != "vision" || gotSource != "kusto" {
 		t.Fatalf("delegated route = path %q workspace %q project %q source %q", gotPath, gotWorkspace, gotProject, gotSource)
+	}
+}
+
+func TestSingleWorkspaceCanonicalStellarResolvesAutoSource(t *testing.T) {
+	native := func(context.Context, string) (string, error) { return "[]", nil }
+	tests := []struct {
+		name          string
+		opts          expapi.Options
+		wantCanonical string
+	}{
+		{name: "kusto available", opts: expapi.Options{Source: "auto", StorePath: t.TempDir(), KustoNativeQuery: native}, wantCanonical: "kusto"},
+		{name: "local only", opts: expapi.Options{Source: "auto", StorePath: t.TempDir()}, wantCanonical: "local"},
+		{name: "explicit source", opts: expapi.Options{Source: "kusto", KustoNativeQuery: native}, wantCanonical: "kusto"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, err := NewServer(Options{Stellar: test.opts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if server.singleWorkspaceScope.Source != test.opts.Source {
+				t.Fatalf("single-workspace source=%q, want configured %q", server.singleWorkspaceScope.Source, test.opts.Source)
+			}
+			gotSources := map[string]string{}
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotSources[r.URL.Path] = r.URL.Query().Get("source")
+				w.WriteHeader(http.StatusNoContent)
+			})
+			for _, path := range []string{
+				"/api/v2/stellar/experiments/search",
+				"/api/stellar/experiments",
+				"/api/stellar/runs",
+				"/api/stellar/snapshot",
+			} {
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				server.workspaceAwareStellar(next).ServeHTTP(rec, req)
+				if rec.Code != http.StatusNoContent {
+					t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+				}
+			}
+			if gotSources["/api/v2/stellar/experiments/search"] != test.wantCanonical {
+				t.Fatalf("canonical source=%q, want %q", gotSources["/api/v2/stellar/experiments/search"], test.wantCanonical)
+			}
+			for _, path := range []string{"/api/stellar/experiments", "/api/stellar/runs", "/api/stellar/snapshot"} {
+				if gotSources[path] != test.opts.Source {
+					t.Fatalf("%s source=%q, want configured %q", path, gotSources[path], test.opts.Source)
+				}
+			}
+		})
 	}
 }
 
