@@ -143,18 +143,25 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	}
 	conditions = append(conditions, condition(tauv1alpha1.ConditionWorkloadIdentityReady, workloadIdentityStatus, workloadIdentityReason, workloadIdentityMessage, workspace.Generation))
 
+	keepServiceAccount := ""
+	if workspace.Spec.WorkloadIdentity != nil {
+		keepServiceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
+	}
+	if namespaceReady {
+		if err := r.cleanupStaleWorkloadIdentityServiceAccounts(ctx, workspace, targetNamespace, keepServiceAccount); err != nil {
+			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+		}
+	}
+
 	currentTargetReady := namespaceReady && rbacReady && rbacErr == nil && queueReady
 	if workspace.Spec.WorkloadIdentity != nil {
 		currentTargetReady = currentTargetReady && workloadIdentityReady && workloadIdentityErr == nil
 	}
-	keepNamespace, keepServiceAccount := "", ""
+	keepNamespace := ""
 	keepResearcherBinding := false
 	if currentTargetReady {
 		keepNamespace = targetNamespace
 		keepResearcherBinding = authorizationMode(workspace) != tauv1alpha1.AuthorizationModeClusterWide
-		if workspace.Spec.WorkloadIdentity != nil {
-			keepServiceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
-		}
 		if err := r.cleanupStaleTargetRBAC(ctx, workspace, keepNamespace, keepServiceAccount, keepResearcherBinding); err != nil {
 			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 		}

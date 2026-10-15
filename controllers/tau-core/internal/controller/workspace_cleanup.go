@@ -265,6 +265,33 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 	return nil
 }
 
+func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace, keepServiceAccount string,
+) error {
+	var accounts corev1.ServiceAccountList
+	if err := r.List(ctx, &accounts, client.InNamespace(targetNamespace), client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range accounts.Items {
+		account := &accounts.Items[i]
+		if keepServiceAccount != "" && account.Name == keepServiceAccount {
+			continue
+		}
+		if err := validateWorkspaceObjectUIDForCleanup(account, workspace); err != nil {
+			return fmt.Errorf("refusing to delete stale workload identity ServiceAccount: %w", err)
+		}
+		if err := r.Delete(ctx, account); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,

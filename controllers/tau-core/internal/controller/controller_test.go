@@ -1133,6 +1133,8 @@ func TestWorkspaceRetargetRetriesStaleNamespaceCleanupAfterQueueRecovery(t *test
 		},
 		Annotations: map[string]string{annotationOwnerUID: string(workspace.UID)},
 	}}
+	oldServiceAccount := testServiceAccount(oldNamespace.Name, "tau-workload", workspace.Name)
+	oldServiceAccount.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	foreignNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        "foreign-aurora",
 		Labels:      map[string]string{labelWorkspace: workspace.Name},
@@ -1140,7 +1142,7 @@ func TestWorkspaceRetargetRetriesStaleNamespaceCleanupAfterQueueRecovery(t *test
 	}}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, oldNamespace, foreignNamespace).
+		WithObjects(workspace, oldNamespace, oldServiceAccount, foreignNamespace).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -1162,6 +1164,9 @@ func TestWorkspaceRetargetRetriesStaleNamespaceCleanupAfterQueueRecovery(t *test
 	if retained.Labels[labelWorkspace] != workspace.Name {
 		t.Fatalf("old namespace was cleaned before target readiness: %#v", retained.Labels)
 	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldServiceAccount), &corev1.ServiceAccount{}); err != nil {
+		t.Fatalf("old namespace ServiceAccount was cleaned before target readiness: %v", err)
+	}
 
 	if err := c.Create(ctx, testClusterQueue("jobqueue")); err != nil {
 		t.Fatalf("Create backing ClusterQueue: %v", err)
@@ -1181,6 +1186,9 @@ func TestWorkspaceRetargetRetriesStaleNamespaceCleanupAfterQueueRecovery(t *test
 	}
 	if retained.Labels[labelWorkspace] != "" || retained.Annotations[annotationOwnerUID] != "" {
 		t.Fatalf("old namespace retained ownership: labels=%#v annotations=%#v", retained.Labels, retained.Annotations)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldServiceAccount), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("old namespace ServiceAccount remains after target readiness: %v", err)
 	}
 	var foreign corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKeyFromObject(foreignNamespace), &foreign); err != nil {
@@ -1234,6 +1242,65 @@ func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T)
 
 	if err := c.Get(ctx, client.ObjectKey{Name: "tau-workload-v2", Namespace: "aurora"}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("removed workload identity retained ServiceAccount: %v", err)
+	}
+}
+
+func TestWorkspaceReconcileCleansSameNamespaceWorkloadIdentityWhileQueueUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		workloadIdentity   *tauv1alpha1.WorkspaceWorkloadIdentity
+		wantServiceAccount string
+	}{
+		{
+			name: "renamed",
+			workloadIdentity: &tauv1alpha1.WorkspaceWorkloadIdentity{
+				ServiceAccountName: "tau-workload-v2",
+				ClientID:           "replacement-client",
+			},
+			wantServiceAccount: "tau-workload-v2",
+		},
+		{name: "removed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			scheme := testScheme(t)
+			workspace := testWorkspace("aurora")
+			localQueue := testLocalQueue("aurora", "aurora", "aurora-cq")
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(workspace, localQueue, testClusterQueue("aurora-cq")).
+				WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+				Build()
+			reconciler := newTestWorkspaceReconciler(c)
+
+			reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+			if err := c.Delete(ctx, testClusterQueue("aurora-cq")); err != nil {
+				t.Fatalf("Delete backing ClusterQueue: %v", err)
+			}
+			var current tauv1alpha1.TauWorkspace
+			if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &current); err != nil {
+				t.Fatalf("Get workspace: %v", err)
+			}
+			current.Spec.WorkloadIdentity = tc.workloadIdentity
+			if err := c.Update(ctx, &current); err != nil {
+				t.Fatalf("Update workload identity: %v", err)
+			}
+			if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}); err != nil {
+				t.Fatalf("Reconcile degraded queue: %v", err)
+			}
+
+			if err := c.Get(ctx, client.ObjectKey{Name: "tau-workload", Namespace: workspace.Name}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("obsolete workload identity ServiceAccount remains: %v", err)
+			}
+			if tc.wantServiceAccount != "" {
+				if err := c.Get(ctx, client.ObjectKey{Name: tc.wantServiceAccount, Namespace: workspace.Name}, &corev1.ServiceAccount{}); err != nil {
+					t.Fatalf("replacement workload identity ServiceAccount missing: %v", err)
+				}
+			}
+			if err := c.Get(ctx, client.ObjectKey{Name: "aurora-cq"}, newQueueObject(clusterQueueGVK)); !apierrors.IsNotFound(err) {
+				t.Fatalf("backing ClusterQueue unexpectedly restored: %v", err)
+			}
+		})
 	}
 }
 
