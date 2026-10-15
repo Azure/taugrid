@@ -1380,6 +1380,96 @@ func TestMultipleWorkspacesReconcileIndependently(t *testing.T) {
 	}
 }
 
+func TestLegacyWorkspaceUpgradeMigratesUIDOwnership(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	namespace := testNamespace("aurora")
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = map[string]string{annotationResultScope: workspace.Spec.Defaults.OutputRoot}
+	localQueue := testLocalQueue("aurora", "aurora", "aurora")
+	localQueue.SetLabels(workspaceLabels("aurora"))
+	localQueue.SetAnnotations(nil)
+	binding := testRoleBinding("aurora", defaultRoleName, "aurora")
+	binding.Annotations = nil
+	account := testServiceAccount("aurora", "tau-workload", "aurora")
+	account.Annotations = map[string]string{annotationAzureWIClientID: workspace.Spec.WorkloadIdentity.ClientID}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, localQueue, binding, account, testClusterQueue("aurora")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+
+	for name, obj := range map[string]client.Object{
+		"workspace":       &tauv1alpha1.TauWorkspace{ObjectMeta: metav1.ObjectMeta{Name: workspace.Name, Namespace: workspace.Namespace}},
+		"namespace":       &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace.Name}},
+		"role binding":    &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: binding.Name, Namespace: binding.Namespace}},
+		"service account": &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: account.Name, Namespace: account.Namespace}},
+	} {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			t.Fatalf("Get migrated %s: %v", name, err)
+		}
+		if got := obj.GetAnnotations()[annotationOwnerUID]; got != string(workspace.UID) {
+			t.Fatalf("%s owner UID = %q, want %q", name, got, workspace.UID)
+		}
+	}
+	gotQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(localQueue), gotQueue); err != nil {
+		t.Fatalf("Get migrated LocalQueue: %v", err)
+	}
+	if got := gotQueue.GetAnnotations()[annotationOwnerUID]; got != string(workspace.UID) {
+		t.Fatalf("LocalQueue owner UID = %q, want %q", got, workspace.UID)
+	}
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get migrated workspace status: %v", err)
+	}
+	if gotWorkspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("workspace phase = %q, want Ready; conditions=%#v", gotWorkspace.Status.Phase, gotWorkspace.Status.Conditions)
+	}
+}
+
+func TestLegacyWorkspaceFinalizerMigratesBeforeCleanup(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	now := metav1.Now()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.DeletionTimestamp = &now
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	namespace := testNamespace("aurora")
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = nil
+	binding := testRoleBinding("aurora", defaultRoleName, "aurora")
+	binding.Annotations = nil
+	localQueue := testLocalQueue("aurora", "aurora", "aurora")
+	localQueue.SetLabels(workspaceLabels("aurora"))
+	localQueue.SetAnnotations(nil)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, binding, localQueue).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	if _, err := reconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile deleting legacy workspace: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy RoleBinding survived finalizer cleanup: %v", err)
+	}
+	gotQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(localQueue), gotQueue); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy LocalQueue survived finalizer cleanup: %v", err)
+	}
+}
+
 func TestWorkspaceReconcileRestoresOwnedLocalQueueClusterQueue(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

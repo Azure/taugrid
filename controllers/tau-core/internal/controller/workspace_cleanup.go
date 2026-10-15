@@ -35,7 +35,7 @@ func (r *TauWorkspaceReconciler) getAndValidateWorkspaceOwnership(
 	if !ownedByWorkspace(obj.GetLabels(), workspace.Name) {
 		return fmt.Errorf("%T %s already exists and is not owned by workspace %q", obj, client.ObjectKeyFromObject(obj), workspace.Name)
 	}
-	return validateWorkspaceObjectUID(obj, workspace)
+	return r.ensureWorkspaceObjectUID(ctx, obj, workspace)
 }
 
 func validateWorkspaceObjectUID(obj client.Object, workspace *tauv1alpha1.TauWorkspace) error {
@@ -48,6 +48,25 @@ func validateWorkspaceObjectUID(obj client.Object, workspace *tauv1alpha1.TauWor
 			ownerUID,
 			workspace.UID,
 		)
+	}
+	return nil
+}
+
+func (r *TauWorkspaceReconciler) ensureWorkspaceObjectUID(
+	ctx context.Context,
+	obj client.Object,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
+	if err := validateWorkspaceObjectUID(obj, workspace); err == nil {
+		return nil
+	}
+	if obj.GetAnnotations()[annotationOwnerUID] != "" ||
+		workspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		return validateWorkspaceObjectUID(obj, workspace)
+	}
+	setOwnerUIDAnnotation(obj, workspace.UID)
+	if err := r.Update(ctx, obj); err != nil {
+		return fmt.Errorf("persist owner UID on %T %s: %w", obj, client.ObjectKeyFromObject(obj), err)
 	}
 	return nil
 }
@@ -147,7 +166,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 			if keepNamespace != "" && obj.GetNamespace() == keepNamespace && candidate.keep(obj) {
 				continue
 			}
-			if err := validateWorkspaceObjectUID(obj, workspace); err != nil {
+			if err := r.ensureWorkspaceObjectUID(ctx, obj, workspace); err != nil {
 				return fmt.Errorf("refusing to delete stale workspace access: %w", err)
 			}
 			if err := r.deleteWithPreconditions(ctx, obj); err != nil {
@@ -179,7 +198,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
 			continue
 		}
-		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
+		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
 			return fmt.Errorf("refusing to delete LocalQueue %q: %w", localQueue.GetName(), err)
 		}
 		if err := r.deleteWithPreconditions(ctx, localQueue); err != nil {
@@ -217,7 +236,7 @@ func (r *TauWorkspaceReconciler) deleteOwnedObject(
 	if !ownedByWorkspace(obj.GetLabels(), workspace.Name) {
 		return fmt.Errorf("refusing to delete %T %s: object is not owned by workspace %q", obj, key, workspace.Name)
 	}
-	if err := validateWorkspaceObjectUID(obj, workspace); err != nil {
+	if err := r.ensureWorkspaceObjectUID(ctx, obj, workspace); err != nil {
 		return fmt.Errorf("refusing to delete %T %s: %w", obj, key, err)
 	}
 	return r.deleteWithPreconditions(ctx, obj)

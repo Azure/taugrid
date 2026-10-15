@@ -90,7 +90,7 @@ func (r *TauWorkspaceReconciler) reconcileQueue(ctx context.Context, workspace *
 			fmt.Sprintf("LocalQueue %q is owned by TauWorkspace %q", workspace.Spec.Queue, labels[labelWorkspace])
 	}
 	if ownedByWorkspace(labels, workspace.Name) {
-		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
+		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
 			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: workspace.Spec.Queue, ClusterQueue: clusterQueueName}, false,
 				fmt.Sprintf("LocalQueue %q ownership is not authoritative: %v", workspace.Spec.Queue, err)
 		}

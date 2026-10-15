@@ -25,6 +25,54 @@ func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 	return workspace.Name
 }
 
+func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
+	if workspace.UID == "" {
+		return fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)
+	}
+	if ownerUID := workspace.Annotations[annotationOwnerUID]; ownerUID != "" {
+		if ownerUID != string(workspace.UID) {
+			return fmt.Errorf("TauWorkspace %q owner UID is %q, want %q", workspace.Name, ownerUID, workspace.UID)
+		}
+		return nil
+	}
+	if workspace.Annotations[annotationV0Primary] != "true" {
+		return nil
+	}
+
+	targetNamespace := resolvedNamespace(workspace)
+	var namespace corev1.Namespace
+	if err := r.Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
+	}
+	if namespace.Labels[labelManagedBy] != labelManagedByValue ||
+		namespace.Labels[labelWorkspace] != workspace.Name ||
+		!workspace.Spec.Target.CreateNamespace {
+		return nil
+	}
+	if ownerUID := namespace.Annotations[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
+		return nil
+	}
+	if namespace.Annotations[annotationOwnerUID] == "" {
+		setOwnerUIDAnnotation(&namespace, workspace.UID)
+		if err := r.Update(ctx, &namespace); err != nil {
+			return fmt.Errorf("persist legacy Namespace owner UID: %w", err)
+		}
+	}
+
+	before := workspace.DeepCopy()
+	setOwnerUIDAnnotation(workspace, workspace.UID)
+	if err := r.Patch(ctx, workspace, client.MergeFrom(before)); err != nil {
+		return fmt.Errorf("persist legacy TauWorkspace ownership migration: %w", err)
+	}
+	return nil
+}
+
 func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, error) {
 	if workspace.UID == "" {
 		return false, fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)

@@ -52,6 +52,9 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&workspace, workspaceFinalizer) {
+			if err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace); err != nil {
+				return ctrl.Result{}, err
+			}
 			if err := r.cleanupWorkspaceAccess(ctx, &workspace); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -68,6 +71,9 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
+	}
+	if err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if strings.TrimSpace(workspace.Spec.Queue) == "" {
