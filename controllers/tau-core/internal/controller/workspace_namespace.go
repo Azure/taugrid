@@ -5,7 +5,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,10 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var (
-	errNamespaceOwnershipUnverified        = errors.New("namespace ownership is not verified")
-	errLegacyNamespaceOwnershipStampFailed = errors.New("legacy namespace ownership stamp failed")
-)
+var errNamespaceOwnershipUnverified = errors.New("namespace ownership is not verified")
 
 func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 	if workspace.Spec.Target.Namespace != "" {
@@ -79,13 +75,13 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	if owner != "" && owner != workspace.Name {
 		if !explicitAdoption {
 			return false, fmt.Errorf(
-				"target namespace %q is retained for TauWorkspace %q; explicit operator adoption is required",
+				"target namespace %q is assigned to TauWorkspace %q; explicit UID-bound adoption is required",
 				targetNamespace,
 				owner,
 			)
 		}
-		var retainedOwner tauv1alpha1.TauWorkspace
-		err := r.apiReader().Get(ctx, client.ObjectKey{Name: owner, Namespace: workspace.Namespace}, &retainedOwner)
+		var existingOwner tauv1alpha1.TauWorkspace
+		err := r.apiReader().Get(ctx, client.ObjectKey{Name: owner, Namespace: workspace.Namespace}, &existingOwner)
 		if err == nil {
 			return false, fmt.Errorf(
 				"target namespace %q is still assigned to existing TauWorkspace %q",
@@ -94,36 +90,26 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 			)
 		}
 		if !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("verify retained TauWorkspace %q: %w", owner, err)
+			return false, fmt.Errorf("verify existing TauWorkspace %q: %w", owner, err)
 		}
 	}
 	ownerUID := namespace.Annotations[annotationOwnerUID]
-	legacyExplicitAdoption := owner == "" &&
-		ownerUID == "" &&
-		!explicitAdoption &&
-		hasLegacyExplicitNamespaceAdoptionEvidence(workspace, &namespace)
-	legacyPartialContinuity := ownerUID == "" &&
-		workspace.UID != "" &&
-		!explicitAdoption &&
-		hasLegacyPartialReconcileNamespaceContinuity(workspace, &namespace)
 	if ownerUID != "" && ownerUID != string(workspace.UID) && !explicitAdoption {
 		return false, fmt.Errorf(
-			"target namespace %q is retained from a different TauWorkspace UID %q; explicit operator adoption is required",
+			"target namespace %q belongs to a different TauWorkspace UID %q; explicit UID-bound adoption is required",
 			targetNamespace,
 			ownerUID,
 		)
 	}
 	if ownerUID == "" &&
 		workspace.UID != "" &&
-		!explicitAdoption &&
-		!legacyExplicitAdoption &&
-		!hasAuthoritativeLegacyNamespaceContinuity(workspace, &namespace, targetNamespace) {
+		!explicitAdoption {
 		ownership := "has no TauWorkspace ownership metadata"
 		if owner == workspace.Name {
-			ownership = "has legacy ownership metadata without an owner UID"
+			ownership = "has a workspace label without an authoritative owner UID"
 		}
 		return false, fmt.Errorf(
-			"%w: target namespace %q %s; explicit operator adoption is required",
+			"%w: target namespace %q %s; explicit UID-bound adoption is required",
 			errNamespaceOwnershipUnverified,
 			targetNamespace,
 			ownership,
@@ -177,9 +163,6 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 	}
 	if changed {
 		if err := r.Update(ctx, &namespace); err != nil {
-			if legacyPartialContinuity || legacyExplicitAdoption {
-				return false, fmt.Errorf("%w: %w", errLegacyNamespaceOwnershipStampFailed, err)
-			}
 			return false, err
 		}
 	}
@@ -187,163 +170,11 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 }
 
 func (r *TauWorkspaceReconciler) namespaceLocalQueueName(
-	ctx context.Context,
+	_ context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-	targetNamespace string,
+	_ string,
 ) (string, error) {
-	if workspace.Spec.TeamRef == nil {
-		return workspace.Spec.Queue, nil
-	}
-	if current := strings.TrimSpace(workspace.Status.Queue.LocalQueue); current != "" {
-		return current, nil
-	}
-	name := workspaceLocalQueueName(workspace)
-	queue := newQueueObject(localQueueGVK)
-	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name, Namespace: targetNamespace}, queue); err != nil {
-		if apierrors.IsNotFound(err) {
-			return workspace.Spec.Queue, nil
-		}
-		return "", fmt.Errorf("read Team-managed LocalQueue %q: %w", name, err)
-	}
-	return name, nil
-}
-
-func hasAuthoritativeLegacyNamespaceContinuity(
-	workspace *tauv1alpha1.TauWorkspace,
-	namespace *corev1.Namespace,
-	targetNamespace string,
-) bool {
-	if namespace.Labels[labelWorkspace] != workspace.Name {
-		return false
-	}
-	if hasLegacyPartialReconcileNamespaceContinuity(workspace, namespace) {
-		return true
-	}
-	if workspace.Status.Target.ResolvedNamespace != targetNamespace {
-		return false
-	}
-	for _, condition := range workspace.Status.Conditions {
-		if condition.Reason == "AdditionalWorkspaceBlocked" {
-			return false
-		}
-	}
-	if workspace.Status.Phase == tauv1alpha1.WorkspacePhaseReady {
-		return true
-	}
-	if workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
-		workspace.Status.ObservedGeneration == 0 {
-		return false
-	}
-	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
-	if drift == nil {
-		return false
-	}
-	if drift.Status == metav1.ConditionFalse {
-		return true
-	}
-	switch drift.Reason {
-	case "NamespaceReconcileFailed", "RBACCleanupFailed", "QueueCleanupFailed", "NamespaceCleanupFailed":
-		return true
-	default:
-		return false
-	}
-}
-
-func hasLegacyPartialReconcileNamespaceContinuity(
-	workspace *tauv1alpha1.TauWorkspace,
-	namespace *corev1.Namespace,
-) bool {
-	if !hasLegacyPartialReconcileStatus(workspace) {
-		return false
-	}
-	if workspace.Spec.Target.CreateNamespace {
-		if namespace.CreationTimestamp.IsZero() {
-			return false
-		}
-		return !namespace.CreationTimestamp.Before(&workspace.CreationTimestamp)
-	}
-	if namespace.Labels[labelWorkspaceLocalQueue] != workspace.Spec.Queue ||
-		namespace.Labels[labelKueueDefaultLocalQueue] != workspace.Spec.Queue {
-		return false
-	}
-	return managedFieldsOwnLabelAfter(
-		namespace.ManagedFields,
-		labelWorkspace,
-		workspace.CreationTimestamp,
-	)
-}
-
-func hasLegacyPartialReconcileStatus(workspace *tauv1alpha1.TauWorkspace) bool {
-	if hasPristineLegacyWorkspaceStatus(workspace) {
-		return true
-	}
-	if workspace.Generation != 1 ||
-		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
-		workspace.Status.ObservedGeneration == 0 ||
-		workspace.Status.Target.ResolvedNamespace != "" ||
-		workspace.Status.Queue.ClusterQueue != "" ||
-		workspace.Status.Queue.ClusterQueueUID != "" ||
-		workspace.CreationTimestamp.IsZero() {
-		return false
-	}
-	if localQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue); localQueue != "" && localQueue != workspace.Spec.Queue {
-		return false
-	}
-	for _, condition := range workspace.Status.Conditions {
-		if condition.Reason == "AdditionalWorkspaceBlocked" {
-			return false
-		}
-	}
-	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
-	if drift != nil &&
-		drift.Status == metav1.ConditionTrue &&
-		drift.Reason == "NamespaceReconcileFailed" {
-		return true
-	}
-	queue := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionQueueReady)
-	return queue != nil &&
-		queue.Status == metav1.ConditionFalse &&
-		queue.Reason == "QueueUnresolved"
-}
-
-func hasPristineLegacyWorkspaceStatus(workspace *tauv1alpha1.TauWorkspace) bool {
-	return workspace.Generation == 1 &&
-		workspace.Status.ObservedGeneration == 0 &&
-		workspace.Status.Target.ResolvedNamespace == "" &&
-		workspace.Status.Queue.LocalQueue == "" &&
-		workspace.Status.Queue.ClusterQueue == "" &&
-		workspace.Status.Queue.ClusterQueueUID == "" &&
-		workspace.Status.Phase == "" &&
-		len(workspace.Status.Conditions) == 0 &&
-		!workspace.CreationTimestamp.IsZero()
-}
-
-func managedFieldsOwnLabelAfter(
-	entries []metav1.ManagedFieldsEntry,
-	label string,
-	notBefore metav1.Time,
-) bool {
-	if notBefore.IsZero() {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.Operation != metav1.ManagedFieldsOperationUpdate ||
-			entry.Time == nil ||
-			entry.Time.Before(&notBefore) ||
-			entry.FieldsV1 == nil {
-			continue
-		}
-		var fields map[string]any
-		if err := json.Unmarshal(entry.FieldsV1.Raw, &fields); err != nil {
-			continue
-		}
-		metadata, _ := fields["f:metadata"].(map[string]any)
-		labels, _ := metadata["f:labels"].(map[string]any)
-		if _, ok := labels["f:"+label]; ok {
-			return true
-		}
-	}
-	return false
+	return workspaceLocalQueueName(workspace), nil
 }
 
 func hasExplicitNamespaceAdoptionEvidence(
@@ -354,50 +185,6 @@ func hasExplicitNamespaceAdoptionEvidence(
 	return expectedUID != "" &&
 		namespace.UID != "" &&
 		expectedUID == string(namespace.UID)
-}
-
-func hasLegacyExplicitNamespaceAdoptionEvidence(
-	workspace *tauv1alpha1.TauWorkspace,
-	namespace *corev1.Namespace,
-) bool {
-	return workspace.Spec.Target.CreateNamespace == false &&
-		authorizationMode(workspace) == tauv1alpha1.AuthorizationModeClusterWide &&
-		hasLegacyExplicitAdoptionStatus(workspace) &&
-		!workspace.CreationTimestamp.IsZero() &&
-		!namespace.CreationTimestamp.IsZero() &&
-		!namespace.CreationTimestamp.After(workspace.CreationTimestamp.Time)
-}
-
-func hasLegacyExplicitAdoptionStatus(workspace *tauv1alpha1.TauWorkspace) bool {
-	if hasPristineLegacyWorkspaceStatus(workspace) {
-		return true
-	}
-	if workspace.Generation != 1 ||
-		workspace.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded ||
-		workspace.Status.ObservedGeneration == 0 ||
-		workspace.Status.Queue.ClusterQueue != "" ||
-		workspace.Status.Queue.ClusterQueueUID != "" ||
-		workspace.CreationTimestamp.IsZero() {
-		return false
-	}
-	if recordedTarget := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace); recordedTarget != "" &&
-		recordedTarget != resolvedNamespace(workspace) {
-		return false
-	}
-	if localQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue); localQueue != "" && localQueue != workspace.Spec.Queue {
-		return false
-	}
-	for _, condition := range workspace.Status.Conditions {
-		if condition.Reason == "AdditionalWorkspaceBlocked" {
-			return false
-		}
-	}
-	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
-	if drift == nil || drift.Status != metav1.ConditionTrue {
-		return false
-	}
-	return drift.Reason == "NamespaceReconcileFailed" ||
-		drift.Reason == "NamespaceOwnershipUnverified"
 }
 
 // reservedNamespaceReason names why a namespace may never be adopted as a

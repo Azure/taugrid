@@ -40,33 +40,14 @@ func (r *TauWorkspaceReconciler) getAndValidateWorkspaceOwnership(
 
 func validateWorkspaceObjectUID(obj client.Object, workspace *tauv1alpha1.TauWorkspace) error {
 	ownerUID := obj.GetAnnotations()[annotationOwnerUID]
-	if ownerUID != "" && ownerUID != string(workspace.UID) {
-		return fmt.Errorf("%T %s belongs to a different workspace UID %q", obj, client.ObjectKeyFromObject(obj), ownerUID)
-	}
-	if ownerUID == "" && workspace.UID != "" && workspace.Status.Target.ResolvedNamespace == "" {
+	if workspace.UID != "" && ownerUID != string(workspace.UID) {
 		return fmt.Errorf(
-			"%T %s has legacy ownership metadata without an owner UID; explicit operator adoption is required",
+			"%T %s owner UID is %q, want %q",
 			obj,
 			client.ObjectKeyFromObject(obj),
+			ownerUID,
+			workspace.UID,
 		)
-	}
-	return nil
-}
-
-func validateWorkspaceObjectUIDForCleanup(obj client.Object, workspace *tauv1alpha1.TauWorkspace) error {
-	if err := validateWorkspaceObjectUID(obj, workspace); err == nil {
-		return nil
-	}
-	objectCreated := obj.GetCreationTimestamp()
-	if workspace.DeletionTimestamp == nil ||
-		workspace.UID == "" ||
-		!hasLegacyPartialReconcileStatus(workspace) ||
-		obj.GetLabels()[labelManagedBy] != labelManagedByValue ||
-		obj.GetLabels()[labelWorkspace] != workspace.Name ||
-		workspace.CreationTimestamp.IsZero() ||
-		objectCreated.IsZero() ||
-		objectCreated.Before(&workspace.CreationTimestamp) {
-		return validateWorkspaceObjectUID(obj, workspace)
 	}
 	return nil
 }
@@ -75,7 +56,6 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
 	namespaceName string,
-	allowLegacyOwner bool,
 ) error {
 	// The previous namespace comes off status and never passes through
 	// reconcileNamespace, so it needs its own reserved-namespace check: a
@@ -91,11 +71,8 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 		}
 		return err
 	}
-	if namespace.Labels[labelWorkspace] != workspace.Name {
-		return nil
-	}
-	ownerUID := namespace.Annotations[annotationOwnerUID]
-	if ownerUID != string(workspace.UID) && !(allowLegacyOwner && ownerUID == "") {
+	if namespace.Labels[labelWorkspace] != workspace.Name ||
+		namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
 		return nil
 	}
 	for _, key := range []string{
@@ -112,28 +89,6 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 		delete(namespace.Annotations, annotationOwnerUID)
 	}
 	return r.Update(ctx, &namespace)
-}
-
-func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceNamespaces(
-	ctx context.Context,
-	workspace *tauv1alpha1.TauWorkspace,
-	keepNamespace string,
-) error {
-	var namespaces corev1.NamespaceList
-	if err := r.List(ctx, &namespaces, client.MatchingLabels{labelWorkspace: workspace.Name}); err != nil {
-		return err
-	}
-	for i := range namespaces.Items {
-		namespace := &namespaces.Items[i]
-		if namespace.Name == keepNamespace ||
-			namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
-			continue
-		}
-		if err := r.cleanupStaleNamespaceMetadata(ctx, workspace, namespace.Name, false); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
@@ -165,32 +120,14 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Contex
 	if !ownedByWorkspace(queue.GetLabels(), workspaceName) {
 		return fmt.Errorf("refusing to delete ClusterQueue %q: object is not owned by workspace %q", queue.GetName(), workspaceName)
 	}
-	ownerUID := queue.GetAnnotations()[annotationOwnerUID]
-	if ownerUID != "" && ownerUID != string(workspace.UID) {
-		return fmt.Errorf("refusing to delete ClusterQueue %q: owner UID is %q, not %q", queue.GetName(), ownerUID, workspace.UID)
-	}
-	if ownerUID == "" && queue.GetUID() != "" && workspace.UID != "" {
-		return fmt.Errorf("refusing to delete ClusterQueue %q without authoritative owner UID", queue.GetName())
+	if err := validateWorkspaceObjectUID(queue, workspace); err != nil {
+		return fmt.Errorf("refusing to delete ClusterQueue %q: %w", queue.GetName(), err)
 	}
 	if expectedUID := workspace.Status.Queue.ClusterQueueUID; workspace.Status.Queue.ClusterQueue == queue.GetName() &&
-		expectedUID != "" &&
-		string(queue.GetUID()) != expectedUID {
+		expectedUID != "" && string(queue.GetUID()) != expectedUID {
 		return fmt.Errorf("refusing to delete ClusterQueue %q: UID changed from %q to %q", queue.GetName(), expectedUID, queue.GetUID())
 	}
-	deleteOptions := []client.DeleteOption{}
-	uid := queue.GetUID()
-	resourceVersion := queue.GetResourceVersion()
-	if uid != "" || resourceVersion != "" {
-		preconditions := client.Preconditions{}
-		if uid != "" {
-			preconditions.UID = &uid
-		}
-		if resourceVersion != "" {
-			preconditions.ResourceVersion = &resourceVersion
-		}
-		deleteOptions = append(deleteOptions, preconditions)
-	}
-	if err := r.Delete(ctx, queue, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.deleteWithPreconditions(ctx, queue); err != nil {
 		return err
 	}
 	remaining := newQueueObject(clusterQueueGVK)
@@ -254,10 +191,10 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 			if keepNamespace != "" && obj.GetNamespace() == keepNamespace && candidate.keep(obj) {
 				continue
 			}
-			if err := validateWorkspaceObjectUIDForCleanup(obj, workspace); err != nil {
+			if err := validateWorkspaceObjectUID(obj, workspace); err != nil {
 				return fmt.Errorf("refusing to delete stale workspace access: %w", err)
 			}
-			if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.deleteWithPreconditions(ctx, obj); err != nil {
 				return err
 			}
 		}
@@ -282,10 +219,10 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
 		if keepServiceAccount != "" && account.Name == keepServiceAccount {
 			continue
 		}
-		if err := validateWorkspaceObjectUIDForCleanup(account, workspace); err != nil {
+		if err := validateWorkspaceObjectUID(account, workspace); err != nil {
 			return fmt.Errorf("refusing to delete stale workload identity ServiceAccount: %w", err)
 		}
-		if err := r.Delete(ctx, account); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.deleteWithPreconditions(ctx, account); err != nil {
 			return err
 		}
 	}
@@ -313,29 +250,10 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
 			continue
 		}
-		if workspace.Spec.TeamRef != nil &&
-			localQueue.GetNamespace() == keepNamespace &&
-			(localQueue.GetName() == workspace.Spec.Queue ||
-				localQueue.GetName() == workspaceClusterQueueName(workspace.Name)) {
-			continue
-		}
-		if err := validateWorkspaceObjectUIDForCleanup(localQueue, workspace); err != nil {
+		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
 			return fmt.Errorf("refusing to delete LocalQueue %q: %w", localQueue.GetName(), err)
 		}
-		deleteOptions := []client.DeleteOption{}
-		uid := localQueue.GetUID()
-		resourceVersion := localQueue.GetResourceVersion()
-		if uid != "" || resourceVersion != "" {
-			preconditions := client.Preconditions{}
-			if uid != "" {
-				preconditions.UID = &uid
-			}
-			if resourceVersion != "" {
-				preconditions.ResourceVersion = &resourceVersion
-			}
-			deleteOptions = append(deleteOptions, preconditions)
-		}
-		if err := r.Delete(ctx, localQueue, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.deleteWithPreconditions(ctx, localQueue); err != nil {
 			return err
 		}
 	}
@@ -370,10 +288,30 @@ func (r *TauWorkspaceReconciler) deleteOwnedObject(
 	if !ownedByWorkspace(obj.GetLabels(), workspace.Name) {
 		return fmt.Errorf("refusing to delete %T %s: object is not owned by workspace %q", obj, key, workspace.Name)
 	}
-	if err := validateWorkspaceObjectUIDForCleanup(obj, workspace); err != nil {
+	if err := validateWorkspaceObjectUID(obj, workspace); err != nil {
 		return fmt.Errorf("refusing to delete %T %s: %w", obj, key, err)
 	}
-	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.deleteWithPreconditions(ctx, obj); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *TauWorkspaceReconciler) deleteWithPreconditions(ctx context.Context, obj client.Object) error {
+	deleteOptions := []client.DeleteOption{}
+	uid := obj.GetUID()
+	resourceVersion := obj.GetResourceVersion()
+	if uid != "" || resourceVersion != "" {
+		preconditions := client.Preconditions{}
+		if uid != "" {
+			preconditions.UID = &uid
+		}
+		if resourceVersion != "" {
+			preconditions.ResourceVersion = &resourceVersion
+		}
+		deleteOptions = append(deleteOptions, preconditions)
+	}
+	if err := r.Delete(ctx, obj, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil

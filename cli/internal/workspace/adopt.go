@@ -250,7 +250,6 @@ type objectMetadata struct {
 	ResourceVersion   string            `json:"resourceVersion"`
 	DeletionTimestamp string            `json:"deletionTimestamp"`
 	Labels            map[string]string `json:"labels"`
-	Annotations       map[string]string `json:"annotations"`
 }
 
 type namespaceDocument struct {
@@ -358,18 +357,14 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 	if err != nil {
 		return AdoptionPreflight{}, fmt.Errorf("preflight: %w", err)
 	}
-	var requestedWorkspace *Workspace
 	liveWorkspaces := make(map[string]Workspace, len(list.Items))
-	existingLocalQueue := ""
 	for i := range list.Items {
 		existing := list.Items[i]
 		liveWorkspaces[existing.Metadata.Name] = existing
 		if existing.Metadata.Name == o.Name {
-			requestedWorkspace = &list.Items[i]
 			if err := requireNotTerminating("TauWorkspace", o.SystemNamespace+"/"+existing.Metadata.Name, existing.Metadata.DeletionTimestamp); err != nil {
 				return AdoptionPreflight{}, err
 			}
-			existingLocalQueue = strings.TrimSpace(existing.Status.Queue.LocalQueue)
 			continue
 		}
 		if workspaceTargetsNamespace(existing, o.Namespace) {
@@ -396,20 +391,8 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 			return AdoptionPreflight{}, fmt.Errorf("preflight: Namespace %q is assigned to TauWorkspace %q, not %q", o.Namespace, owner, o.Name)
 		}
 	}
-	if queue := ns.Metadata.Labels[defaultLocalQueueLabel]; queue != "" &&
-		queue != o.Queue &&
-		queue != existingLocalQueue {
+	if queue := ns.Metadata.Labels[defaultLocalQueueLabel]; queue != "" && queue != o.Queue {
 		return AdoptionPreflight{}, fmt.Errorf("preflight: Namespace %q default LocalQueue is %q, want exactly %q", o.Namespace, queue, o.Queue)
-	}
-	if requestedWorkspace != nil &&
-		!sameAdoptionIntent(*requestedWorkspace, desired) &&
-		!(ns.Metadata.Annotations[workloadmeta.AnnotationOwnerUID] == requestedWorkspace.Metadata.UID &&
-			sameAdoptionIntentIgnoringTeamQuota(*requestedWorkspace, desired)) {
-		return AdoptionPreflight{}, fmt.Errorf(
-			"preflight: existing TauWorkspace %s/%s has a conflicting spec; refusing to overwrite it",
-			o.SystemNamespace,
-			o.Name,
-		)
 	}
 
 	var localQueue localQueueDocument
@@ -519,9 +502,7 @@ func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOpt
 	if err := requireNotTerminating("TauWorkspace", o.SystemNamespace+"/"+o.Name, existing.Metadata.DeletionTimestamp); err != nil {
 		return AdoptionPreflight{}, err
 	}
-	if !sameAdoptionIntent(existing, desired) &&
-		!(ns.Metadata.Annotations[workloadmeta.AnnotationOwnerUID] == existing.Metadata.UID &&
-			sameAdoptionIntentIgnoringTeamQuota(existing, desired)) {
+	if !sameAdoptionIntent(existing, desired) {
 		return AdoptionPreflight{}, fmt.Errorf("preflight: existing TauWorkspace %s/%s has a conflicting spec; refusing to overwrite it", o.SystemNamespace, o.Name)
 	}
 	report.ExistingWorkspace = true
@@ -546,18 +527,12 @@ func sameAdoptionIntent(existing, desired Workspace) bool {
 	return reflect.DeepEqual(existingSpec, desiredSpec)
 }
 
-func sameAdoptionIntentIgnoringTeamQuota(existing, desired Workspace) bool {
-	existing.Spec.TeamRef = nil
-	existing.Spec.Quota = nil
-	return sameAdoptionIntent(existing, desired)
-}
-
 func workspaceTargetsNamespace(workspace Workspace, namespace string) bool {
 	target := strings.TrimSpace(workspace.Spec.Target.Namespace)
 	if target == "" {
 		target = workspace.Metadata.Name
 	}
-	return target == namespace || strings.TrimSpace(workspace.Status.Target.ResolvedNamespace) == namespace
+	return target == namespace
 }
 
 func verifyStablePreflight(before, after AdoptionPreflight) error {

@@ -29,9 +29,6 @@ const (
 	// AnnotationAdoptionNamespaceUID records the exact Namespace identity
 	// validated by an explicit workspace adoption operation.
 	AnnotationAdoptionNamespaceUID = "tau.azure.com/adoption-namespace-uid"
-	// AnnotationOwnerUID binds controller-owned resources to one exact owner
-	// object incarnation rather than only its reusable name.
-	AnnotationOwnerUID = "tau.azure.com/owner-uid"
 
 	// AnnotationV0PrimaryWorkspace marks the active v0 workspace.
 	AnnotationV0PrimaryWorkspace = "tau.azure.com/v0-primary-workspace"
