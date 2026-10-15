@@ -4,10 +4,12 @@
 package rules
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/scraper"
+	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/state"
 )
 
 func TestEvaluate_InstantThreshold(t *testing.T) {
@@ -47,6 +49,69 @@ func TestEvaluate_InstantBelowThreshold(t *testing.T) {
 	results := engine.Evaluate(metrics)
 	if results[0].Firing {
 		t.Error("expected not firing (below threshold)")
+	}
+}
+
+func TestEvaluate_HistoryOnlyTracksRateRuleMetrics(t *testing.T) {
+	t.Parallel()
+
+	const rateMetric = "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL"
+	engine := NewEngine([]Rule{
+		{Name: "ecc-sbe-rate", MetricName: rateMetric, ConditionType: "GPUECCSingleRate", Mode: "rate", Threshold: 10, Window: 10 * time.Minute},
+		{Name: "xid", MetricName: "DCGM_FI_DEV_XID_ERRORS", ConditionType: "XIDError", Mode: "instant", Threshold: 0},
+	})
+
+	metrics := make([]scraper.Metric, 0, 15002)
+	for i := 0; i < 15000; i++ {
+		metrics = append(metrics, scraper.Metric{
+			Name:   "unconfigured_metric",
+			Labels: map[string]string{"series": fmt.Sprintf("%d", i)},
+			Value:  float64(i),
+		})
+	}
+	metrics = append(metrics,
+		scraper.Metric{Name: "DCGM_FI_DEV_XID_ERRORS", Labels: map[string]string{"gpu": "0"}, Value: 0},
+		scraper.Metric{Name: rateMetric, Labels: map[string]string{"gpu": "0"}, Value: 1},
+	)
+
+	engine.Evaluate(metrics)
+	history, _ := engine.ExportState()
+	if len(history) != 1 {
+		t.Fatalf("history keys = %d, want 1 rate-rule key", len(history))
+	}
+	rateKey := metricKey(rateMetric, map[string]string{"gpu": "0"})
+	if len(history[rateKey]) != 1 {
+		t.Fatalf("rate history samples = %d, want 1", len(history[rateKey]))
+	}
+}
+
+func TestRestoreState_DropsHistoryUnusedByRateRules(t *testing.T) {
+	t.Parallel()
+
+	const rateMetric = "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL"
+	engine := NewEngine([]Rule{
+		{Name: "ecc-sbe-rate", MetricName: rateMetric, ConditionType: "GPUECCSingleRate", Mode: "rate", Threshold: 10, Window: 10 * time.Minute},
+		{Name: "xid", MetricName: "DCGM_FI_DEV_XID_ERRORS", ConditionType: "XIDError", Mode: "instant", Threshold: 0},
+	})
+	now := time.Now()
+	engine.RestoreState(map[string][]state.Sample{
+		metricKey(rateMetric, map[string]string{"gpu": "0"}): {
+			{Time: now, Value: 1},
+		},
+		metricKey("DCGM_FI_DEV_XID_ERRORS", map[string]string{"gpu": "0"}): {
+			{Time: now, Value: 0},
+		},
+		metricKey("node_cpu_seconds_total", map[string]string{"cpu": "0"}): {
+			{Time: now, Value: 100},
+		},
+	}, nil)
+
+	history, _ := engine.ExportState()
+	if len(history) != 1 {
+		t.Fatalf("restored history keys = %d, want 1 rate-rule key", len(history))
+	}
+	if _, exists := history[metricKey(rateMetric, map[string]string{"gpu": "0"})]; !exists {
+		t.Fatal("rate-rule history was not restored")
 	}
 }
 

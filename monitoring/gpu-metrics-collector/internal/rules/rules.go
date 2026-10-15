@@ -62,13 +62,14 @@ const DefaultMaxSampleAge = 2 * time.Minute
 
 // Engine evaluates rules against scraped metrics.
 type Engine struct {
-	rules       []Rule
-	mu          sync.Mutex
-	history     map[string][]sample // metric key → time series for rate calculations
-	rateBreaks  map[int]map[string]int
-	pending     map[string]time.Time // conditionType → first time condition was met (for "for" duration)
-	evalCounter int                  // tracks cycles for periodic cleanup
-	retention   time.Duration        // how long to keep history samples
+	rules              []Rule
+	historyMetricNames map[string]struct{}
+	mu                 sync.Mutex
+	history            map[string][]sample // metric key → time series for rate calculations
+	rateBreaks         map[int]map[string]int
+	pending            map[string]time.Time // conditionType → first time condition was met (for "for" duration)
+	evalCounter        int                  // tracks cycles for periodic cleanup
+	retention          time.Duration        // how long to keep history samples
 }
 
 type sample struct {
@@ -81,9 +82,15 @@ type sample struct {
 func NewEngine(rules []Rule) *Engine {
 	// Compute max window across all rate rules for history retention.
 	var maxWindow time.Duration
+	historyMetricNames := make(map[string]struct{})
 	for _, r := range rules {
 		if r.Window > maxWindow {
 			maxWindow = r.Window
+		}
+		if r.Mode == "rate" {
+			for _, name := range r.MetricSources() {
+				historyMetricNames[name] = struct{}{}
+			}
 		}
 	}
 	// Retain at least 15m, or the longest rule window + 1m buffer.
@@ -93,11 +100,12 @@ func NewEngine(rules []Rule) *Engine {
 	}
 
 	return &Engine{
-		rules:      rules,
-		history:    make(map[string][]sample),
-		rateBreaks: make(map[int]map[string]int),
-		pending:    make(map[string]time.Time),
-		retention:  retention,
+		rules:              rules,
+		historyMetricNames: historyMetricNames,
+		history:            make(map[string][]sample),
+		rateBreaks:         make(map[int]map[string]int),
+		pending:            make(map[string]time.Time),
+		retention:          retention,
 	}
 }
 
@@ -283,6 +291,9 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 
 func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time, cycle int) {
 	for _, m := range metrics {
+		if _, needed := e.historyMetricNames[m.Name]; !needed {
+			continue
+		}
 		key := metricKey(m.Name, m.Labels)
 		if math.IsNaN(m.Value) || math.IsInf(m.Value, 0) {
 			delete(e.history, key)
@@ -305,8 +316,11 @@ func (e *Engine) recordMetrics(metrics []scraper.Metric, now time.Time, cycle in
 }
 
 func (e *Engine) breakMissingRateContinuity(metrics []scraper.Metric) {
-	present := make(map[string]struct{}, len(metrics))
+	present := make(map[string]struct{})
 	for _, m := range metrics {
+		if _, needed := e.historyMetricNames[m.Name]; !needed {
+			continue
+		}
 		present[metricKey(m.Name, m.Labels)] = struct{}{}
 	}
 	for key := range e.history {
@@ -410,6 +424,11 @@ func metricKey(name string, labels map[string]string) string {
 	return key
 }
 
+func metricNameFromKey(key string) string {
+	name, _, _ := strings.Cut(key, "|")
+	return name
+}
+
 // cleanupStaleHistory removes history entries for metrics not seen within maxAge.
 func (e *Engine) cleanupStaleHistory(now time.Time, maxAge time.Duration) {
 	cutoff := now.Add(-maxAge)
@@ -487,6 +506,9 @@ func (e *Engine) RestoreState(history map[string][]state.Sample, pending map[str
 
 	now := time.Now()
 	for k, samples := range history {
+		if _, needed := e.historyMetricNames[metricNameFromKey(k)]; !needed {
+			continue
+		}
 		restored := make([]sample, 0, len(samples))
 		for _, s := range samples {
 			if now.Sub(s.Time) <= e.retention {
