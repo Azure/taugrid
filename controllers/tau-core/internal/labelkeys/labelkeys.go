@@ -7,6 +7,7 @@ const Domain = "tau.azure.com/"
 
 const (
 	LabelWorkspace          = "tau.azure.com/workspace"
+	LabelTeam               = "tau.azure.com/team"
 	LabelLocalQueue         = "tau.azure.com/local-queue"
 	LabelGPUClass           = "tau.azure.com/gpu-class"
 	LabelSite               = "tau.azure.com/site"
@@ -25,4 +26,5 @@ const (
 	AnnotationAdoptionNamespaceUID = "tau.azure.com/adoption-namespace-uid"
 
 	FinalizerWorkspaceCleanup = "tau.azure.com/workspace-cleanup"
+	FinalizerTeamCleanup      = "tau.azure.com/team-cleanup"
 )
