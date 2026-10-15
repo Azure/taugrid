@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -1100,6 +1101,97 @@ func TestWorkspaceReconcileCleansStaleTargetRBAC(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRetargetRetriesStaleNamespaceCleanupAfterQueueRecovery(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Generation = 2
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.PrincipalRef = nil
+	workspace.Spec.KubernetesSubject = nil
+	workspace.Spec.Role = ""
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.Target.Namespace = "new-aurora"
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:              tauv1alpha1.WorkspacePhaseReady,
+		ObservedGeneration: 1,
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: "old-aurora"},
+		Queue: tauv1alpha1.WorkspaceQueueStatus{
+			LocalQueue:   "jobqueue",
+			ClusterQueue: "jobqueue",
+		},
+	}
+	oldNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "old-aurora",
+		Labels: map[string]string{
+			labelManagedBy:              labelManagedByValue,
+			labelWorkspace:              workspace.Name,
+			labelWorkspaceLocalQueue:    "jobqueue",
+			labelKueueDefaultLocalQueue: "jobqueue",
+		},
+		Annotations: map[string]string{annotationOwnerUID: string(workspace.UID)},
+	}}
+	foreignNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        "foreign-aurora",
+		Labels:      map[string]string{labelWorkspace: workspace.Name},
+		Annotations: map[string]string{annotationOwnerUID: "foreign-workspace-uid"},
+	}}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, oldNamespace, foreignNamespace).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("first sync: %v", err)
+	}
+	var afterFailure tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &afterFailure); err != nil {
+		t.Fatalf("Get workspace after queue failure: %v", err)
+	}
+	if afterFailure.Status.Target.ResolvedNamespace != oldNamespace.Name {
+		t.Fatalf("resolved namespace advanced to %q before target readiness", afterFailure.Status.Target.ResolvedNamespace)
+	}
+	var retained corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldNamespace), &retained); err != nil {
+		t.Fatalf("Get retained namespace: %v", err)
+	}
+	if retained.Labels[labelWorkspace] != workspace.Name {
+		t.Fatalf("old namespace was cleaned before target readiness: %#v", retained.Labels)
+	}
+
+	if err := c.Create(ctx, testClusterQueue("jobqueue")); err != nil {
+		t.Fatalf("Create backing ClusterQueue: %v", err)
+	}
+	if _, err := reconciler.syncWorkspace(ctx, &afterFailure); err != nil {
+		t.Fatalf("recovery sync: %v", err)
+	}
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get recovered workspace: %v", err)
+	}
+	if gotWorkspace.Status.Target.ResolvedNamespace != workspace.Spec.Target.Namespace {
+		t.Fatalf("resolved namespace = %q, want %q", gotWorkspace.Status.Target.ResolvedNamespace, workspace.Spec.Target.Namespace)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldNamespace), &retained); err != nil {
+		t.Fatalf("Get cleaned namespace: %v", err)
+	}
+	if retained.Labels[labelWorkspace] != "" || retained.Annotations[annotationOwnerUID] != "" {
+		t.Fatalf("old namespace retained ownership: labels=%#v annotations=%#v", retained.Labels, retained.Annotations)
+	}
+	var foreign corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(foreignNamespace), &foreign); err != nil {
+		t.Fatalf("Get foreign namespace: %v", err)
+	}
+	if foreign.Labels[labelWorkspace] != workspace.Name ||
+		foreign.Annotations[annotationOwnerUID] != "foreign-workspace-uid" {
+		t.Fatalf("foreign namespace ownership changed: labels=%#v annotations=%#v", foreign.Labels, foreign.Annotations)
+	}
+}
+
 func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -1277,6 +1369,45 @@ func TestWorkspaceDeleteIgnoresRetainedLegacyClusterQueueUIDForManagedQueue(t *t
 	remaining := newQueueObject(clusterQueueGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: queue.GetName()}, remaining); !apierrors.IsNotFound(err) {
 		t.Fatalf("managed ClusterQueue was not deleted: %v", err)
+	}
+}
+
+func TestWorkspaceClusterQueueCleanupDoesNotDeleteReplacement(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	queue := newQueueObject(clusterQueueGVK)
+	queue.SetName(workspaceClusterQueueName(workspace.Name))
+	queue.SetUID(types.UID("old-cluster-queue-uid"))
+	queue.SetResourceVersion("1")
+	queue.SetLabels(workspaceLabels(workspace.Name))
+	queue.SetAnnotations(map[string]string{annotationOwnerUID: string(workspace.UID)})
+	replacement := newQueueObject(clusterQueueGVK)
+	replacement.SetName(queue.GetName())
+	replacement.SetUID(types.UID("replacement-cluster-queue-uid"))
+	replacement.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "helm"})
+
+	baseClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, queue).
+		Build()
+	c := &replacementBeforeDeleteClient{
+		Client:      baseClient,
+		target:      client.ObjectKeyFromObject(queue),
+		replacement: replacement,
+	}
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if err := reconciler.cleanupWorkspaceClusterQueue(ctx, workspace); err == nil {
+		t.Fatal("cleanup deleted a same-name replacement without reporting a precondition failure")
+	}
+	got := newQueueObject(clusterQueueGVK)
+	if err := baseClient.Get(ctx, client.ObjectKeyFromObject(replacement), got); err != nil {
+		t.Fatalf("replacement ClusterQueue was deleted: %v", err)
+	}
+	if got.GetUID() != replacement.GetUID() {
+		t.Fatalf("ClusterQueue UID = %q, want replacement %q", got.GetUID(), replacement.GetUID())
 	}
 }
 
@@ -1775,6 +1906,111 @@ func TestTeamWorkspaceRetainsLegacyRoutingUntilConsumersCanUseManagedQueue(t *te
 	}
 }
 
+func TestTeamWorkspaceRecoversLegacyRoutingFromOldControllerStatus(t *testing.T) {
+	for _, test := range []struct {
+		name                       string
+		status                     tauv1alpha1.WorkspaceQueueStatus
+		localQueueInitiallyMissing bool
+	}{
+		{name: "empty queue status"},
+		{
+			name: "local queue without backing queue",
+			status: tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue: "jobqueue",
+			},
+		},
+		{
+			name:                       "empty status while local queue is temporarily unreadable",
+			localQueueInitiallyMissing: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			scheme := testScheme(t)
+			workspace := testWorkspace("aurora")
+			workspace.UID = types.UID("workspace-uid")
+			workspace.Generation = 2
+			workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+			workspace.Spec.WorkloadIdentity = nil
+			workspace.Spec.Queue = "jobqueue"
+			workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+			workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+			workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+				Phase:              tauv1alpha1.WorkspacePhaseDegraded,
+				ObservedGeneration: 1,
+				Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: workspace.Name},
+				Queue:              test.status,
+			}
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name: workspace.Name,
+				Labels: map[string]string{
+					labelWorkspace:              workspace.Name,
+					labelWorkspaceLocalQueue:    "jobqueue",
+					labelKueueDefaultLocalQueue: "jobqueue",
+				},
+				Annotations: map[string]string{annotationOwnerUID: string(workspace.UID)},
+			}}
+			legacyQueue := testLocalQueue(workspace.Name, "jobqueue", "legacy-cq")
+			team := testTeam("vision", "8")
+			team.Status.Phase = tauv1alpha1.TeamPhaseReady
+			team.Status.ObservedGeneration = team.Generation
+			flavor := newQueueObject(resourceFlavorGVK)
+			flavor.SetName("taugrid-gpu-h200")
+			objects := []client.Object{workspace, namespace, testClusterQueue("legacy-cq"), team, flavor}
+			if !test.localQueueInitiallyMissing {
+				objects = append(objects, legacyQueue)
+			}
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(objects...).
+				WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+				Build()
+			reconciler := newTestWorkspaceReconciler(c)
+
+			if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+				t.Fatalf("sync workspace: %v", err)
+			}
+			if test.localQueueInitiallyMissing {
+				var waiting tauv1alpha1.TauWorkspace
+				if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
+					t.Fatalf("Get waiting workspace: %v", err)
+				}
+				if condition := findCondition(waiting.Status.Conditions, tauv1alpha1.ConditionQueueReady); condition == nil || condition.Status != metav1.ConditionFalse {
+					t.Fatalf("QueueReady = %#v, want False while retained LocalQueue is missing", waiting.Status.Conditions)
+				}
+				var waitingNamespace corev1.Namespace
+				if err := c.Get(ctx, client.ObjectKeyFromObject(namespace), &waitingNamespace); err != nil {
+					t.Fatalf("Get waiting namespace: %v", err)
+				}
+				if waitingNamespace.Labels[labelKueueDefaultLocalQueue] != "jobqueue" {
+					t.Fatalf("namespace routing switched while retained LocalQueue was missing: %#v", waitingNamespace.Labels)
+				}
+				if err := c.Create(ctx, legacyQueue); err != nil {
+					t.Fatalf("Restore legacy LocalQueue: %v", err)
+				}
+				if _, err := reconciler.syncWorkspace(ctx, &waiting); err != nil {
+					t.Fatalf("sync workspace after LocalQueue recovery: %v", err)
+				}
+			}
+			var gotWorkspace tauv1alpha1.TauWorkspace
+			if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+				t.Fatalf("Get workspace: %v", err)
+			}
+			if gotWorkspace.Status.Queue.LocalQueue != "jobqueue" ||
+				gotWorkspace.Status.Queue.ClusterQueue != "legacy-cq" {
+				t.Fatalf("recovered queue = %#v, want legacy routing", gotWorkspace.Status.Queue)
+			}
+			var gotNamespace corev1.Namespace
+			if err := c.Get(ctx, client.ObjectKeyFromObject(namespace), &gotNamespace); err != nil {
+				t.Fatalf("Get namespace: %v", err)
+			}
+			if gotNamespace.Labels[labelKueueDefaultLocalQueue] != "jobqueue" {
+				t.Fatalf("namespace routing = %#v, want jobqueue", gotNamespace.Labels)
+			}
+		})
+	}
+}
+
 func TestTeamOptInRejectsNamespaceRetargetWhileLegacyRoutingIsRetained(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -2224,6 +2460,44 @@ type namespaceMutationFailingClient struct {
 	client.Client
 	createErr error
 	updateErr error
+}
+
+type replacementBeforeDeleteClient struct {
+	client.Client
+	target      client.ObjectKey
+	replacement client.Object
+	replaced    bool
+}
+
+func (c *replacementBeforeDeleteClient) Delete(
+	ctx context.Context,
+	obj client.Object,
+	opts ...client.DeleteOption,
+) error {
+	if !c.replaced && client.ObjectKeyFromObject(obj) == c.target {
+		current := obj.DeepCopyObject().(client.Object)
+		if err := c.Client.Get(ctx, c.target, current); err != nil {
+			return err
+		}
+		if err := c.Client.Delete(ctx, current); err != nil {
+			return err
+		}
+		if err := c.Client.Create(ctx, c.replacement.DeepCopyObject().(client.Object)); err != nil {
+			return err
+		}
+		c.replaced = true
+		deleteOptions := (&client.DeleteOptions{}).ApplyOptions(opts)
+		if deleteOptions.Preconditions != nil &&
+			deleteOptions.Preconditions.UID != nil &&
+			*deleteOptions.Preconditions.UID == obj.GetUID() {
+			return apierrors.NewConflict(
+				schema.GroupResource{Group: clusterQueueGVK.Group, Resource: "clusterqueues"},
+				obj.GetName(),
+				errors.New("object was replaced before delete"),
+			)
+		}
+	}
+	return c.Client.Delete(ctx, obj, opts...)
 }
 
 type namespaceGetFailingClient struct {
@@ -2727,6 +3001,99 @@ func TestWorkspaceRequiresExplicitAdoptionOfRetainedNamespace(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExplicitlyAdoptsNamespaceFromDeletedOwner(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "shared",
+		UID:    types.UID("namespace-uid"),
+		Labels: map[string]string{labelWorkspace: "ghost"},
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Target.Namespace = retained.Name
+	workspace.Annotations = map[string]string{
+		annotationAdoptionNamespaceUID: string(retained.UID),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, retained).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	ready, err := reconciler.reconcileNamespace(ctx, workspace, retained.Name, false)
+	if err != nil || !ready {
+		t.Fatalf("reconcile namespace: ready=%v err=%v", ready, err)
+	}
+	var got corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(retained), &got); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if got.Labels[labelWorkspace] != workspace.Name ||
+		got.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("namespace ownership = labels:%#v annotations:%#v", got.Labels, got.Annotations)
+	}
+}
+
+func TestWorkspaceCannotAdoptNamespaceFromExistingOwner(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	retained := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "shared",
+		UID:    types.UID("namespace-uid"),
+		Labels: map[string]string{labelWorkspace: "ghost"},
+	}}
+	ghost := testWorkspace("ghost")
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Target.Namespace = retained.Name
+	workspace.Annotations = map[string]string{
+		annotationAdoptionNamespaceUID: string(retained.UID),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, ghost, retained).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if ready, err := reconciler.reconcileNamespace(ctx, workspace, retained.Name, false); err == nil || ready {
+		t.Fatalf("reconcile namespace: ready=%v err=%v, want existing owner refusal", ready, err)
+	}
+}
+
+func TestWorkspaceRejectsMismatchedNamespaceAdoptionEvidence(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	replacement := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "aurora",
+		UID:  types.UID("replacement-namespace-uid"),
+	}}
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Annotations = map[string]string{
+		annotationAdoptionNamespaceUID: "validated-namespace-uid",
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, replacement).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if ready, err := reconciler.reconcileNamespace(ctx, workspace, replacement.Name, false); err == nil || ready {
+		t.Fatalf("reconcile namespace: ready=%v err=%v, want UID mismatch refusal", ready, err)
+	}
+	var got corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(replacement), &got); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if got.Labels[labelWorkspace] != "" || got.Annotations[annotationOwnerUID] != "" {
+		t.Fatalf("replacement namespace was claimed: labels=%#v annotations=%#v", got.Labels, got.Annotations)
+	}
+}
+
 func TestWorkspaceRecreationCannotAdoptRetainedNamespaceFromOldUID(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -3027,6 +3394,76 @@ func TestLegacyWorkspaceRBACPartialReconcileRecoversExistingNamespace(t *testing
 	}
 	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
 		t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+}
+
+func TestLegacyPartialReconcileRecoversAfterDefaultQueueFailure(t *testing.T) {
+	for _, createNamespace := range []bool{true, false} {
+		t.Run(fmt.Sprintf("createNamespace=%v", createNamespace), func(t *testing.T) {
+			ctx := context.Background()
+			scheme := testScheme(t)
+			workspaceCreated := metav1.NewTime(time.Now().Add(-time.Hour))
+			namespaceCreated := metav1.NewTime(time.Now())
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:              "aurora",
+				UID:               types.UID("namespace-uid"),
+				CreationTimestamp: namespaceCreated,
+				Labels:            map[string]string{labelWorkspace: "aurora"},
+			}}
+			if !createNamespace {
+				namespace.CreationTimestamp = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+				namespace.Labels[labelWorkspaceLocalQueue] = "aurora"
+				namespace.Labels[labelKueueDefaultLocalQueue] = "aurora"
+				labelManaged := metav1.NewTime(time.Now())
+				namespace.ManagedFields = []metav1.ManagedFieldsEntry{{
+					Manager:    "tau-core-controller",
+					Operation:  metav1.ManagedFieldsOperationUpdate,
+					APIVersion: "v1",
+					Time:       &labelManaged,
+					FieldsType: "FieldsV1",
+					FieldsV1:   managedLabelFields(t, labelWorkspace),
+				}}
+			}
+			workspace := testWorkspace("aurora")
+			workspace.UID = types.UID("workspace-uid")
+			workspace.Generation = 1
+			workspace.CreationTimestamp = workspaceCreated
+			workspace.Spec.Queue = ""
+			workspace.Spec.Target.CreateNamespace = createNamespace
+			baseClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(workspace, namespace, testLocalQueue("aurora", "aurora", "aurora"), testClusterQueue("aurora")).
+				WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+				Build()
+			var c client.Client = baseClient
+			if !createNamespace {
+				c = &namespaceManagedFieldsClient{
+					Client:        baseClient,
+					namespace:     namespace.Name,
+					managedFields: namespace.ManagedFields,
+				}
+			}
+			reconciler := newTestWorkspaceReconciler(c)
+
+			if _, err := reconciler.reportUnresolvedQueue(ctx, workspace, "default queue unavailable"); err != nil {
+				t.Fatalf("report unresolved queue: %v", err)
+			}
+			var afterFailure tauv1alpha1.TauWorkspace
+			if err := baseClient.Get(ctx, client.ObjectKeyFromObject(workspace), &afterFailure); err != nil {
+				t.Fatalf("Get workspace after queue failure: %v", err)
+			}
+			afterFailure.Spec.Queue = "aurora"
+			if _, err := reconciler.syncWorkspace(ctx, &afterFailure); err != nil {
+				t.Fatalf("sync workspace after recovery: %v", err)
+			}
+			var gotNamespace corev1.Namespace
+			if err := baseClient.Get(ctx, client.ObjectKeyFromObject(namespace), &gotNamespace); err != nil {
+				t.Fatalf("Get namespace: %v", err)
+			}
+			if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				t.Fatalf("namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+			}
+		})
 	}
 }
 

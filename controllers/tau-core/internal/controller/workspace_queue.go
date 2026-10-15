@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -206,12 +207,74 @@ func workspaceLocalQueueName(workspace *tauv1alpha1.TauWorkspace) string {
 	return workspace.Spec.Queue
 }
 
+func (r *TauWorkspaceReconciler) recoverRetainedWorkspaceQueueStatus(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace string,
+) (tauv1alpha1.WorkspaceQueueStatus, bool) {
+	if workspace.Spec.TeamRef == nil {
+		return workspace.Status.Queue, false
+	}
+	namespace := &corev1.Namespace{}
+	if err := r.Get(ctx, client.ObjectKey{Name: targetNamespace}, namespace); err != nil {
+		return workspace.Status.Queue, false
+	}
+	if namespace.Labels[labelWorkspace] != workspace.Name {
+		return workspace.Status.Queue, false
+	}
+	localQueueName := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
+	if localQueueName == "" {
+		localQueueName = strings.TrimSpace(namespace.Labels[labelWorkspaceLocalQueue])
+	}
+	if localQueueName == "" ||
+		localQueueName == workspaceLocalQueueName(workspace) ||
+		namespace.Labels[labelWorkspaceLocalQueue] != localQueueName ||
+		namespace.Labels[labelKueueDefaultLocalQueue] != localQueueName {
+		return workspace.Status.Queue, false
+	}
+	retainedStatus := workspace.Status.Queue
+	retainedStatus.LocalQueue = localQueueName
+	localQueue := newQueueObject(localQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: localQueueName, Namespace: targetNamespace}, localQueue); err != nil {
+		return retainedStatus, true
+	}
+	if ownedByWorkspace(localQueue.GetLabels(), workspace.Name) {
+		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
+			return retainedStatus, true
+		}
+	} else if localQueue.GetLabels()[labelManagedBy] == labelManagedByValue {
+		return retainedStatus, true
+	}
+	clusterQueueName, _, _ := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+	clusterQueueName = strings.TrimSpace(clusterQueueName)
+	if clusterQueueName == "" {
+		return retainedStatus, true
+	}
+	retainedStatus.ClusterQueue = clusterQueueName
+	if recorded := strings.TrimSpace(workspace.Status.Queue.ClusterQueue); recorded != "" && recorded != clusterQueueName {
+		retainedStatus.ClusterQueue = recorded
+		retainedStatus.ClusterQueueUID = workspace.Status.Queue.ClusterQueueUID
+		return retainedStatus, true
+	}
+	clusterQueue := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
+		return retainedStatus, true
+	}
+	if expectedUID := strings.TrimSpace(workspace.Status.Queue.ClusterQueueUID); expectedUID != "" &&
+		expectedUID != string(clusterQueue.GetUID()) {
+		retainedStatus.ClusterQueueUID = expectedUID
+		return retainedStatus, true
+	}
+	retainedStatus.ClusterQueueUID = string(clusterQueue.GetUID())
+	return retainedStatus, true
+}
+
 func (r *TauWorkspaceReconciler) reconcileRetainedWorkspaceQueue(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
 	targetNamespace string,
+	status tauv1alpha1.WorkspaceQueueStatus,
 ) (bool, string, error) {
-	status := workspace.Status.Queue
 	localQueueName := strings.TrimSpace(status.LocalQueue)
 	clusterQueueName := strings.TrimSpace(status.ClusterQueue)
 	if localQueueName == "" || clusterQueueName == "" {

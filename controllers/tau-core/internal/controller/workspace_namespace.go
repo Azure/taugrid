@@ -66,14 +66,37 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(
 		namespace.Labels = map[string]string{}
 	}
 	owner := namespace.Labels[labelWorkspace]
-	if owner != "" && owner != workspace.Name {
+	adoptionNamespaceUID := strings.TrimSpace(workspace.Annotations[annotationAdoptionNamespaceUID])
+	if adoptionNamespaceUID != "" && adoptionNamespaceUID != string(namespace.UID) {
 		return false, fmt.Errorf(
-			"target namespace %q is retained for TauWorkspace %q; explicit operator adoption is required",
+			"target namespace %q UID is %q, but adoption evidence names %q",
 			targetNamespace,
-			owner,
+			namespace.UID,
+			adoptionNamespaceUID,
 		)
 	}
 	explicitAdoption := hasExplicitNamespaceAdoptionEvidence(workspace, &namespace)
+	if owner != "" && owner != workspace.Name {
+		if !explicitAdoption {
+			return false, fmt.Errorf(
+				"target namespace %q is retained for TauWorkspace %q; explicit operator adoption is required",
+				targetNamespace,
+				owner,
+			)
+		}
+		var retainedOwner tauv1alpha1.TauWorkspace
+		err := r.apiReader().Get(ctx, client.ObjectKey{Name: owner, Namespace: workspace.Namespace}, &retainedOwner)
+		if err == nil {
+			return false, fmt.Errorf(
+				"target namespace %q is still assigned to existing TauWorkspace %q",
+				targetNamespace,
+				owner,
+			)
+		}
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("verify retained TauWorkspace %q: %w", owner, err)
+		}
+	}
 	ownerUID := namespace.Annotations[annotationOwnerUID]
 	legacyExplicitAdoption := owner == "" &&
 		ownerUID == "" &&
@@ -272,9 +295,15 @@ func hasLegacyPartialReconcileStatus(workspace *tauv1alpha1.TauWorkspace) bool {
 		}
 	}
 	drift := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionDriftDetected)
-	return drift != nil &&
+	if drift != nil &&
 		drift.Status == metav1.ConditionTrue &&
-		drift.Reason == "NamespaceReconcileFailed"
+		drift.Reason == "NamespaceReconcileFailed" {
+		return true
+	}
+	queue := findCondition(workspace.Status.Conditions, tauv1alpha1.ConditionQueueReady)
+	return queue != nil &&
+		queue.Status == metav1.ConditionFalse &&
+		queue.Reason == "QueueUnresolved"
 }
 
 func hasPristineLegacyWorkspaceStatus(workspace *tauv1alpha1.TauWorkspace) bool {

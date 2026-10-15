@@ -147,14 +147,35 @@ func TestPreflightAdoptionSuccess(t *testing.T) {
 	}
 }
 
-func TestPreflightAdoptionEnforcesSingleV0Workspace(t *testing.T) {
-	runner := successfulAdoptRunner()
-	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
-		out: `{"items":[{"metadata":{"name":"other"},"spec":{"queue":"jobqueue"}}]}`,
-	}}
-	_, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
-	if err == nil || !strings.Contains(err.Error(), `TauWorkspace "other" already exists with different intent`) {
-		t.Fatalf("expected singleton refusal, got %v", err)
+func TestPreflightAdoptionAllowsUnrelatedWorkspaces(t *testing.T) {
+	for _, items := range []string{
+		`{"items":[{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"},"queue":"jobqueue"}}]}`,
+		`{"items":[
+			{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"},"queue":"jobqueue"}},
+			{"metadata":{"name":"third"},"spec":{"target":{"namespace":"third"},"queue":"jobqueue"}}
+		]}`,
+	} {
+		runner := successfulAdoptRunner()
+		runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{out: items}}
+		if _, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions()); err != nil {
+			t.Fatalf("unrelated workspaces blocked adoption: %v", err)
+		}
+	}
+}
+
+func TestPreflightAdoptionRejectsCompetingWorkspaceTarget(t *testing.T) {
+	for _, existing := range []string{
+		`{"metadata":{"name":"other"},"spec":{"target":{"namespace":"sample"},"queue":"jobqueue"}}`,
+		`{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"},"queue":"jobqueue"},"status":{"target":{"resolvedNamespace":"sample"}}}`,
+	} {
+		runner := successfulAdoptRunner()
+		runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+			out: `{"items":[` + existing + `]}`,
+		}}
+		_, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
+		if err == nil || !strings.Contains(err.Error(), `already targets Namespace "sample"`) {
+			t.Fatalf("competing target error = %v", err)
+		}
 	}
 }
 
@@ -182,6 +203,9 @@ func TestPreflightAdoptionRefusals(t *testing.T) {
 		{
 			name: "namespace assigned elsewhere",
 			change: func(r *adoptFakeRunner) {
+				r.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+					out: `{"items":[{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"},"queue":"jobqueue"}}]}`,
+				}}
 				r.responses["get namespace sample -o json"] = []adoptFakeResponse{{
 					out: fmt.Sprintf(`{"metadata":{"name":"sample","uid":"ns-uid","labels":{"%s":"other"}}}`, workloadmeta.LabelWorkspace),
 				}}
@@ -345,8 +369,12 @@ func compatibleWorkspaceJSON(queue string) string {
 
 func TestPreflightAdoptionAcceptsCompatibleWorkspace(t *testing.T) {
 	runner := successfulAdoptRunner()
+	existing := compatibleWorkspaceJSON("jobqueue")
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+		out: `{"items":[` + existing + `,{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"},"queue":"jobqueue"}}]}`,
+	}}
 	runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
-		out: compatibleWorkspaceJSON("jobqueue"),
+		out: existing,
 	}}
 	report, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
 	if err != nil {
@@ -355,6 +383,64 @@ func TestPreflightAdoptionAcceptsCompatibleWorkspace(t *testing.T) {
 	if !report.ExistingWorkspace || report.ExistingWorkspaceIntent != "compatible" ||
 		report.ExistingWorkspaceUID != "workspace-uid" || report.ExistingWorkspaceRV != "17" {
 		t.Fatalf("unexpected existing workspace report: %#v", report)
+	}
+}
+
+func TestPreflightAdoptionAllowsRetainedNamespaceFromDeletedOwner(t *testing.T) {
+	runner := successfulAdoptRunner()
+	runner.responses["get namespace sample -o json"] = []adoptFakeResponse{{
+		out: fmt.Sprintf(
+			`{"metadata":{"name":"sample","uid":"ns-uid","labels":{"%s":"ghost","kueue.x-k8s.io/default-local-queue":"jobqueue"}}}`,
+			workloadmeta.LabelWorkspace,
+		),
+	}}
+	if _, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions()); err != nil {
+		t.Fatalf("deleted owner blocked explicit adoption: %v", err)
+	}
+}
+
+func TestPreflightAdoptionTeamIntentRequiresExistingNamespaceOwnership(t *testing.T) {
+	existing := strings.Replace(
+		compatibleWorkspaceJSON("jobqueue"),
+		`"authorization":{"mode":"cluster-wide"},`,
+		`"teamRef":{"name":"vision"},"quota":[{"flavor":"gpu","resource":"nvidia.com/gpu","nominalQuota":"1"}],"authorization":{"mode":"cluster-wide"},`,
+		1,
+	)
+	for _, test := range []struct {
+		name      string
+		namespace string
+		wantErr   bool
+	}{
+		{
+			name:      "retained namespace belongs to old UID",
+			namespace: `{"metadata":{"name":"sample","uid":"ns-uid","annotations":{"tau.azure.com/owner-uid":"old-workspace-uid"},"labels":{"kueue.x-k8s.io/default-local-queue":"jobqueue"}}}`,
+			wantErr:   true,
+		},
+		{
+			name:      "evidence refresh for current owner",
+			namespace: `{"metadata":{"name":"sample","uid":"ns-uid","annotations":{"tau.azure.com/owner-uid":"workspace-uid"},"labels":{"kueue.x-k8s.io/default-local-queue":"jobqueue"}}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runner := successfulAdoptRunner()
+			runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+				out: `{"items":[` + existing + `]}`,
+			}}
+			runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
+				out: existing,
+			}}
+			runner.responses["get namespace sample -o json"] = []adoptFakeResponse{{out: test.namespace}}
+			_, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "conflicting spec") {
+					t.Fatalf("error = %v, want conflicting spec", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("evidence refresh rejected: %v", err)
+			}
+		})
 	}
 }
 
