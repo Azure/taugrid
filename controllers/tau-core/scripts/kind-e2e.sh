@@ -178,6 +178,16 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterQueue:
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: field is immutable
+              x-kubernetes-preserve-unknown-fields: true
           x-kubernetes-preserve-unknown-fields: true
     - name: v1beta2
       served: true
@@ -185,6 +195,16 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterQueue:
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: field is immutable
+              x-kubernetes-preserve-unknown-fields: true
           x-kubernetes-preserve-unknown-fields: true
 ---
 apiVersion: apiextensions.k8s.io/v1
@@ -198,6 +218,27 @@ spec:
     listKind: ClusterQueueList
     plural: clusterqueues
     singular: clusterqueue
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cohorts.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: Cohort
+    listKind: CohortList
+    plural: cohorts
+    singular: cohort
   scope: Cluster
   versions:
     - name: v1beta2
@@ -694,9 +735,14 @@ while (( SECONDS < deadline )); do
   [[ "${team_phase}" == "Ready" && "${training_phase}" == "Ready" && "${evaluation_phase}" == "Ready" ]] && break
   sleep 1
 done
-[[ "${team_phase:-}" == "Ready" ]]
-[[ "${training_phase:-}" == "Ready" ]]
-[[ "${evaluation_phase:-}" == "Ready" ]]
+if [[ "${team_phase:-}" != "Ready" || "${training_phase:-}" != "Ready" || "${evaluation_phase:-}" != "Ready" ]]; then
+  echo "team-backed workspaces did not become Ready" >&2
+  kubectl -n "${SYSTEM_NAMESPACE}" get teams.tau.azure.com/kind-research -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-training -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-evaluation -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  exit 1
+fi
 kubectl get cohort.kueue.x-k8s.io/tau-team-kind-research \
   -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources[0].nominalQuota}' | grep -qx 2
 kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training \
