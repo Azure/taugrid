@@ -53,6 +53,24 @@ func validateWorkspaceObjectUID(obj client.Object, workspace *tauv1alpha1.TauWor
 	return nil
 }
 
+func validateWorkspaceObjectUIDForCleanup(obj client.Object, workspace *tauv1alpha1.TauWorkspace) error {
+	if err := validateWorkspaceObjectUID(obj, workspace); err == nil {
+		return nil
+	}
+	objectCreated := obj.GetCreationTimestamp()
+	if workspace.DeletionTimestamp == nil ||
+		workspace.UID == "" ||
+		!hasPristineLegacyWorkspaceStatus(workspace) ||
+		obj.GetLabels()[labelManagedBy] != labelManagedByValue ||
+		obj.GetLabels()[labelWorkspace] != workspace.Name ||
+		workspace.CreationTimestamp.IsZero() ||
+		objectCreated.IsZero() ||
+		objectCreated.Before(&workspace.CreationTimestamp) {
+		return validateWorkspaceObjectUID(obj, workspace)
+	}
+	return nil
+}
+
 func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
@@ -236,7 +254,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 			if keepNamespace != "" && obj.GetNamespace() == keepNamespace && candidate.keep(obj) {
 				continue
 			}
-			if err := validateWorkspaceObjectUID(obj, workspace); err != nil {
+			if err := validateWorkspaceObjectUIDForCleanup(obj, workspace); err != nil {
 				return fmt.Errorf("refusing to delete stale workspace access: %w", err)
 			}
 			if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
@@ -274,7 +292,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 				localQueue.GetName() == workspaceClusterQueueName(workspace.Name)) {
 			continue
 		}
-		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
+		if err := validateWorkspaceObjectUIDForCleanup(localQueue, workspace); err != nil {
 			return fmt.Errorf("refusing to delete LocalQueue %q: %w", localQueue.GetName(), err)
 		}
 		deleteOptions := []client.DeleteOption{}
@@ -325,7 +343,7 @@ func (r *TauWorkspaceReconciler) deleteOwnedObject(
 	if !ownedByWorkspace(obj.GetLabels(), workspace.Name) {
 		return fmt.Errorf("refusing to delete %T %s: object is not owned by workspace %q", obj, key, workspace.Name)
 	}
-	if err := validateWorkspaceObjectUID(obj, workspace); err != nil {
+	if err := validateWorkspaceObjectUIDForCleanup(obj, workspace); err != nil {
 		return fmt.Errorf("refusing to delete %T %s: %w", obj, key, err)
 	}
 	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {

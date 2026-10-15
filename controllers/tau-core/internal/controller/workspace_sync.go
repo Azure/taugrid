@@ -64,7 +64,7 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	if recovered, ok := r.recoverRetainedWorkspaceQueueStatus(ctx, workspace, targetNamespace); ok {
 		queueStatus = recovered
 	}
-	if queueStatus.LocalQueue == "" {
+	if queueStatus.LocalQueue == "" && workspace.Spec.TeamRef == nil {
 		queueStatus.LocalQueue = workspaceLocalQueueName(workspace)
 	}
 	queueReady := false
