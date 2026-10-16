@@ -27,21 +27,10 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// runManagedWorkflowRequest is the resolved managed workflow (schema_version: 1)
-// dispatch for `tau run --config`. Managed workflows keep the manifest as the
-// source of truth for compute and storage; the run config only supplies the
-// scheduling policy and the entrypoint.
 type runManagedWorkflowRequest struct {
 	Options resolvedRunManagedWorkflowOptions
 }
 
-// managedWorkflowGPUDemand reports the total number of GPUs a managed workflow
-// asks Kueue to admit at once, which is what the quota preflight must compare
-// against a queue's capacity. It is not the per-pod count: a training RayJob
-// renders workers dedicated GPU worker replicas plus a CPU-only control head,
-// so its demand is workers x gpus. Eval renders one dedicated GPU worker and
-// CPU fanout workers; a plain Job is a single pod, so both stay at the
-// per-execution-pod count.
 func managedWorkflowGPUDemand(m *manifest.Manifest, workloadKind string) int {
 	if m == nil || m.Compute.GPUs <= 0 {
 		return 0
@@ -71,8 +60,6 @@ func newRunManagedWorkflowRequest(o unresolvedRunOptions) (runManagedWorkflowReq
 	return runManagedWorkflowRequest{Options: resolveRunManagedWorkflowOptions(o)}, nil
 }
 
-// managedWorkflowProfileOptions resolves the nsys profiling window from the run
-// config. Profiling knobs are only meaningful with an explicit profiler.
 func managedWorkflowProfileOptions(o resolvedRunManagedWorkflowOptions) (manifest.ProfileOptions, error) {
 	resolvedProfiler, err := validateProfiler(o.profiler)
 	if err != nil {
@@ -111,8 +98,6 @@ func managedWorkflowProfileOptions(o resolvedRunManagedWorkflowOptions) (manifes
 	return manifest.ProfileOptions{Mode: resolvedProfiler, Rank: rank, Warmup: warmup, Duration: duration}, nil
 }
 
-// managedWorkflowMetricsOffload resolves sidecar metrics offload options from
-// the TAU_METRICS_OFFLOAD_* environment contract.
 func managedWorkflowMetricsOffload(ctx context.Context) (manifest.MetricsOffloadOptions, error) {
 	var opts manifest.MetricsOffloadOptions
 	fromEnv := func(name string, dest *string) {
@@ -214,8 +199,6 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 			fmt.Fprintf(stderr, "tau: inferred workload_kind=rayjob (compute.workers=%d requires multi-node; set workload_kind: rayjob explicitly to silence this warning)\n", m.Compute.Workers)
 		}
 	}
-	// eval.cpu_workers from the run config overrides the manifest. Apply it
-	// before the eval dispatch inference below so IsEval() sees the override.
 	if o.cpuWorkers > 0 {
 		m.Eval.CPUWorkers = o.cpuWorkers
 	}
@@ -516,8 +499,6 @@ func executeRunManagedWorkflow(ctx context.Context, stdout, stderr io.Writer, re
 			SubmissionID: o.submissionID,
 		}}, cleanupSubmissions...)
 	}
-	// The per-run SecretProviderClass is rendered by manifest.Render under the
-	// same condition (see render.go: KVSpec non-nil with at least one entry).
 	spcName := ""
 	if kvSpec != nil && len(kvSpec.Entries) > 0 {
 		spcName = kvspec.SPCName(m.ResourceName())
@@ -575,9 +556,6 @@ func printManagedWorkflowSubmission(stdout io.Writer, m *manifest.Manifest, name
 		} else {
 			kindLabel = "rayjob-eval"
 		}
-		// tau run get reads batch/v1 Job result annotations today. Surface
-		// RayJob-native lifecycle commands and a Kueue lookup without
-		// advertising unsupported retrieval.
 		followUp = fmt.Sprintf(
 			"status:  tau run status %s -n %s%s\n"+
 				"rayjob:  kubectl get rayjob %s -n %s%s\n"+

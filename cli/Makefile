@@ -7,9 +7,6 @@ BINARY := tau
 GEN_BINARY := tau-gen
 PKG := ./cmd/tau
 GEN_PKG := ./cmd/tau-gen
-# Local checkout builds use the explicit development marker understood by
-# workspace version checks. Release builds always override VERSION with a
-# reviewed SemVer tag; commit and date still identify local builds.
 VERSION ?= dev
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
@@ -17,8 +14,6 @@ VERSION_PKG := github.com/Azure/taugrid/core/version
 LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE)
 BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 
-# Pinned so a staticcheck release cannot fail CI on an unrelated change. Bump it
-# deliberately, in a PR that also fixes whatever the new version finds.
 STATICCHECK_VERSION := v0.7.0
 RELEASE_DIR := bin/release
 RELEASE_TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
@@ -58,9 +53,6 @@ lint:
 clean:
 	rm -rf bin/
 
-# Release builds require explicit SemVer and exact source metadata. The tag
-# workflow separately proves that the checkout is clean and VERSION names an
-# annotated tag on main.
 verify-release-inputs:
 	@printf '%s\n' "$(VERSION)" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*))(\.((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*)))*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$$' || \
 	  { echo "VERSION must be SemVer with a v prefix, got '$(VERSION)'" >&2; exit 1; }
@@ -71,8 +63,6 @@ verify-release-inputs:
 	@test "$$(go env GOHOSTOS)" = "darwin" || \
 	  { echo "release builds require macOS because Darwin token-cache support requires CGO" >&2; exit 1; }
 
-# Cross-compile the public release surface. Outputs raw binaries matching the
-# established GitHub Release asset contract.
 release-binaries: verify-release-inputs
 	@test -n "$(RELEASE_DIR)" || { echo "RELEASE_DIR must not be empty" >&2; exit 1; }
 	@rm -rf "$(RELEASE_DIR)"

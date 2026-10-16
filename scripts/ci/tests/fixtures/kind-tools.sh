@@ -7,7 +7,6 @@ set -eu
 tool="${0##*/}"
 printf '%s %s\n' "$tool" "$*" >>"$CALL_LOG"
 if [ "${KIND_TEST_FAILURE:-}" = "$tool:$1" ] || [ "${KIND_TEST_FAILURE:-}" = "$1" ]; then
-  # Let the importer succeed so a failed save specifically exercises pipefail.
   [ "$tool:$1" != podman:save ] || printf archive
   exit 1
 fi

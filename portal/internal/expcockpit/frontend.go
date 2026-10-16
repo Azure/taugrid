@@ -34,11 +34,7 @@ type FrontendOptions struct {
 	SeriesPath      string
 	Source          string
 	RefreshInterval string
-	// Embedded tightens the landing layout for same-origin iframe hosts (the
-	// unified portal's Experiments board) so it fills the narrower frame instead
-	// of keeping the standalone full-page margins. Full-page /stellar leaves it
-	// false.
-	Embedded bool
+	Embedded        bool
 }
 
 type FrontendAsset struct {

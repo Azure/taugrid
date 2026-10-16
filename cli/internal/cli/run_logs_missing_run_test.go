@@ -14,10 +14,6 @@ import (
 	"github.com/Azure/taugrid/core/status"
 )
 
-// A snapshot that succeeded but located neither workload kind: the run does not
-// exist. Historically this fell through to `kubectl logs -l job-name=<name>`,
-// which matches nothing for an unknown name and returns empty output with a nil
-// error, so `tau run logs <typo>` exited 0 in silence.
 func TestRunLogsReportsMissingRunInsteadOfSilentSuccess(t *testing.T) {
 	var out bytes.Buffer
 	jobLogsCalled := false
@@ -27,7 +23,6 @@ func TestRunLogsReportsMissingRunInsteadOfSilentSuccess(t *testing.T) {
 		Tail:      200,
 	}, runLogsHooks{
 		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
-			// Snapshot itself succeeds; it simply found nothing.
 			return status.Snapshot{
 				Name:      "typo-run-name",
 				Namespace: "pre-training-document",
@@ -37,8 +32,6 @@ func TestRunLogsReportsMissingRunInsteadOfSilentSuccess(t *testing.T) {
 			return "", errors.New("not a rayjob")
 		},
 		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
-			// This is the empty-match path that produced the silent success:
-			// `kubectl logs -l job-name=<unknown>` returns "" with a nil error.
 			jobLogsCalled = true
 			return "", nil
 		},
@@ -60,9 +53,6 @@ func TestRunLogsReportsMissingRunInsteadOfSilentSuccess(t *testing.T) {
 	}
 }
 
-// Negative control for the guard above: when the snapshot DOES find a Job, the
-// batch/v1 path must still run normally. Without this, a guard that fired too
-// eagerly would break every plain Job run and the test above would still pass.
 func TestRunLogsStillReadsJobLogsWhenJobExists(t *testing.T) {
 	var out bytes.Buffer
 	jobLogsCalled := false
@@ -79,7 +69,7 @@ func TestRunLogsStillReadsJobLogsWhenJobExists(t *testing.T) {
 			}, nil
 		},
 		rayJobLogs: func(context.Context, *kube.Runner, string, string, bool) (string, error) {
-			return "", context.Canceled // force the fallthrough to jobLogs
+			return "", context.Canceled
 		},
 		jobLogs: func(context.Context, kubeRawRunner, string, string, bool, int) (string, error) {
 			jobLogsCalled = true

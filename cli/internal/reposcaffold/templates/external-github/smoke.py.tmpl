@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 import subprocess
 
-
 def main() -> None:
     root = Path(os.environ.get("UPSTREAM_ROOT", "{{.UpstreamRoot}}"))
     output_dir = Path(os.environ.get("TAU_OUTPUT_DIR", "/tmp/{{.Package}}-smoke"))
@@ -38,7 +37,6 @@ def main() -> None:
     }
     (output_dir / "smoke-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))
-
 
 if __name__ == "__main__":
     main()

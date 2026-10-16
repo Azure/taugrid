@@ -5,10 +5,6 @@ package runconfig
 
 import "testing"
 
-// The experiment axis used to be defined as the run group, so a config had no
-// way to say the two differ. These cases pin the separation: a named
-// experiment spans its arms, and an unnamed one still falls back to the group
-// so pre-existing configs keep their identity.
 func TestExperimentRunMetadataSeparatesExperimentFromGroup(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

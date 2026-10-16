@@ -2,42 +2,18 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-#
-# TauGrid A100 GPU quickstart — scripted run.
-#
-# This script is ONLY a sequencer for the commands documented in README.md.
-# It contains no logic beyond ordering, existence checks, polling, and echoing
-# what it is about to run. It invokes exactly three tools: az, tau, kubectl.
-#
-# It deliberately does NOT wrap, template, or generate any Kubernetes manifest,
-# and it does not call helm/terraform/make/docker. `tau cluster install` shells
-# out to helm internally; that is Tau's own prerequisite, not this script's.
-#
-# Creates EXPENSIVE billable Azure resources (an A100 node). Run ./cleanup.sh
-# as soon as you have your evidence.
-#
-# Usage:  ./examples/aks-gpu-quickstart/run.sh
-# Run from the repository root.
-
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RG="${TAU_QUICKSTART_RG:-taugrid-gpu-quickstart-rg}"
 CLUSTER="${TAU_QUICKSTART_CLUSTER:-tau-gpu-quickstart}"
-# A100 quota is region-specific and is usually the binding constraint here. See
-# README.md > Choosing a region before changing this.
 LOCATION="${TAU_QUICKSTART_LOCATION:-swedencentral}"
-# CPU system pool. Standard_D4s_v5 is blocked by policy in some subscriptions;
-# the non-"s" Standard_D4_v5 has the same 4 vCPU / 16 GiB shape.
 NODE_SIZE="${TAU_QUICKSTART_NODE_SIZE:-Standard_D4_v5}"
 NODE_COUNT="${TAU_QUICKSTART_NODE_COUNT:-2}"
-# One A100 80GB per node, 24 vCPU. See README.md > Choosing a GPU SKU.
 GPU_SIZE="${TAU_QUICKSTART_GPU_SIZE:-Standard_NC24ads_A100_v4}"
 GPU_COUNT="${TAU_QUICKSTART_GPU_COUNT:-1}"
 GPU_POOL="${TAU_QUICKSTART_GPU_POOL:-a100}"
-# TauGrid v0 activates exactly one workspace per cluster and defaults its name,
-# so this example does not choose one. Every stock install looks the same.
 WORKSPACE="${TAU_QUICKSTART_WORKSPACE:-taugrid-default}"
 NAMESPACE="${TAU_QUICKSTART_NAMESPACE:-taugrid-default}"
 PRINCIPAL="${TAU_QUICKSTART_PRINCIPAL:-quickstart-researcher}"
@@ -52,15 +28,6 @@ CHART_ARGS=()
 if [[ -n "$CHART" ]]; then
   CHART_ARGS=(--chart "$CHART")
 fi
-# Host-diagnostic image for the MIG probe/repair below. Deliberately a fixed,
-# digest-pinned MCR image rather than anything user-overridable: these pods run
-# privileged as root in the node's host namespaces, so an override would be
-# arbitrary root code execution on the node. AGENTS.md rule 18 requires this for
-# privileged host-level workloads. base/core is minimal; tdnf adds util-linux
-# for nsenter. Same pattern as
-# tests/e2e/managedgpu/harness/fixtures/validate-gpu-job.yaml.
-#
-# The image the *workload* runs on is pinned in tau.yaml, not here.
 DIAG_IMAGE="mcr.microsoft.com/azurelinux/base/core@sha256:4ecd6b297db85c54ec2df07145a28536c3655a3e98e54eb2364189bc4e6eac23"
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -81,15 +48,6 @@ run tau run --config "$CONFIG" --namespace "$NAMESPACE" --dry-run=client >/dev/n
 echo "config renders a valid RayJob spec with an nvidia.com/gpu request"
 
 step "0b. Confirm A100 quota in $LOCATION"
-# Failing here costs seconds; failing after the cluster exists costs ~15 minutes
-# and leaves a billable resource group behind.
-#
-# The quota family and per-node vCPU count are derived from $GPU_SIZE, not
-# hardcoded: a Standard_NC48ads_A100_v4 override needs 48 vCPU per node from the
-# same family, and a different family needs a different usage row entirely.
-# This example only supports the NC-ads-A100-v4 family (the MIG and device-plugin
-# handling below is A100-specific), so anything else is rejected here — before
-# any billable resource is created — rather than silently passing the check.
 case "$GPU_SIZE" in
   Standard_NC[0-9]*ads_A100_v4) ;;
   *)
@@ -109,9 +67,6 @@ az vm list-usage --location "$LOCATION" -o tsv \
         printf "  %s: %s/%s used, need %s more\n", $1, $2, $3, need
         if ($3 - $2 < need) { print "  INSUFFICIENT QUOTA — see README.md > Choosing a region"; exit 1 }
       }
-      # Fail closed: no matching usage row means the family is unavailable in
-      # this region, which is indistinguishable from zero quota. Without this
-      # awk exits 0 and the script goes on to create the billable CPU cluster.
       END { if (!found) {
         printf "  no %s quota row in %s — the family is unavailable in this region\n", fam, loc
         print "  see README.md > Choosing a region"
@@ -119,10 +74,6 @@ az vm list-usage --location "$LOCATION" -o tsv \
       } }'
 
 step "1. Resource group + CPU-only AKS cluster"
-# The ownership tag is what makes teardown safe. cleanup.sh deletes the whole
-# resource group only when it finds this tag, so pointing TAU_QUICKSTART_RG at a
-# pre-existing shared group can never cause cleanup.sh to delete resources this
-# quickstart did not create.
 if az group show --name "$RG" >/dev/null 2>&1; then
   echo "resource group $RG already exists — skipping create"
   echo "  NOTE: not tagging a pre-existing group. cleanup.sh will therefore"
@@ -147,12 +98,6 @@ else
 fi
 
 step "2. Add the A100 node pool"
-# Deliberately UNTAINTED. TauGrid's stock ResourceFlavor (charts/taugrid
-# values.yaml) selects only kubernetes.io/os=linux and carries no tolerations,
-# so a tainted GPU pool would never be admitted by Kueue without editing the
-# chart — which would break the "every TauGrid install looks the same"
-# invariant. AKS installs the NVIDIA *driver* automatically for GPU SKUs
-# (gpuProfile.driver=Install), but NOT the device plugin — see step 2a.
 if az aks nodepool show --resource-group "$RG" --cluster-name "$CLUSTER" \
      --name "$GPU_POOL" >/dev/null 2>&1; then
   echo "node pool $GPU_POOL already exists — skipping create"
@@ -172,16 +117,9 @@ run az aks get-credentials \
   --overwrite-existing
 
 step "2a. Install the NVIDIA device plugin"
-# AKS installs the driver but not the device plugin, so without this DaemonSet
-# the node never advertises nvidia.com/gpu and every GPU pod stays Pending.
-# The plugin needs privileged + hostPath /dev: with only NVIDIA_VISIBLE_DEVICES
-# it logs "No devices found. Waiting indefinitely." and silently never registers.
 run kubectl apply -f "$SCRIPT_DIR/nvidia-device-plugin.yaml"
 
 step "2b. Wait for the GPU to be advertised"
-# A GPU node goes Ready before the device plugin has registered the device, so
-# Ready alone is not enough: submitting in that window leaves the pod Pending
-# on "Insufficient nvidia.com/gpu" with no obvious cause.
 for _ in $(seq 1 40); do
   gpus="$(kubectl get nodes -l agentpool="$GPU_POOL" \
     -o jsonpath='{.items[*].status.allocatable.nvidia\.com/gpu}' 2>/dev/null || true)"
@@ -192,21 +130,6 @@ done
 run kubectl get nodes -L agentpool -L kubernetes.azure.com/accelerator
 
 step "2c. Disable MIG on the A100"
-# Standard_NC24ads_A100_v4 comes up with MIG *enabled* and no MIG instances
-# configured, even though `az aks nodepool show` reports gpuInstanceProfile:null.
-# Signature: nvidia-smi -L lists the A100 (NVML works) but cuInit() returns 100
-# CUDA_ERROR_NO_DEVICE, and torch reports device_count 1 with is_available False.
-# nvidia-smi -mig 0 only sets a *pending* state; the driver applies it on reload,
-# hence the VMSS restart. Both steps are skipped when MIG is already Disabled.
-# Runs a command in the GPU node's host namespaces and echoes its stdout.
-# $1 = pod name, $2 = command line to execute on the host.
-#
-# Requests NO nvidia.com/gpu. That is the whole point: the state this code
-# exists to repair (MIG enabled with no MIG instances configured) is exactly
-# the state in which the device plugin advertises zero allocatable GPUs. A pod
-# that requested one would sit Pending forever, `kubectl logs` would return
-# empty, and the caller would misread that as "MIG is Disabled" — silently
-# skipping the repair and failing later with CUDA_ERROR_NO_DEVICE.
 host_exec() {
   _pod="$1"; _cmd="$2"
   kubectl delete pod "$_pod" --ignore-not-found --wait=true >/dev/null 2>&1
@@ -250,8 +173,6 @@ YAML
   kubectl delete pod "$_pod" --wait=false >/dev/null 2>&1 || true
 }
 
-# Echoes exactly one of: Enabled, Disabled, N/A, Unknown.
-# Unknown is a probe failure, never "assume it is off".
 mig_mode() {
   _out="$(host_exec tau-mig-probe \
     'nvidia-smi --query-gpu=mig.mode.current --format=csv,noheader' \
@@ -309,21 +230,11 @@ cause will be far from here. Investigate with:
 esac
 
 step "3. Install TauGrid"
-# --wait=false is required on Helm 4: it extended its readiness wait to custom
-# resources, and TauGrid's TauCluster CR sits at InProgress on a stock install,
-# which is the normal steady state rather than a failure. With --atomic left on
-# the timeout would also roll the release back. Readiness is not skipped, only
-# moved to `tau cluster validate installation`, which is Tau's own gate.
-#
-# With no override, tau uses the public MCR chart and the version pinned in the
-# installed CLI. TAU_QUICKSTART_CHART remains available for contributor tests.
 run tau cluster install "${CHART_ARGS[@]}" --context "$CLUSTER" \
   --wait=false --atomic=false
 run tau cluster validate installation --context "$CLUSTER"
 
 step "4. Create the researcher workspace"
-# NAME is optional, but pass WORKSPACE explicitly so an override creates the
-# same workspace that the status checks below target.
 run tau workspace create "$WORKSPACE" \
   --principal-name "$PRINCIPAL" \
   --context "$CLUSTER" \

@@ -10,10 +10,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// applyTolerance determines the exit code based on the number of failed GPUs
-// and the configured maxFailedGPUs tolerance. criticalBase is the base exit
-// code for failures that exceed tolerance (2 for most checks, but some checks
-// are always warning-level).
 func applyTolerance(failedGPUs []int, maxFailed int, criticalBase int) int {
 	if len(failedGPUs) == 0 {
 		return 0
@@ -24,8 +20,6 @@ func applyTolerance(failedGPUs []int, maxFailed int, criticalBase int) int {
 	return criticalBase
 }
 
-// checkStaleness verifies that the most recent sample is not too old.
-// Returns a non-OK Result if data is stale, nil otherwise.
 func checkStaleness(db *store.DB, maxAge time.Duration) *Result {
 	ts, err := db.LatestTimestamp()
 	if err != nil || ts == 0 {
@@ -51,7 +45,6 @@ func checkStaleness(db *store.DB, maxAge time.Duration) *Result {
 	return nil
 }
 
-// AppendUnique appends v to s only if it is not already present.
 func AppendUnique(s []int, v int) []int {
 	for _, x := range s {
 		if x == v {
@@ -61,10 +54,6 @@ func AppendUnique(s []int, v int) []int {
 	return append(s, v)
 }
 
-// ComputeDeltas computes the delta (last - first) of counter values per GPU.
-// Returns a map of GPU index → delta. If the counter wraps around (last <
-// first, indicating a driver reset), the last value is used as the delta
-// since we can't know the pre-reset value.
 func ComputeDeltas(samples []store.Sample) map[int]float64 {
 	type minMax struct {
 		first, last float64
@@ -93,8 +82,6 @@ func ComputeDeltas(samples []store.Sample) map[int]float64 {
 		if delta > 0 {
 			rates[gpu] = delta
 		} else if delta < 0 {
-			// Counter wrapped around (driver reset). Use the post-reset
-			// value as a conservative estimate of errors since reset.
 			if mm.last > 0 {
 				rates[gpu] = mm.last
 			}

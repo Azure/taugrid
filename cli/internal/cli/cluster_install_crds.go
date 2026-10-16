@@ -58,7 +58,6 @@ func tauGridCRDManifest(rendered []byte) ([]byte, error) {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		// Helm dependency-update progress can precede the first YAML document.
 		var typeErr *yaml.TypeError
 		if errors.As(err, &typeErr) {
 			continue

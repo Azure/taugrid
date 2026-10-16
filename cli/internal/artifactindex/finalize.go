@@ -1,58 +1,17 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package artifactindex emits the durable artifact index (artifacts.json) that
-// the CLI's train -> serve handoff depends on.
-//
-// Why this exists: `tau serve deploy --from-finetune/--checkpoint-ref` and
-// `tau data model index rebuild` both resolve a trained checkpoint by reading
-// /data/checkpoints/finetunes/<run>/artifacts.json. Until this package, the
-// only writer of that file in the repository was the Python SDK's cluster
-// wrapper (sdk/python/tau/_cluster.py, _finalize_train_artifacts). Managed
-// workflows launched by `tau run` execute the researcher's script directly and
-// never load that wrapper, so a CLI-only researcher could train a model and
-// then had no supported way to serve it — every registry-aware path failed to
-// resolve the run, leaving `--checkpoint <absolute path>` typed by hand as the
-// only escape.
-//
-// The emitted schema matches managedWorkflowArtifactIndex in
-// cli/internal/cli/pvc_helpers.go. Keep the two in sync; finalize_test.go
-// asserts the emitted field names agree with that struct's JSON tags.
 package artifactindex
 
 import "strings"
 
-// Config carries the render-time values the finalize step needs. These are
-// passed explicitly rather than read from the pod environment because the
-// managed-workflow entrypoint resolves ${NAME}-style markers at render time,
-// not at runtime — there is no TAU_RUN_NAME env var to read.
 type Config struct {
-	// Artifact is the manifest's artifacts.checkpoint value, e.g.
-	// "last.safetensors". Empty means the manifest declared no checkpoint.
-	Artifact string
-	// Run is the run name; it names the durable directory
-	// <durable>/finetunes/<Run>/ that artifacts.json is written into.
-	Run string
-	// ResourceName and Namespace are recorded in the index for provenance.
+	Artifact     string
+	Run          string
 	ResourceName string
 	Namespace    string
 }
 
-// Script returns a POSIX shell snippet that finalizes the declared checkpoint
-// artifact and writes artifacts.json.
-//
-// It exits 0 when the declared artifact is simply absent, so a training run
-// that produced real results is not failed over a checkpoint the researcher's
-// own script did not write. It exits 126 when the index cannot be written at
-// all: no python3 in the image, a refused destination, or an I/O failure. A
-// run that declared storage.checkpoint and has no artifact index is not
-// servable, and reporting success for it hides that until deploy time.
-//
-// Callers run it only after training succeeds — the entrypoint's `set -eu`
-// guarantees a failed training run never reaches it.
-//
-// An empty Artifact or Run yields an empty script, so manifests that declare no
-// checkpoint render exactly as they did before this step existed.
 func Script(cfg Config) string {
 	if strings.TrimSpace(cfg.Artifact) == "" || strings.TrimSpace(cfg.Run) == "" {
 		return ""
@@ -67,18 +26,10 @@ func Script(cfg Config) string {
 	return b.String()
 }
 
-// shellQuote wraps s in single quotes, escaping any embedded single quote.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
-// finalizeScript mirrors _finalize_train_artifacts in the Python SDK: locate the
-// declared artifact across the same candidate roots, copy it into the durable
-// artifacts directory, then write the index atomically.
-//
-// It reads its inputs from the TAU_ARTIFACT_* variables that Script exports
-// immediately above it, so this constant is identical for every run and the
-// only render-time quoting happens in Script.
 const finalizeScript = `# Emit the durable artifact index that 'tau serve --from-finetune' and
 # 'tau data model index rebuild' read. Best-effort for transient faults: a
 # training run that produced real results is not failed over bookkeeping.
@@ -221,8 +172,6 @@ then
   exit 126
 fi`
 
-// IndentedScript returns Script(cfg) with every line prefixed by spaces, for
-// embedding in a YAML block scalar. Mirrors storageprobe.IndentedScript.
 func IndentedScript(cfg Config, spaces int) string {
 	body := Script(cfg)
 	if body == "" {
@@ -240,16 +189,6 @@ func IndentedScript(cfg Config, spaces int) string {
 	return strings.Join(lines, "\n")
 }
 
-// WrapCommand returns cmd wrapped so the artifact index step runs after it
-// succeeds. It is the container-command analogue of Script, for the renderers
-// that build an argv rather than a shell entrypoint (jobrender, rayjobrender).
-//
-// The wrapper runs the original command under `set -e`, so a non-zero exit
-// propagates and the index step is skipped — an artifact index must never
-// claim a model that a failed run did not produce.
-//
-// Returns cmd unchanged when there is nothing to index, so runs that declare
-// no checkpoint render exactly as they did before.
 func WrapCommand(cmd []string, cfg Config) []string {
 	body := Script(cfg)
 	if len(cmd) == 0 || body == "" {

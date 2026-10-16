@@ -1,32 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package nodeutil builds the portal's node resource-utilization board.
-//
-// It is the CPU/memory sibling of internal/portal/cluster (which reads GPU DCGM
-// health): node-exporter metrics from the Metrics ADX database, folded into one
-// row per node — CPU utilization and memory-used percentage. The Utilization
-// page renders it beneath the per-GPU table so operators see the whole fleet's
-// resource pressure, not just GPUs.
-//
-// It reads the raw node-exporter tables (NodeCpuSecondsTotal,
-// NodeMemoryMemTotalBytes, NodeMemoryMemAvailableBytes) rather than the
-// NodeHealth() ADX function, because on the deployed adx-mon the node identity
-// lives in the ingestion-level Host column, while NodeHealth() derives its
-// instance from Labels.instance — a label node-exporter never emits (Labels
-// carries only {cpu, mode}). Reading Host directly is what makes the per-node
-// breakdown work; keying on the always-empty instance collapsed every node into
-// one bogus group.
-//
-// CPU utilization averages per-core idle rates over observed intervals. Reset
-// intervals are excluded rather than mistaken for busy time. KQL packs the
-// timestamped samples by core; Go handles ordering, resets, and coverage.
-// Memory is (total - available) / total from the latest observed samples.
-//
-// Data access is the shell-out kustoquery.Querier seam, so tests inject a fake
-// with canned Kusto JSON and no live ADX. The tables live in the Metrics
-// database (expkusto.DefaultEndpoint/DefaultDatabase), the same target the
-// portal's --kusto-* flags already point at.
 package nodeutil
 
 import (
@@ -40,27 +14,16 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
-// DefaultWindow is the look-back for the CPU counter delta and the latest
-// memory sample, matching the cluster board's ago(15m).
 const DefaultWindow = 15 * time.Minute
 
-// Bound scanned CPU data even for a caller-supplied long window. Overflow fails
-// the board explicitly; an incomplete series must never look like a rate.
 const maxCPUSamples = 250000
 
-// Options controls the board query. Window defaults to DefaultWindow; the
-// optional Cluster/Instance filters are interpolated as safe KQL string
-// literals (kustoquery.QuoteString) so the board can scope to one cluster/node.
-// Instance filters the node identity, which node-exporter carries in the
-// ingestion-level Host column (Labels holds only {cpu, mode}); it is surfaced
-// back to the frontend as the row's instance field.
 type Options struct {
 	Window   time.Duration
 	Cluster  string
 	Instance string
 }
 
-// Node preserves unknown readings as null rather than a measured zero.
 type Node struct {
 	Cluster          string      `json:"cluster,omitempty"`
 	Instance         string      `json:"instance"`
@@ -74,8 +37,6 @@ type Node struct {
 	MemAvailSampleAt *time.Time  `json:"memAvailSampleAt,omitempty"`
 }
 
-// CPUCoverage describes observed cores, not the node's provisioned inventory.
-// ObservedSeconds is the mean usable interval duration across observed cores.
 type CPUCoverage struct {
 	Samples           int        `json:"samples"`
 	ObservedCores     int        `json:"observedCores"`
@@ -87,8 +48,6 @@ type CPUCoverage struct {
 	LastSampleAt      *time.Time `json:"lastSampleAt,omitempty"`
 }
 
-// Snapshot is the node-utilization board payload: known CPU rates sort hottest
-// first, followed by nodes whose CPU rate is unknown.
 type Snapshot struct {
 	Window       string    `json:"window"`
 	QueriedAt    time.Time `json:"queriedAt"`
@@ -96,8 +55,6 @@ type Snapshot struct {
 	Nodes        []Node    `json:"nodes"`
 }
 
-// Board runs the node-exporter CPU/memory query via the Querier and aggregates
-// the rows into a Snapshot.
 func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, error) {
 	rows, err := q.Query(ctx, buildKQL(opts))
 	if err != nil {
@@ -114,16 +71,9 @@ func queryWindow(opts Options) time.Duration {
 	return time.Duration(max(int64(window/time.Second), 1)) * time.Second
 }
 
-// buildKQL reduces CPU counters in ADX instead of transferring every timestamp
-// and value to the portal. Duplicate timestamps are collapsed exactly as the Go
-// reducer did: identical values count once and conflicts invalidate that point.
-// Reset and invalid intervals are excluded before per-core rates are averaged.
 func buildKQL(opts Options) string {
 	seconds := int64(queryWindow(opts) / time.Second)
 
-	// scope is the optional cluster/host filter appended to each table leg so the
-	// CPU and memory sides see the same nodes. Host is node-exporter's node key;
-	// Instance in Options filters it.
 	var scope strings.Builder
 	if opts.Cluster != "" {
 		fmt.Fprintf(&scope, "  | where Cluster == %s\n", kustoquery.QuoteString(opts.Cluster))

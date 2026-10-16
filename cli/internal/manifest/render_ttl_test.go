@@ -8,11 +8,6 @@ import (
 	"testing"
 )
 
-// TauWorkspace.spec.defaults.ttlSecondsAfterFinished reaches the rendered batch
-// Job through RenderOptions.TTLSecondsAfterFinished. Zero must reproduce the
-// retention the template has always used, so adopting the override is a no-op
-// for every workspace that does not set one.
-
 func ttlFixtureManifest(t *testing.T) ([]byte, *Manifest) {
 	t.Helper()
 	raw := []byte(`
@@ -62,8 +57,6 @@ func TestJobTTLSecondsAfterFinishedFallsBackToTemplateDefault(t *testing.T) {
 	if got := jobTTLSecondsAfterFinished(0); got != defaultManagedJobTTLSecondsAfterFinished {
 		t.Errorf("jobTTLSecondsAfterFinished(0) = %d, want %d", got, defaultManagedJobTTLSecondsAfterFinished)
 	}
-	// A negative value is not a request to delete immediately; it is nonsense,
-	// and must fall back rather than render an invalid Job.
 	if got := jobTTLSecondsAfterFinished(-1); got != defaultManagedJobTTLSecondsAfterFinished {
 		t.Errorf("jobTTLSecondsAfterFinished(-1) = %d, want the default", got)
 	}
@@ -86,9 +79,6 @@ func TestRenderedJobKeepsBuiltInTTLWhenUnset(t *testing.T) {
 	}
 }
 
-// RayJob ttlSecondsAfterFinished controls Ray cluster teardown, not lifecycle
-// record retention. A workspace retention default must not stretch a Ray
-// cluster's lifetime by a week.
 func TestRayJobRetentionIsUnaffectedByTTLOverride(t *testing.T) {
 	got := ttlLines(renderWithTTL(t, WorkloadKindRayJob, 604800))
 	for _, line := range got {

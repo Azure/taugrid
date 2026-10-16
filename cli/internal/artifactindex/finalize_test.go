@@ -26,11 +26,6 @@ func requireUnixShell(t *testing.T) {
 	}
 }
 
-// readerStructTags parses the JSON tag names off a struct declared in the
-// consuming package. The reader lives in package cli, which this package
-// cannot import (both are internal siblings and cli imports far more), so the
-// contract is asserted against the source text instead. This is the same
-// fail-closed AST-guard pattern used by core/workloadmeta/contract_test.go.
 func readerStructTags(t *testing.T, structName string) []string {
 	t.Helper()
 	const src = "../cli/pvc_helpers.go"
@@ -62,8 +57,6 @@ func readerStructTags(t *testing.T, structName string) []string {
 		return false
 	})
 	if len(got) == 0 {
-		// Positive control: an empty result here would otherwise be
-		// indistinguishable from "the struct legitimately has no tags".
 		t.Fatalf("no json tags found for %s in %s — the guard is not reading the struct it thinks it is", structName, src)
 	}
 	sort.Strings(got)
@@ -73,8 +66,8 @@ func readerStructTags(t *testing.T, structName string) []string {
 func TestScriptEmptyWhenNothingDeclared(t *testing.T) {
 	for _, cfg := range []Config{
 		{},
-		{Artifact: "last.safetensors"}, // no run
-		{Run: "demo"},                  // no artifact
+		{Artifact: "last.safetensors"},
+		{Run: "demo"},
 		{Artifact: "   ", Run: "demo"},
 	} {
 		if got := Script(cfg); got != "" {
@@ -105,9 +98,6 @@ func TestShellQuoteHandlesEmbeddedQuote(t *testing.T) {
 	}
 }
 
-// TestScriptWritesIndexMatchingReaderSchema executes the emitted script for
-// real and asserts the JSON it produces is exactly what cli's reader parses.
-// A pure string test would not catch a Python syntax error or a key typo.
 func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 	requireUnixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
@@ -120,8 +110,6 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 	const run = "demo-run"
 	const artifact = "last.safetensors"
 
-	// The checkpoint lands where a real training script would put it: the hot
-	// checkpoints dir, first candidate in the search order.
 	if err := os.MkdirAll(hot, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +150,6 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 		t.Fatalf("emitted invalid JSON: %v\n%s", err, raw)
 	}
 
-	// Every key we emit must be a key the reader knows. The reverse is not
-	// required: the reader's optional fields (e.g. storage_probe) are written
-	// by other producers.
 	assertSubset(t, index, readerStructTags(t, "managedWorkflowArtifactIndex"), "index")
 
 	artifacts, ok := index["artifacts"].([]any)
@@ -177,8 +162,6 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 	}
 	assertSubset(t, rec, readerStructTags(t, "managedWorkflowArtifact"), "artifact")
 
-	// The three values selectManagedWorkflowArtifact (cli/serve.go:413-434)
-	// requires before it will resolve a checkpoint.
 	if rec["name"] != "checkpoint" {
 		t.Errorf(`name = %v, want "checkpoint" (serve.go defaults artifactName to "checkpoint")`, rec["name"])
 	}
@@ -198,8 +181,6 @@ func TestScriptWritesIndexMatchingReaderSchema(t *testing.T) {
 	}
 }
 
-// TestScriptSucceedsWhenArtifactMissing pins the best-effort contract: a
-// training run that produced real results must not be failed by bookkeeping.
 func TestScriptSucceedsWhenArtifactMissing(t *testing.T) {
 	requireUnixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
@@ -221,11 +202,6 @@ func TestScriptSucceedsWhenArtifactMissing(t *testing.T) {
 	}
 }
 
-// noPythonEnv returns an environment in which python3 cannot be resolved,
-// reproducing an image that simply does not ship it. The three tests above
-// t.Skip when python3 is missing, which means the suite is structurally unable
-// to cover the case where it is missing — the exact condition BUG-26 needs.
-// Emptying PATH simulates absence instead of skipping on it.
 func noPythonEnv(hot, durable string) []string {
 	return []string{
 		"PATH=/nonexistent",
@@ -234,15 +210,6 @@ func noPythonEnv(hot, durable string) []string {
 	}
 }
 
-// TestScriptFailsWhenInterpreterMissing is the BUG-26 guard.
-//
-// The step is best-effort by design, but that contract covers transient faults:
-// a copy that failed once may succeed next run. "This image has no python3" is
-// not transient — it is a static property of the image, so every retry produces
-// the same nothing. Reporting success there tells the researcher their declared
-// storage.checkpoint was honoured when no artifact index exists, and the lie is
-// only discovered much later when `tau serve deploy --from-finetune` cannot
-// resolve the run.
 func TestScriptFailsWhenInterpreterMissing(t *testing.T) {
 	requireUnixShell(t)
 	root := t.TempDir()
@@ -256,16 +223,9 @@ func TestScriptFailsWhenInterpreterMissing(t *testing.T) {
 		t.Fatalf("script exited %v with no python3; a run that cannot write its\n"+
 			"artifact index must not report success. output:\n%s", err, out)
 	}
-	// 126 is the convention the sibling artifactpublish package uses for
-	// "refused after the payload itself succeeded".
 	if got := exitErr.ExitCode(); got != 126 {
 		t.Errorf("exit code = %d, want 126\n%s", got, out)
 	}
-	// These strings must be ones ONLY the interpreter guard emits. The
-	// generic wrapper failure below it also exits 126 and also names the
-	// checkpoint, so asserting on "python3" or the artifact name alone would
-	// pass with the guard deleted — the shell's own "python3: not found" and
-	// the wrapper's message between them satisfy both.
 	for _, want := range []string{
 		"this image has no python3",
 		"Use an image that ships python3",
@@ -277,11 +237,6 @@ func TestScriptFailsWhenInterpreterMissing(t *testing.T) {
 	}
 }
 
-// TestScriptFailsWhenDestinationRefused pins the outcome of the traversal
-// guard. The refusal itself always worked — the copy does not happen — but the
-// wrapper used to flatten it to "(non-fatal)" and exit 0, so a run that was
-// stopped from writing into another researcher's directory was indistinguishable
-// from one that indexed cleanly. A refusal is not a written index.
 func TestScriptFailsWhenDestinationRefused(t *testing.T) {
 	requireUnixShell(t)
 	if _, err := exec.LookPath("python3"); err != nil {
@@ -289,9 +244,6 @@ func TestScriptFailsWhenDestinationRefused(t *testing.T) {
 	}
 	root := t.TempDir()
 	cmd := exec.Command("sh", "-eu")
-	// Bypasses Storage.ValidateCheckpoint deliberately: this asserts the
-	// in-pod defense in depth, which exists precisely for the case where the
-	// render-time check was not the last word.
 	cmd.Stdin = strings.NewReader(Script(Config{Artifact: "../escape.bin", Run: "demo"}))
 	cmd.Env = append(os.Environ(),
 		"TAU_CHECKPOINTS_DIR="+filepath.Join(root, "hot"),
@@ -324,10 +276,6 @@ func assertSubset(t *testing.T, got map[string]any, allowed []string, label stri
 	}
 }
 
-// Regression guard for a live failure on Azure Files: shutil.copy2 calls
-// copystat -> utime, which SMB rejects with EPERM for a non-owner. That aborted
-// the index step after a successful A100 training run. A local-filesystem test
-// cannot reproduce it (tmpfs/APFS permit utime), so guard the source instead.
 func TestScriptDoesNotUseMetadataPreservingCopy(t *testing.T) {
 	s := Script(Config{Artifact: "last.pt", Run: "r", ResourceName: "r", Namespace: "ns"})
 	if s == "" {

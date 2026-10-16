@@ -32,9 +32,6 @@ func success(target scraper.ScrapeTarget) scraper.TargetStatus {
 	return scraper.TargetStatus{Target: target, OK: true, SafeURL: scraper.SafeURL(target.URL)}
 }
 
-// establish drives the tracker through a full success window so it owns the
-// condition, mirroring a collector that has been running normally. A fresh
-// tracker deliberately publishes nothing until it has proven the state.
 func establish(t *testing.T, tr *Tracker, target scraper.ScrapeTarget, start time.Time) time.Time {
 	t.Helper()
 	tr.Evaluate([]scraper.TargetStatus{success(target)}, start)
@@ -63,8 +60,6 @@ func TestHealthyTargetReportsExplicitFalse(t *testing.T) {
 	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
-	// A fresh tracker stays silent until reachability is proven for
-	// availableFor; only then does it publish the explicit False.
 	if results := tr.Evaluate([]scraper.TargetStatus{success(target)}, start); len(results) != 0 {
 		t.Fatalf("unproven tracker published %+v", results)
 	}
@@ -89,7 +84,6 @@ func TestTransientFailureBelowThresholdDoesNotFire(t *testing.T) {
 	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := establish(t, tr, target, time.Now())
 
-	// One failed scrape, then recovery, well inside the 2m failure window.
 	got := only(t, tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start), "DcgmExporterUnavailable")
 	if got.Firing {
 		t.Fatal("a single failed scrape must not set the condition")
@@ -103,8 +97,6 @@ func TestTransientFailureBelowThresholdDoesNotFire(t *testing.T) {
 		t.Fatal("recovered target must not fire")
 	}
 
-	// The failure timer must have reset: another failure 5m later still needs
-	// the full window before firing.
 	got = only(t, tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start.Add(5*time.Minute)), "DcgmExporterUnavailable")
 	if got.Firing {
 		t.Fatal("failure timer must restart after a successful scrape")
@@ -183,7 +175,6 @@ func TestRecoveryClearsOnlyAfterRecoveryWindow(t *testing.T) {
 		t.Fatal("expected the condition to clear after the recovery window")
 	}
 
-	// A failure during recovery restarts the recovery clock.
 	tr2 := New([]scraper.ScrapeTarget{target}, nil)
 	tr2.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
 	tr2.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start.Add(3*time.Minute))
@@ -209,7 +200,6 @@ func TestOptionalTargetsProduceNoCondition(t *testing.T) {
 
 	start := time.Now()
 	tr.Evaluate([]scraper.TargetStatus{success(dcgm)}, start)
-	// Optional targets fail while the required one succeeds.
 	results := tr.Evaluate([]scraper.TargetStatus{
 		success(dcgm),
 		failure(nodeExporter, "connection refused"),
@@ -288,8 +278,6 @@ func TestStateSurvivesRestart(t *testing.T) {
 	restarted := New([]scraper.ScrapeTarget{target}, nil)
 	restarted.RestoreState(saved, savedAt, restartedAt)
 
-	// The first successful scrape after a restart must not clear the condition
-	// before the recovery window elapses.
 	got := only(t, restarted.Evaluate([]scraper.TargetStatus{success(target)}, restartedAt), "DcgmExporterUnavailable")
 	if !got.Firing {
 		t.Fatal("restored condition cleared before the recovery window")
@@ -307,7 +295,6 @@ func TestRestartDowntimeDoesNotCountTowardFailureWindow(t *testing.T) {
 	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
-	// One failed scrape is persisted with a non-zero failure timer.
 	start = establish(t, tr, target, start)
 	got := only(t, tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start), "DcgmExporterUnavailable")
 	if got.Firing {
@@ -315,7 +302,6 @@ func TestRestartDowntimeDoesNotCountTowardFailureWindow(t *testing.T) {
 	}
 	saved := tr.ExportState()
 
-	// The node reboots for five minutes, longer than the failure window.
 	savedAt := start
 	restartedAt := start.Add(5 * time.Minute)
 	restarted := New([]scraper.ScrapeTarget{target}, nil)
@@ -326,8 +312,6 @@ func TestRestartDowntimeDoesNotCountTowardFailureWindow(t *testing.T) {
 		t.Fatal("collector downtime must not count as continuous scrape failure")
 	}
 
-	// Progress made before the restart is preserved: the remaining window is
-	// what was left, not the full window again.
 	got = only(t, restarted.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, restartedAt.Add(2*time.Minute)), "DcgmExporterUnavailable")
 	if !got.Firing {
 		t.Fatal("expected firing once the remaining failure window elapsed")
@@ -343,7 +327,6 @@ func TestRestartDowntimeDoesNotCountTowardRecoveryWindow(t *testing.T) {
 
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start)
 	tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start.Add(3*time.Minute))
-	// One successful scrape starts the recovery clock, then the collector dies.
 	tr.Evaluate([]scraper.TargetStatus{success(target)}, start.Add(3*time.Minute+10*time.Second))
 	saved := tr.ExportState()
 
@@ -426,25 +409,16 @@ func TestDefaultWindowsApplyWhenUnset(t *testing.T) {
 	}
 }
 
-// The following cover the unseeded-restart hazard: the collector restarts while
-// an outage is ongoing, but its snapshot is missing, corrupt, or stale, so
-// state.Load returns nil. The tracker starts with firing=false and must not let
-// a still-failing scrape clear the True condition the server already holds.
-
 func TestUnseededRestartDuringOutageNeverClears(t *testing.T) {
 	t.Parallel()
 
 	target := dcgmTarget()
 	start := time.Now()
 
-	// state.Load returns (nil, nil) for a missing, corrupt, or stale snapshot,
-	// so in every case RestoreState is never called and the tracker is fresh.
 	for _, snapshot := range []string{"missing", "corrupt", "stale"} {
 		t.Run(snapshot, func(t *testing.T) {
 			tr := New([]scraper.ScrapeTarget{target}, nil)
 
-			// The outage continues across the restart. Nothing may be published
-			// yet: publishing False here would clear the server's True.
 			for _, offset := range []time.Duration{0, 15 * time.Second, 90 * time.Second} {
 				results := tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start.Add(offset))
 				if len(results) != 0 {
@@ -452,8 +426,6 @@ func TestUnseededRestartDuringOutageNeverClears(t *testing.T) {
 				}
 			}
 
-			// Once this process has proven the failure for the full window it
-			// owns the condition again and re-asserts True.
 			got := only(t, tr.Evaluate([]scraper.TargetStatus{failure(target, "connection refused")}, start.Add(2*time.Minute)), "DcgmExporterUnavailable")
 			if !got.Firing {
 				t.Fatal("expected the condition to be re-asserted True after unavailableFor")
@@ -469,9 +441,6 @@ func TestUnseededRestartClearsOnlyAfterProvenRecovery(t *testing.T) {
 	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
-	// Restart with no usable snapshot, and the target is reachable again. The
-	// clear must still wait for availableFor of proven success rather than
-	// trusting one scrape.
 	if results := tr.Evaluate([]scraper.TargetStatus{success(target)}, start); len(results) != 0 {
 		t.Fatalf("one successful scrape after an unseeded restart published %+v", results)
 	}
@@ -495,8 +464,6 @@ func TestUnseededRestartRecoveryInterruptedByFailureStaysSilent(t *testing.T) {
 	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
-	// A flapping endpoint after an unseeded restart never accumulates a full
-	// success window, so the tracker must never clear the server's condition.
 	for i := 0; i < 10; i++ {
 		at := start.Add(time.Duration(i) * 30 * time.Second)
 		statuses := []scraper.TargetStatus{success(target)}
@@ -516,15 +483,12 @@ func TestSeededRestartStillReportsImmediately(t *testing.T) {
 	tr := New([]scraper.ScrapeTarget{target}, nil)
 	start := time.Now()
 
-	// Establish a healthy, published condition and snapshot it.
 	tr.Evaluate([]scraper.TargetStatus{success(target)}, start)
 	if got := only(t, tr.Evaluate([]scraper.TargetStatus{success(target)}, start.Add(time.Minute)), "DcgmExporterUnavailable"); got.Firing {
 		t.Fatal("expected an established False")
 	}
 	saved := tr.ExportState()
 
-	// A usable snapshot is continuity, so the restarted process may speak to
-	// the condition on its very first cycle.
 	savedAt := start.Add(time.Minute)
 	restarted := New([]scraper.ScrapeTarget{target}, nil)
 	restarted.RestoreState(saved, savedAt, savedAt.Add(15*time.Second))
@@ -551,8 +515,6 @@ func TestOrphanConditionIsPublishedExactlyOnce(t *testing.T) {
 		t.Fatal("a de-configured condition must be cleared once")
 	}
 
-	// Re-publishing forever would keep asserting a stale False for the life of
-	// the process, and results share one patch keyed by condition type.
 	for i := 1; i <= 3; i++ {
 		at := now.Add(time.Duration(i) * 15 * time.Second)
 		for _, r := range tr.Evaluate([]scraper.TargetStatus{success(target)}, at) {
@@ -569,16 +531,12 @@ func TestOrphanNeverOverridesARuleOwnedCondition(t *testing.T) {
 	target := dcgmTarget()
 	now := time.Now()
 
-	// The condition type moved from this scrape target to a rule, which
-	// config validation accepts because it only compares config against config.
 	tr := New([]scraper.ScrapeTarget{target}, []string{"MigratedCondition"})
 	establish(t, tr, target, now.Add(-2*time.Minute))
 	tr.RestoreState(map[string]state.Availability{
 		"MigratedCondition": {Firing: true, FailingSince: now.Add(-time.Hour), Established: true},
 	}, now.Add(-time.Minute), now)
 
-	// Clearing it here would overwrite the rule's genuinely firing condition,
-	// since both entries share a merge key and the last one wins.
 	for i := 0; i < 3; i++ {
 		at := now.Add(time.Duration(i) * 15 * time.Second)
 		for _, r := range tr.Evaluate([]scraper.TargetStatus{success(target)}, at) {

@@ -22,12 +22,6 @@ type ExperimentRunDataOptions struct {
 	CaptureSource string
 }
 
-// RunProfileRecord is a storage-neutral projection of a run profile.
-//
-// It deliberately mirrors the shape of the experiment store's run and run
-// context records without depending on that store, so that the status package
-// stays free of experiment-storage imports. Consumers that persist runs map
-// this into their own record types.
 type RunProfileRecord struct {
 	RunID       string
 	Project     string
@@ -64,8 +58,6 @@ type RunProfileRecord struct {
 	CaptureSource string
 }
 
-// ExperimentRunProfile projects a status snapshot and cost profile into a
-// storage-neutral run profile record.
 func ExperimentRunProfile(s Snapshot, c CostProfile, opts ExperimentRunDataOptions) (RunProfileRecord, error) {
 	if !s.JobFound && !s.RayJobFound {
 		return RunProfileRecord{}, fmt.Errorf("cannot capture run profile: job %s/%s was not found", s.Namespace, s.Name)

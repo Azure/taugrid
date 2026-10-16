@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package runconfig owns the direct `tau run --config` YAML contract.
 package runconfig
 
 import (
@@ -24,9 +23,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the implementation-backed shape for direct `tau run --config`
-// files. SDK-generated managed workflow manifests share some field names, but
-// are intentionally documented and validated separately.
 type Config struct {
 	SchemaVersion any    `yaml:"schema_version"`
 	Name          string `yaml:"name"`
@@ -87,20 +83,12 @@ type Run struct {
 	Source                  *Source `yaml:"source"`
 	TTLSecondsAfterFinished *int64  `yaml:"ttl_seconds_after_finished"`
 
-	// WorkingDir ships a whole project directory with the run instead of the
-	// entrypoint alone, so sibling modules and local packages import on
-	// workers as well as the driver. Empty keeps single-file behaviour.
-	WorkingDir string `yaml:"working_dir"`
-	// WorkingDirExcludes are extra glob patterns to leave out of the shipped
-	// project archive, on top of the built-in defaults.
+	WorkingDir         string   `yaml:"working_dir"`
 	WorkingDirExcludes []string `yaml:"working_dir_excludes"`
 }
 
 const SourceMountPath = "/tau/source"
 
-// Source stages an immutable source tree from a digest-pinned OCI image for a
-// direct Job. Path is copied into SourceMountPath by an init container. The
-// source image must provide /bin/sh, cp, and chmod.
 type Source struct {
 	Image string `yaml:"image"`
 	Path  string `yaml:"path"`
@@ -128,31 +116,20 @@ type Runtime struct {
 	RDMA       RDMA              `yaml:"rdma"`
 }
 
-// RDMA opts workload containers into RDMA topology placement and the memlock
-// capabilities NCCL NET/IB needs for verbs memory registration.
 type RDMA struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// DefaultRDMAShmSize is the /dev/shm size for RDMA Job workloads when the
-// renderer does not receive an explicit override.
 const DefaultRDMAShmSize = "32Gi"
 
 var qualifiedNameSegmentRE = regexp.MustCompile(`^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$`)
 
-// QualifiedNameSegmentRE is the exported accessor for template renderers that
-// need the same regex (e.g. Kubernetes label value validation). The pattern is
-// anchored and matches a single segment of a qualified resource name.
 func QualifiedNameSegmentRE() *regexp.Regexp { return qualifiedNameSegmentRE }
 
-// NormalizedRDMA is the resolved RDMA configuration. ShmSize is deliberately
-// excluded because the RayJob path manages /dev/shm independently.
 type NormalizedRDMA struct {
 	Enabled bool
 }
 
-// NormalizeRDMA returns the shared renderer input. When RDMA is disabled the
-// zero struct is returned.
 func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
 	if !cfg.Enabled {
 		return NormalizedRDMA{}
@@ -162,7 +139,6 @@ func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
 
 const SecurityModeRestricted = "restricted"
 
-// Security is the portable pod-security contract for direct workloads.
 type Security struct {
 	Mode string `yaml:"mode"`
 }
@@ -177,14 +153,8 @@ func (s Security) Validate() error {
 }
 
 const (
-	// MaxLiteralEnvValueBytes leaves ample room below Linux's per-string exec
-	// limit and prevents source archives from becoming Kubernetes metadata.
-	MaxLiteralEnvValueBytes = 64 * 1024
-	// MaxLiteralEnvTotalBytes bounds the control-plane amplification when a Job
-	// is copied into Kueue Workloads and Pods. Secret-backed values are excluded.
-	MaxLiteralEnvTotalBytes = 128 * 1024
-	// MaxTTLSecondsAfterFinished is Kubernetes' signed int32 ceiling for
-	// batch/v1 Job spec.ttlSecondsAfterFinished.
+	MaxLiteralEnvValueBytes          = 64 * 1024
+	MaxLiteralEnvTotalBytes          = 128 * 1024
 	MaxTTLSecondsAfterFinished int64 = 1<<31 - 1
 )
 
@@ -240,13 +210,6 @@ type Storage struct {
 	Mounts      []string     `yaml:"mounts"`
 	ImageAssets []ImageAsset `yaml:"image_assets"`
 
-	// Checkpoint names the file or directory, relative to the run's
-	// checkpoint directory, that this run produces as its servable model
-	// (e.g. "last.safetensors"). Declaring it lets tau index the artifact
-	// after a successful run so `tau serve deploy --from-finetune` and
-	// `tau data model` can resolve it by run name instead of requiring the
-	// researcher to pass an absolute --checkpoint path. Optional; when
-	// empty, no artifact index is written and nothing else changes.
 	Checkpoint string `yaml:"checkpoint"`
 }
 
@@ -298,24 +261,11 @@ const (
 	MetricsOffloadMaxTerminalDrainTimeout      = offloadcontract.MaxTerminalDrainTimeout
 )
 
-// Experiment names where a run belongs in the identity hierarchy:
-//
-//	workspace -> project -> experiment -> run
-//
-// Name is the experiment: the set of runs being compared. Group is an arm
-// inside that set (baseline vs ablation), not a level of its own, so two
-// groups under one Name are directly comparable.
-//
-// Name is optional for input compatibility. A pre-v0.1 Title is normalized
-// first, then Group remains the final fallback for configs whose experiment
-// axis used the group. New configs set Name explicitly.
 type Experiment struct {
 	Project string `yaml:"project"`
 	Name    string `yaml:"name"`
 	Group   string `yaml:"group"`
-	// Title is the pre-v0.1 experiment identity spelling. Keep accepting it so
-	// existing configs migrate safely, but new configs must use Name.
-	Title string `yaml:"title"`
+	Title   string `yaml:"title"`
 }
 
 func (e Experiment) resolvedID() string {
@@ -363,19 +313,11 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// Load reads and validates a direct run config. SDK-generated managed workflow
-// manifests keep their legacy permissive parse so `tau run` does not start
-// rejecting pass-through manifest data while that contract is clarified.
-//
-// Callers that can surface diagnostics should prefer LoadWithDiagnostics: this
-// wrapper drops the unknown-key warnings on the floor.
 func Load(path string) (Config, error) {
 	cfg, _, err := LoadWithDiagnostics(path)
 	return cfg, err
 }
 
-// LoadWithDiagnostics is Load plus non-fatal warnings, currently unknown keys in
-// managed workflow manifests.
 func LoadWithDiagnostics(path string) (Config, []string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -398,8 +340,6 @@ func parseWithDiagnostics(raw []byte, source string) (Config, []string, error) {
 		if err := yaml.Unmarshal(raw, &projection); err != nil {
 			return Config{}, nil, fmt.Errorf("parse %s: %w", source, err)
 		}
-		// The projection is partial by design, so unknown keys are reported
-		// rather than rejected. See unknown.go.
 		unknown, uerr := UnknownKeys(raw)
 		if uerr != nil {
 			return Config{}, nil, fmt.Errorf("parse %s: %w", source, uerr)
@@ -485,14 +425,10 @@ func (c Config) ValidateDirect() error {
 	return c.Storage.Validate()
 }
 
-// Hash returns a stable hash of the validated config contract. Source payloads
-// have their own digest metadata; this hash identifies the complete run config.
 func (c Config) Hash() (string, error) {
 	return experiment.HashJSON(c)
 }
 
-// ValidateContainerWorkingDir enforces the path shape Kubernetes expects for a
-// container workingDir without resolving it on the host.
 func ValidateContainerWorkingDir(value string) error {
 	if value == "" {
 		return nil
@@ -621,18 +557,6 @@ func validateImageAssetPath(field, value string) error {
 	return nil
 }
 
-// ValidateCheckpoint enforces that storage.checkpoint stays inside the run's
-// own artifact directory. The finalizer joins this value onto
-// <durable>/finetunes/<run>/artifacts/, and that PVC is shared by every run in
-// the namespace, so an unchecked value is a write primitive into someone
-// else's run: "../../victim/model.bin" resolves to
-// <durable>/finetunes/victim/model.bin. An absolute value is worse than it
-// looks, because pathlib discards every component before it — joining
-// "/etc/passwd" yields "/etc/passwd", not a path under the run directory.
-//
-// These are the same rules the manifest path already enforces in
-// validateCheckpointArtifact; this field reached the same finalizer without
-// them.
 func (s Storage) ValidateCheckpoint() error {
 	checkpoint := strings.TrimSpace(s.Checkpoint)
 	if checkpoint == "" {
@@ -751,17 +675,10 @@ func (m Metrics) Validate(experimentConfig Experiment) error {
 	return nil
 }
 
-// MetricsOffloadTerminalDrainTimeout returns the finite workload-side deadline
-// that covers every configured ADX attempt, exponential retry backoff, and a
-// small coordination grace period. Configurations exceeding the platform
-// ceiling are rejected so workload teardown never races a longer collector
-// delivery budget.
 func MetricsOffloadTerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time.Duration) (time.Duration, error) {
 	return offloadcontract.TerminalDrainTimeout(maxAttempts, retryBackoff, finalStatusTimeout)
 }
 
-// ResolveMetricsOffloadRuntime returns the sole supported metrics offload
-// executable contract.
 func ResolveMetricsOffloadRuntime(value string) (string, error) {
 	switch value {
 	case "":
@@ -777,8 +694,6 @@ func ResolveMetricsOffloadRuntime(value string) (string, error) {
 	}
 }
 
-// ResolveMetricsOffloadDeliveryMode returns the collector sink contract.
-// Empty selects the typed ADX-only required-delivery contract.
 func ResolveMetricsOffloadDeliveryMode(value string) (string, error) {
 	switch strings.TrimSpace(value) {
 	case "":
@@ -794,9 +709,6 @@ func ResolveMetricsOffloadDeliveryMode(value string) (string, error) {
 	}
 }
 
-// ValidateMetricsOffloadRuntimeImage validates the pinned image reference for
-// an explicit executable contract. Runtime is authoritative: Tau deliberately
-// does not infer compatibility from an image repository name.
 func ValidateMetricsOffloadRuntimeImage(runtime, image string) error {
 	if _, err := ResolveMetricsOffloadRuntime(runtime); err != nil {
 		return err
@@ -804,9 +716,6 @@ func ValidateMetricsOffloadRuntimeImage(runtime, image string) error {
 	return ValidateMetricsOffloadImage(image)
 }
 
-// ValidateMetricsOffloadImage rejects mutable or implicit sidecar image
-// references while allowing either an exact digest or an explicit non-latest
-// release tag.
 func ValidateMetricsOffloadImage(image string) error {
 	image = strings.TrimSpace(image)
 	if image == "" {
@@ -829,10 +738,6 @@ func ValidateMetricsOffloadImage(image string) error {
 	return nil
 }
 
-// TauEnvAllowed is every TAU_-prefixed env key a user may set. The retry loop
-// injects these four and researcher code reads them back, so they have to
-// survive a round trip through runtime.env; the rest of the namespace is
-// Tau's. This is the whole rule — see ReservedTauEnvKey.
 var TauEnvAllowed = []string{
 	"TAU_RESUME_FROM",
 	"TAU_RETRY_ATTEMPT",
@@ -845,26 +750,6 @@ var reservedEnvKeys = map[string]bool{
 	"MASTER_PORT": true,
 }
 
-// ReservedTauEnvKey reports whether name is inside the Tau-owned TAU_
-// namespace without being one of the permitted keys. It is the single gate for
-// both `tau run --config` validation and the Job and RayJob renderers, so a
-// key rejected at render is rejected at load with the same message.
-//
-// The namespace test is case-insensitive but the escape hatch is exact-case,
-// and the asymmetry is the point. Environment variables are case-sensitive, so
-// `tau_resume_from` is not the key the retry loop injects: code reading
-// TAU_RESUME_FROM would find nothing, silently, on the retry path. Permitting
-// it as a distinct variable hands the researcher that failure; rejecting it
-// shows them the misspelling, because the error lists the keys in the case
-// that works.
-//
-// The name is matched as given. A legal env name has no surrounding space, so
-// trimming one off could only let a malformed name read as a permitted key.
-// Leading space is not a bypass either: " TAU_RESUME_FROM" is not a name this
-// predicate claims, and every path that reaches a workload validates names
-// against envspec's C_IDENTIFIER rule, which rejects any surrounding space.
-// Reporting such a name as a TAU_ namespace violation would misdescribe an
-// ordinary typo -- " PATH" is not a Tau key.
 func ReservedTauEnvKey(name string) bool {
 	if !strings.HasPrefix(strings.ToUpper(name), "TAU_") {
 		return false
@@ -872,9 +757,6 @@ func ReservedTauEnvKey(name string) bool {
 	return !slices.Contains(TauEnvAllowed, name)
 }
 
-// ReservedTauEnvKeyError is the rejection message for a reserved TAU_ key. It
-// names the permitted keys rather than only asserting the namespace is owned,
-// so the reader's next action is defined.
 func ReservedTauEnvKeyError(name string) error {
 	return fmt.Errorf("env %q is reserved: Tau owns the TAU_ namespace; the only TAU_ keys you can set are %s", name, strings.Join(TauEnvAllowed, ", "))
 }
@@ -906,10 +788,6 @@ func (r Runtime) ValidateReservedEnvKeys(allowNCCLOverride bool) error {
 	return fmt.Errorf("runtime.env contains Tau-managed keys that cannot be overridden: %s; remove them from runtime.env (settable TAU_ keys: %s)", strings.Join(conflicts, ", "), strings.Join(TauEnvAllowed, ", "))
 }
 
-// ValidateLiteralEnvPayloads rejects content-sized literal environment values.
-// Kubernetes repeats literal values across Job, Workload, and Pod objects, and
-// Linux includes them in the argv+environment budget when starting a process.
-// Secret-backed references are intentionally not passed to this function.
 func ValidateLiteralEnvPayloads(env map[string]string) error {
 	total := 0
 	names := make([]string, 0, len(env))
@@ -952,8 +830,6 @@ var engineAliases = map[string]string{
 	EngineRayJob: EngineRayJob,
 }
 
-// NormalizeEngine returns the canonical workload engine. "ray" remains an
-// accepted compatibility alias, but Tau always submits that path as a RayJob.
 func NormalizeEngine(engine string) (string, error) {
 	raw := strings.ToLower(strings.TrimSpace(engine))
 	normalized, ok := engineAliases[raw]
@@ -963,9 +839,6 @@ func NormalizeEngine(engine string) (string, error) {
 	return normalized, nil
 }
 
-// ValidateExecution checks that execution.launcher is valid for the given
-// engine and that engine-specific constraints (nodes, processes_per_node,
-// clear_node_selector) are met.
 func (c Config) ValidateExecution(engine string) error {
 	var err error
 	engine, err = NormalizeEngine(engine)
@@ -1139,7 +1012,6 @@ func (c Config) validateConfigs(engine, launcher string) error {
 		return nil
 	}
 
-	// Resolve effective launcher for configs dispatch.
 	effectiveLauncher := launcher
 	if effectiveLauncher == "" {
 		switch engine {
@@ -1158,14 +1030,13 @@ func (c Config) validateConfigs(engine, launcher string) error {
 	case "ray-train":
 		return validateRayTrainConfigs(c.Execution.Configs)
 	case "ray-tune":
-		// No denylist for tune — all keys are search dimensions.
 		return nil
 	}
 	return nil
 }
 
 func validateTorchrunConfigs(configs map[string]any) error {
-	seen := make(map[string]string) // canonical → original
+	seen := make(map[string]string)
 	for key, val := range configs {
 		if err := validateConfigKey(key); err != nil {
 			return fmt.Errorf("execution.configs: %w", err)
@@ -1315,11 +1186,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// rejectRemovedEvalFields turns `task: eval` and `eval.*` into migration
-// guidance rather than the bare "field not found" that strict decoding would
-// otherwise produce. Eval was removed because it rendered the same Job as any
-// other engine: job run; the only thing it added was two labels and two
-// environment variables the config can set directly.
 func rejectRemovedEvalFields(raw []byte, source string) error {
 	var probe struct {
 		Task string         `yaml:"task"`
@@ -1329,7 +1195,6 @@ func rejectRemovedEvalFields(raw []byte, source string) error {
 		} `yaml:"run"`
 	}
 	if err := yaml.Unmarshal(raw, &probe); err != nil {
-		// Let the real decoder report malformed YAML.
 		return nil
 	}
 	task := strings.ToLower(strings.TrimSpace(firstNonEmpty(probe.Run.Task, probe.Task)))

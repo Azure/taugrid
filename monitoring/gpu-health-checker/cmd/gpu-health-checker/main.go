@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Command gpu-health-checker provides DCGM-based GPU health monitoring for NPD.
 package main
 
 import (
@@ -47,9 +46,6 @@ func main() {
 	}
 }
 
-// exitCodeError carries an NPD-compatible exit code (0/1/2) out of a cobra
-// RunE so that deferred cleanup (DB close, cancel funcs) runs before the
-// process exits.
 type exitCodeError struct {
 	code int
 }
@@ -64,8 +60,6 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newCollectCmd(), newReadCmd(), newStatusCmd(), newListCmd())
 	return root
 }
-
-// --- collect ---
 
 func newCollectCmd() *cobra.Command {
 	var (
@@ -125,8 +119,6 @@ func newCollectCmd() *cobra.Command {
 	return cmd
 }
 
-// retryDCGMInit attempts to initialize DCGM with exponential backoff.
-// This handles transient DCGM unavailability during driver reloads.
 func retryDCGMInit(ctx context.Context) (*dcgmclient.Client, error) {
 	delay := dcgmInitialDelay
 	for attempt := 1; attempt <= dcgmMaxRetries; attempt++ {
@@ -149,8 +141,6 @@ func retryDCGMInit(ctx context.Context) (*dcgmclient.Client, error) {
 	}
 	return nil, fmt.Errorf("DCGM init failed after %d retries", dcgmMaxRetries)
 }
-
-// --- read ---
 
 func newReadCmd() *cobra.Command {
 	var (
@@ -188,9 +178,6 @@ func newReadCmd() *cobra.Command {
 			r := checks.ByName(checkName)
 			if r == nil {
 				fmt.Fprintf(os.Stderr, "unknown check: %s\nAvailable: %s\n", checkName, availableChecks())
-				// Exit 2: treat unknown check as a hard failure so operators
-				// notice misconfiguration rather than seeing it flap as a
-				// transient NPD warning.
 				return &exitCodeError{code: 2}
 			}
 
@@ -242,8 +229,6 @@ func availableChecks() string {
 	return strings.Join(names, ", ")
 }
 
-// --- status ---
-
 func newStatusCmd() *cobra.Command {
 	var dbPath string
 
@@ -259,7 +244,6 @@ func newStatusCmd() *cobra.Command {
 
 			ctx := cmd.Context()
 
-			// GPU info
 			gpuInfo, err := db.QueryAllGPUInfo(ctx)
 			if err != nil {
 				return fmt.Errorf("query gpu_info: %w", err)
@@ -273,7 +257,6 @@ func newStatusCmd() *cobra.Command {
 					g.GPU, g.Name, g.UUID, g.PCIBus, g.VBIOS, g.Driver)
 			}
 
-			// Latest samples per GPU per field
 			fmt.Println("\n=== Latest Samples ===")
 			var unsupportedFields []string
 			for _, field := range fieldnames.AllFields() {
@@ -298,7 +281,6 @@ func newStatusCmd() *cobra.Command {
 				}
 			}
 
-			// Latest health checks
 			fmt.Println("\n=== Health Checks ===")
 			checks, err := db.QueryLatestHealthChecks(ctx)
 			if err != nil {
@@ -312,7 +294,6 @@ func newStatusCmd() *cobra.Command {
 				fmt.Printf("  GPU %d  %-10s  %-8s  %s  (%s)\n", c.GPU, c.System, c.Status, c.Message, ts)
 			}
 
-			// DB stats
 			latest, _ := db.LatestTimestamp()
 			if latest > 0 {
 				age := time.Since(time.Unix(latest, 0)).Round(time.Second)
@@ -328,8 +309,6 @@ func newStatusCmd() *cobra.Command {
 
 	return cmd
 }
-
-// --- list ---
 
 func newListCmd() *cobra.Command {
 	return &cobra.Command{

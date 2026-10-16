@@ -63,8 +63,6 @@ func TestBuildIncludesSiblingsAndPackagesAtArchiveRoot(t *testing.T) {
 			t.Fatalf("archive missing %s; has %v", want, got)
 		}
 	}
-	// Ray strips at most one top-level directory, so entries must sit at the
-	// archive root for `import helpers` to resolve after unpacking.
 	if got["helpers.py"] != "X = 1\n" {
 		t.Fatalf("unexpected content: %q", got["helpers.py"])
 	}
@@ -119,7 +117,6 @@ func TestBuildIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	// Touch mtimes; a reproducible archive must not notice.
 	if err := os.Chtimes(filepath.Join(root, "train.py"), fixedModTime, fixedModTime); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}

@@ -16,17 +16,6 @@ import (
 	"github.com/Azure/taugrid/core/kube"
 )
 
-// KubeRay tears down the ray-head container when a RayJob reaches a terminal
-// state. `tau run logs` used to exec `ray job logs` inside that container, so
-// reading the output of a run that merely SUCCEEDED failed with
-// `container not found ("ray-head")` -- i.e. it broke on the normal end state
-// of every healthy run.
-//
-// These tests pin the fallback to the log-offload sidecar, which outlives the
-// ray-head container and holds the same driver output.
-
-// fakeKubectlRunner writes a POSIX shell stub at Runner.Path so rayJobLogs
-// exercises its real argv construction rather than a mocked seam.
 func fakeKubectlRunner(t *testing.T, script string) *kube.Runner {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -41,8 +30,6 @@ func fakeKubectlRunner(t *testing.T, script string) *kube.Runner {
 
 const driverOutputLine = "step 199 loss 0.032720"
 
-// headResolutionCases answers the jobId / rayClusterName / head-pod lookups that
-// precede the log read, so each test below differs only in log behaviour.
 const headResolutionCases = `
   *status.jobId*)          printf '%s' 'raysubmit_abc123' ;;
   *status.rayClusterName*) printf '%s' 'demo-train-tzqst' ;;
@@ -76,8 +63,6 @@ esac
 }
 
 func TestRayJobLogsPrefersExecAndDoesNotReadSidecarWhenHeadAlive(t *testing.T) {
-	// Negative control for the test above: if the sidecar were read
-	// unconditionally, that test would pass even with the precedence inverted.
 	marker := filepath.Join(t.TempDir(), "sidecar-was-read")
 	r := fakeKubectlRunner(t, `#!/bin/sh
 case "$*" in`+headResolutionCases+`
@@ -102,8 +87,6 @@ esac
 }
 
 func TestRayJobLogsSurfacesBothErrorsWhenSidecarAlsoFails(t *testing.T) {
-	// A fallback that swallows the original error is worse than no fallback:
-	// the researcher loses the cause. Both must appear.
 	r := fakeKubectlRunner(t, `#!/bin/sh
 case "$*" in`+headResolutionCases+`
   *) echo 'boom' >&2; exit 1 ;;

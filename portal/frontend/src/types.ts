@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Wire contracts from portalapi, internal/portal boards, and core/runs.
 export interface WorkspaceScope {
   workspace: string; name: string; cluster: string; namespace: string;
   team?: string; localQueue?: string; resultScope?: string; source: string;

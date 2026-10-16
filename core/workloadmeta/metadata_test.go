@@ -17,17 +17,14 @@ func TestStampWorkspaceWritesCanonicalLabel(t *testing.T) {
 
 func TestPodCorrelationAnnotations(t *testing.T) {
 	got := PodCorrelationAnnotations(map[string]string{
-		AnnotationWorkspaceID:         "sample",
-		AnnotationResultScope:         "/data/runs",
-		AnnotationExperimentSource:    "tau",
-		AnnotationStellarExperimentID: "experiment:exact",
-		AnnotationStellarProject:      "vision",
-		// Carried on the workload but deliberately not correlated onto pods.
-		AnnotationResultPath: "/data/runs/result.json",
-		// Not a Tau key at all.
+		AnnotationWorkspaceID:                     "sample",
+		AnnotationResultScope:                     "/data/runs",
+		AnnotationExperimentSource:                "tau",
+		AnnotationStellarExperimentID:             "experiment:exact",
+		AnnotationStellarProject:                  "vision",
+		AnnotationResultPath:                      "/data/runs/result.json",
 		"kueue.x-k8s.io/podset-required-topology": "kubernetes.io/hostname",
-		// Empty values are dropped even when the key does match.
-		AnnotationStellarExperimentTitle: "",
+		AnnotationStellarExperimentTitle:          "",
 	})
 	want := map[string]string{
 		AnnotationWorkspaceID:         "sample",

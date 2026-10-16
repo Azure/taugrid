@@ -31,8 +31,6 @@ const (
 	GPURuntimeUnavailable  GPURuntimeState = "unavailable"
 )
 
-// GPURuntimeEvidence is a current, run-scoped DCGM snapshot. It intentionally
-// does not retain samples after a pod releases its GPU allocation.
 type GPURuntimeEvidence struct {
 	State         GPURuntimeState     `json:"state"`
 	Source        string              `json:"source,omitempty"`
@@ -42,8 +40,6 @@ type GPURuntimeEvidence struct {
 	Devices       []GPUDeviceEvidence `json:"devices"`
 }
 
-// GPUDeviceEvidence joins one DCGM device sample to its Kubernetes owner.
-// Observation booleans distinguish a real zero from a missing metric.
 type GPUDeviceEvidence struct {
 	Pod                     string  `json:"pod"`
 	Container               string  `json:"container"`
@@ -89,8 +85,6 @@ type dcgmSample struct {
 	Value  float64
 }
 
-// FetchGPURuntime fetches a bounded live snapshot from dcgm-exporter through
-// Kubernetes pod proxy. It never execs into workload or system containers.
 func FetchGPURuntime(ctx context.Context, r rawRunner, s Snapshot) GPURuntimeEvidence {
 	evidence := GPURuntimeEvidence{Source: "dcgm-exporter"}
 	if runFinished(s) {

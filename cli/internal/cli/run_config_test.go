@@ -63,9 +63,6 @@ func TestPortalRayStellarExampleUsesCanonicalExperimentIdentity(t *testing.T) {
 }
 
 func TestPortalRayStellarExampleDryRun(t *testing.T) {
-	// The example deliberately names policy.workspace. With no usable
-	// kubeconfig in this test, success guards that client dry-run retains the
-	// name for metrics metadata without fetching the live TauWorkspace.
 	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
 	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
@@ -589,10 +586,6 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 		}
 	}
 
-	// The driver script is no longer visible as plaintext in the rendered
-	// YAML (it's embedded as a base64 payload) — decode it the same way the
-	// tau-payload initContainer would, and confirm the staged file still
-	// contains the expected script content.
 	files := decodeRenderedRayPayload(t, rendered)
 	trainPy, ok := files["ray_train.py"]
 	if !ok {
@@ -651,11 +644,6 @@ execution:
 	}
 }
 
-// TestRunConfigAKSGPUQuickstartExampleDryRun guards the checked-in A100
-// quickstart config. The GPU request, the CUDA-tagged MCR image, and the
-// RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO opt-out are all load-bearing: without the
-// last one Ray blanks CUDA_VISIBLE_DEVICES on the worker and the run fails on a
-// healthy A100.
 func TestRunConfigAKSGPUQuickstartExampleDryRun(t *testing.T) {
 	config := filepath.Clean("../../../examples/aks-gpu-quickstart/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{
@@ -673,17 +661,6 @@ func TestRunConfigAKSGPUQuickstartExampleDryRun(t *testing.T) {
 	}
 }
 
-// TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing binds the one
-// empirical claim the example's comments make about resource_naming.
-//
-// The claim needs a test rather than prose because the default-valued render is
-// not evidence either way: manifest.go's defaultResourcePrefix is itself "tau",
-// so `prefix: tau` restates the default and renders identically whether the key
-// is read or silently dropped. Reading that output actively manufactures
-// confidence in whichever answer you already hold. Only perturbing the value
-// discriminates, so that is what this does -- if resource_naming ever stops
-// being read on the managed-workflow path, this fails by name instead of the
-// comment going quietly false.
 func TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing(t *testing.T) {
 	const probePrefix = "zzprobe"
 
@@ -697,7 +674,6 @@ func TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing(t *testing.T) {
 		t.Fatalf("example config no longer contains `prefix: tau`; update this probe")
 	}
 
-	// The entrypoint is a relative path, so it has to travel with the config.
 	dir := t.TempDir()
 	entrypoint, err := os.ReadFile(filepath.Join(source, "train.py"))
 	if err != nil {
@@ -722,9 +698,6 @@ func TestRunConfigAKSGPUQuickstartResourcePrefixIsLoadBearing(t *testing.T) {
 	}
 }
 
-// TestRunConfigAKSCPUQuickstartExampleDryRun guards the CPU quickstart config.
-// The non-CUDA image tag and the absence of any GPU request are the properties
-// that keep it runnable on a CPU-only cluster.
 func TestRunConfigAKSCPUQuickstartExampleDryRun(t *testing.T) {
 	config := filepath.Clean("../../../examples/aks-cpu-quickstart/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{
@@ -743,9 +716,6 @@ func TestRunConfigAKSCPUQuickstartExampleDryRun(t *testing.T) {
 	}
 }
 
-// decodeRenderedRayPayload extracts the tau-payload initContainer's env
-// vars from a rendered RayJob and decodes/verifies the embedded payload,
-// mirroring what the initContainer does at pod startup.
 func decodeRenderedRayPayload(t *testing.T, rendered string) map[string][]byte {
 	t.Helper()
 	var manifest map[string]any
@@ -1112,9 +1082,6 @@ runtime:
 	}
 }
 
-// torchrun runs the entrypoint under python3, so a shell entrypoint cannot
-// work. Reject it while validating instead of at runtime, where it surfaces as
-// a Python SyntaxError on the shell script.
 func TestRunConfigValidateRejectsTorchrunShellEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "train.sh"), []byte("#!/usr/bin/env bash\necho train\n"), 0o755); err != nil {
@@ -1142,10 +1109,6 @@ execution:
 	}
 }
 
-// runconfig validates a lowercased copy but leaves execution.launcher as
-// written, and only jobrender.Render normalizes it. Validation runs before
-// Render, so without folding the case here `validate` would report a config
-// valid that `run` then rejects.
 func TestRunConfigValidateRejectsTorchrunShellEntrypointMixedCase(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "train.sh"), []byte("#!/usr/bin/env bash\necho train\n"), 0o755); err != nil {
@@ -1173,8 +1136,6 @@ execution:
 	}
 }
 
-// A torchrun config with no entrypoint at all is a missing field, not a wrong
-// file type. Validation must not answer it with the .py message.
 func TestRunConfigValidateTorchrunWithoutEntrypointIsNotAFileTypeError(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, "tau.yaml")
@@ -1220,8 +1181,6 @@ execution:
 	}
 }
 
-// The default launcher execs the decoded script, so the shebang picks the
-// interpreter and shell entrypoints stay valid.
 func TestRunConfigValidateAcceptsShellEntrypointWithoutTorchrun(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "train.sh"), []byte("#!/usr/bin/env bash\necho train\n"), 0o755); err != nil {
@@ -1242,9 +1201,6 @@ compute:
 	}
 }
 
-// Managed workflows run run.main_script under python3 and ignore the launcher,
-// so their run.entrypoint is not subject to the torchrun .py rule. `tau run
-// validate` rejects managed manifests outright, so only the run path covers it.
 func TestRunConfigManagedWorkflowTorchrunKeepsShellEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "launch.sh"), []byte("#!/usr/bin/env bash\necho launch\n"), 0o755); err != nil {
@@ -2094,24 +2050,7 @@ execution:
 	}
 }
 
-// TestQuickstartScriptsPassWorkspaceCreateName guards the quickstarts' explicit
-// workspace selection.
-//
-// This asserts on the scripts rather than the command so the guard fails in CI,
-// where the scripts are never executed.
-//
-// NAME is optional at the command (cobra.MaximumNArgs(1), `create [NAME]`), but
-// the scripts must still pass it: omitting it would ignore a
-// TAU_QUICKSTART_WORKSPACE override and create a workspace other than the one
-// the status checks below poll — a mismatch that only surfaces after the
-// billable cluster exists.
 func TestQuickstartScriptsPassWorkspaceCreateName(t *testing.T) {
-	// Fail closed on the command no longer ACCEPTING a NAME at all (e.g.
-	// cobra.NoArgs), which would make the scripts below fail at runtime.
-	// Whether NAME is required or optional is deliberately not asserted.
-	//
-	// This reports with Errorf rather than Fatalf: a fatal precondition here
-	// silently skips the script assertions that are the point of the test.
 	src, err := os.ReadFile(filepath.Join("..", "..", "internal", "cli", "workspace_create.go"))
 	if err != nil {
 		t.Fatalf("read workspace_create.go: %v", err)
@@ -2139,9 +2078,6 @@ func TestQuickstartScriptsPassWorkspaceCreateName(t *testing.T) {
 	}
 }
 
-// TestQuickstartCleanupGuardsResourceGroupDeletion guards the destructive path:
-// run.sh reuses a pre-existing resource group, so cleanup.sh must not delete the
-// group unless this quickstart created (and therefore tagged) it.
 func TestQuickstartCleanupGuardsResourceGroupDeletion(t *testing.T) {
 	for _, tc := range []struct{ dir, owner string }{
 		{"aks-cpu-quickstart", "aks-cpu-quickstart"},
@@ -2166,7 +2102,6 @@ func TestQuickstartCleanupGuardsResourceGroupDeletion(t *testing.T) {
 			t.Errorf("%s/cleanup.sh: must check the ownership tag before deleting "+
 				"the resource group", tc.dir)
 		}
-		// The delete must be inside a conditional, never at top level.
 		for _, line := range strings.Split(clean, "\n") {
 			trimmed := strings.TrimSpace(line)
 			if !strings.HasPrefix(trimmed, "run az group delete") {
@@ -2180,10 +2115,6 @@ func TestQuickstartCleanupGuardsResourceGroupDeletion(t *testing.T) {
 	}
 }
 
-// TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage enforces AGENTS.md rule 18
-// for the GPU quickstart's MIG probe/repair pods, which run privileged as root in
-// the node's host namespaces. A user-overridable image there would be arbitrary
-// root code execution on the node.
 func TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "examples", "aks-gpu-quickstart", "run.sh")
 	body, err := os.ReadFile(path)
@@ -2196,13 +2127,9 @@ func TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage(t *testing.T) {
 		t.Errorf("%s: privileged host pods must use a fixed, digest-pinned MCR "+
 			"image (AGENTS.md rule 18)", path)
 	}
-	// TAU_QUICKSTART_RAY_IMAGE was the override that made these pods unsafe.
 	if strings.Contains(text, "TAU_QUICKSTART_RAY_IMAGE") {
 		t.Errorf("%s: the privileged MIG pods must not use a user-overridable image", path)
 	}
-	// The probe must not request a GPU: in the MIG-enabled state it exists to
-	// repair, the device plugin advertises zero GPUs, so the pod would hang
-	// Pending and its empty logs would be misread as "MIG disabled".
 	if strings.Contains(text, "nvidia.com/gpu\":1") {
 		t.Errorf("%s: the MIG probe must not request nvidia.com/gpu", path)
 	}

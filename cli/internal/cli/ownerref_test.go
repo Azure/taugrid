@@ -13,19 +13,6 @@ import (
 	"github.com/Azure/taugrid/core/kube"
 )
 
-// The per-run SecretProviderClass that manifest.Render emits for Key Vault
-// workloads is applied as an ancillary document. An ownerReference cannot be
-// rendered into it because the owning Job/RayJob UID does not exist until the
-// API server has created the workload, so tau adopts it immediately after the
-// apply. Without that adoption every Key Vault run leaves an orphan that
-// Kubernetes garbage collection can never reclaim.
-//
-// These tests drive the real argv construction through a kubectl stub rather
-// than a mocked seam, so a change to the resource name, the patch shape, or the
-// owner lookup is caught here.
-
-// ownerRefArgsLog installs a kubectl stub that records every invocation and
-// answers the owner UID lookup. It returns the path of the argv log.
 func ownerRefArgsLog(t *testing.T, uid string) (*kube.Runner, string) {
 	t.Helper()
 	log := filepath.Join(t.TempDir(), "args.log")
@@ -67,7 +54,6 @@ func TestPatchSecretProviderClassOwnerRefAdoptsJob(t *testing.T) {
 		t.Fatalf("expected a UID lookup then a patch, got %d invocations: %v", len(lines), lines)
 	}
 
-	// The owner UID must be read from the batch Job, not the SPC.
 	if !strings.Contains(lines[0], "get jobs.batch demo-train") {
 		t.Errorf("owner UID lookup did not target the Job: %q", lines[0])
 	}
@@ -79,8 +65,6 @@ func TestPatchSecretProviderClassOwnerRefAdoptsJob(t *testing.T) {
 	if !strings.Contains(patch, "patch "+secretProviderClassResource+" demo-train-kv") {
 		t.Errorf("patch did not target the SecretProviderClass: %q", patch)
 	}
-	// Both flags matter: controller=true makes this the managing reference, and
-	// blockOwnerDeletion=true keeps the SPC from outliving a foreground delete.
 	for _, want := range []string{
 		`"apiVersion":"batch/v1"`,
 		`"kind":"Job"`,
@@ -114,9 +98,6 @@ func TestPatchSecretProviderClassOwnerRefAdoptsRayJob(t *testing.T) {
 	}
 }
 
-// An empty UID means the owner lookup succeeded but returned nothing. Patching
-// an ownerReference with an empty UID produces an object Kubernetes will never
-// collect, so this must fail loudly and let the caller run cleanup.
 func TestPatchSecretProviderClassOwnerRefRejectsEmptyUID(t *testing.T) {
 	runner, _ := ownerRefArgsLog(t, "")
 
@@ -151,8 +132,6 @@ func TestOwnerRefTargetForWorkloadKinds(t *testing.T) {
 	}
 }
 
-// Cleanup of a half-submitted run deletes the SPC by GVR, so the resource
-// string used for cleanup has to resolve.
 func TestRunSubmissionGVRResolvesSecretProviderClass(t *testing.T) {
 	for _, resource := range []string{
 		secretProviderClassResource,

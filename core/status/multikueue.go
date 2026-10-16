@@ -8,27 +8,12 @@ import (
 	"strings"
 )
 
-// multiKueueControllerName is the MultiKueue admission check controller
-// name used by Kueue v0.18.x AdmissionCheck.spec.controllerName.
 const multiKueueControllerName = "kueue.x-k8s.io/multikueue"
 
-// multiKueueAdmissionCheckName is the current upstream AdmissionCheck name
-// that Kueue's MultiKueue controller installs. When manager-side
-// AdmissionCheck lookups fail (the current batch-user RBAC does not grant
-// get on admissionchecks.kueue.x-k8s.io), placement logic falls back to this
-// exact name only. Activation tests should keep this contract pinned.
 const multiKueueAdmissionCheckName = "multikueue"
 
-// multiKueueManagedBy is the spec.managedBy value Kueue's MultiKueue
-// admission check controller sets on a manager-cluster Job/RayJob once
-// the workload is routed to a worker cluster. See the Kueue and KubeRay
-// CRDs (ray.io_rayjobs.yaml: "the managedBy field value must be either
-// 'ray.io/kuberay-operator' or 'kueue.x-k8s.io/multikueue'").
 const multiKueueManagedBy = multiKueueControllerName
 
-// AdmissionCheckSummary pairs a Workload name with one of its admission
-// checks, so callers can report check progress without assuming there is
-// exactly one Workload for a job (Fetch tolerates multiples).
 type AdmissionCheckSummary struct {
 	WorkloadName string
 	AdmissionCheck
@@ -45,19 +30,6 @@ const (
 	MultiKueueStateRejected  MultiKueueState = "Rejected"
 )
 
-// IsMultiKueue reports whether this job is being scheduled through
-// Kueue's MultiKueue admission check, as evidenced by:
-//   - spec.managedBy == "kueue.x-k8s.io/multikueue" on the Job or RayJob, or
-//   - manager-visible Workload placement fields (clusterName or
-//     nominatedClusterNames), or
-//   - any AdmissionCheck resolved to the MultiKueue controller, or
-//   - a failed AdmissionCheck lookup on the exact upstream "multikueue"
-//     check name (temporary fallback until platform RBAC grants get on
-//     admissionchecks.kueue.x-k8s.io and activation tests pin the name).
-//
-// All of these are manager-visible fields; this never inspects worker
-// cluster state. A job with none of these signals is a normal
-// single-cluster submission and IsMultiKueue returns false.
 func (s Snapshot) IsMultiKueue() bool {
 	if s.JobFound {
 		if s.JobManagedBy == multiKueueManagedBy {
@@ -79,10 +51,6 @@ func (s Snapshot) IsMultiKueue() bool {
 	return false
 }
 
-// MultiKueueState aggregates manager-visible placement progress. It never
-// consults worker-cluster credentials or objects. Successful controller
-// lookups are authoritative; exact-name fallback is used only when the
-// controller lookup failed.
 func (s Snapshot) MultiKueueState() MultiKueueState {
 	if !s.IsMultiKueue() {
 		return ""
@@ -133,8 +101,6 @@ func (s Snapshot) MultiKueueState() MultiKueueState {
 	return MultiKueueStatePending
 }
 
-// ManagerOnlyMultiKueueView reports the manager-cluster view for a MultiKueue
-// workload: placement state is visible but no local execution pods exist.
 func (s Snapshot) ManagerOnlyMultiKueueView() bool {
 	return s.IsMultiKueue() && len(s.Pods) == 0
 }
@@ -187,11 +153,6 @@ func (s Snapshot) AnyAdmissionCheckRejected() bool {
 	return false
 }
 
-// PlacementWorkerCluster returns the unambiguous worker cluster for the current
-// aggregate MultiKueue placement state. It matches Tau's renderer semantics:
-// once all observed MultiKueue checks are ready it reports the common ready
-// worker, otherwise it reports the selected worker from the unfinished
-// placement workload. Conflicting cluster assignments return "".
 func (s Snapshot) PlacementWorkerCluster() string {
 	state := s.MultiKueueState()
 	if state == "" {
@@ -216,15 +177,6 @@ func (s Snapshot) PlacementWorkerCluster() string {
 	return worker
 }
 
-// SelectedWorkerCluster returns the worker cluster name Kueue has
-// selected for this workload (status.clusterName), or "" if no Workload
-// has been assigned yet — either because admission hasn't happened, this
-// isn't a MultiKueue job, or the Workload hasn't been fetched.
-//
-// When Fetch finds multiple Workloads for a job (tolerated but unusual),
-// the first Workload reporting a non-empty ClusterName wins; Workloads
-// are otherwise returned in API list order, so this is deterministic for
-// the common single-Workload case.
 func (s Snapshot) SelectedWorkerCluster() string {
 	for _, w := range s.Workloads {
 		if w.ClusterName != "" {
@@ -234,11 +186,6 @@ func (s Snapshot) SelectedWorkerCluster() string {
 	return ""
 }
 
-// NominatedWorkerClusters returns the deduplicated, sorted union of
-// worker cluster names nominated (but not yet selected) across all known
-// Workloads for this job. Returns nil when there are no nominations —
-// either because a cluster has already been selected, this isn't a
-// MultiKueue job, or nomination hasn't happened yet.
 func (s Snapshot) NominatedWorkerClusters() []string {
 	seen := make(map[string]bool)
 	var out []string
@@ -255,11 +202,6 @@ func (s Snapshot) NominatedWorkerClusters() []string {
 	return out
 }
 
-// AdmissionCheckSummaries returns every admission check reported across
-// all known Workloads, sorted by Workload name then check name for
-// deterministic rendering. Returns nil when there are no admission
-// checks reported (including for ordinary single-cluster jobs, which
-// typically have none).
 func (s Snapshot) AdmissionCheckSummaries() []AdmissionCheckSummary {
 	var out []AdmissionCheckSummary
 	for _, w := range s.Workloads {

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -21,10 +20,8 @@ EXPECTED_ARCHITECTURE = {
     "valueHead": "linear",
 }
 
-
 def fail(message: str) -> None:
     raise SystemExit(f"market policy check failed: {message}")
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -62,7 +59,6 @@ def main() -> int:
         f"parameters={parameter_count}"
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

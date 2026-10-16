@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -9,7 +8,6 @@ from __future__ import annotations
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
-
 
 class ScriptCollector(HTMLParser):
     def __init__(self) -> None:
@@ -34,7 +32,6 @@ class ScriptCollector(HTMLParser):
             self.scripts.append((self._attrs, "".join(self._body)))
             self._attrs = None
             self._body = []
-
 
 def main() -> int:
     public_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "public")
@@ -78,7 +75,6 @@ def main() -> int:
 
     print("Validated early theme initialization and generated design tokens")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

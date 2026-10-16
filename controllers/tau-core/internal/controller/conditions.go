@@ -81,9 +81,6 @@ func mergeConditions(existing, desired []metav1.Condition) []metav1.Condition {
 	return out
 }
 
-// equalWorkspaceStatus and equalQuotaRequestStatus gate the status write.
-// mergeConditions already carries LastTransitionTime forward on an unchanged
-// condition, so a semantic deep-equal is a faithful "nothing changed" test.
 func equalWorkspaceStatus(a, b tauv1alpha1.TauWorkspaceStatus) bool {
 	return apiequality.Semantic.DeepEqual(a, b)
 }
@@ -96,8 +93,6 @@ func equalTauClusterStatus(a, b tauv1alpha1.TauClusterStatus) bool {
 	return apiequality.Semantic.DeepEqual(a, b)
 }
 
-// findCondition returns a pointer to the condition of the given type within
-// conditions, or nil if not present.
 func findCondition(conditions []metav1.Condition, conditionType string) *metav1.Condition {
 	for i := range conditions {
 		if conditions[i].Type == conditionType {

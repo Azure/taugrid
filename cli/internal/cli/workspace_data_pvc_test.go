@@ -28,8 +28,6 @@ func workspaceWithNamespace(ns string) tauworkspace.Workspace {
 	return w
 }
 
-// A conclusive NotFound is the one case where the claim's absence is known, so
-// it stays a warning: storage is opt-in and CPU configs never mount /data.
 func TestReportWorkspaceDataPVCNotFoundWarnsWithoutFailing(t *testing.T) {
 	var out bytes.Buffer
 	err := reportWorkspaceDataPVC(
@@ -47,8 +45,6 @@ func TestReportWorkspaceDataPVCNotFoundWarnsWithoutFailing(t *testing.T) {
 	}
 }
 
-// Forbidden and transport failures leave the claim's existence unknown. The
-// check must not report them as optional missing storage.
 func TestReportWorkspaceDataPVCInconclusiveLookupFails(t *testing.T) {
 	for name, lookupErr := range map[string]error{
 		"forbidden": errors.New(`Error from server (Forbidden): persistentvolumeclaims is forbidden`),

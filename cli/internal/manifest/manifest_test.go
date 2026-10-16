@@ -456,10 +456,7 @@ runtime:
 	}
 }
 
-// --- multi-node RayJob render tests ---
-
 func TestManifestIsEval(t *testing.T) {
-	// IsEval drives auto-defaulting in the CLI when --workload-kind is omitted.
 	cases := []struct {
 		name string
 		raw  []byte

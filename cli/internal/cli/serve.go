@@ -33,8 +33,6 @@ func defaultServeConnectionEnsurer(cmd *cobra.Command) runConnectionEnsurer {
 	return manager
 }
 
-// RayService owns the Ray cluster and application lifecycle. Plain deployments
-// remain available for non-Ray serving.
 func newServeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -72,15 +70,15 @@ func newServeDeployCmd() *cobra.Command {
 		namespace       string
 		dryRun          string
 		kubeContext     string
-		kind            string // rayservice | deployment
+		kind            string
 		ports           []int
 		envKV           []string
-		initSpecs       []string // --init NAME=IMAGE (repeatable)
-		sideSpecs       []string // --sidecar NAME=IMAGE (repeatable)
-		volSpecs        []string // --volume NAME=KIND[:src] (repeatable)
-		mountSpecs      []string // --mount NAME:PATH[:ro] (repeatable)
-		envSecretKV     []string // --env-secret KEY=SECRET:KEY (repeatable)
-		runtimePip      []string // --runtime-pip package spec (repeatable)
+		initSpecs       []string
+		sideSpecs       []string
+		volSpecs        []string
+		mountSpecs      []string
+		envSecretKV     []string
+		runtimePip      []string
 		checkpoint      string
 		checkpointPVC   string
 		fromFinetune    string
@@ -693,7 +691,6 @@ func applyCheckpointMount(env map[string]string, volumes []serve.Volume, mounts 
 	normalizedCheckpointPath := checkpointPath
 	if !path.IsAbs(checkpointPath) {
 		relativePath := path.Clean(checkpointPath)
-		// Workspace outputs live directly on the PVC, alongside legacy checkpoints.
 		if strings.HasPrefix(relativePath, "projects/") {
 			normalizedCheckpointPath = path.Join(storage.DurableRoot, relativePath)
 		} else {
@@ -733,9 +730,6 @@ func indexEq(s string) int {
 	return -1
 }
 
-// parseContainerSpecs parses NAME=IMAGE repeated flags into serve.Container.
-// V0 only sets name+image; users wanting command/args should bake them
-// into the image (ENTRYPOINT/CMD).
 func parseContainerSpecs(specs []string, flag string) ([]serve.Container, error) {
 	if len(specs) == 0 {
 		return nil, nil
@@ -751,13 +745,6 @@ func parseContainerSpecs(specs []string, flag string) ([]serve.Container, error)
 	return out, nil
 }
 
-// parseVolumeSpecs parses "NAME=KIND[:src]" strings into serve.Volume.
-// Accepted forms:
-//
-//	NAME=emptyDir
-//	NAME=pvc:<claimName>
-//	NAME=configMap:<cmName>
-//	NAME=secret:<secretName>
 func parseVolumeSpecs(specs []string) ([]serve.Volume, error) {
 	if len(specs) == 0 {
 		return nil, nil
@@ -802,7 +789,6 @@ func parseVolumeSpecs(specs []string) ([]serve.Volume, error) {
 	return out, nil
 }
 
-// parseMountSpecs parses "NAME:PATH[:ro]" strings into serve.VolumeMount.
 func parseMountSpecs(specs []string) ([]serve.VolumeMount, error) {
 	if len(specs) == 0 {
 		return nil, nil
@@ -819,7 +805,6 @@ func parseMountSpecs(specs []string) ([]serve.VolumeMount, error) {
 			case "ro", "readonly":
 				vm.ReadOnly = true
 			case "rw":
-				// default; explicit OK
 			default:
 				return nil, fmt.Errorf("--mount %q: 3rd field must be ro|rw", s)
 			}
@@ -832,9 +817,6 @@ func parseMountSpecs(specs []string) ([]serve.VolumeMount, error) {
 	return out, nil
 }
 
-// validateMountsAgainstVolumes checks every mount references a volume
-// declared via --volume. Fail-fast at CLI layer so users see a clear
-// error instead of a kubectl rejection later.
 func validateMountsAgainstVolumes(mounts []serve.VolumeMount, vols []serve.Volume) error {
 	names := make(map[string]bool, len(vols))
 	for _, v := range vols {
@@ -986,10 +968,6 @@ func deployReplicas(replicas int, autoscaling *serve.AutoscalingOptions) int32 {
 	return int32(replicas)
 }
 
-// splitShellish splits a simple "--a b --c d" arg string on whitespace.
-// No quote handling in V0 — users with exotic args use a custom image
-// or a config file. Keeping this naive is deliberate; Python-style
-// shlex parsing in the CLI is a footgun we don't want.
 func splitShellish(s string) []string {
 	if s == "" {
 		return nil

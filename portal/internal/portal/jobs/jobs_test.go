@@ -15,8 +15,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// fakeReader records the arguments it was called with and returns canned JSON,
-// so Board can be exercised without a live Kubernetes API.
 type fakeReader struct {
 	localJSON, clusterJSON, workloadJSON []byte
 	localErr, clusterErr, workloadErr    error
@@ -71,9 +69,6 @@ const (
     ]}`
 )
 
-// TestBoardFetchesThreeListsAndAggregates verifies the client-go seam: Board
-// reads localqueues + workloads in the target namespace, clusterqueues cluster
-// wide, and passes the bytes to queue.BuildSnapshot() to produce a Snapshot.
 func TestBoardFetchesThreeListsAndAggregates(t *testing.T) {
 	r := &fakeReader{
 		localJSON:    []byte(fixtureLocalQueues),
@@ -190,8 +185,6 @@ func TestBoardRejectsMissingLiveLocalQueue(t *testing.T) {
 	}
 }
 
-// TestBoardPropagatesFetchError verifies a reader error surfaces (a queue view
-// without Kueue data is more misleading than an error, matching queue.Fetch()).
 func TestBoardPropagatesFetchError(t *testing.T) {
 	sentinel := errors.New("boom")
 	r := &fakeReader{

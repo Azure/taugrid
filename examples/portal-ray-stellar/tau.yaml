@@ -1,25 +1,3 @@
-# tau run --config tau.yaml
-#
-# Single RayJob that lights BOTH portal detail-page links:
-#   - "Ray dashboard"        (RayJob -> RayCluster head Service)
-#   - "Open in Experiments"  (Stellar; metrics offload writes a terminal
-#                             tau/run_status marker to Kusto on shutdown)
-#
-# Submit with the standalone collector image and approved ADX Workload Identity:
-#
-#   export TAU_METRICS_OFFLOAD_IMAGE=<platform-supplied-taugrid-metrics-collector@sha256:digest>
-#   export TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI=https://<cluster>.<region>.kusto.windows.net
-#   export TAU_METRICS_OFFLOAD_ADX_DATABASE=Metrics
-#   export TAU_METRICS_OFFLOAD_ADX_CLIENT_ID=<workspace-workload-identity-client-id>
-#   tau run --config tau.yaml
-#
-# NOTE (namespace): select a Ready TauWorkspace with `tau run --workspace`.
-# The example values below use `taugrid-default` and require a writable /data
-# `blob-training` PVC in that workspace namespace.
-# and the deployed portal is scoped to it (portal.workloadNamespace), so the run
-# appears on the Runs list board as well as at its detail URL
-#   /portal/runs/taugrid-default/<run-name>
-
 name: portal-ray-stellar
 
 engine: rayjob
@@ -43,12 +21,9 @@ policy:
   queue: jobqueue
 
 storage:
-  data_pvc: blob-training       # mounted at /data
+  data_pvc: blob-training
   output: /data/projects/taugrid-default/runs/portal-ray-stellar
 
-# Stellar wiring: the collector watches immutable chunks and queues typed events
-# (plus a terminal tau/run_status marker) to ADX. Path is relative to
-# storage.output.
 metrics:
   history:
     - metrics-history-attempt-0/*.jsonl

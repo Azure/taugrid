@@ -16,9 +16,6 @@ var launchValue = regexp.MustCompile(`^[a-zA-Z0-9_./:@+-]*$`)
 var launchCommandValue = regexp.MustCompile(`^[a-zA-Z0-9_./: -]+$`)
 var launchMIGProfile = regexp.MustCompile(`^[0-9]+g\.[0-9]+gb$`)
 
-// Launch records resolved submission intent, never an observed allocation.
-// Deliberately exclude raw argv, environment, pip URLs and arbitrary config values:
-// all can carry credentials. Entrypoint is a path, not a workload command.
 type Launch struct {
 	Version         int    `json:"version"`
 	WorkloadKind    string `json:"workload_kind,omitempty"`
@@ -39,7 +36,6 @@ type Launch struct {
 	TauCommand      string `json:"tau_command,omitempty"`
 }
 
-// JSON validates and bounds the allowlisted metadata before persistence.
 func (l Launch) JSON() string {
 	if l.Version != 1 {
 		return ""
@@ -50,8 +46,6 @@ func (l Launch) JSON() string {
 		}
 	}
 	for _, value := range []*string{&l.WorkloadKind, &l.GPUClass, &l.Image, &l.Entrypoint, &l.Launcher, &l.Profile, &l.Workspace, &l.Namespace} {
-		// No URLs with credentials/query strings, shell fragments or multiline
-		// values. Runtime arguments and env are intentionally not accepted.
 		if !launchValue.MatchString(*value) || strings.Contains(*value, "://") ||
 			(strings.Contains(*value, "@") && !strings.Contains(*value, "@sha256:")) {
 			*value = ""
@@ -85,7 +79,6 @@ func (l Launch) JSON() string {
 	return string(raw)
 }
 
-// Tag avoids commas in the legacy metrics-offload comma-separated tag carrier.
 func (l Launch) Tag() string {
 	if raw := l.JSON(); raw != "" {
 		return "base64url:" + base64.RawURLEncoding.EncodeToString([]byte(raw))

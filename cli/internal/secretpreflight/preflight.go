@@ -19,9 +19,6 @@ type Runner interface {
 	Raw(context.Context, []string, []byte) (string, error)
 }
 
-// AvailableSecret describes a Secret that will be created in the same apply
-// operation as the workload. Keys are sufficient for preflight; values stay
-// with the owning renderer.
 type AvailableSecret struct {
 	Name string
 	Keys []string
@@ -31,9 +28,6 @@ type requiredSecret struct {
 	keys map[string][]string
 }
 
-// ValidateRequiredEnv verifies required Secret key references without returning
-// Secret values to Tau. The caller's Kubernetes identity remains authoritative:
-// restricted identities fail closed instead of bypassing the check.
 func ValidateRequiredEnv(ctx context.Context, runner Runner, namespace string, vars []envspec.Var, available ...AvailableSecret) error {
 	required := collectRequired(vars)
 	if len(required) == 0 {

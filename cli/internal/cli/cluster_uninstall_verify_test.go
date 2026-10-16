@@ -16,10 +16,6 @@ func deployedMetadataFor(chart, version string) string {
 	return `{"chart":"` + chart + `","version":"` + version + `"}`
 }
 
-// The drain is a real mutating `helm upgrade` that re-renders the whole release
-// and, on Helm 4, forces field ownership. Running it from a chart other than
-// the one the release was installed from would apply a different chart's
-// manifests on the way out.
 func TestClusterUninstallSkipsDrainOnChartMismatch(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t,
@@ -40,8 +36,6 @@ func TestClusterUninstallSkipsDrainOnChartMismatch(t *testing.T) {
 	}
 }
 
-// The deployed name is a bare chart name; --chart is a reference. Comparing
-// them literally would reject every correct invocation.
 func TestClusterUninstallDrainsWhenChartReferenceMatchesByName(t *testing.T) {
 	for name, chart := range map[string]string{
 		"local path":     "./charts/taugrid",
@@ -64,8 +58,6 @@ func TestClusterUninstallDrainsWhenChartReferenceMatchesByName(t *testing.T) {
 	}
 }
 
-// A release installed before this field was read has no chart name to compare
-// against; refusing to drain there would regress every existing release.
 func TestClusterUninstallDrainsWhenDeployedChartNameUnknown(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t,
@@ -80,12 +72,6 @@ func TestClusterUninstallDrainsWhenDeployedChartNameUnknown(t *testing.T) {
 	}
 }
 
-// The drain omits --wait, and Helm does not wait on resources it drops from a
-// release, so it returns as soon as the deletes are accepted. On a cluster with
-// active runs Kueue holds resource-in-use, the objects stay Terminating, and
-// phase two then removes the controller underneath them — the exact state this
-// command exists to prevent, except a claimed drain suppresses the recovery
-// guidance that would tell the operator about it.
 func TestClusterUninstallReportsLeftoversWhenDrainedObjectsRemain(t *testing.T) {
 	installFakeHelmWithRelease(t,
 		installedRelease(queueEnabledValues, deployedMetadataFor("taugrid", "0.1.1")),
@@ -106,8 +92,6 @@ func TestClusterUninstallReportsLeftoversWhenDrainedObjectsRemain(t *testing.T) 
 	}
 }
 
-// When the drain really did remove them, naming them would send the operator
-// after resources that no longer exist.
 func TestClusterUninstallOmitsLeftoversWhenDrainedObjectsAreGone(t *testing.T) {
 	installFakeHelmWithRelease(t,
 		installedRelease(queueEnabledValues, deployedMetadataFor("taugrid", "0.1.1")),
@@ -128,7 +112,6 @@ func TestClusterUninstallOmitsLeftoversWhenDrainedObjectsAreGone(t *testing.T) {
 	}
 }
 
-// A confirmation that cannot run must not upgrade a maybe into a yes.
 func TestClusterUninstallReportsLeftoversWhenConfirmationFails(t *testing.T) {
 	installFakeHelmWithRelease(t,
 		installedRelease(queueEnabledValues, deployedMetadataFor("taugrid", "0.1.1")),
@@ -159,9 +142,6 @@ func stubQueuePolicyPresent(t *testing.T, present bool) {
 	t.Cleanup(func() { queuePolicyPresent = original })
 }
 
-// The confirmation shells to kubectl, so any test that drains successfully
-// without stubbing it would query whatever cluster the runner happens to point
-// at — slow, and green or red by accident. Failing here names the test instead.
 func TestMain(m *testing.M) {
 	queuePolicyPresent = func(context.Context, clusterUninstallSpec, baselineQueuePolicy) (bool, error) {
 		return false, errors.New("queuePolicyPresent must be stubbed with stubQueuePolicyPresent in tests that reach a successful drain")

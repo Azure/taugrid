@@ -14,11 +14,10 @@ from typing import Any
 
 import yaml
 
-try:  # Python 3.11+
+try:
     import tomllib  # type: ignore[import-not-found]
 except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
-
 
 @dataclass(frozen=True)
 class SecretRef:
@@ -31,14 +30,11 @@ class SecretRef:
         if not self.name or not self.key:
             raise ValueError("tau.secret_ref requires non-empty secret name and key")
 
-
 def secret_ref(name: str, key: str) -> SecretRef:
     return SecretRef(name=name, key=key)
 
-
 def secret(name: str, key: str) -> SecretRef:
     return secret_ref(name, key)
-
 
 @dataclass(frozen=True)
 class SecretSource:
@@ -54,26 +50,21 @@ class SecretSource:
         if bool(self.env) == bool(self.path):
             raise ValueError("tau secret sources require exactly one of env or path")
 
-
 def secret_from_env(key: str, *, env: str | None = None) -> SecretSource:
     return SecretSource(key=key, env=env or key)
 
-
 def secret_from_file(key: str, *, path: str) -> SecretSource:
     return SecretSource(key=key, path=path)
-
 
 def pvc_mount(name: str, *, pvc: str, mount_path: str, read_only: bool = False) -> dict[str, Any]:
     if not name or not pvc or not mount_path.startswith("/"):
         raise ValueError("tau.pvc_mount requires name, pvc, and an absolute mount_path")
     return {"name": name, "pvc": pvc, "mountPath": mount_path, "readOnly": bool(read_only)}
 
-
 def _copy_mapping(value: Any, *, error: str | None = None) -> dict[str, Any]:
     if error is not None and not isinstance(value, Mapping):
         raise ValueError(error)
     return copy.deepcopy(dict(value))
-
 
 def load_config(source: str | Path | Mapping[str, Any] | Sequence[Any] | None) -> dict[str, Any]:
     """Load and deep-merge YAML/TOML/dict config sources.
@@ -105,7 +96,6 @@ def load_config(source: str | Path | Mapping[str, Any] | Sequence[Any] | None) -
         return merged
     raise TypeError(f"unsupported tau config source: {type(source)!r}")
 
-
 def config(
     *sources: str | Path | Mapping[str, Any],
     overrides: Mapping[str, Any] | None = None,
@@ -122,7 +112,6 @@ def config(
         merged = deep_merge(merged, dict(overrides))
     return merged
 
-
 def deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
     out = copy.deepcopy(dict(base))
     for key, value in override.items():
@@ -131,7 +120,6 @@ def deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str
         else:
             out[key] = copy.deepcopy(value)
     return out
-
 
 def runtime_env_entries(env: Mapping[str, Any] | Sequence[Any] | None) -> list[dict[str, Any]]:
     if env is None:
@@ -152,7 +140,6 @@ def runtime_env_entries(env: Mapping[str, Any] | Sequence[Any] | None) -> list[d
         out.append(_env_entry(key, value))
     return out
 
-
 def merge_runtime_env(existing: Any, extra: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     entries = runtime_env_entries(existing)
     by_name = {str(item.get("name")): dict(item) for item in entries if item.get("name")}
@@ -163,12 +150,10 @@ def merge_runtime_env(existing: Any, extra: Sequence[Mapping[str, Any]]) -> list
         by_name[name] = copy.deepcopy(dict(item))
     return [by_name[key] for key in sorted(by_name)]
 
-
 def normalize_mounts(mounts: Sequence[Any] | None) -> list[dict[str, Any]]:
     if not mounts:
         return []
     return [_copy_mapping(item, error="tau mounts must be mappings; use tau.pvc_mount(...)") for item in mounts]
-
 
 def _env_entry(name: str, value: Any) -> dict[str, Any]:
     if not name or "=" in name:
@@ -196,7 +181,6 @@ def _env_entry(name: str, value: Any) -> dict[str, Any]:
             },
         }
     return {"name": name, "value": str(value)}
-
 
 def _set_path(target: dict[str, Any], dotted_path: str, value: Any) -> None:
     parts = [part for part in dotted_path.split(".") if part]

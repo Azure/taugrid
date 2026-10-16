@@ -54,12 +54,6 @@ func (h *Health) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		// pods_status is operator-facing, not decorative: when it is not
-		// "available" every batch-Job failure summary silently degrades to the
-		// Job's own "BackoffLimitExceeded" with no other signal. The usual
-		// cause is a Role without the pods read verb. Runbooks direct
-		// operators here first, so it has to be readable from outside the
-		// process.
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"rayjobs_status":   status,
 			"workloads_status": workloadsStatus,

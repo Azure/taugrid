@@ -27,14 +27,10 @@ import (
 )
 
 const (
-	connectionStateSchema = "tau.workspace.connection-state.v1"
-	// connectionStateSchemaV2 is written by newer Tau clients. The routing
-	// fields consumed by ListCachedConnections are unchanged.
+	connectionStateSchema   = "tau.workspace.connection-state.v1"
 	connectionStateSchemaV2 = "tau.workspace.connection-state.v2"
 )
 
-// defaultRevalidationTimeout bounds non-interactive revalidation. Overridable
-// per-Manager for tests; there is no env knob until someone needs one.
 const defaultRevalidationTimeout = 30 * time.Second
 
 var (
@@ -101,20 +97,14 @@ type connectionState struct {
 }
 
 type Manager struct {
-	ConfigDir string
-	// Interactive reports whether stdin is a terminal. It no longer gates
-	// consent — the confirmation prompt reads piped stdin like any other unix
-	// tool — and now only bounds credential revalidation, which may need a
-	// terminal of its own for kubelogin.
-	Interactive  bool
-	Input        io.Reader
-	Output       io.Writer
-	Credentials  CredentialProvider
-	Verifier     Verifier
-	Now          func() time.Time
-	ReadinessTTL time.Duration
-	// RevalidationTimeout bounds non-interactive revalidation. Zero falls back
-	// to TAU_CONNECTION_REVALIDATION_TIMEOUT, then defaultRevalidationTimeout.
+	ConfigDir           string
+	Interactive         bool
+	Input               io.Reader
+	Output              io.Writer
+	Credentials         CredentialProvider
+	Verifier            Verifier
+	Now                 func() time.Time
+	ReadinessTTL        time.Duration
 	RevalidationTimeout time.Duration
 	TauVersion          string
 }
@@ -127,8 +117,6 @@ func DefaultConfigDir() (string, error) {
 	return filepath.Join(base, "tau"), nil
 }
 
-// ListCachedConnections returns the verified workspace routes Tau has already
-// configured locally. It does not refresh credentials or contact a cluster.
 func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 	states, err := listConnectionStates(configDir)
 	if err != nil {
@@ -141,8 +129,6 @@ func ListCachedConnections(configDir string) ([]ActiveConnection, error) {
 	return connections, nil
 }
 
-// ListAssignableConnections returns locally verified connections whose complete
-// non-secret descriptor can be reproduced safely for a repository assignment.
 func ListAssignableConnections(configDir string) ([]AssignableConnection, error) {
 	states, err := listConnectionStates(configDir)
 	if err != nil {
@@ -264,8 +250,6 @@ func (m Manager) Ensure(ctx context.Context, startDir string) (ActiveConnection,
 	return m.EnsureDiscovery(ctx, discovery)
 }
 
-// EnsureDiscovery activates one already-resolved descriptor. Callers use this
-// for catalog entries so connection routing cannot fall back to ancestor search.
 func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (ActiveConnection, error) {
 	if strings.TrimSpace(m.TauVersion) != "" {
 		if err := CheckTauVersion(m.TauVersion, discovery.Descriptor.Requirements.MinTauVersion); err != nil {
@@ -334,12 +318,6 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		if m.Verifier == nil {
 			return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
 		}
-		// Revalidation reads the TauWorkspace and runs `auth can-i` checks; it
-		// never asks the user anything, so it must not require a terminal.
-		// A kubeconfig exec plugin can block on browser or device-code sign-in
-		// when its token cache is cold. Without a terminal that would hang
-		// forever, which is worse for an automated caller than a clean failure,
-		// so bound it and report how to recover.
 		verifyCtx, cancel := m.signInDeadline(ctx)
 		defer cancel()
 		var verification Verification
@@ -474,9 +452,6 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		return ActiveConnection{}, fmt.Errorf("workspace connection verifier is not configured")
 	}
 
-	// Credential acquisition stays on the caller context. Provider-backed access
-	// may require a human-paced sign-in, while kubeconfig access may invoke its
-	// own exec credential plugin.
 	rawKubeconfig, accessFingerprint, err := m.resolveUserKubeconfig(ctx, discovery.Descriptor, sourceKubeconfig)
 	if err != nil {
 		return ActiveConnection{}, fmt.Errorf("obtain Kubernetes credentials: %w", err)
@@ -579,8 +554,6 @@ func (m Manager) configDir() (string, error) {
 	return DefaultConfigDir()
 }
 
-// ConfigDirectory returns the per-user Tau state directory used by this
-// manager. Workspace consumers use it for adjacent non-secret runtime caches.
 func (m Manager) ConfigDirectory() (string, error) {
 	return m.configDir()
 }
@@ -727,10 +700,6 @@ func validateVerification(descriptor Descriptor, verification Verification) erro
 	return nil
 }
 
-// signInDeadline bounds a call that may block on a credential-plugin prompt.
-// Without a terminal that prompt can never be answered, so hanging forever is
-// strictly worse for an automated caller than failing with instructions.
-// Interactive callers keep the unbounded context so a human can complete it.
 func (m Manager) signInDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
 	if m.Interactive {
 		return ctx, func() {}
@@ -738,8 +707,6 @@ func (m Manager) signInDeadline(ctx context.Context) (context.Context, context.C
 	return context.WithTimeout(ctx, m.revalidationTimeout())
 }
 
-// signInTimeout returns the actionable error for a call bounded by
-// signInDeadline, or nil when the failure was not the deadline.
 func (m Manager) signInTimeout(bounded context.Context, stage string) error {
 	if m.Interactive || !errors.Is(bounded.Err(), context.DeadlineExceeded) {
 		return nil
@@ -1127,8 +1094,6 @@ func (m Manager) verifyCandidate(
 	defer func() {
 		_ = os.Remove(candidatePath)
 	}()
-	// The candidate kubeconfig is kubelogin exec auth, so this verify can block
-	// on a sign-in prompt that a caller with no terminal can never answer.
 	verifyCtx, cancel := m.signInDeadline(ctx)
 	defer cancel()
 	verification, err := m.Verifier.Verify(verifyCtx, discovery.Descriptor, candidatePath)
@@ -1144,8 +1109,6 @@ func (m Manager) verifyCandidate(
 	return verification, nil
 }
 
-// candidateChmod is overridden in tests to simulate filesystems (BlobFuse and
-// friends) that reject chmod on a file this process just created.
 var candidateChmod = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
 
 func writeKubeconfigCandidate(configDir string, rawKubeconfig []byte) (string, error) {

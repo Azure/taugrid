@@ -8,7 +8,6 @@ GOFLAGS  := -trimpath
 LDFLAGS  := -s -w
 CGO      := 1
 
-# Cross-compile CC selection: use aarch64 cross-compiler when targeting arm64 from amd64.
 ifeq ($(GOARCH),arm64)
   export CC := aarch64-linux-gnu-gcc
 endif

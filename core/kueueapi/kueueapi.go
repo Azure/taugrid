@@ -1,11 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package kueueapi holds the Kueue API JSON shapes and GPU quota accounting
-// shared by the CLI's queue validation path and the portal's queue snapshot
-// path. Both decode the same ClusterQueue/LocalQueue/ResourceFlavor documents
-// and must agree on how NVIDIA GPU quota is counted, so that logic lives here
-// rather than being duplicated per consumer.
 package kueueapi
 
 import (
@@ -18,19 +13,12 @@ import (
 )
 
 const (
-	// GPUResource is the Kueue DRA accounting resource for NVIDIA GPUs.
-	GPUResource = "gpu.nvidia.com"
-	// GPUResourceDevicePlugin is the standard NVIDIA device-plugin resource
-	// name. The finetune flow uses this after the DRA->device-plugin migration,
-	// so queue accounting must count it alongside the DRA resource.
+	GPUResource             = "gpu.nvidia.com"
 	GPUResourceDevicePlugin = "nvidia.com/gpu"
 )
 
-// GPUResourceNames lists every resource name that represents an NVIDIA GPU for
-// queue accounting: the DRA resource and the device-plugin resource.
 var GPUResourceNames = []string{GPUResource, GPUResourceDevicePlugin}
 
-// isGPUResource reports whether a Kueue resource name accounts for NVIDIA GPUs.
 func isGPUResource(name string) bool {
 	for _, n := range GPUResourceNames {
 		if name == n {
@@ -149,13 +137,6 @@ func (cq ClusterQueue) HasResourceFlavor(flavor string) bool {
 	return false
 }
 
-// NominalGPU reports configured GPU quota. When flavor is empty it sums across
-// every ResourceFlavor, which is a pool total and deliberately not the same
-// number as MaxGPUCapacity's empty-flavor case: a pool total answers "how many
-// GPUs does this queue own", never "how large a workload can this queue admit".
-// Do not reuse it as a per-workload ceiling -- Kueue assigns a workload to
-// exactly one flavor, so the ceiling is a single flavor's capacity. See
-// MaxGPUCapacity for that, and for the bug summing here once caused there.
 func (cq ClusterQueue) NominalGPU(flavor string) (int64, bool) {
 	if flavor == "" {
 		var total int64
@@ -193,17 +174,6 @@ func (cq ClusterQueue) NominalGPU(flavor string) (int64, bool) {
 	return 0, false
 }
 
-// MaxGPUCapacity reports the largest GPU request this queue could admit, which
-// is what the submission preflight compares a workload against.
-//
-// When flavor is empty the workload is not pinned to one ResourceFlavor, but
-// Kueue still assigns it to exactly one flavor -- it never splits a single
-// workload's GPUs across flavors. The ceiling is therefore the largest single
-// flavor's capacity, not the sum of all of them. Summing overstated the
-// ceiling: live tau-cq has tau-system (0 GPU), nd-h200-v5 (16) and
-// ndm-a100-v4 (16), which reported 32, so preflight admitted a 32-GPU request
-// that could never be scheduled and the run sat Pending with no explanation
-// instead of being rejected outright.
 func (cq ClusterQueue) MaxGPUCapacity(flavor, resourceName string) (int64, bool) {
 	if flavor == "" {
 		var best int64
@@ -233,21 +203,6 @@ func (cq ClusterQueue) MaxGPUCapacity(flavor, resourceName string) (int64, bool)
 	return 0, false
 }
 
-// BestGPUFlavorFor returns the ResourceFlavor with the highest GPU capacity
-// among this ClusterQueue's GPU-quota flavors that also satisfy the caller's
-// gpu_class constraint.
-//
-// allowedFlavors is the caller-resolved allow-list of ResourceFlavor names
-// that satisfy the request: nil means no gpu_class filter applies (for
-// example gpu_class: any, or no gpu_class requested at all) and every
-// GPU-quota flavor is a candidate; a non-nil map (even an empty one) means
-// only the named flavors qualify. Callers must resolve allowedFlavors by
-// comparing each candidate ResourceFlavor's spec.nodeLabels against the
-// tau.azure.com/gpu-class contract -- never by matching a substring of the
-// flavor's own name. A ClusterQueue's JSON representation does not carry
-// ResourceFlavor node labels, so this function cannot do that matching
-// itself; see queueresolve.gpuClassAllowedFlavors for the exact-match
-// resolution this depends on.
 func (cq ClusterQueue) BestGPUFlavorFor(allowedFlavors map[string]bool, resourceName string) (string, int64, bool) {
 	type candidate struct {
 		name string
@@ -365,22 +320,6 @@ type Toleration struct {
 	Effect   string `json:"effect"`
 }
 
-// PendingCause explains why Kueue has not admitted a workload, from its
-// conditions. Both the CLI status view and the portal queue board show this
-// text, so the choice of which condition to believe lives here.
-//
-// The reason and message always come from the same condition, so the pair
-// describes one thing. QuotaReserved is preferred: its reason varies with the
-// actual cause (Kueue passes "Pending", "Waiting", or "Inadmissible" to
-// UnsetQuotaReservationWithCondition depending on the path) and its message
-// carries the flavor-assignment detail — which flavors were tried, which
-// nodes were excluded and why. Admitted is the weaker fallback because Kueue
-// derives it mechanically from the other conditions, so it only ever reports
-// that a reservation is missing ("NoReservation", "UnsatisfiedChecks"), never
-// why. Any other non-True condition (Deactivated, Requeued) is the last
-// resort. Kueue often sets just one of these while a workload waits, so none
-// is assumed present, and each is read independently of its position in the
-// list.
 func PendingCause(conditions []Condition) (reason, message string) {
 	var quota, admitted, other Condition
 	for _, c := range conditions {

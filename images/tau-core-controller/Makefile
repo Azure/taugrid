@@ -8,9 +8,7 @@ ACR_REGISTRY ?= aksairuntime.azurecr.io
 IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 PLATFORMS ?= linux/amd64,linux/arm64
 
-# Source lives in the module directory; this directory only packages it.
 SRC := ../../controllers/tau-core
-# The Dockerfile copies both controllers/tau-core and the shared core module.
 CONTEXT := ../..
 
 .PHONY: build test test-kind-e2e lint generate manifests clean docker-build docker-push

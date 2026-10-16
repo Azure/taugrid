@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// XIDReader checks for XID errors on each GPU.
 type XIDReader struct{}
 
 func (r *XIDReader) Name() string { return "xid" }

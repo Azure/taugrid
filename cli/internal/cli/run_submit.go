@@ -331,10 +331,6 @@ func jsonPointerEscape(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(value, "~", "~0"), "/", "~1")
 }
 
-// secretProviderClassResource is the kubectl resource name for the CSI Secrets
-// Store SecretProviderClass that manifest.Render emits per Key Vault run. It is
-// fully qualified so it cannot collide with a same-named resource from another
-// API group.
 const secretProviderClassResource = "secretproviderclasses.secrets-store.csi.x-k8s.io"
 
 func runSubmissionGVR(resource string) (schema.GroupVersionResource, error) {

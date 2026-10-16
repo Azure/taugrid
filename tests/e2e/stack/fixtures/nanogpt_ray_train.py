@@ -27,7 +27,6 @@ from ray.train import RunConfig, ScalingConfig
 from ray.train import torch as ray_train_torch
 from ray.train.torch import TorchTrainer
 
-
 @dataclass(frozen=True)
 class GPTConfig:
     block_size: int
@@ -36,7 +35,6 @@ class GPTConfig:
     n_head: int = 4
     n_embd: int = 256
     dropout: float = 0.0
-
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -68,7 +66,6 @@ class CausalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(bsz, seq_len, channels)
         return self.c_proj(y)
 
-
 class MLP(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -77,7 +74,6 @@ class MLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.c_proj(F.gelu(self.c_fc(x)))
-
 
 class Block(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -90,7 +86,6 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln_1(x))
         return x + self.mlp(self.ln_2(x))
-
 
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -129,7 +124,6 @@ class GPT(nn.Module):
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
 
-
 def csv_values(name: str, required: bool = True) -> list[str]:
     raw = os.environ.get(name, "")
     values = [item.strip() for item in raw.split(",")]
@@ -139,18 +133,15 @@ def csv_values(name: str, required: bool = True) -> list[str]:
         raise RuntimeError(f"{name} must not contain empty CSV items")
     return values
 
-
 def env_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "")
     if raw == "":
         return default
     return int(raw)
 
-
 def safe_uri(uri: str) -> str:
     parsed = urllib.parse.urlsplit(uri)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-
 
 def validate_shard_uri(index: int, uri: str) -> str:
     parsed = urllib.parse.urlsplit(uri)
@@ -169,14 +160,12 @@ def validate_shard_uri(index: int, uri: str) -> str:
         raise RuntimeError(f"NANOGPT_DATASET_URIS item {index} must point to a .bin shard ({safe_uri(uri)})")
     return uri
 
-
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
 
 def download_shard(uri: str, expected_sha256: str, rank: int) -> Path:
     cache_dir = Path("/tmp/nanogpt-openwebtext")
@@ -210,7 +199,6 @@ def download_shard(uri: str, expected_sha256: str, rank: int) -> Path:
             time.sleep((2**attempt) + random.uniform(0, 3))
     raise AssertionError("unreachable")
 
-
 def parse_dataset_contract() -> tuple[list[str], list[str], list[int]]:
     uris = [
         validate_shard_uri(index, value)
@@ -242,7 +230,6 @@ def parse_dataset_contract() -> tuple[list[str], list[str], list[int]]:
         )
     return uris, sha256s, token_counts
 
-
 def get_batch(
     tokens: np.memmap,
     batch_size: int,
@@ -265,7 +252,6 @@ def get_batch(
             "increase NANOGPT_VOCAB_SIZE or use GPT-2/OpenWebText-compatible token shards"
         )
     return torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
-
 
 def train_loop(config: dict) -> None:
     ctx = train.get_context()
@@ -341,7 +327,6 @@ def train_loop(config: dict) -> None:
                 }
             )
 
-
 def final_metrics_from_result(result) -> dict:
     metrics = getattr(result, "metrics", None)
     if metrics:
@@ -352,7 +337,6 @@ def final_metrics_from_result(result) -> dict:
         return dict(metrics_dataframe.iloc[-1].to_dict())
 
     return {}
-
 
 def main() -> None:
     dataset_uris, dataset_sha256s, token_counts = parse_dataset_contract()
@@ -406,7 +390,6 @@ def main() -> None:
         f"NANOGPT_RAY_TRAIN_SUCCESS step={final_step} world_size={world_size} "
         f"workers={workers} final_loss={final_loss_text} dataset_tokens={sum(token_counts)}"
     )
-
 
 if __name__ == "__main__":
     main()

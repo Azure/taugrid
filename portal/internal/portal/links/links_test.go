@@ -10,8 +10,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// stubReader returns canned Kueue Workloads JSON so the projection can be
-// tested without a live API. It records the namespace it was asked for.
 type stubReader struct {
 	json   string
 	err    error
@@ -27,9 +25,6 @@ func (s *stubReader) ListWorkloads(_ context.Context, namespace string) ([]byte,
 }
 
 func TestListWorkloadsProjectsJoinKeys(t *testing.T) {
-	// One admitted workload with run-id/job labels, one pending without them,
-	// one finished. The projection must keep run-id (which queue.Snapshot drops)
-	// and classify admission state.
 	const raw = `{"items":[
       {"metadata":{"name":"wl-admitted","namespace":"ray","creationTimestamp":"2026-01-02T03:04:05Z",
         "labels":{"` + workloadmeta.LabelRunID + `":"train-77","` + workloadmeta.LabelJob + `":"phi-finetune"}},
@@ -120,9 +115,6 @@ func TestListWorkloadsSortsByNamespaceThenJob(t *testing.T) {
 }
 
 func TestListWorkloadsParsesOwnerReferences(t *testing.T) {
-	// A Kueue Workload admitted for a RayJob carries no tau.azure.com labels but
-	// does have an ownerReference back to the RayJob object. The projection must
-	// surface those owner names so the Portal can join by ownership.
 	const raw = `{"items":[
       {"metadata":{"name":"rayjob-portal-e2e-abcde","namespace":"ray",
         "ownerReferences":[
@@ -241,12 +233,6 @@ func TestListWorkloadsPropagatesError(t *testing.T) {
 	}
 }
 
-// TestListWorkloadsProjectsStellarIdentity locks the alignment between what
-// `tau run` stamps and what the portal reads: every run path merges
-// experiment.Metadata onto the Job, so the Stellar project/experiment/group and
-// the workspace ride along on the Workload Kueue admits. Dropping them left the
-// overview showing a bare run-id for a row whose experiment identity was
-// already on the object.
 func TestListWorkloadsProjectsStellarIdentity(t *testing.T) {
 	const raw = `{"items":[
       {"metadata":{"name":"wl","namespace":"ray","labels":{
@@ -274,9 +260,6 @@ func TestListWorkloadsProjectsStellarIdentity(t *testing.T) {
 	}
 }
 
-// TestListWorkloadsWithoutStellarIdentity guards the non-tau case: a Workload
-// admitted for an object nobody stamped must leave the identity fields empty
-// (they are omitempty) rather than inventing a project.
 func TestListWorkloadsWithoutStellarIdentity(t *testing.T) {
 	const raw = `{"items":[{"metadata":{"name":"wl","namespace":"ray"},
       "spec":{"queueName":"jobqueue"},"status":{"conditions":[]}}]}`

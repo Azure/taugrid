@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package config loads and validates the gpu-health-checker YAML configuration.
 package config
 
 import (
@@ -12,7 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the top-level configuration for gpu-health-checker.
 type Config struct {
 	ExpectedGPUs   int           `yaml:"expectedGPUs"`
 	GPUType        string        `yaml:"gpuType"`
@@ -27,14 +25,12 @@ type Config struct {
 	warningXIDSet  map[int]bool
 }
 
-// NVLinkConfig holds NVLink topology expectations.
 type NVLinkConfig struct {
 	ExpectedActiveLinksPerGPU int  `yaml:"expectedActiveLinksPerGPU"`
 	CheckC2C                  bool `yaml:"checkC2C"`
 	CheckNVSwitch             bool `yaml:"checkNVSwitch"`
 }
 
-// ChecksConfig holds per-check enablement and thresholds.
 type ChecksConfig struct {
 	XID     XIDCheckConfig     `yaml:"xid"`
 	ECC     ECCCheckConfig     `yaml:"ecc"`
@@ -46,33 +42,28 @@ type ChecksConfig struct {
 	Info    CheckEnabled       `yaml:"info"`
 }
 
-// CheckEnabled is a simple check that can be enabled or disabled.
 type CheckEnabled struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// XIDCheckConfig configures XID error classification.
 type XIDCheckConfig struct {
 	Enabled       bool  `yaml:"enabled"`
 	CriticalCodes []int `yaml:"criticalCodes"`
 	WarningCodes  []int `yaml:"warningCodes"`
 }
 
-// ECCCheckConfig configures ECC error thresholds.
 type ECCCheckConfig struct {
 	Enabled          bool          `yaml:"enabled"`
 	SBERateThreshold float64       `yaml:"sbeRateThreshold"`
 	SBERateWindow    time.Duration `yaml:"sbeRateWindow"`
 }
 
-// PCIeCheckConfig configures PCIe replay error thresholds.
 type PCIeCheckConfig struct {
 	Enabled             bool          `yaml:"enabled"`
 	ReplayRateThreshold float64       `yaml:"replayRateThreshold"`
 	ReplayRateWindow    time.Duration `yaml:"replayRateWindow"`
 }
 
-// ThermalCheckConfig configures thermal and temperature thresholds.
 type ThermalCheckConfig struct {
 	Enabled              bool    `yaml:"enabled"`
 	GPUTempWarning       float64 `yaml:"gpuTempWarning"`
@@ -83,13 +74,11 @@ type ThermalCheckConfig struct {
 	NVSwitchTempCritical float64 `yaml:"nvswitchTempCritical"`
 }
 
-// HealthCheckConfig configures DCGM health diagnostics.
 type HealthCheckConfig struct {
 	Enabled bool `yaml:"enabled"`
 	Level   int  `yaml:"level"`
 }
 
-// Load reads and parses a YAML config file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -190,12 +179,10 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// IsCriticalXID returns true if the given XID code is in the critical set.
 func (c *Config) IsCriticalXID(xid int) bool {
 	return c.criticalXIDSet[xid]
 }
 
-// IsWarningXID returns true if the given XID code is in the warning set.
 func (c *Config) IsWarningXID(xid int) bool {
 	return c.warningXIDSet[xid]
 }

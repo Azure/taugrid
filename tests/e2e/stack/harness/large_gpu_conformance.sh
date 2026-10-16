@@ -559,18 +559,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-
 def csv_values(name):
     values = [item.strip() for item in os.environ[name].split(",")]
     if any(value == "" for value in values):
         raise ValueError(f"{name} contains an empty item; remove blank CSV entries")
     return values
 
-
 def safe_uri(uri):
     parsed = urllib.parse.urlsplit(uri)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-
 
 def validate_shard_uri(index, uri):
     parsed = urllib.parse.urlsplit(uri)
@@ -589,7 +586,6 @@ def validate_shard_uri(index, uri):
         raise ValueError(
             f"NANOGPT_DATASET_URIS item {index} must point to a .bin shard ({safe_uri(uri)})"
         )
-
 
 def validate_shard_reachable(index, uri):
     request = urllib.request.Request(uri, method="HEAD")
@@ -610,7 +606,6 @@ def validate_shard_reachable(index, uri):
             f"NANOGPT_DATASET_URIS item {index} is not reachable "
             f"({safe_uri(uri)}): {exc.reason}"
         ) from exc
-
 
 try:
     uris = csv_values("NANOGPT_DATASET_URIS")
@@ -682,8 +677,6 @@ assert_capacity() {
 
   echo "Ready GPU nodes=${ready_count} allocatable_gpu=${allocatable_gpu} requested_gpu=${requested_gpu} available_gpu=${available_gpu}"
   if [ "$available_gpu" -lt "$required_gpus" ]; then
-    # Capacity contention on shared GPU pools should skip this scheduled conformance run;
-    # the workflow only reaches the test step when the full GPU set is available.
     if [ "$requested_gpu" -gt 0 ]; then
       write_optional_output "should_run" "false"
       echo "::notice::Skipping large GPU conformance for ${MATRIX_TARGET:-target}: only ${available_gpu}/${required_gpus} GPUs are available on selected nodes because existing GPU pods are consuming capacity."

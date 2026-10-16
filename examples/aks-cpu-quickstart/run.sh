@@ -2,38 +2,15 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-#
-# TauGrid CPU quickstart — scripted run.
-#
-# This script is ONLY a sequencer for the commands documented in README.md.
-# It contains no logic beyond ordering, existence checks, and echoing what it
-# is about to run. It invokes exactly three tools: az, tau, kubectl.
-#
-# It deliberately does NOT wrap, template, or generate any Kubernetes manifest,
-# and it does not call helm/terraform/make/docker. `tau cluster install` shells
-# out to helm internally; that is Tau's own prerequisite, not this script's.
-#
-# Creates billable Azure resources. Run ./cleanup.sh when you are done.
-#
-# Usage:  ./examples/aks-cpu-quickstart/run.sh
-# Run from the repository root.
-
 set -euo pipefail
 
 RG="${TAU_QUICKSTART_RG:-taugrid-cpu-quickstart-rg}"
 CLUSTER="${TAU_QUICKSTART_CLUSTER:-tau-cpu-quickstart}"
 LOCATION="${TAU_QUICKSTART_LOCATION:-eastus2}"
 NODE_COUNT="${TAU_QUICKSTART_NODE_COUNT:-3}"
-# Standard_D4s_v5 is blocked by policy in some subscriptions/regions; the
-# non-"s" Standard_D4_v5 has the same 4 vCPU / 16 GiB shape and is broadly
-# allowed. If `az aks create` rejects this, the error lists the permitted sizes.
 NODE_SIZE="${TAU_QUICKSTART_NODE_SIZE:-Standard_D4_v5}"
-# TauGrid v0 activates exactly one workspace per cluster and now defaults its
-# name, so this example does not choose one. Every stock install looks the same.
 WORKSPACE="${TAU_QUICKSTART_WORKSPACE:-taugrid-default}"
 NAMESPACE="${TAU_QUICKSTART_NAMESPACE:-taugrid-default}"
-# Subject the workspace RBAC is bound to. Any principal name works for a
-# single-operator quickstart; use the real Entra identity on a shared cluster.
 PRINCIPAL="${TAU_QUICKSTART_PRINCIPAL:-quickstart-researcher}"
 RUN_NAME="tau-aks-cpu-quickstart"
 
@@ -59,11 +36,6 @@ command -v helm >/dev/null 2>&1 || {
   echo "See README.md > Prerequisites. You do not invoke helm yourself." >&2
   exit 1
 }
-# Older `tau` builds called `helm list --all`, a flag Helm 4 removed, so they
-# failed with "unknown flag: --all". Current `tau` passes the individual state
-# flags and works on both Helm 3 and Helm 4, so no version pin is needed.
-# HELM3_BIN remains an opt-in escape hatch for running this example against a
-# pre-fix `tau` build; it is never required and never fatal.
 if [ -x "${HELM3_BIN:-}" ]; then
   PATH="$(dirname "$HELM3_BIN"):$PATH"; export PATH
   echo "using pinned helm $(helm version --short) (HELM3_BIN set)"
@@ -77,10 +49,6 @@ run tau run --config "$STELLAR_CONFIG" --namespace "$NAMESPACE" --dry-run=client
 echo "both configs render a valid RayJob spec"
 
 step "1. Resource group + CPU-only AKS cluster"
-# The ownership tag is what makes teardown safe. cleanup.sh deletes the whole
-# resource group only when it finds this tag, so pointing TAU_QUICKSTART_RG at a
-# pre-existing shared group can never cause cleanup.sh to delete resources this
-# quickstart did not create.
 if az group show --name "$RG" >/dev/null 2>&1; then
   echo "resource group $RG already exists — skipping create"
   echo "  NOTE: not tagging a pre-existing group. cleanup.sh will therefore"
@@ -110,32 +78,16 @@ run az aks get-credentials \
   --overwrite-existing
 
 step "2. Install TauGrid"
-# --wait=false is required on Helm 4. Helm 4 extended its readiness wait to
-# custom resources, and TauGrid's TauCluster CR never reports Ready on a stock
-# install: it sits at InProgress with "queue and storage observers are not
-# enabled", which is the normal steady state, not a failure. Helm 3 only waited
-# on built-in kinds, so this did not surface there. With --atomic left on, the
-# 15m timeout also rolls the whole release back.
-#
-# Readiness is not skipped, only moved: `tau cluster validate installation`
-# below is Tau's own readiness check and is the authoritative gate.
-#
-# With no override, tau uses the public MCR chart and the version pinned in the
-# installed CLI. TAU_QUICKSTART_CHART remains available for contributor tests.
 run tau cluster install "${CHART_ARGS[@]}" --context "$CLUSTER" \
   --wait=false --atomic=false
 run tau cluster validate installation --context "$CLUSTER"
 
 step "3. Create the researcher workspace"
-# NAME is optional, but pass WORKSPACE explicitly so an override creates the
-# same workspace that the status checks below target.
 run tau workspace create "$WORKSPACE" \
   --principal-name "$PRINCIPAL" \
   --context "$CLUSTER" \
   --apply
 
-# Poll until the tau-core-controller reports phase=Ready. `tau workspace status`
-# is a reporting verb with no wait/--check flag, so the loop lives here.
 for _ in $(seq 1 30); do
   phase="$(tau workspace status "$WORKSPACE" --context "$CLUSTER" 2>/dev/null \
     | awk '/^ *[Pp]hase/ {print $NF; exit}')"
@@ -146,7 +98,6 @@ done
 run tau workspace status "$WORKSPACE" --context "$CLUSTER"
 
 step "4. Submit the PyTorch workload"
-# Also no --workspace. A researcher never names it.
 run tau run --config "$CONFIG" --context "$CLUSTER"
 
 step "5. Observe it"

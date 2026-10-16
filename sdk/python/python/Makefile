@@ -3,23 +3,12 @@
 
 .PHONY: install install-optional install-from-git require-usable-python python-env-guidance vendor-snippet test clean help
 
-# Path to this tau-py directory (resolved at make-invocation time so any
-# parent caller sees the same absolute path).
 TAU_PY_DIR := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
 
-# Interpreter that receives the install. Override to target a specific
-# environment without activating it: `make install PYTHON=~/.venvs/tau/bin/python`.
 PYTHON ?= python3
 
-# Debian/Ubuntu ship an EXTERNALLY-MANAGED marker (PEP 668) from Python 3.11 on,
-# and pip refuses to install into that interpreter unless it is a virtualenv.
-# A venv reuses the base stdlib, so the marker is still visible from inside one —
-# `sys.prefix != sys.base_prefix` is what actually decides, and it holds whether
-# or not the venv was activated.
 PYTHON_ENV_OK := $(PYTHON) -c 'import os, sys, sysconfig; sys.exit(0 if sys.prefix != sys.base_prefix or not os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")) else 1)'
 
-# Branch to vendor from when generating git+ssh snippets. Override on the
-# command line: `make vendor-snippet REF=main` or `make vendor-snippet REF=<sha>`.
 REF ?= v0.1.0
 GIT_REPO := ssh://git@github.com/Azure/taugrid.git
 
@@ -59,9 +48,6 @@ python-env-guidance:
 install: require-usable-python
 	$(PYTHON) -m pip install -e .[dev]
 
-# Same as `install`, but reports an interpreter that cannot take the install as a
-# skip instead of a failure. The root `install-tau` target uses this because the
-# SDK is optional. A pip error still fails.
 install-optional:
 	@if $(PYTHON_ENV_OK); then \
 	  $(MAKE) --no-print-directory install; \

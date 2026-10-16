@@ -12,8 +12,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/expcockpit"
 )
 
-// An experiment-expanded snapshot may truncate an exact run. Resolve that run
-// through the workspace-scoped search API before reading its target-bound index.
 func trustedExactRunArtifacts(client *http.Client, request *http.Request, scope WorkspaceScope) ([]expcockpit.ArtifactView, int) {
 	target := request.URL.Query().Get("target")
 	query := url.Values{

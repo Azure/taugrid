@@ -17,10 +17,9 @@ responsibility rather than an automated synchronization claim.
 - Current maturity.
 - Last joint review date.
 
-The documentation pipeline validates that mapped site pages exist and metadata
-is current whenever the site changes. Its consolidated Azure DevOps pipeline
-also runs the same parity and review-age checks on the Monday parity-only
-schedule.
+The pull request documentation pipeline validates that mapped site pages exist
+and parity metadata is structurally valid. The consolidated Azure DevOps
+pipeline additionally enforces review age on the Monday parity-only schedule.
 
 When user-facing behavior or maturity changes:
 

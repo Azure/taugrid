@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package projectcatalog owns strict Tau monorepo project discovery and
-// filesystem-derived run targets.
 package projectcatalog
 
 import (
@@ -68,10 +66,6 @@ type Project struct {
 	defaultConfigCount   int
 }
 
-// ResolveProjectConnection returns the checked-in connection that governs one
-// catalog project. An explicit catalog connection wins; otherwise the project
-// may use its conventional tau/workspace.connection.yaml before callers fall
-// back to machine-local assignment state.
 func (c *Catalog) ResolveProjectConnection(project *Project) (workspaceconnection.Discovery, bool, error) {
 	if project == nil {
 		return workspaceconnection.Discovery{}, false, fmt.Errorf("Tau project is required")
@@ -172,7 +166,6 @@ func (c *Catalog) ResolveProjectConnection(project *Project) (workspaceconnectio
 	return discovery, true, nil
 }
 
-// Parse decodes the strict, versioned catalog schema.
 func Parse(raw []byte) (Spec, error) {
 	if err := validateYAMLStructure(raw); err != nil {
 		return Spec{}, fmt.Errorf("parse %s: %w", Filename, err)
@@ -284,8 +277,6 @@ func validateYAMLNode(node *yaml.Node) error {
 	return nil
 }
 
-// Discover resolves the exact Git worktree for start and loads only the catalog
-// at that root. Non-Git directories never search parent directories.
 func Discover(start string) (Repository, error) {
 	boundary, err := repository.Resolve(start)
 	if err != nil {
@@ -311,8 +302,6 @@ func Discover(start string) (Repository, error) {
 	return result, nil
 }
 
-// DiscoverLexicalConfig finds the Git boundary containing a config's lexical
-// path without following symlinked directory components past that boundary.
 func DiscoverLexicalConfig(configPath string) (Repository, error) {
 	absolute, err := filepath.Abs(configPath)
 	if err != nil {
@@ -395,7 +384,6 @@ func internalGitSymlinkParent(start string) (string, bool, error) {
 	}
 }
 
-// Load validates the catalog at one exact Git worktree root.
 func Load(root string) (*Catalog, error) {
 	boundary, err := repository.Resolve(root)
 	if err != nil {

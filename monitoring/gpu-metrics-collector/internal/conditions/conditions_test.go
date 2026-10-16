@@ -83,7 +83,6 @@ func TestWriteConditionsPatchesAvailabilityCondition(t *testing.T) {
 		t.Errorf("message must not carry credentials or query secrets: %q", cond.Message)
 	}
 
-	// A rule condition and an availability condition coexist in one patch.
 	if len(got[0].Status.Conditions) != 2 {
 		t.Errorf("expected both conditions in the patch, got %d", len(got[0].Status.Conditions))
 	}
@@ -112,10 +111,6 @@ func TestWriteConditionsPatchesOnRecoveryTransition(t *testing.T) {
 	if err := w.WriteConditions(ctx, firing); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Repeating the same status must not record another transition. It may
-	// still emit a throttled heartbeat patch, whose cycle depends on the
-	// writer's per-node random jitter offset, so assert on transitions rather
-	// than on a raw patch count.
 	if err := w.WriteConditions(ctx, firing); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,8 +123,6 @@ func TestWriteConditionsPatchesOnRecoveryTransition(t *testing.T) {
 		t.Fatalf("expected at least the set and clear patches, got %d", len(got))
 	}
 
-	// LastTransitionTime is set only on an actual status change, so exactly two
-	// patches should carry one: the set and the clear.
 	var transitions []corev1.NodeCondition
 	for _, patch := range got {
 		cond := conditionOf(t, patch, "DcgmExporterUnavailable")
@@ -150,7 +143,6 @@ func TestWriteConditionsPatchesOnRecoveryTransition(t *testing.T) {
 		t.Errorf("unexpected recovery reason %q", transitions[1].Reason)
 	}
 
-	// The final patch must reflect the recovered state.
 	if cond := conditionOf(t, got[len(got)-1], "DcgmExporterUnavailable"); cond.Status != corev1.ConditionFalse {
 		t.Errorf("expected the last patch to be False, got %s", cond.Status)
 	}

@@ -1,16 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package cluster builds the portal's Cluster Health board.
-//
-// A single GpuHealth() KQL takes the latest sample per GPU for the
-// health metrics, pivots metric→column, and the pure aggregator here folds the
-// generic rows into a typed Snapshot (per-GPU rows + summary counts).
-//
-// Data access is the shell-out kustoquery.Querier seam, so tests inject a fake
-// with canned Kusto JSON and no live ADX. GpuHealth() lives in the Metrics
-// database (expkusto.DefaultEndpoint/DefaultDatabase), the same target the
-// portal's --kusto-* flags already point at.
 package cluster
 
 import (
@@ -24,12 +14,8 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
-// DefaultWindow is the look-back for "latest sample per GPU".
 const DefaultWindow = 15 * time.Minute
 
-// healthMetrics are the GpuHealth() metric rows the board pivots into columns.
-// Order is irrelevant (they become column names), but the list is the contract
-// with parseGPU below.
 var healthMetrics = []string{
 	"gpu_utilization",
 	"gpu_temperature_celsius",
@@ -41,10 +27,6 @@ var healthMetrics = []string{
 	"row_remap_failure",
 }
 
-// Options controls the board query. Window defaults to DefaultWindow; the
-// optional Cluster/Namespace/Instance/Model filters are interpolated as safe KQL
-// string literals (kustoquery.QuoteString) so the board can scope to one
-// workspace or node.
 type Options struct {
 	Window    time.Duration
 	Cluster   string
@@ -53,9 +35,6 @@ type Options struct {
 	Model     string
 }
 
-// GPU is one GPU's latest health sample. Counter metrics (remapped rows) keep
-// their raw values. Healthy is unknown unless both error counters are measured
-// or either counter establishes a failure.
 type GPU struct {
 	Cluster                   string   `json:"cluster,omitempty"`
 	Instance                  string   `json:"instance"`
@@ -74,14 +53,11 @@ type GPU struct {
 	Healthy                   *bool    `json:"healthy"`
 }
 
-// ModelCount is the GPU count for one model, for the model-distribution summary.
 type ModelCount struct {
 	ModelName string `json:"modelName"`
 	GPUs      int    `json:"gpus"`
 }
 
-// Snapshot is the Cluster Health board payload. TotalGPUs counts observed rows,
-// not inventory. HealthObservedGPUs counts known verdicts; unknowns are not errors.
 type Snapshot struct {
 	Window                  string       `json:"window"`
 	TotalGPUs               int          `json:"totalGPUs"`
@@ -94,8 +70,6 @@ type Snapshot struct {
 	GPUs                    []GPU        `json:"gpus"`
 }
 
-// Board runs the GpuHealth() pivot via the Querier and aggregates the rows into
-// a Snapshot.
 func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, error) {
 	rows, err := q.Query(ctx, buildKQL(opts))
 	if err != nil {
@@ -104,9 +78,6 @@ func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, e
 	return aggregate(rows, opts), nil
 }
 
-// buildKQL renders the GpuHealth() latest-per-GPU pivot. The window is emitted
-// as an integer-second ago() literal (injection-proof); optional filters use
-// QuoteString.
 func buildKQL(opts Options) string {
 	window := opts.Window
 	if window <= 0 {
@@ -148,8 +119,6 @@ func buildKQL(opts Options) string {
 	return b.String()
 }
 
-// aggregate folds pivoted rows into the Snapshot: one GPU per row, plus error
-// and per-model rollups.
 func aggregate(rows []kustoquery.Row, opts Options) Snapshot {
 	window := opts.Window
 	if window <= 0 {
@@ -212,7 +181,6 @@ func aggregate(rows []kustoquery.Row, opts Options) Snapshot {
 	return snap
 }
 
-// parseGPU preserves missing, invalid, and non-finite metrics as null.
 func parseGPU(row kustoquery.Row) GPU {
 	num := func(col string) *float64 {
 		v, ok := row.Num(col)

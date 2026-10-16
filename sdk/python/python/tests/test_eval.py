@@ -18,10 +18,8 @@ import yaml
 import tau
 from tau._cluster import render_wrapper
 
-
 def _write_python(path: Path, source: str) -> None:
     path.write_text(textwrap.dedent(source).strip() + "\n")
-
 
 def _write_argv_recorder(path: Path, recorder: Path, *, append: bool = False) -> None:
     if append:
@@ -42,7 +40,6 @@ def _write_argv_recorder(path: Path, recorder: Path, *, append: bool = False) ->
     path.write_text(body)
     path.chmod(0o755)
 
-
 def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -51,12 +48,6 @@ def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> N
         f"shutil.copyfile(sys.argv[sys.argv.index('--config') + 1], {str(copied_config)!r})\n"
     )
     path.chmod(0o755)
-
-
-# ============================================================================
-# @tau.eval decorator + cluster wrapper + orchestrator coverage
-# ============================================================================
-
 
 def test_eval_decorator_returns_handle():
     captured = {}
@@ -86,7 +77,6 @@ def test_eval_decorator_returns_handle():
     assert captured["threshold"] == 0.75
     assert captured["ctx"].upstream_checkpoint == Path("/tmp/checkpoint")
 
-
 def test_eval_manifest_shape():
     @tau.eval(name="my-ev", after="my-tr", gpus=1, cpu_workers=19, team="research")
     def f(ctx):
@@ -98,9 +88,7 @@ def test_eval_manifest_shape():
     assert m["compute"] == {"gpus": 1}
     assert m["eval"]["cpu_workers"] == 19
     assert m["eval"]["upstream"] == "my-tr"
-    # The Go side dispatches on cpu_workers > 0 (IsEval), so it must be present.
     assert "cpu_workers" in m["eval"]
-
 
 def test_eval_manifest_no_upstream_when_after_omitted():
     @tau.eval(name="standalone-ev", gpus=1, cpu_workers=4)
@@ -110,7 +98,6 @@ def test_eval_manifest_no_upstream_when_after_omitted():
     m = f.manifest()
     assert m["eval"]["cpu_workers"] == 4
     assert "upstream" not in m["eval"]
-
 
 def test_eval_manifest_declares_primary_data_pvc():
     @tau.eval(
@@ -124,7 +111,6 @@ def test_eval_manifest_declares_primary_data_pvc():
         pass
 
     assert f.manifest()["storage"]["data_pvc"] == "lustre-research"
-
 
 def test_eval_manifest_declares_resource_sizing():
     @tau.eval(
@@ -148,7 +134,6 @@ def test_eval_manifest_declares_resource_sizing():
         "worker_memory": "8Gi",
     }
 
-
 def test_eval_local_call_passes_ctx_with_upstream_checkpoint(tmp_path):
     captured = {}
 
@@ -163,7 +148,6 @@ def test_eval_local_call_passes_ctx_with_upstream_checkpoint(tmp_path):
     assert ctx.name == "local-ev"
     assert ctx.is_remote is False
     assert ctx.upstream_checkpoint == fake_ckpt
-
 
 def test_eval_submit_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     """Replace tau binary with a recorder; assert eval-specific argv."""
@@ -196,7 +180,6 @@ def test_eval_submit_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     assert config["run"]["entrypoint"].endswith("tau_py_wrapper.py")
     assert config["policy"]["namespace"] == "ray"
     assert config["policy"]["team"] == "research"
-
 
 def test_eval_submit_forwards_gpu_resource_mode_and_node_selector(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
@@ -232,7 +215,6 @@ def test_eval_submit_forwards_gpu_resource_mode_and_node_selector(tmp_path, monk
     assert config["compute"]["gpu_resource_mode"] == "device-plugin"
     assert config["policy"]["node_selector"] == {"gpu": "a100"}
 
-
 def test_eval_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
     copied_manifest = tmp_path / "manifest.yaml"
@@ -267,7 +249,6 @@ def test_eval_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
     assert res.returncode == 0
     manifest = yaml.safe_load(copied_manifest.read_text())
     assert manifest["storage"]["data_pvc"] == "lustre-research"
-
 
 def test_cluster_wrapper_dispatches_to_eval_handle(tmp_path):
     """End-to-end cluster wrapper: drop a user file with @tau.eval, run it."""
@@ -322,10 +303,8 @@ def test_cluster_wrapper_dispatches_to_eval_handle(tmp_path):
     assert "CTX_UPSTREAM=/data/checkpoints/upstream-tr/last.safetensors" in res.stdout
     assert "CTX_STORAGE=hot:123.5" in res.stdout
     assert "CTX_REMOTE=True" in res.stdout
-    # Wrapper banner should call out the eval kind so debug logs are clear.
     assert "kind=eval" in res.stdout
     assert "cpu_workers=4" in res.stdout
-
 
 def test_cluster_wrapper_eval_runtime_env_exports_user_module_and_tau_shim(tmp_path):
     """Eval Ray actors/tasks need an importable user module and tau shim."""
@@ -439,7 +418,6 @@ def test_cluster_wrapper_eval_runtime_env_exports_user_module_and_tau_shim(tmp_p
     assert "True\nTrue" in res.stdout
     assert "WORKER_IMPORT_OK" in res.stdout
 
-
 def test_cluster_wrapper_finds_train_when_both_handles_present(tmp_path):
     """experiment.py with both train+eval: cluster wrapper picks train when manifest lacks cpu_workers."""
     user_module = tmp_path / "experiment.py"
@@ -457,7 +435,6 @@ def test_cluster_wrapper_finds_train_when_both_handles_present(tmp_path):
             print("EVAL_RAN")
         """,
     )
-    # Manifest without cpu_workers → train branch.
     manifest_path = tmp_path / "tr.yaml"
     yaml.safe_dump(
         {
@@ -482,7 +459,6 @@ def test_cluster_wrapper_finds_train_when_both_handles_present(tmp_path):
     assert "TRAIN_RAN" in res.stdout
     assert "EVAL_RAN" not in res.stdout
     assert "kind=train" in res.stdout
-
 
 def test_cluster_wrapper_finds_eval_when_both_handles_present(tmp_path):
     """Same module, but eval manifest → eval branch picked."""
@@ -528,7 +504,6 @@ def test_cluster_wrapper_finds_eval_when_both_handles_present(tmp_path):
     assert "TRAIN_RAN" not in res.stdout
     assert "kind=eval" in res.stdout
 
-
 def test_inspect_cli_lists_both_train_and_eval_handles(tmp_path, capsys):
     user_module = tmp_path / "exp.py"
     _write_python(
@@ -552,7 +527,6 @@ def test_inspect_cli_lists_both_train_and_eval_handles(tmp_path, capsys):
     assert "exp-tr" in out
     assert "exp-ev" in out
     assert out.count("schema_version: 1") == 2
-
 
 def test_orchestrator_train_and_eval_dry_run(tmp_path, monkeypatch, capsys):
     """Orchestrator: dry-run skips polling and still submits both jobs."""
@@ -602,7 +576,6 @@ def test_orchestrator_train_and_eval_dry_run(tmp_path, monkeypatch, capsys):
     assert eval_config["workflow"]["upstream_checkpoint"] == "/data/checkpoints/finetunes/exp-tr/artifacts/last.safetensors"
     assert eval_config["eval"]["cpu_workers"] == 4
 
-
 def test_orchestrator_uses_declared_train_checkpoint_artifact(tmp_path, monkeypatch):
     recorder = tmp_path / "argv-log.txt"
     copied_configs = tmp_path / "configs"
@@ -647,16 +620,11 @@ def test_orchestrator_uses_declared_train_checkpoint_artifact(tmp_path, monkeypa
     eval_config = yaml.safe_load((copied_configs / "exp-ev.yaml").read_text())
     assert eval_config["workflow"]["upstream_checkpoint"] == "/data/checkpoints/finetunes/exp-tr/artifacts/rank0/final.safetensors"
 
-
-# ----- runtime.pip deprecation warning ------------------------------------
-
-
 def _make_fake_tau(tmp_path):
     fake_tau = tmp_path / "tau"
     fake_tau.write_text("#!/usr/bin/env python3\n")
     fake_tau.chmod(0o755)
     return fake_tau
-
 
 def test_runtime_pip_passes_through_to_manifest():
     """User-supplied runtime.pip must reach the rendered manifest unmodified."""
@@ -668,7 +636,6 @@ def test_runtime_pip_passes_through_to_manifest():
         return ctx
     m = f.manifest()
     assert m["runtime"] == {"pip": ["torch==2.4.0", "mypkg==1.0"]}
-
 
 def test_submit_raises_when_runtime_pip_unset(tmp_path, monkeypatch):
     """Submitting without an explicit runtime.pip must hard-fail with ValueError.

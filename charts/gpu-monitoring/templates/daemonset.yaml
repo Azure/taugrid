@@ -213,8 +213,6 @@ spec:
           securityContext:
             {{- toYaml $.Values.securityContext | nindent 12 }}
           {{- if eq $dcgmHealthRequired "1" }}
-          # Watch loss after a host-engine restart restarts this container; its
-          # startup wrapper reinitializes and warms watches before running NPD.
           livenessProbe:
             exec:
               command:

@@ -186,7 +186,7 @@ func TestRender_ReplicasAndImportPath(t *testing.T) {
 }
 
 func TestRender_NoImage_Errors(t *testing.T) {
-	p := makeServeProfile() // no runtime.image in fixture
+	p := makeServeProfile()
 	_, err := Render(p, Options{Name: "x", Namespace: "n"})
 	if err == nil || !strings.Contains(err.Error(), "no image") {
 		t.Errorf("expected no-image error, got: %v", err)
@@ -223,9 +223,6 @@ func TestRender_DevicePluginHasNoClaimBlock(t *testing.T) {
 	}
 }
 
-// TestRender_NoQueue_IsRejected pins the RayService half of the fail-closed
-// contract. An unlabelled RayService is never admitted by Kueue, so rendering
-// one produces a submit that silently never runs.
 func TestRender_NoQueue_IsRejected(t *testing.T) {
 	p := makeServeProfile()
 	p.Queue = ""

@@ -27,10 +27,7 @@ const (
 type managerCleanupOptions struct {
 	Timeout  time.Duration
 	Interval time.Duration
-	// Release controls the post-delete wait that proves compute was actually
-	// freed. Deleting the RayJob only starts teardown; see
-	// waitForComputeRelease.
-	Release computeReleaseOptions
+	Release  computeReleaseOptions
 }
 
 type cancelWorkloadOptions = managerCleanupOptions
@@ -61,9 +58,6 @@ func deleteWorkloadAndWaitForManagerCleanup(ctx context.Context, r kubeRawRunner
 	if beforeErr != nil && ctx.Err() != nil {
 		return beforeErr
 	}
-	// Capture the RayCluster name before the delete. Once the RayJob is gone
-	// its .status.rayClusterName is unrecoverable, which is precisely why the
-	// old code could not verify its own work.
 	capturedCluster := before.RayJob.RayClusterName
 	if capturedCluster == "" {
 		capturedCluster = before.RayClusterName
@@ -74,8 +68,6 @@ func deleteWorkloadAndWaitForManagerCleanup(ctx context.Context, r kubeRawRunner
 	if err := waitForManagerCleanup(ctx, r, name, ns, before, beforeErr, opts, hooks); err != nil {
 		return err
 	}
-	// Runs on every path, including the direct/unqueued early return above:
-	// a run with no Kueue Workload still leaves a RayCluster behind.
 	return waitForComputeRelease(ctx, r, ns, name, capturedCluster, w, opts.Release, computeReleaseHooks{
 		wait: hooks.wait,
 		now:  hooks.now,

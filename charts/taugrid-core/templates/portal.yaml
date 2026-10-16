@@ -149,48 +149,34 @@ metadata:
     app: {{ $resourceName }}
     {{- include "taugrid-core.labels" . | nindent 4 }}
 rules:
-  # Ray board: discover <rc>-dashboard Services cluster-wide.
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch"]
-  # Ray board: read Ray head pod readiness to gate the dashboard "open" link,
-  # and Job detail pod status. A head Service can outlive its head pod, so the
-  # board checks pod Ready before offering a live dashboard link.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
-  # Workload detail: fetch bounded current/previous container log snapshots.
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  # Job detail: surface namespaced scheduling, image-pull, and failure Events.
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
-  # Cluster Nodes board: read node hardware inventory (SKU, agentpool,
-  # CPU/memory/GPU capacity) from cluster-scoped Node objects.
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
-  # Fleet Compute current CPU/memory utilization from Metrics Server.
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes"]
     verbs: ["get", "list"]
-  # Fleet Compute runtime-plumbing summary: GPU/runtime DaemonSet readiness.
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
     verbs: ["get", "list", "watch"]
-  # Jobs / Queue board: read Kueue queue depth and admitted/pending workloads.
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["localqueues", "clusterqueues", "workloads"]
     verbs: ["get", "list", "watch"]
-  # Workload profile readiness: singleton TauCluster status only.
   - apiGroups: ["tau.azure.com"]
     resources: ["clusters"]
     resourceNames: ["cluster"]
     verbs: ["get"]
-  # Runs board and Job detail: read submitted RayJobs, their RayClusters, and
-  # batch Jobs in the workload namespace.
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]
@@ -308,8 +294,6 @@ spec:
             - --store
             - {{ . | quote }}
             {{- end }}
-            # Ray and Runs retain an explicit legacy namespace. Jobs scopes are
-            # authorized independently below.
             {{- with $workloadNamespace }}
             - --namespace
             - {{ . | quote }}
@@ -324,7 +308,6 @@ spec:
             {{- end }}
             {{- if $workspaceDirectoryEnabled }}
             - --workspace-directory
-            # Compatibility wire path consumed by existing Tau CLI releases.
             - /etc/tau-portal/workspaces.json
             - --workspace-user-header
             - {{ default "X-MS-CLIENT-PRINCIPAL-NAME" $workspaceAuth.userHeader | quote }}
@@ -332,9 +315,6 @@ spec:
             - {{ default "X-MS-CLIENT-PRINCIPAL-GROUPS" $workspaceAuth.groupsHeader | quote }}
             {{- end }}
             {{- if $kueueviz.enabled }}
-            # Kueue (Live) board: reverse-proxy the KueueViz backend/frontend
-            # ClusterIP Services (enabled by the Flex kueue overlay) same-origin
-            # under /api/portal/kueueviz/*.
             - --kueueviz
             - --kueueviz-namespace
             - {{ default "kueue-system" $kueueviz.namespace | quote }}
@@ -344,9 +324,6 @@ spec:
             - {{ default "kueue-kueueviz-frontend" $kueueviz.frontendService | quote }}
             {{- end }}
             {{- with $portal.cluster }}
-            # Scope the Kusto-backed Cluster Health and Cost boards to this
-            # cluster's rows in the shared Metrics database (a per-request
-            # ?cluster= overrides).
             - --cluster
             - {{ . | quote }}
             {{- end }}

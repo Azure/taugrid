@@ -40,8 +40,6 @@ type AccessibleQueue struct {
 	Team         string
 }
 
-// ResolveExactQueue verifies one workspace-assigned LocalQueue without using
-// namespace labels for discovery or authorization.
 func ResolveExactQueue(ctx context.Context, r RawRunner, opts ResolveAccessibleQueueOptions) (AccessibleQueue, error) {
 	opts = normalizeOptions(opts)
 	if r == nil {
@@ -107,9 +105,6 @@ func ResolveExactQueue(ctx context.Context, r RawRunner, opts ResolveAccessibleQ
 	}, nil
 }
 
-// rejection records why a labelled namespace was not usable, so the failure
-// message can name the specific onboarding step that is missing instead of
-// collapsing every cause into "no authorized queue namespace".
 type rejection struct {
 	namespace string
 	reason    string
@@ -131,9 +126,6 @@ type namespaceItem struct {
 	} `json:"metadata"`
 }
 
-// ResolveAccessibleQueue finds the namespace-local queue the current kubectl
-// identity can use. Kubernetes RBAC is the source of truth; Tau does not read
-// Entra group membership.
 func ResolveAccessibleQueue(ctx context.Context, r RawRunner, opts ResolveAccessibleQueueOptions) (AccessibleQueue, []AccessibleQueue, error) {
 	opts = normalizeOptions(opts)
 	resource := opts.WorkloadResource
@@ -220,9 +212,6 @@ namespaceLoop:
 	return AccessibleQueue{}, candidates, fmt.Errorf("multiple authorized Tau queue namespaces found; pass --namespace or --team to disambiguate")
 }
 
-// unresolvedQueueError explains which onboarding precondition actually failed.
-// The three causes are very different fixes: the cluster was never onboarded,
-// the caller lacks RBAC, or the workspace's LocalQueue has not reconciled yet.
 func unresolvedQueueError(resource, team string, labelled, teamFiltered int, rejected []rejection) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "no usable Tau queue namespace found for %s", resource)

@@ -28,7 +28,6 @@ const (
 	supervisorExitError = 125
 )
 
-// processTreeReapDelay bounds supervisor cleanup after the command exits.
 const processTreeReapDelay = time.Second
 
 func init() {
@@ -77,9 +76,6 @@ func runCommand(ctx context.Context, name string, args []string, stdin io.Reader
 	readyErr := waitForSupervisorReady(ctx, readyReader)
 	var stopForcedTermination func() bool
 	if readyErr != nil {
-		// The supervisor writes readiness before starting the command. SIGTERM
-		// therefore either stops it before any descendants exist or reaches its
-		// installed handler and lets it perform normal descendant cleanup.
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		stopForcedTermination = time.AfterFunc(commandWaitDelay, func() {
 			_ = cmd.Process.Kill()
@@ -166,10 +162,6 @@ func terminateRunningCommand(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return os.ErrProcessDone
 	}
-	// Kill through os.Process while cmd.Wait still owns the child. On Linux Go
-	// uses a pidfd when available, avoiding a reusable numeric PID/PGID handle.
-	// Descendants are adopted and terminated by this dedicated supervisor after
-	// the direct child exits.
 	err := cmd.Process.Kill()
 	if errors.Is(err, os.ErrProcessDone) {
 		return os.ErrProcessDone

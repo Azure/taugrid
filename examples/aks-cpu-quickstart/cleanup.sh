@@ -2,15 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-#
-# TauGrid CPU quickstart — scripted teardown.
-#
-# Sequencer only, matching README.md > Cleanup. Invokes exactly three tools:
-# az, tau, kubectl. Tolerates already-deleted resources so it is safe to re-run.
-#
-# Usage:  ./examples/aks-cpu-quickstart/cleanup.sh
-#         ./examples/aks-cpu-quickstart/cleanup.sh --yes   # skip the prompt
-
 set -uo pipefail
 
 RG="${TAU_QUICKSTART_RG:-taugrid-cpu-quickstart-rg}"
@@ -18,8 +9,6 @@ CLUSTER="${TAU_QUICKSTART_CLUSTER:-tau-cpu-quickstart}"
 NAMESPACE="${TAU_QUICKSTART_NAMESPACE:-research}"
 WORKSPACE="${TAU_QUICKSTART_WORKSPACE:-research}"
 SYSTEM_NS="${TAU_QUICKSTART_SYSTEM_NS:-tau-system}"
-# Empty uses Tau's public MCR default. Keep this aligned with run.sh when a
-# contributor explicitly overrides the chart.
 CHART="${TAU_QUICKSTART_CHART:-}"
 CHART_ARGS=()
 if [[ -n "$CHART" ]]; then
@@ -43,8 +32,6 @@ for job in tau-aks-cpu-quickstart aks-cpu-quickstart-stellar-demo; do
   run tau run cancel "$job" -n "$NAMESPACE" --context "$CLUSTER" --teardown-timeout 3m
 done
 
-# `tau run cancel` can report `signal: killed` from an internal Kueue wait step
-# after it has already deleted the RayJob, so verify the real state directly.
 step "Verify no RayJobs remain"
 run kubectl get rayjob -n "$NAMESPACE"
 
@@ -52,16 +39,9 @@ step "2. Delete the TauWorkspace (lives in $SYSTEM_NS, not $NAMESPACE)"
 run kubectl delete workspace.tau.azure.com "${WORKSPACE}" -n "$SYSTEM_NS" --ignore-not-found
 
 step "3. Uninstall TauGrid"
-# --yes is required once TauWorkspace objects have existed on the cluster.
-# Uninstall drains the queue policy while Kueue still runs, so its finalizers
-# are released before the controller goes away. See README > Cleanup.
 run tau cluster uninstall --context "$CLUSTER" "${CHART_ARGS[@]}" --yes
 
 step "4. Delete the resource group (this is what stops the billing)"
-# Guarded: only groups this quickstart created carry the ownership tag. If the
-# tag is absent, the group pre-existed (run.sh reuses an existing group), so
-# deleting it could destroy unrelated resources. In that case tear down only
-# the cluster this example created.
 OWNER_TAG="$(az group show --name "$RG" \
   --query "tags.\"tau-quickstart-owned\"" -o tsv 2>/dev/null)"
 if [[ "$OWNER_TAG" == "aks-cpu-quickstart" ]]; then
@@ -71,9 +51,6 @@ if [[ "$OWNER_TAG" == "aks-cpu-quickstart" ]]; then
 else
   echo "  resource group '$RG' is not tagged as created by this quickstart."
   echo "  Refusing to delete it."
-  # The group pre-existed, but the cluster inside it may still be ours.
-  # run.sh reuses a same-name cluster too, so ownership has to be recorded and
-  # checked independently of the group. Fail closed when the tag is absent.
   CLUSTER_TAG="$(az aks show --resource-group "$RG" --name "$CLUSTER" \
     --query "tags.\"tau-quickstart-owned\"" -o tsv 2>/dev/null || true)"
   if [[ "$CLUSTER_TAG" == "aks-cpu-quickstart" ]]; then

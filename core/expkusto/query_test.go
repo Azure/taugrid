@@ -219,18 +219,12 @@ func TestBuildMetricsQuerySupportsAutoTargetFilter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The filter runs before the projection that aliases the experiment column,
-	// so it must match the raw column. Both spellings are matched: experiment_id
-	// is current, question_id is what stores written before the rename carry.
-	// Matching only one silently returns nothing rather than erroring.
 	want := "| where (column_ifexists('experiment_id', '') == 'sample-project-wandb-migration' or column_ifexists('question_id', '') == 'sample-project-wandb-migration') or run_group_id == 'sample-project-wandb-migration' or run_id == 'sample-project-wandb-migration'"
 	if !strings.Contains(query, want) {
 		t.Fatalf("query missing auto target filter %q:\n%s", want, query)
 	}
 }
 
-// The experiment filter is the one that silently degrades: an unmatched column
-// yields an empty chart, not an error, so pin the experiment-scoped form too.
 func TestBuildMetricsQueryExperimentFilterMatchesBothSpellings(t *testing.T) {
 	query, err := BuildMetricsQuery(MetricsQueryOptions{
 		Project:      "sample-project",
@@ -246,8 +240,6 @@ func TestBuildMetricsQueryExperimentFilterMatchesBothSpellings(t *testing.T) {
 	if !strings.Contains(query, want) {
 		t.Fatalf("query missing experiment target filter %q:\n%s", want, query)
 	}
-	// The projection must prefer the current column, or a store carrying both
-	// would resolve to the stale value.
 	if !strings.Contains(query, "experiment_id=experimentIdOf") {
 		t.Fatalf("query does not alias the resolved experiment column:\n%s", query)
 	}

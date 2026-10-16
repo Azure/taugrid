@@ -99,9 +99,6 @@ func loadRunConfig(path string) (unresolvedRunOptions, string, error) {
 	return options, name, nil
 }
 
-// emitConfigWarnings surfaces non-fatal config diagnostics. Unknown keys in a
-// managed manifest are ignored by the parser, so this is the only signal the
-// author gets that a directive they wrote is doing nothing.
 func emitConfigWarnings(w io.Writer, warnings []string) {
 	for _, warning := range warnings {
 		fmt.Fprintln(w, warning)
@@ -319,7 +316,6 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	}
 	if len(c.Execution.Configs) > 0 {
 		o.configs = c.Execution.Configs
-		// For ray-tune, also pre-serialize to tuneParamSpace for the CLI wire.
 		effectiveLauncher := o.launcher
 		if effectiveLauncher == "" && strings.EqualFold(o.engine, "ray") {
 			effectiveLauncher = "ray-train"

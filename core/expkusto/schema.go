@@ -33,13 +33,8 @@ type SchemaOptions struct {
 	RunLifecycleTable string
 }
 
-// RunLifecycleIngestionMappingName is the ADX JSON mapping used by the
-// lifecycle recorder's queued-ingestion contract. It is created by
-// BuildRunLifecycleSchemaKQL alongside the table and dashboard function.
 const RunLifecycleIngestionMappingName = "TauExpRunLifecycleMapping"
 
-// RunLifecycleIngestionColumn describes one JSON field emitted by the
-// lifecycle recorder and its destination ADX column type.
 type RunLifecycleIngestionColumn struct {
 	Column   string `json:"column"`
 	DataType string `json:"datatype"`
@@ -89,14 +84,10 @@ var runLifecycleIngestionColumns = []RunLifecycleIngestionColumn{
 	{Column: "experiment_source", DataType: "string", Path: "$.experiment_source"},
 }
 
-// RunLifecycleIngestionMapping returns a copy of the recorder's schema-owned
-// ADX mapping, so callers cannot mutate the contract used to render KQL.
 func RunLifecycleIngestionMapping() []RunLifecycleIngestionColumn {
 	return append([]RunLifecycleIngestionColumn(nil), runLifecycleIngestionColumns...)
 }
 
-// BuildRunLifecycleIngestionMappingKQL returns an idempotent ADX command for
-// the named JSON mapping consumed by the lifecycle recorder.
 func BuildRunLifecycleIngestionMappingKQL(opts SchemaOptions) (string, error) {
 	table := strings.TrimSpace(opts.RunLifecycleTable)
 	if table == "" {

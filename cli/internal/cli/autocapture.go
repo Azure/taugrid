@@ -76,7 +76,6 @@ func addLaunchMetadata(metadata experiment.Metadata, gpuClass, profileName, entr
 	return metadata
 }
 
-// mode and migProfile must be the resolved renderer inputs, not queue/profile hints.
 func addLaunchGPUResources(metadata experiment.Metadata, mode, migProfile string) experiment.Metadata {
 	launch := metadata.Launch
 	if launch == nil {

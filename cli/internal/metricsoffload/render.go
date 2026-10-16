@@ -1,9 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package metricsoffload renders the opt-in Stellar metrics sidecar.
-//
-// Runtime selects the standalone collector executable contract.
 package metricsoffload
 
 import (
@@ -154,7 +151,6 @@ func BuildContainer(runtime Runtime, mounts []Mount) map[string]any {
 	}
 }
 
-// RuntimeCommand returns the standalone collector executable and fixed argv.
 func RuntimeCommand(value string) (string, []string, error) {
 	if _, err := ResolveRuntime(value); err != nil {
 		return "", nil, err

@@ -101,10 +101,6 @@ func (s *KubernetesSource) ListRayJobs(ctx context.Context, namespace string) ([
 	return out, nil
 }
 
-// ListPods reads the pods behind Tau workloads so a terminal Job failure can be
-// explained by exit code or OOM kill rather than by the Job's own opaque
-// "BackoffLimitExceeded". Pods are filtered to Tau-labelled workloads, matching
-// how Jobs and RayJobs are filtered above.
 func (s *KubernetesSource) ListPods(ctx context.Context, namespace string) ([]Pod, error) {
 	items, err := s.core.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -127,10 +123,6 @@ func (s *KubernetesSource) ListPods(ctx context.Context, namespace string) ([]Po
 	return out, nil
 }
 
-// containerStates flattens the terminal or blocked state of every container in
-// a pod. Waiting containers are only reported when they carry a reason
-// (ImagePullBackOff, CreateContainerConfigError and friends) — a container
-// merely waiting to start explains nothing.
 func containerStates(status corev1.PodStatus) []ContainerState {
 	all := make([]corev1.ContainerStatus, 0, len(status.InitContainerStatuses)+len(status.ContainerStatuses))
 	all = append(all, status.InitContainerStatuses...)

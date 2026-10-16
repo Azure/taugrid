@@ -59,8 +59,6 @@ func TestBuildProjectArchivePackagesProjectAndRelativisesEntrypoint(t *testing.T
 	if len(archive) == 0 {
 		t.Fatal("expected a project archive")
 	}
-	// The renderer turns this into `python3 -m pipeline.train`, so it must be
-	// the path relative to the project root, in slash form.
 	if name != "pipeline/train.py" {
 		t.Fatalf("script name = %q, want pipeline/train.py", name)
 	}
@@ -104,16 +102,12 @@ func TestEntrypointImportGateSuppressedWhenWorkingDirSet(t *testing.T) {
 	writeProjectFile(t, root, "helpers.py", "X = 1\n")
 	script := writeProjectFile(t, root, "train.py", "import helpers\nprint(helpers.X)\n")
 
-	// Without working_dir the sibling is not shipped, so the gate must fire
-	// at submit time rather than letting Ray fail with ModuleNotFoundError.
 	if err := checkEntrypointImports(projectRunOptions(script, "")); err == nil {
 		t.Fatal("want submit-time failure for an unshipped sibling import")
 	} else if !strings.Contains(err.Error(), "working_dir") {
 		t.Fatalf("error should point at the working_dir remedy, got: %v", err)
 	}
 
-	// With working_dir the sibling genuinely ships and Ray puts it on
-	// PYTHONPATH, so the same import must be accepted.
 	if err := checkEntrypointImports(projectRunOptions(script, root)); err != nil {
 		t.Fatalf("working_dir ships siblings; gate should pass: %v", err)
 	}
@@ -123,9 +117,6 @@ func TestWorkingDirRejectedForJobEngine(t *testing.T) {
 	root := t.TempDir()
 	script := writeProjectFile(t, root, "train.py", "print(1)\n")
 
-	// engine: job renders a plain Kubernetes Job, which has no runtime_env.
-	// Accepting working_dir there would also suppress the submit-time import
-	// check, handing back the exact late ModuleNotFoundError it prevents.
 	_, err := newRunJobRequest(projectRunOptions(script, root), "wd-job")
 	if err == nil {
 		t.Fatal("want rejection: engine job cannot deliver working_dir")
@@ -147,9 +138,6 @@ func TestJobEngineUnaffectedWhenWorkingDirUnset(t *testing.T) {
 }
 
 func TestEntrypointImportGateSearchesProjectRootNotJustEntrypointDir(t *testing.T) {
-	// Entrypoint in a subdirectory, shared module at the project root. This
-	// resolves when the researcher runs it locally from the project root, so
-	// it is exactly the layout most likely to slip through to a Ray worker.
 	root := t.TempDir()
 	writeProjectFile(t, root, "helpers.py", "def build(): return 1\n")
 	script := writeProjectFile(t, root, "pipeline/train.py", "from helpers import build\n")

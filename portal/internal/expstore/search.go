@@ -216,7 +216,6 @@ func ClassifyRun(run RunRecord, tags map[string]string, summaries []MetricSummar
 	case "failed":
 		return RunClassification{LifecycleState: "failed", Successful: false, Reasons: []string{"run state is failed"}}
 	case "succeeded", "completed":
-		// Continue into success gates.
 	default:
 		if strings.TrimSpace(run.CompletedAt) == "" {
 			return RunClassification{LifecycleState: "pending", Successful: false, Reasons: []string{"run has not reached a terminal state"}}

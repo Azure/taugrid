@@ -25,7 +25,6 @@ print(f"Cluster resources: {cluster_resources}")
 GPU_AVAILABLE = cluster_resources.get("GPU", 0) > 0
 print(f"GPU_AVAILABLE = {GPU_AVAILABLE}")
 
-# Generate synthetic images in-memory (no S3 dependency)
 NUM_IMAGES = 10
 synthetic_images = [
     {"image": np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)}
@@ -43,7 +42,6 @@ class ImageClassifier:
 
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Device: {self.device}")
-        # Simple conv net with random weights — no download needed.
         self.model = nn.Sequential(
             nn.Conv2d(3, 16, 3, stride=2),
             nn.ReLU(),
@@ -69,7 +67,6 @@ class ImageClassifier:
         batch["score"] = [logits[j, indices[j]].item() for j in range(len(indices))]
         return batch
 
-# Use fewer actors on GPU (1 worker × 1 GPU) than CPU (2 workers × 2 CPU).
 POOL_SIZE = 1 if GPU_AVAILABLE else 2
 
 predictions = ds.map_batches(
@@ -85,4 +82,3 @@ for i, r in enumerate(results):
     print(f"  Image {i}: Label: {r['label']} (score: {r['score']:.4f})")
 
 print("\nSUCCESS: All images classified")
-

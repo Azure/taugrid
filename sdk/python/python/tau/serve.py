@@ -21,7 +21,6 @@ from tau.workloads import (
     _refuse_cluster_submit,
 )
 
-
 @dataclass(frozen=True)
 class ServeHandle:
     """Deployable Tau serving endpoint."""
@@ -203,7 +202,6 @@ class ServeHandle:
             argv += list(extra_args)
         return argv
 
-
 def serve(
     *,
     name: str,
@@ -254,14 +252,12 @@ def serve(
         mounts=tuple(mounts or ()),
     )
 
-
 def _validate_checkpoint_source_count(*values: Optional[str]) -> None:
     if sum(bool(v) for v in values) > 1:
         raise ValueError(
             "tau-py: tau.serve accepts at most one of from_finetune, "
             "checkpoint_ref, from_model, model_ref, or checkpoint"
         )
-
 
 def _resolve_finetune_ref(value: Optional[Any]) -> Optional[str]:
     if value is None:
@@ -280,7 +276,6 @@ def _resolve_finetune_ref(value: Optional[Any]) -> Optional[str]:
         "or a finetune run name"
     )
 
-
 def _env_cli_flags(env: Mapping[str, Any] | Sequence[str] | None) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for entry in runtime_env_entries(env):
@@ -298,14 +293,12 @@ def _env_cli_flags(env: Mapping[str, Any] | Sequence[str] | None) -> list[tuple[
             out.append(("--env", f"{name}={entry.get('value', '')}"))
     return out
 
-
 def _profiles_dirs(value: str | Path | Sequence[str | Path] | None) -> tuple[str | Path, ...]:
     if value is None:
         return ()
     if isinstance(value, (str, Path)):
         return (value,)
     return tuple(value)
-
 
 def _args_string(args: str | Sequence[str]) -> str:
     if isinstance(args, str):

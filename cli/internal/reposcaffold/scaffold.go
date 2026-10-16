@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package reposcaffold renders Tau-ready Python research repository scaffolds.
 package reposcaffold
 
 import (
@@ -37,7 +36,6 @@ const (
 	defaultTauRev        = "main"
 )
 
-// Options controls one scaffold render.
 type Options struct {
 	Name                string
 	Template            string
@@ -62,7 +60,6 @@ type Options struct {
 	Force               bool
 }
 
-// Result summarizes the generated files.
 type Result struct {
 	OutputDir string
 	Files     []string
@@ -116,7 +113,6 @@ type templateData struct {
 	UsesDPR                bool
 }
 
-// Render writes the selected scaffold to disk.
 func Render(opts Options) (Result, error) {
 	normalized, err := normalizeOptions(opts)
 	if err != nil {
@@ -143,7 +139,6 @@ func Render(opts Options) (Result, error) {
 	return Result{OutputDir: normalized.OutputDir, Files: written}, nil
 }
 
-// Preview renders files in memory for tests and dry validation.
 func Preview(opts Options) ([]RenderedFile, error) {
 	normalized, err := normalizeOptions(opts)
 	if err != nil {
@@ -163,7 +158,6 @@ func Preview(opts Options) ([]RenderedFile, error) {
 	return out, nil
 }
 
-// RenderedFile is one in-memory scaffold output.
 type RenderedFile struct {
 	Path    string
 	Mode    os.FileMode
@@ -547,19 +541,6 @@ func yamlSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-// minTauVersion is the requirements.minTauVersion written into a generated
-// repository's workspace connection descriptor.
-//
-// It is derived from the generating binary rather than hardcoded. A literal
-// pinned ahead of the shipped release makes every generated repo unrunnable —
-// `tau run TARGET` rejects it with "install Tau X or newer" naming a version
-// that was never published, and blames the researcher for a scaffold defect.
-//
-// The floor is the generator's own major.minor with patch 0, so patch releases
-// of the same line stay compatible while a repo scaffolded by a newer minor
-// still refuses an older CLI. Unstamped `go build` binaries report "dev", which
-// is not a version; those fall back to 0.0.0, which every real release
-// satisfies.
 func minTauVersion(current string) string {
 	value := strings.TrimPrefix(strings.TrimSpace(current), "v")
 	if base, _, found := strings.Cut(value, "-"); found {

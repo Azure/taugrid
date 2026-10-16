@@ -1,35 +1,3 @@
-# RayJob for the stack integration test.
-#
-# Flow:
-#   1. Labelled with kueue.x-k8s.io/queue-name so Kueue gates admission.
-#   2. Kueue creates a Workload (name: rayjob-e2e-inference-<hash>) and admits it
-#      once head 2 CPU + 2 workers × 1 CPU = 4 CPU quota is available.
-#   3. KubeRay spawns head + 2 workers; Ray Data runs image classification on CPU.
-#
-# Uses the custom Ray image built from images/ray/. {{RAY_IMAGE}} is resolved at
-# test time from the RAY_E2E_IMAGE env var, which CI sets to the image pushed to
-# the PR-scoped ACR. {{RAY_VERSION}} follows RAY_E2E_VERSION, the image tag, or
-# the images/ray/Makefile fallback.
-#
-# The driver script is embedded directly (head-only initContainer + emptyDir at
-# /script) instead of mounted from a ConfigMap, matching PR1's
-# cli/internal/payload wire contract (issues #869/#871 PR3): the
-# INFERENCE_SCRIPT_PAYLOAD_B64 / INFERENCE_SCRIPT_PAYLOAD_DIGEST env values set
-# below are computed from the real fixtures/inference_job.py file at test time
-# (see readFixture in tests/e2e/testcontext.go), so MultiKueue's
-# worker-cluster dispatch -- which does not replicate ConfigMaps -- has
-# everything the head pod needs inside the RayJob spec it copies over.
-#
-# NOTE: this comment intentionally does NOT spell the placeholder names in
-# {{DOUBLE_BRACE}} form -- readFixture's substitution is a blind text replace
-# of every "{{NAME}}" occurrence in the file, so writing the literal token
-# here would duplicate the (potentially large) base64 payload into this
-# comment on every substitution. The duplicate text is harmless to the
-# resulting Kubernetes object (YAML comments are dropped on parse, never
-# reach the API server), but it needlessly bloats the rendered fixture size
-# measured in tests -- see TestPayloadFixturesStayUnderSizeLimits in
-# tests/e2e/stack/payload_fixtures_test.go, which sizes the parsed+
-# JSON-marshaled object rather than raw YAML bytes for exactly this reason.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
@@ -59,15 +27,11 @@ spec:
     enableInTreeAutoscaling: false
     headGroupSpec:
       rayStartParams:
-        num-cpus: "0"            # Don't schedule Ray tasks on head; Kueue still counts its K8s CPU requests.
+        num-cpus: "0"
         dashboard-host: "0.0.0.0"
       template:
         metadata:
           annotations:
-            # Ray Job driver stdout lives in head-local /tmp/ray session logs,
-            # not the ray-head container stdout stream. This sidecar tails the
-            # driver log files into its own stdout so adx-mon can ship them via
-            # the existing Logs/ContainerLogs path without cluster credentials.
             adx-mon/log-destination: "Logs:ContainerLogs"
         spec:
           initContainers:
@@ -208,8 +172,6 @@ spec:
               discover_logs() {
                 local entry candidate real
                 local -a roots=("$ray_root/session_latest/logs")
-                # Default contract: tail /tmp/ray/session_latest/logs/job-driver-*.log,
-                # plus concrete session_* directories so session_latest flips do not drop logs.
                 shopt -s nullglob
                 for entry in "$ray_root"/session_*/logs; do
                   [[ -d "$entry" ]] && roots+=("$entry")

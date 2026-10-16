@@ -438,10 +438,6 @@ func TestChartBrushZoomFrontendSource(t *testing.T) {
 		t.Fatal("app.js asset missing")
 	}
 	source := string(asset.Content)
-	// Drag-to-zoom must be a new *input* for the existing focused-series range
-	// fetch, not a new data path: the brush writes startStep/endStep and calls
-	// loadFocusedSeriesDetail, exactly like the toolbar form. These assertions
-	// pin that contract so the two inputs cannot silently diverge.
 	for _, want := range []string{
 		"function attachChartBrush(brush)",
 		"function applyBrushRange(lo, hi)",
@@ -2345,10 +2341,6 @@ func TestParseKustoMetricRowsReadsV2DataFrames(t *testing.T) {
 }
 
 func TestParseKustoMetricRowsReadsV2FragmentedFrames(t *testing.T) {
-	// Real azure-kusto-go QueryToJson shape when the response is progressive:
-	// PrimaryResult is split across a TableHeader (Columns + TableId) and
-	// TableFragment frames (Rows for the matching TableId), so the
-	// DataTable-only path would silently return zero rows.
 	raw := []byte(`[
   {"FrameType":"DataSetHeader","IsProgressive":true,"Version":"v2.0"},
   {"FrameType":"DataTable","TableId":0,"TableKind":"QueryProperties",

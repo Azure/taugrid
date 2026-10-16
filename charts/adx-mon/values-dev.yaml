@@ -1,9 +1,3 @@
-# values-dev.yaml — Development overrides for local/CI testing
-#
-# Uses GHCR images from the upstream adx-mon repo instead of MCR.
-# Usage:
-#   helm install adx-mon charts/adx-mon/ -f charts/adx-mon/values.yaml -f charts/adx-mon/values-dev.yaml
-
 operator:
   image:
     repository: ghcr.io/azure/adx-mon/operator
@@ -28,9 +22,6 @@ alerter:
   image:
     repository: ghcr.io/azure/adx-mon/alerter
     tag: latest
-
-# NOTE: kube-state-metrics image is not overridden here.
-# values.yaml already defaults to mcr.microsoft.com/oss/v2/kubernetes/kube-state-metrics:v2.20.0.
 
 global:
   imagePullPolicy: Always

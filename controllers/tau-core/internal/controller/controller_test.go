@@ -521,8 +521,6 @@ func TestWorkspaceReconcileCreatesNamespaceRBACAndReadyStatus(t *testing.T) {
 	reconciler := newTestWorkspaceReconciler(c)
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}
-	// The first reconcile adds the finalizer, the second persists the primary
-	// marker, and the third creates access resources.
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
@@ -897,8 +895,6 @@ func TestWorkspaceReconcileReportsNamespaceOwnedByAnotherWorkspace(t *testing.T)
 	foreignBinding.Subjects = []rbacv1.Subject{{Kind: "Group", APIGroup: rbacv1.GroupName, Name: "other-researchers"}}
 	foreignServiceAccount := testServiceAccount("aurora", "tau-workload", "other-workspace")
 	foreignServiceAccount.Annotations = map[string]string{annotationAzureWIClientID: "other-client"}
-	// The owning workspace must exist: a namespace is only off-limits while its
-	// owner is live. A dangling owner is reclaimable by design.
 	otherWorkspace := testWorkspace("other-workspace")
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -1210,8 +1206,6 @@ func TestWorkspaceRefusesReservedTargetNamespace(t *testing.T) {
 			scheme := testScheme(t)
 			workspace := testWorkspace("aurora")
 			workspace.Spec.Target.Namespace = reserved
-			// Helm owns tau-system; kube-system carries cluster-critical
-			// metadata. Both must survive a workspace pointed at them.
 			namespace := testNamespace(reserved)
 			namespace.Labels = map[string]string{
 				labelManagedBy:              "Helm",
@@ -1252,9 +1246,6 @@ func TestWorkspaceRefusesReservedTargetNamespace(t *testing.T) {
 	}
 }
 
-// A workspace retargeted away from a reserved namespace must not strip that
-// namespace's queue metadata on the way out: reconcileNamespace refuses the
-// reserved target, so cleanupStaleNamespaceMetadata never runs against it.
 func TestWorkspaceRetargetDoesNotStripReservedNamespaceMetadata(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -1525,8 +1516,6 @@ func TestWorkspaceReconcileDoesNotRequireStorage(t *testing.T) {
 	assertConditionAbsent(t, got.Status.Conditions, "StorageReady")
 }
 
-// A workspace blocked on a missing ClusterQueue must retry on its own because
-// Kueue may be installed or configured after the Tau controller starts.
 func TestWorkspaceReconcileRequeuesWhileNotReady(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -1719,8 +1708,6 @@ func TestWorkspaceWithoutQueueResolvesTauClusterDefault(t *testing.T) {
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("add finalizer: %v", err)
 	}
-	// The finalizer and the v0 primary-workspace marker each take a pass
-	// before the workspace body reconciles.
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("mark primary workspace: %v", err)
 	}
@@ -1772,8 +1759,6 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("add finalizer: %v", err)
 	}
-	// The v0 primary-workspace marker is written on its own pass, so let it
-	// settle before asserting that an unresolved queue touches nothing.
 	if _, err := reconciler.Reconcile(ctx, req); err != nil {
 		t.Fatalf("mark primary workspace: %v", err)
 	}

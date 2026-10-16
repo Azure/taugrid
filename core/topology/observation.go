@@ -14,21 +14,12 @@ import (
 
 const LabelPreset = workloadmeta.LabelPreset
 
-// DefaultLocalQueueNamespace is the default workspace namespace used when a
-// live queue observation does not provide an explicit namespace.
 const DefaultLocalQueueNamespace = workloadmeta.DefaultWorkspaceName
 
-// Policy is an in-memory projection used only to aggregate live LocalQueue and
-// ClusterQueue observations. It is not a workload-profile catalog, file format,
-// loader, or fallback source. Authoritative workload intent comes from the
-// singleton TauCluster spec/status contract.
 type Policy struct {
 	Presets map[string]Preset
 }
 
-// Preset is one observed queue grouping in Policy. It deliberately remains a
-// small projection for the existing queue-pressure API; it is not loaded from
-// disk and must not be used for workload-profile selection.
 type Preset struct {
 	Name                      string
 	Description               string
@@ -50,7 +41,6 @@ type Preset struct {
 	Explain                   string
 }
 
-// Names returns stable observation-group ordering.
 func (p Policy) Names() []string {
 	names := make([]string, 0, len(p.Presets))
 	for name := range p.Presets {
@@ -60,7 +50,6 @@ func (p Policy) Names() []string {
 	return names
 }
 
-// GPUCountFromShape parses a shape such as "2xa100-80gb".
 func GPUCountFromShape(shape string) (int, bool, error) {
 	count, _, ok := strings.Cut(shape, "x")
 	if !ok || count == "" {

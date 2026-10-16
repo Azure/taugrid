@@ -17,10 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// RayJob has no command root of its own: `tau run --config` with
-// `engine: rayjob` resolves a typed runRayJobRequest and calls executeRunRayJob
-// (run.go, resolveRunTarget). These tests drive that same path directly.
-
 func runRayJobDryRun(t *testing.T, name string, mutate func(*runDispatchOptions)) string {
 	return runRayJobDryRunWithCapture(t, name, "tau run --config tau.yaml", mutate)
 }

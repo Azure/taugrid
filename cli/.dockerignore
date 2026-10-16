@@ -4,5 +4,4 @@ bin/
 .idea/
 .vscode/
 .DS_Store
-# Don't ship the staged release binaries into the build context.
 bin/release/

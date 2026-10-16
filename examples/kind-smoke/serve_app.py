@@ -3,7 +3,6 @@
 
 from ray import serve
 
-
 @serve.deployment(
     num_replicas=2,
     max_replicas_per_node=1,
@@ -12,6 +11,5 @@ from ray import serve
 class Smoke:
     def __call__(self) -> str:
         return "tau kind serve smoke complete"
-
 
 app = Smoke.bind()

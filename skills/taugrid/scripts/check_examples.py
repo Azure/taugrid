@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -38,12 +37,10 @@ PLACEHOLDERS = {
 }
 FENCE = re.compile(r"^```(\w+)[^\n]*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 
-
 def markdown_files(root: Path) -> list[Path]:
     if not (root / "SKILL.md").is_file():
         raise ValueError(f"missing {root / 'SKILL.md'}")
     return [root / "SKILL.md", *sorted((root / "references").rglob("*.md"))]
-
 
 def check_links(path: Path) -> int:
     checked = 0
@@ -65,7 +62,6 @@ def check_links(path: Path) -> int:
         checked += 1
     return checked
 
-
 def run_examples(text: str) -> list[str]:
     examples = []
     for language, body in FENCE.findall(text):
@@ -85,12 +81,9 @@ def run_examples(text: str) -> list[str]:
             ):
                 if document.get("apiVersion") or document.get("schema"):
                     continue
-                # Run examples are single-document inputs. Preserve the original
-                # YAML for CLI validation, including duplicate/unknown fields.
                 examples.append(body)
                 break
     return examples
-
 
 def shell_examples(text: str) -> list[list[str]]:
     examples = []
@@ -103,11 +96,9 @@ def shell_examples(text: str) -> list[list[str]]:
                 examples.append(tokens[1:])
     return examples
 
-
 def child_commands(help_text: str) -> set[str]:
     section = help_text.partition("Available Commands:\n")[2].split("\nFlags:")[0]
     return set(re.findall(r"^  (\S+)[ \t]+", section, re.MULTILINE))
-
 
 class Tau:
     def __init__(self, binary: Path, cwd: Path, timeout: int = 30):
@@ -171,7 +162,6 @@ class Tau:
                 break
             path += (remaining.pop(0),)
             if path == ("python",) and remaining:
-                # Go deliberately delegates argument parsing to the optional SDK.
                 children = child_commands(self.help(path))
                 if remaining[0] not in children and remaining[0] != "--help":
                     raise ValueError(f"unknown SDK command: {remaining[0]}")
@@ -186,13 +176,11 @@ class Tau:
             if token.startswith("-") and token.split("=", 1)[0] not in flags:
                 raise ValueError(f"unknown flag in tau {' '.join(tokens)}: {token}")
 
-
 def inside(root: Path, relative: str) -> Path:
     target = (root / relative).resolve()
     if not target.is_relative_to(root.resolve()):
         raise ValueError(f"example path escapes its temporary directory: {relative}")
     return target
-
 
 def prepare_example(
     body: str, directory: Path, snapshot: Path | None = None
@@ -235,14 +223,11 @@ def prepare_example(
     }.items():
         offline_policy.setdefault(field, value)
     if (offline.get("metrics") or {}).get("offload", {}).get("enabled"):
-        # Snapshot mode skips the live workspace that normally supplies this
-        # metrics identity. This is fixture metadata, not an authorization check.
         offline_policy.setdefault("workspace", "skill-tests")
     offline_policy["workload_profile_snapshot"] = str(snapshot)
     rendered_input = directory / "offline.yaml"
     rendered_input.write_text(yaml.safe_dump(offline, sort_keys=False))
     return original, rendered_input, config
-
 
 def check_render(rendered: str, config: dict, snapshot: dict) -> None:
     documents = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
@@ -292,7 +277,6 @@ def check_render(rendered: str, config: dict, snapshot: dict) -> None:
         secret_name, secret_key = reference.split(":", 1)
         if f"name: {secret_name}" in rendered or f"key: {secret_key}" in rendered:
             raise ValueError("client dry-run did not redact a Secret reference")
-
 
 def check(
     root: Path,
@@ -347,7 +331,6 @@ def check(
     if examples == 0:
         raise ValueError("no complete direct run examples found")
     return links, commands, examples, renders
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -404,7 +387,6 @@ def main(argv: list[str] | None = None) -> int:
         "SDK proxy flags, portal commands, images, training code, and live cluster behavior are not exercised."
     )
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

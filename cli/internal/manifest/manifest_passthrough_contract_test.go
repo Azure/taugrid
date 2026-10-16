@@ -11,11 +11,6 @@ import (
 	"github.com/Azure/taugrid/core/runconfig"
 )
 
-// runconfig cannot import this package (dependency direction), so its allowlist
-// of manifest-owned keys is hardcoded there. This test is the fail-closed guard
-// that keeps the hardcoded list honest: if a field is added to Manifest and
-// runconfig does not recognize it, `tau run` would start emitting a bogus
-// "unknown config key" warning for a legitimate manifest field.
 func TestManagedPassthroughCoversManifestSchema(t *testing.T) {
 	paths := manifestYAMLPaths(reflect.TypeOf(Manifest{}), "")
 	if len(paths) == 0 {
@@ -34,11 +29,6 @@ func TestManagedPassthroughCoversManifestSchema(t *testing.T) {
 	}
 }
 
-// The reverse direction. A field removed from Manifest leaves a stale allowlist
-// entry behind, which silently permits a key that no longer means anything --
-// the same failure mode this whole change exists to kill, just one layer up.
-// Unlike a missing entry (loud: a spurious warning) a stale one is invisible,
-// so it needs its own assertion.
 func TestManagedPassthroughHasNoStaleEntries(t *testing.T) {
 	paths := manifestYAMLPaths(reflect.TypeOf(Manifest{}), "")
 	if len(paths) == 0 {
@@ -93,10 +83,6 @@ func manifestYAMLPaths(t reflect.Type, prefix string) []string {
 		for ft.Kind() == reflect.Pointer {
 			ft = ft.Elem()
 		}
-		// Descend into structs and into lists of structs. A list element shares
-		// its parent's path: storage.mounts[].readOnly is storage.mounts.readOnly,
-		// matching how runconfig names it. Map contents stay opaque -- their keys
-		// are user data, not schema.
 		for ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
 			ft = ft.Elem()
 			for ft.Kind() == reflect.Pointer {

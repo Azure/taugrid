@@ -29,9 +29,7 @@ const (
 	pvcHelperBase64MissingMarker = "TAU_PVC_GET_BASE64_MISSING"
 	pvcHelperListCompleteMarker  = "TAU_PVC_LIST_COMPLETE"
 	pvcHelperListFailedMarker    = "TAU_PVC_LIST_FAILED"
-	// Supported BlobFuse PVCs suppress list operations for 10 seconds after
-	// mount. A fresh helper must outwait that window before trusting emptiness.
-	pvcHelperListSettleDelay = 12 * time.Second
+	pvcHelperListSettleDelay     = 12 * time.Second
 )
 
 type managedWorkflowArtifactIndex struct {
@@ -145,11 +143,6 @@ func pvcHelperPodName(prefix, runName string) (string, error) {
 	return prefix + "-" + base + suffix, nil
 }
 
-// fetchPVCFile spawns a one-shot Pod that mounts the named PVC and base64
-// encodes the requested path. Pod logs are line-oriented and not safe for raw
-// binary artifacts such as .nsys-rep/.sqlite; decode locally before returning.
-// Pod name is unique per call (timestamp suffix) so repeated calls don't
-// collide. The path must be the in-pod /data path.
 func fetchPVCFile(ctx context.Context, kubeContext, namespace, runName, pvcName, path string) ([]byte, error) {
 	if pvcName == "" {
 		pvcName = defaultTauPVCName
@@ -158,10 +151,6 @@ func fetchPVCFile(ctx context.Context, kubeContext, namespace, runName, pvcName,
 	if err != nil {
 		return nil, err
 	}
-	// path can flow from a Job annotation (tau.azure.com/result-path) so it
-	// is not trusted input. Build the Pod via yaml.Marshal of typed structs
-	// (no text-templated YAML) and quote path for the shell with single
-	// quotes (no parameter expansion in single-quoted strings).
 	script := fmt.Sprintf(`if [ ! -f %s ]; then
   echo "%s" >&2
   exit 2
@@ -232,12 +221,10 @@ func decodePVCFileLogs(path, pvcName, logs string) ([]byte, error) {
 	return raw, nil
 }
 
-// fetchPVCList returns the direct children under dirPath on the named PVC.
 func fetchPVCList(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string) ([]string, error) {
 	return fetchPVCListWithMode(ctx, kubeContext, namespace, runName, pvcName, dirPath, false)
 }
 
-// fetchPVCListRecursive returns every descendant as a relative path.
 func fetchPVCListRecursive(ctx context.Context, kubeContext, namespace, runName, pvcName, dirPath string) ([]string, error) {
 	return fetchPVCListWithMode(ctx, kubeContext, namespace, runName, pvcName, dirPath, true)
 }
@@ -467,11 +454,6 @@ func artifactVisibilityError(path, pvcName, logs string, err error) error {
 	}
 }
 
-// helperPodSpec is the typed input to helperPodYAML. Used by fetchPVCFile and
-// fetchPVCList to render the read-side helper Pod from caller-controlled values
-// (path, namespace, pvcName) without text-templating YAML. yaml.Marshal handles
-// all structural escaping; the caller is responsible for shell-quoting values it
-// embeds in Script (use shellSingleQuote).
 type helperPodSpec struct {
 	Name       string
 	Namespace  string
@@ -479,7 +461,7 @@ type helperPodSpec struct {
 	Image      string
 	PVCName    string
 	TTLSec     int
-	Script     string // single shell script passed to `sh -c`
+	Script     string
 	ScriptArgs []string
 }
 
@@ -586,9 +568,6 @@ func waitForHelperPodTerminal(ctx context.Context, r *kube.Runner, namespace, po
 	}
 }
 
-// shellSingleQuote wraps s in POSIX single quotes, escaping any embedded single
-// quotes by closing-then-reopening. Single-quoted strings undergo no parameter,
-// command, or arithmetic expansion in any POSIX shell.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

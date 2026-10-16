@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
 
 from __future__ import annotations
 
@@ -10,7 +8,6 @@ import html.parser
 import pathlib
 import sys
 import urllib.parse
-
 
 class DocumentParser(html.parser.HTMLParser):
     def __init__(self) -> None:
@@ -29,7 +26,6 @@ class DocumentParser(html.parser.HTMLParser):
             if target := values.get(attribute):
                 self.targets.append(target)
 
-
 def document_url(relative_path: pathlib.Path, base_path: str) -> str:
     path = relative_path.as_posix()
     if path == "index.html":
@@ -37,7 +33,6 @@ def document_url(relative_path: pathlib.Path, base_path: str) -> str:
     if path.endswith("/index.html"):
         path = path[: -len("index.html")]
     return f"{base_path}/{path}".replace("//", "/")
-
 
 def target_file(
     root: pathlib.Path, target_path: str, base_path: str
@@ -54,7 +49,6 @@ def target_file(
     elif candidate.suffix == "":
         candidate /= "index.html"
     return candidate
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check generated Hugo links")
@@ -112,7 +106,6 @@ def main() -> int:
         return 1
     print(f"Checked {len(documents)} generated HTML documents")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

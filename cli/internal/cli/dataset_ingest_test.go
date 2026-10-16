@@ -16,8 +16,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/dataset"
 )
 
-// ---- Helper: build a file-backed registry rooted at a temp dir ----
-
 func fileRegistryWithIngest(t *testing.T) (*dataset.Registry, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -33,7 +31,6 @@ func testFileURI(t *testing.T, path string) string {
 	return uri
 }
 
-// ingestRecord registers a minimal record and returns the registered Record.
 func ingestRecord(t *testing.T, reg *dataset.Registry, name, version string, files []dataset.File) dataset.Record {
 	t.Helper()
 	total := int64(0)
@@ -64,13 +61,10 @@ func ingestRecord(t *testing.T, reg *dataset.Registry, name, version string, fil
 	return registered
 }
 
-// sha256hex computes the hex sha256 of b.
 func sha256hex(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
-
-// ---- `tau data dataset status` command tests ----
 
 func TestDatasetStatusCmd_notFound(t *testing.T) {
 	_, regRoot := fileRegistryWithIngest(t)
@@ -94,18 +88,15 @@ func TestDatasetStatusCmd_json(t *testing.T) {
 		{Path: "data.txt", Bytes: int64(len(content)), SHA256: sha},
 	})
 
-	// Run ingest in local mode first to get a ready status.
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(srcDir, "data.txt"), content, 0o644); err != nil {
 		t.Fatalf("write src file: %v", err)
 	}
-	// Write destination dir for FileSink.
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		t.Fatalf("mkdirAll dst: %v", err)
 	}
 
-	// Run ingest command.
 	ingestCmd := newDatasetCmd()
 	var buf bytes.Buffer
 	ingestCmd.SetOut(&buf)
@@ -121,7 +112,6 @@ func TestDatasetStatusCmd_json(t *testing.T) {
 		t.Fatalf("ingest command: %v (output: %s)", err, buf.String())
 	}
 
-	// Now run status command.
 	buf.Reset()
 	statusCmd := newDatasetCmd()
 	statusCmd.SetOut(&buf)
@@ -146,8 +136,6 @@ func TestDatasetStatusCmd_json(t *testing.T) {
 		t.Errorf("state: want ready, got %q", state)
 	}
 }
-
-// ---- `tau data dataset ingest` dry-run test ----
 
 func TestDatasetIngestCmd_dryRun(t *testing.T) {
 	reg, regRoot := fileRegistryWithIngest(t)
@@ -178,17 +166,13 @@ func TestDatasetIngestCmd_dryRun(t *testing.T) {
 	if !strings.Contains(out, "dry-run") {
 		t.Errorf("expected dry-run output, got: %s", out)
 	}
-	// The destination file must NOT have been written.
 	if _, err := os.Stat(filepath.Join(dstDir, "data.txt")); err == nil {
 		t.Error("dry-run: destination file was written (should not be)")
 	}
 }
 
-// ---- Worker image security: mutable tag rejected ----
-
 func TestDatasetIngestCmd_mutableWorkerImageRejected(t *testing.T) {
 	_, regRoot := fileRegistryWithIngest(t)
-	// Use an az:// source so it enters workspace mode.
 	cmd := newDatasetCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
@@ -198,7 +182,7 @@ func TestDatasetIngestCmd_mutableWorkerImageRejected(t *testing.T) {
 		"--registry", testFileURI(t, regRoot),
 		"--source-root", "az://myaccount/datasets",
 		"--workspace", "my-workspace",
-		"--worker-image", "mcr.microsoft.com/tau:latest", // mutable tag, no digest
+		"--worker-image", "mcr.microsoft.com/tau:latest",
 	})
 	err := cmd.Execute()
 	if err == nil {
@@ -208,8 +192,6 @@ func TestDatasetIngestCmd_mutableWorkerImageRejected(t *testing.T) {
 		t.Errorf("error should mention digest/sha256/mutable: %v", err)
 	}
 }
-
-// ---- Source-root SAS token rejected ----
 
 func TestDatasetIngestCmd_sasTokenRejected(t *testing.T) {
 	_, regRoot := fileRegistryWithIngest(t)
@@ -230,8 +212,6 @@ func TestDatasetIngestCmd_sasTokenRejected(t *testing.T) {
 	}
 }
 
-// ---- `tau data dataset ingest` without @version fails ----
-
 func TestDatasetIngestCmd_requiresVersion(t *testing.T) {
 	_, regRoot := fileRegistryWithIngest(t)
 	cmd := newDatasetCmd()
@@ -239,7 +219,7 @@ func TestDatasetIngestCmd_requiresVersion(t *testing.T) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 	cmd.SetArgs([]string{
-		"ingest", "ds", // no @version
+		"ingest", "ds",
 		"--registry", testFileURI(t, regRoot),
 		"--source-root", "file:///some/src",
 	})
@@ -249,8 +229,6 @@ func TestDatasetIngestCmd_requiresVersion(t *testing.T) {
 	}
 }
 
-// ---- `tau data dataset status` output format: table ----
-
 func TestDatasetStatusCmd_tableFormat(t *testing.T) {
 	reg, regRoot := fileRegistryWithIngest(t)
 	content := []byte("table-format bytes")
@@ -258,7 +236,6 @@ func TestDatasetStatusCmd_tableFormat(t *testing.T) {
 	registered := ingestRecord(t, reg, "ds", "v1", []dataset.File{
 		{Path: "data.txt", Bytes: int64(len(content)), SHA256: sha},
 	})
-	// Verify that the initial state is "registered", visible in table output.
 	_ = registered
 
 	cmd := newDatasetCmd()
@@ -270,8 +247,6 @@ func TestDatasetStatusCmd_tableFormat(t *testing.T) {
 		"--registry", testFileURI(t, regRoot),
 		"-o", "table",
 	})
-	// status is "registered" (no ingest yet) — the exit code is non-zero only
-	// for "failed" state; "registered" exits 0.
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("status table command: %v", err)
 	}
@@ -283,8 +258,6 @@ func TestDatasetStatusCmd_tableFormat(t *testing.T) {
 		t.Errorf("table output should contain state 'registered': %s", out)
 	}
 }
-
-// ---- WorkerCmd: local file mode integration ----
 
 func TestDatasetIngestWorkerCmd_fileMode(t *testing.T) {
 	reg, regRoot := fileRegistryWithIngest(t)
@@ -314,7 +287,6 @@ func TestDatasetIngestWorkerCmd_fileMode(t *testing.T) {
 		t.Fatalf("ingest-worker command: %v (output: %s)", err, buf.String())
 	}
 
-	// Output should be a complete stable worker result with ready status.
 	var result datasetIngestResult
 	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
 		t.Fatalf("parse worker output JSON: %v (raw: %s)", err, buf.String())
@@ -325,7 +297,6 @@ func TestDatasetIngestWorkerCmd_fileMode(t *testing.T) {
 		t.Errorf("worker output must be a complete ready result: %+v", result)
 	}
 
-	// The destination file must exist.
 	if _, err := os.Stat(filepath.Join(dstDir, "w.txt")); err != nil {
 		t.Errorf("destination file not found: %v", err)
 	}

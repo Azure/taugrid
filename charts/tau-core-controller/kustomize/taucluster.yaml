@@ -8,8 +8,6 @@ metadata:
     app.kubernetes.io/name: tau-core-controller
     app.kubernetes.io/part-of: taugrid
 spec:
-  # Keep this concrete Kustomize desired state aligned with values.yaml. Argo CD
-  # overlays can patch the rule list when they introduce another ResourceFlavor.
   managementMode: Reconcile
   deletionPolicy: Retain
   nodes:

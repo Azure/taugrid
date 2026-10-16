@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package metricsoffload owns the reusable metrics producer configuration
-// shared by managed RayJobs and direct Jobs.
 package metricsoffload
 
 import (
@@ -26,7 +24,6 @@ const (
 	MaxADXAttempts      = runconfig.MetricsOffloadMaxADXAttempts
 )
 
-// Options contains platform-owned offload settings plus experiment scope.
 type Options struct {
 	Runtime               string
 	Image                 string
@@ -49,7 +46,6 @@ type Options struct {
 	ADXFinalStatusTimeout time.Duration
 }
 
-// Runtime is a fully resolved, credential-free metrics producer contract.
 type Runtime struct {
 	Runtime                 string
 	Image                   string
@@ -70,7 +66,7 @@ type Runtime struct {
 	ReadyFile               string
 	ReadyTimeout            time.Duration
 	DoneFile                string
-	DoneTimeout             time.Duration // Zero derives the ADX delivery budget.
+	DoneTimeout             time.Duration
 	DeliveryMode            string
 	ADXClusterURI           string
 	ADXDatabase             string
@@ -166,8 +162,6 @@ func TerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time
 	return runconfig.MetricsOffloadTerminalDrainTimeout(maxAttempts, retryBackoff, finalStatusTimeout)
 }
 
-// ShutdownGracePeriodSeconds keeps Kubernetes from sending SIGKILL before the
-// collector's bounded final drain can finish and the pod can exit cleanly.
 func ShutdownGracePeriodSeconds(doneTimeout time.Duration, minimum int64) int64 {
 	if doneTimeout <= 0 {
 		return minimum
@@ -188,18 +182,14 @@ func ResolveDeliveryMode(value string) (string, error) {
 	return runconfig.ResolveMetricsOffloadDeliveryMode(value)
 }
 
-// ValidateRuntimeImage validates the explicit executable contract and pinned
-// image reference without guessing compatibility from the repository name.
 func ValidateRuntimeImage(runtime, image string) error {
 	return runconfig.ValidateMetricsOffloadRuntimeImage(runtime, image)
 }
 
-// ValidatePinnedImage rejects mutable or implicit sidecar image references.
 func ValidatePinnedImage(image string) error {
 	return ValidateRuntimeImage(RuntimeCollectorV1, image)
 }
 
-// MergeTags applies experiment overrides and then protected platform scope.
 func MergeTags(base, overrides, protected map[string]string) map[string]string {
 	out := map[string]string{}
 	for _, tags := range []map[string]string{base, overrides, protected} {

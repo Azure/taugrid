@@ -19,9 +19,6 @@ func withWorkloadNamespaceDiscoverer(t *testing.T, fn workspaceDiscoverer) {
 	t.Cleanup(func() { workloadNamespaceDiscoverer = previous })
 }
 
-// The query verbs must resolve the same target the submit path does. Before
-// this, `tau run` accepted no --workspace but `tau run status` then demanded a
-// --namespace the researcher was never told.
 func TestResolveWorkloadNamespaceDiscoversWhenUnset(t *testing.T) {
 	called := 0
 	withWorkloadNamespaceDiscoverer(t, func(*cobra.Command, string) (tauworkspace.Workspace, error) {
@@ -44,8 +41,6 @@ func TestResolveWorkloadNamespaceDiscoversWhenUnset(t *testing.T) {
 	}
 }
 
-// An explicit namespace is the operator's answer and must never be overridden,
-// nor cost a cluster round-trip on the common path.
 func TestResolveWorkloadNamespaceExplicitWins(t *testing.T) {
 	withWorkloadNamespaceDiscoverer(t, func(*cobra.Command, string) (tauworkspace.Workspace, error) {
 		t.Fatal("discovery must not run when a namespace was already resolved")
@@ -61,8 +56,6 @@ func TestResolveWorkloadNamespaceExplicitWins(t *testing.T) {
 	}
 }
 
-// The workspace's status is authoritative, but a workspace that has not been
-// reconciled yet still names its target in the spec.
 func TestResolveWorkloadNamespaceFallsBackToSpecThenName(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -104,8 +97,6 @@ func TestResolveWorkloadNamespaceFallsBackToSpecThenName(t *testing.T) {
 	}
 }
 
-// Not every cluster runs TauGrid. A discovery failure must surface the original
-// actionable guidance rather than a lookup error the user cannot act on.
 func TestResolveWorkloadNamespaceReportsGuidanceOnDiscoveryFailure(t *testing.T) {
 	withWorkloadNamespaceDiscoverer(t, func(*cobra.Command, string) (tauworkspace.Workspace, error) {
 		return tauworkspace.Workspace{}, errors.New("connection refused")

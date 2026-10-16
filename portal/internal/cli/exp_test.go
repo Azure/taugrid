@@ -86,18 +86,10 @@ func TestExpLocalStoreWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exp status failed: %v\nstderr:\n%s", err, stderr)
 	}
-	// An experiment's arms are the groups its runs occupy, so a freshly
-	// initialized experiment reports none. This used to report 1: run_groups
-	// carried an experiment_id, which asserted that an arm label belongs to one
-	// experiment. It does not -- "reference-group" is reusable across
-	// experiments -- so ownership now lives on the run, and "runs": 0 with
-	// "run_groups": 1 is no longer representable.
 	if !strings.Contains(out, `"target_type": "experiment"`) ||
 		!strings.Contains(out, `"runs": 0`) || !strings.Contains(out, `"run_groups": 0`) {
 		t.Fatalf("status output unexpected:\n%s", out)
 	}
-	// The group itself is still registered; it just is not an arm of the
-	// experiment until a run lands in it.
 	groupsOut, stderr, err := executeExpCommand("experiment", "--store", store, "list", "--kind", "groups", "--json")
 	if err != nil {
 		t.Fatalf("exp list groups failed: %v\nstderr:\n%s", err, stderr)
@@ -325,8 +317,6 @@ func TestExpLocalStoreWorkflow(t *testing.T) {
 			t.Fatalf("tracked dashboard tui missing %s:\n%s", want, out)
 		}
 	}
-	// The verb moved out of tau, so a dashboard that still prints "tau
-	// experiment ..." hands the user a command that no longer resolves.
 	if strings.Contains(out, "tau experiment ") {
 		t.Fatalf("dashboard tui offers a command on the tau binary, which no longer has the experiment verb:\n%s", out)
 	}
@@ -2993,8 +2983,6 @@ type cliScalar struct {
 	value    float64
 }
 
-// writeCLIJSONLScalars emits scalars as a Stellar-style JSONL history file,
-// collapsing all scalars sharing a step into one row.
 func writeCLIJSONLScalars(path string, scalars []cliScalar) error {
 	f, err := os.Create(path)
 	if err != nil {

@@ -147,11 +147,6 @@ func addExpServeFlags(cmd *cobra.Command, opts *expServeOptions, includeOpen boo
 	cmd.Flags().DurationVar(&opts.timeout, "request-timeout", expapi.DefaultRequestTimeout, "maximum time per HTTP request")
 }
 
-// nativeKustoQuery returns the azure-kusto-go transport for Stellar, or nil when
-// it does not apply. An explicit --kusto-query-command always wins, so existing
-// shell-adapter deployments keep their behaviour; otherwise a bare
-// --kusto-endpoint is enough to reach ADX with DefaultAzureCredential, matching
-// how the other portal boards already pick kustoquery.SDKClient.
 func (opts expServeOptions) nativeKustoQuery() func(ctx context.Context, query string) (string, error) {
 	if strings.TrimSpace(opts.kustoQueryCommand) != "" {
 		return nil
@@ -168,9 +163,6 @@ func newExpServerFromOptions(storePath *string, opts expServeOptions) (*expapi.S
 	return expapi.NewServer(opts.toExpapiOptions(storePath))
 }
 
-// toExpapiOptions maps the shared serve flags onto expapi.Options. Both
-// `taugrid-portal experiment serve` and `taugrid-portal portal serve` build their Stellar server from this,
-// so the two commands stay flag-compatible.
 func (opts expServeOptions) toExpapiOptions(storePath *string) expapi.Options {
 	return expapi.Options{
 		StorePath:              storePathValue(storePath),

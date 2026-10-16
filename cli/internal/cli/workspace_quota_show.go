@@ -73,14 +73,10 @@ the remaining quota is not an error, it simply waits for capacity.`,
 	_ = cmd.Flags().MarkDeprecated("namespace", "use --system-namespace")
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
-	// The ClusterQueue normally comes from workspace status. The override
-	// exists for the window where the controller has not published it yet.
 	cmd.Flags().StringVar(&clusterQueue, "cluster-queue", "", "ClusterQueue to report (default: from workspace status)")
 	return cmd
 }
 
-// workspaceLocalQueue prefers the queue the controller resolved and falls back
-// to the declared spec, matching workspaceTargetNamespace.
 func workspaceLocalQueue(w tauworkspace.Workspace) string {
 	if q := strings.TrimSpace(w.Status.Queue.LocalQueue); q != "" {
 		return q

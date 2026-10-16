@@ -5,9 +5,6 @@ package cli
 
 import "testing"
 
-// TestNativeKustoQueryPrecedence pins the transport precedence rule: an explicit
-// --kusto-query-command keeps existing shell-adapter deployments untouched, a
-// bare --kusto-endpoint reaches ADX natively, and neither means no transport.
 func TestNativeKustoQueryPrecedence(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

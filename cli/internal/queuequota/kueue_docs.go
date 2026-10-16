@@ -8,11 +8,6 @@ import (
 	"sort"
 )
 
-// The doc types below mirror only the Kueue fields this view needs. They are
-// intentionally local rather than pulled from the Kueue Go API: the CLI reads
-// through kubectl JSON, and taking a Kueue module dependency for four structs
-// would couple the researcher CLI to a specific Kueue version.
-
 type clusterQueueDoc struct {
 	Metadata struct {
 		Name string `json:"name"`
@@ -53,8 +48,6 @@ type flavorResourceKey struct {
 	resource string
 }
 
-// indexFlavorStatus flattens Kueue's per-flavor status arrays into a lookup
-// keyed by (flavor, resource).
 func indexFlavorStatus(entries []flavorStatus) map[flavorResourceKey]string {
 	index := map[flavorResourceKey]string{}
 	for _, entry := range entries {
@@ -65,8 +58,6 @@ func indexFlavorStatus(entries []flavorStatus) map[flavorResourceKey]string {
 	return index
 }
 
-// flavorNames lists every ResourceFlavor the ClusterQueue references, in a
-// stable order so output does not churn between invocations.
 func (cq clusterQueueDoc) flavorNames() []string {
 	seen := map[string]bool{}
 	var names []string
@@ -82,9 +73,6 @@ func (cq clusterQueueDoc) flavorNames() []string {
 	return names
 }
 
-// quotasFor returns the declared quotas for one flavor across every resource
-// group. Kueue allows the same flavor in more than one resource group, so the
-// results are merged and de-duplicated by resource name.
 func (cq clusterQueueDoc) quotasFor(flavor string) []flavorResourceQuota {
 	seen := map[string]bool{}
 	var out []flavorResourceQuota
@@ -106,8 +94,6 @@ func (cq clusterQueueDoc) quotasFor(flavor string) []flavorResourceQuota {
 	return out
 }
 
-// flavorNamesFrom lets the fetcher learn which ResourceFlavors to read without
-// parsing the ClusterQueue twice in the caller.
 func flavorNamesFrom(raw []byte) ([]string, error) {
 	var cq clusterQueueDoc
 	if err := json.Unmarshal(raw, &cq); err != nil {

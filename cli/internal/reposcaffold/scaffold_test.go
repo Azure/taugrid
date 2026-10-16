@@ -128,7 +128,6 @@ func TestRenderPythonScaffold(t *testing.T) {
 	assertContains(t, doctor, "warn: .env not found")
 	assertContains(t, doctor, "warn: IMAGE is not set")
 	assertNotContains(t, doctor, "kubelogin")
-	// Debian and Ubuntu ship python3 only, so a bare python check always fails there.
 	assertContains(t, doctor, "check_cmd python3 || status=1")
 	assertNotContains(t, doctor, "check_cmd python || status=1")
 	dockerfile := readFile(t, filepath.Join(dir, "images/train.Dockerfile"))

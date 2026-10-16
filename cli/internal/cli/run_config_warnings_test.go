@@ -11,9 +11,6 @@ import (
 	"testing"
 )
 
-// End-to-end guard for the warning path: an unknown key in a managed manifest
-// must reach the user. The parser ignores the key either way, so this message is
-// the only evidence the author gets that their directive does nothing.
 func TestReadRunConfigReportsUnknownManagedKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tau.yaml")

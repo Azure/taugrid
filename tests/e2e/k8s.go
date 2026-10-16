@@ -30,28 +30,24 @@ import (
 
 const pollInterval = 2 * time.Second
 
-// WorkloadGVR is the Kueue Workload GVR — used to query Workload objects via the dynamic client.
 var WorkloadGVR = schema.GroupVersionResource{
 	Group:    "kueue.x-k8s.io",
 	Version:  "v1beta1",
 	Resource: "workloads",
 }
 
-// LocalQueue GVR — used to query LocalQueue status via the dynamic client.
 var localQueueGVR = schema.GroupVersionResource{
 	Group:    "kueue.x-k8s.io",
 	Version:  "v1beta1",
 	Resource: "localqueues",
 }
 
-// RayJobGVR is the RayJob GVR — used to query RayJob status via the dynamic client.
 var RayJobGVR = schema.GroupVersionResource{
 	Group:    "ray.io",
 	Version:  "v1",
 	Resource: "rayjobs",
 }
 
-// RayClusterGVR is the RayCluster GVR — used to query RayCluster status via the dynamic client.
 var RayClusterGVR = schema.GroupVersionResource{
 	Group:    "ray.io",
 	Version:  "v1",
@@ -70,7 +66,6 @@ var validatingWebhookConfigurationGVR = schema.GroupVersionResource{
 	Resource: "validatingwebhookconfigurations",
 }
 
-// WaitForDeploymentAvailable waits for a Deployment to have the Available condition.
 func (tc *TestContext) WaitForDeploymentAvailable(ns, name string, timeout time.Duration) (err error) {
 	defer func() {
 		if err != nil {
@@ -103,7 +98,6 @@ func (tc *TestContext) WaitForDeploymentAvailable(ns, name string, timeout time.
 	}
 }
 
-// WaitForDaemonSet waits for a DaemonSet to exist.
 func (tc *TestContext) WaitForDaemonSet(ns, name string, timeout time.Duration) (err error) {
 	defer func() {
 		if err != nil {
@@ -131,21 +125,16 @@ func (tc *TestContext) WaitForDaemonSet(ns, name string, timeout time.Duration) 
 	}
 }
 
-// WorkloadConditionResult holds the matched Workload and condition details.
 type WorkloadConditionResult struct {
 	Workload *unstructured.Unstructured
 	Reason   string
 	Message  string
 }
 
-// WaitForWorkloadAdmitted waits for the Kueue Workload associated with a Job to have Admitted=True.
 func (tc *TestContext) WaitForWorkloadAdmitted(ns, jobName string, timeout time.Duration) (*WorkloadConditionResult, error) {
 	return tc.waitForWorkloadCondition(ns, jobName, "Admitted", "True", timeout)
 }
 
-// WaitForWorkloadQuotaNotReserved waits for the Kueue Workload associated with a Job
-// to have QuotaReserved=False, meaning Kueue evaluated the workload but could not
-// reserve quota (e.g., insufficient resources or insufficient unused quota).
 func (tc *TestContext) WaitForWorkloadQuotaNotReserved(ns, jobName string, timeout time.Duration) (*WorkloadConditionResult, error) {
 	return tc.waitForWorkloadCondition(ns, jobName, "QuotaReserved", "False", timeout)
 }
@@ -199,7 +188,6 @@ func (tc *TestContext) waitForWorkloadCondition(ns, jobName, condType, wantStatu
 	}
 }
 
-// findWorkloadForJob finds the Kueue Workload for a given Job by matching the job-uid label.
 func (tc *TestContext) findWorkloadForJob(ns, jobName string) (*unstructured.Unstructured, error) {
 	job, err := tc.kubeClient.BatchV1().Jobs(ns).Get(tc.ctx, jobName, metav1.GetOptions{})
 	if err != nil {
@@ -219,10 +207,6 @@ func (tc *TestContext) findWorkloadForJob(ns, jobName string) (*unstructured.Uns
 	return &workloads.Items[0], nil
 }
 
-// WaitForWorkloadAdmittedByRayJob waits for the Kueue Workload owned by the given
-// RayJob to have Admitted=True. It fetches the RayJob to obtain its UID, then
-// matches Workloads by ownerReference (kind=RayJob, name, uid). This is more
-// deterministic than prefix-matching, which could match stale workloads.
 func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, timeout time.Duration) (result *WorkloadConditionResult, err error) {
 	defer func() {
 		if err != nil {
@@ -270,7 +254,6 @@ func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, ti
 		case <-tc.ctx.Done():
 			return nil, tc.ctx.Err()
 		case <-ticker.C:
-			// Fetch the RayJob to get its UID (may not exist yet on first polls).
 			rj, err := tc.dynamicClient.Resource(RayJobGVR).Namespace(ns).Get(tc.ctx, rayJobName, metav1.GetOptions{})
 			if err != nil {
 				lastErr = err
@@ -309,7 +292,6 @@ func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, ti
 	}
 }
 
-// hasOwnerRef returns true if the object has an ownerReference matching the given kind, name, and UID.
 func hasOwnerRef(obj *unstructured.Unstructured, kind, name, uid string) bool {
 	for _, ref := range obj.GetOwnerReferences() {
 		if ref.Kind == kind && ref.Name == name && string(ref.UID) == uid {
@@ -319,9 +301,6 @@ func hasOwnerRef(obj *unstructured.Unstructured, kind, name, uid string) bool {
 	return false
 }
 
-// WaitForRayJobStatus polls a RayJob's .status.jobStatus field until it matches
-// targetStatus. Terminal job states ("FAILED", "STOPPED") and terminal deployment
-// failures cause the helper to return immediately rather than waiting for the timeout.
 func (tc *TestContext) WaitForRayJobStatus(ns, name, targetStatus string, timeout time.Duration) (err error) {
 	defer func() {
 		if err == nil {
@@ -368,9 +347,6 @@ func (tc *TestContext) WaitForRayJobStatus(ns, name, targetStatus string, timeou
 	}
 }
 
-// WaitForRayJobDeleted waits for one named RayJob to disappear without listing
-// pods or other namespace resources. Manager-routed tests use this because their
-// workload identity is intentionally limited to manager-visible objects.
 func (tc *TestContext) WaitForRayJobDeleted(ns, name string, timeout time.Duration) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -413,17 +389,10 @@ func rayJobTerminalFailure(jobStatus, deploymentStatus string) (bool, string) {
 	return false, ""
 }
 
-// GetPodLogsByLabel returns the logs of the most recently created pod matching the given
-// label selector. Reads at most the last 500 lines. Useful for asserting on submitter/job
-// pod output.
 func (tc *TestContext) GetPodLogsByLabel(ns, labelSelector string) (string, error) {
 	return tc.getPodLogsByLabelTail(ns, labelSelector, int64Ptr(500))
 }
 
-// GetFullPodLogsByLabel returns the complete logs (no tail limit) of the most recently
-// created pod matching the given label selector. Use this when assertions must span the
-// entire run — e.g. an early NCCL init line plus a late checkpoint/success sentinel that
-// would not coexist in a tailed window of verbose (NCCL_DEBUG=INFO) submitter output.
 func (tc *TestContext) GetFullPodLogsByLabel(ns, labelSelector string) (string, error) {
 	return tc.getPodLogsByLabelTail(ns, labelSelector, nil)
 }
@@ -438,7 +407,6 @@ func (tc *TestContext) getPodLogsByLabelTail(ns, labelSelector string, tailLines
 	if len(pods.Items) == 0 {
 		return "", fmt.Errorf("no pods found with selector %q in %s", labelSelector, ns)
 	}
-	// Pick the most recently created pod to avoid reading logs from a stale retry.
 	latest := pods.Items[0]
 	for _, p := range pods.Items[1:] {
 		if p.CreationTimestamp.After(latest.CreationTimestamp.Time) {
@@ -453,19 +421,10 @@ func (tc *TestContext) getPodLogsByLabelTail(ns, labelSelector string, tailLines
 	return string(logs), nil
 }
 
-// WaitForPodLogsByLabelContaining polls the most recent pod matching labelSelector until
-// its logs contain all expected substrings. RayJob submitter pods can report SUCCEEDED
-// before forwarded worker stdout has fully appeared in the Kubernetes pod log stream.
-// Reads a tailed window (last 500 lines); use WaitForFullPodLogsByLabelContaining when the
-// expected substrings span the whole run.
 func (tc *TestContext) WaitForPodLogsByLabelContaining(ns, labelSelector string, expected []string, timeout time.Duration) (lastLogs string, err error) {
 	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, expected, timeout, false)
 }
 
-// WaitForFullPodLogsByLabelContaining behaves like WaitForPodLogsByLabelContaining but reads
-// the complete pod log (no tail limit) on each poll. Use this when assertions must match
-// substrings emitted far apart in time (e.g. an early NCCL NET/IB init line plus a late
-// checkpoint sentinel) that would never coexist in a tailed window of verbose output.
 func (tc *TestContext) WaitForFullPodLogsByLabelContaining(ns, labelSelector string, expected []string, timeout time.Duration) (lastLogs string, err error) {
 	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, expected, timeout, true)
 }
@@ -519,8 +478,6 @@ func (tc *TestContext) waitForPodLogsByLabelContaining(ns, labelSelector string,
 	}
 }
 
-// getWorkloadCondition extracts a condition from an unstructured Workload.
-// Returns (status, reason, message, found).
 func getWorkloadCondition(wl *unstructured.Unstructured, condType string) (string, string, string, bool) {
 	conditions, found, err := unstructured.NestedSlice(wl.Object, "status", "conditions")
 	if err != nil || !found {
@@ -541,14 +498,11 @@ func getWorkloadCondition(wl *unstructured.Unstructured, condType string) (strin
 	return "", "", "", false
 }
 
-// LocalQueueCounts holds the pending and admitted workload counts for a LocalQueue.
 type LocalQueueCounts struct {
 	Pending  int
 	Admitted int
 }
 
-// GetLocalQueueCounts returns the pending and admitted workload counts for a LocalQueue.
-// On error, dumps all LocalQueues in the namespace for diagnostic context.
 func (tc *TestContext) GetLocalQueueCounts(ns, name string) (_ LocalQueueCounts, err error) {
 	defer func() {
 		if err != nil {
@@ -571,12 +525,6 @@ func (tc *TestContext) GetLocalQueueCounts(ns, name string) (_ LocalQueueCounts,
 	}, nil
 }
 
-// WaitForLocalQueueCounts polls until the LocalQueue's pending and admitted counts match
-// the expected values. This avoids a race where the Workload status updates before
-// the LocalQueue reconciler bumps the counters.
-//
-// Unlike GetLocalQueueCounts, this function queries the dynamic client directly to
-// avoid triggering diagnostic dumps on every transient poll failure.
 func (tc *TestContext) WaitForLocalQueueCounts(ns, name string, wantPending, wantAdmitted int, timeout time.Duration) (err error) {
 	defer func() {
 		if err != nil {
@@ -618,7 +566,6 @@ func (tc *TestContext) WaitForLocalQueueCounts(ns, name string, wantPending, wan
 	}
 }
 
-// WaitForRunningJobPods waits until a Job has exactly wantCount pods in Running phase.
 func (tc *TestContext) WaitForRunningJobPods(ns, jobName string, wantCount int, timeout time.Duration) (err error) {
 	defer func() {
 		if err != nil {
@@ -661,8 +608,6 @@ func (tc *TestContext) WaitForRunningJobPods(ns, jobName string, wantCount int, 
 	}
 }
 
-// WaitForRunningPodsByLabel waits until exactly wantCount pods matching a label selector
-// are in Running phase with all containers Ready.
 func (tc *TestContext) WaitForRunningPodsByLabel(ns, labelSelector string, wantCount int, timeout time.Duration) (err error) {
 	defer func() {
 		if err != nil {
@@ -702,8 +647,6 @@ func (tc *TestContext) WaitForRunningPodsByLabel(ns, labelSelector string, wantC
 	}
 }
 
-// WaitForNoPods waits until a namespace has no remaining pods, including
-// terminating pods that may still hold scarce resources such as a single GPU.
 func (tc *TestContext) WaitForNoPods(ns string, timeout time.Duration) (err error) {
 	defer func() {
 		if err != nil {
@@ -743,8 +686,6 @@ func (tc *TestContext) WaitForNoPods(ns string, timeout time.Duration) (err erro
 	}
 }
 
-// WaitForNoPodsByLabel waits until no pods matching a non-empty label selector
-// remain. It is safe for shared namespaces because unrelated pods are ignored.
 func (tc *TestContext) WaitForNoPodsByLabel(ns, labelSelector string, timeout time.Duration) (err error) {
 	labelSelector = strings.TrimSpace(labelSelector)
 	if labelSelector == "" {
@@ -791,8 +732,6 @@ func (tc *TestContext) WaitForNoPodsByLabel(ns, labelSelector string, timeout ti
 	}
 }
 
-// DumpPods writes detailed pod diagnostics for pods matching a label selector
-// to the test's artifact bundle (tees to t.Logf). Best-effort: never fails the test.
 func (tc *TestContext) DumpPods(ns, labelSelector string) {
 	tc.Helper()
 	safeName := sanitizeFileName(labelSelector)
@@ -805,8 +744,6 @@ func (tc *TestContext) DumpPods(ns, labelSelector string) {
 	writeEventDiagnostics(w, tc.ctx, tc.kubeClient, ns)
 }
 
-// DumpEvents writes namespace events to their own bundle file.
-// Best-effort: never fails the test.
 func (tc *TestContext) DumpEvents(ns string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("events-%s.txt", ns)
@@ -814,8 +751,6 @@ func (tc *TestContext) DumpEvents(ns string) {
 	writeEventDiagnostics(w, tc.ctx, tc.kubeClient, ns)
 }
 
-// DumpDeployment writes a detailed description of a Deployment to the bundle,
-// similar to `kubectl describe deployment`. Best-effort: never fails the test.
 func (tc *TestContext) DumpDeployment(ns, name string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("deployment-%s-%s.txt", ns, name)
@@ -823,8 +758,6 @@ func (tc *TestContext) DumpDeployment(ns, name string) {
 	writeDeploymentDiagnostics(w, tc.ctx, tc.kubeClient, ns, name)
 }
 
-// DumpDaemonSet writes a detailed description of a DaemonSet to the bundle,
-// similar to `kubectl describe daemonset`. Best-effort: never fails the test.
 func (tc *TestContext) DumpDaemonSet(ns, name string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("daemonset-%s-%s.txt", ns, name)
@@ -832,8 +765,6 @@ func (tc *TestContext) DumpDaemonSet(ns, name string) {
 	writeDaemonSetDiagnostics(w, tc.ctx, tc.kubeClient, ns, name)
 }
 
-// DumpJobs writes a summary of all Jobs in a namespace to the bundle, including
-// labels, completions, parallelism, and status (active/succeeded/failed).
 func (tc *TestContext) DumpJobs(ns string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("jobs-%s.txt", ns)
@@ -861,8 +792,6 @@ func (tc *TestContext) DumpJobs(ns string) {
 	}
 }
 
-// DumpWorkloads writes a summary of all Kueue Workloads in a namespace to the bundle,
-// including labels, ownership, admission metadata, and all status conditions.
 func (tc *TestContext) DumpWorkloads(ns string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("workloads-%s.txt", ns)
@@ -909,8 +838,6 @@ func (tc *TestContext) DumpWorkloads(ns string) {
 	}
 }
 
-// DumpLocalQueues writes a summary of all LocalQueues in a namespace to the bundle,
-// including admitted, pending, and reserving workload counts and conditions.
 func (tc *TestContext) DumpLocalQueues(ns string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("localqueues-%s.txt", ns)
@@ -944,8 +871,6 @@ func (tc *TestContext) DumpLocalQueues(ns string) {
 	}
 }
 
-// DumpKueueAdmissionDiagnostics captures Kueue webhook/controller state that
-// explains admission flakes without requiring workflow-level kubectl plumbing.
 func (tc *TestContext) DumpKueueAdmissionDiagnostics(ns string) {
 	tc.Helper()
 	fileName := fmt.Sprintf("kueue-admission-%s.txt", ns)
@@ -969,7 +894,6 @@ func (tc *TestContext) DumpKueueAdmissionDiagnostics(ns string) {
 	writeEventDiagnostics(w, tc.ctx, tc.kubeClient, ns)
 }
 
-// formatLabels formats a map as "key=value,key2=value2" for display.
 func formatLabels(labels map[string]string) string {
 	if len(labels) == 0 {
 		return ""
@@ -1005,7 +929,6 @@ func formatMetaTime(t metav1.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-// fmtInt32Ptr formats an *int32 as a string, returning "<nil>" if nil.
 func fmtInt32Ptr(p *int32) string {
 	if p == nil {
 		return "<nil>"
@@ -1013,9 +936,6 @@ func fmtInt32Ptr(p *int32) string {
 	return fmt.Sprintf("%d", *p)
 }
 
-// --- Shared diagnostic writers (used by both TestContext methods and DumpDeploymentDiagnostics) ---
-
-// writeDeploymentDiagnostics writes deployment details to w. Same format as DumpDeployment.
 func writeDeploymentDiagnostics(w io.Writer, ctx context.Context, kubeClient kubernetes.Interface, ns, name string) {
 	deploy, err := kubeClient.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -1032,7 +952,6 @@ func writeDeploymentDiagnostics(w io.Writer, ctx context.Context, kubeClient kub
 	}
 }
 
-// writeDaemonSetDiagnostics writes daemonset details to w. Same format as DumpDaemonSet.
 func writeDaemonSetDiagnostics(w io.Writer, ctx context.Context, kubeClient kubernetes.Interface, ns, name string) {
 	ds, err := kubeClient.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -1164,7 +1083,6 @@ func writeWebhookConfigurationDiagnostics(w io.Writer, ctx context.Context, dynC
 	}
 }
 
-// writePodDiagnostics writes pod status, container state, and logs to w. Same format as DumpPods.
 func writePodDiagnostics(w io.Writer, ctx context.Context, kubeClient kubernetes.Interface, ns, labelSelector string) {
 	pods, err := kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
@@ -1200,7 +1118,6 @@ func writePodDiagnostics(w io.Writer, ctx context.Context, kubeClient kubernetes
 			}
 		}
 
-		// Log container logs (current and previous) for crash diagnosis.
 		for _, cs := range p.Status.ContainerStatuses {
 			logOpts := &corev1.PodLogOptions{Container: cs.Name, TailLines: int64Ptr(50)}
 			logs, err := kubeClient.CoreV1().Pods(ns).GetLogs(p.Name, logOpts).Do(ctx).Raw()
@@ -1218,7 +1135,6 @@ func writePodDiagnostics(w io.Writer, ctx context.Context, kubeClient kubernetes
 	}
 }
 
-// writeEventDiagnostics writes namespace events to w. Same format as DumpPods event section.
 func writeEventDiagnostics(w io.Writer, ctx context.Context, kubeClient kubernetes.Interface, ns string) {
 	events, err := kubeClient.CoreV1().Events(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -1287,7 +1203,6 @@ func int64Ptr(i int64) *int64 {
 	return &i
 }
 
-// isPodReady returns true if all containers in the pod have the Ready condition set to True.
 func isPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady {
@@ -1297,7 +1212,6 @@ func isPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-// applyYAMLWithClient applies multi-document YAML using a dynamic client directly.
 func applyYAMLWithClient(ctx context.Context, dynClient dynamic.Interface, yamlBytes []byte) error {
 	return forEachYAMLDocument(yamlBytes, func(obj *unstructured.Unstructured) error {
 		gvr, err := gvrFromObject(obj)
@@ -1321,7 +1235,6 @@ func applyYAMLWithClient(ctx context.Context, dynClient dynamic.Interface, yamlB
 	})
 }
 
-// deleteYAMLWithClient deletes resources described in multi-document YAML using a dynamic client directly.
 func deleteYAMLWithClient(ctx context.Context, dynClient dynamic.Interface, yamlBytes []byte) error {
 	return forEachYAMLDocument(yamlBytes, func(obj *unstructured.Unstructured) error {
 		gvr, err := gvrFromObject(obj)
@@ -1346,9 +1259,6 @@ type fixtureDeleteTarget struct {
 	uid       string
 }
 
-// deleteYAMLWithClientAndWait deletes every rendered object before waiting for
-// the deleted UIDs to disappear. Documents are deleted in reverse order so a
-// Namespace listed first in a fixture is requested last.
 func deleteYAMLWithClientAndWait(ctx context.Context, dynClient dynamic.Interface, yamlBytes []byte, timeout time.Duration) error {
 	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1474,7 +1384,6 @@ func (target fixtureDeleteTarget) objectName() string {
 	return target.namespace + "/" + target.name
 }
 
-// forEachYAMLDocument splits multi-doc YAML and calls fn for each document.
 func forEachYAMLDocument(yamlBytes []byte, fn func(*unstructured.Unstructured) error) error {
 	reader := yaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(yamlBytes)))
 	for {
@@ -1486,7 +1395,6 @@ func forEachYAMLDocument(yamlBytes []byte, fn func(*unstructured.Unstructured) e
 			return fmt.Errorf("reading YAML document: %w", err)
 		}
 
-		// Skip empty documents
 		doc = bytes.TrimSpace(doc)
 		if len(doc) == 0 {
 			continue
@@ -1497,7 +1405,6 @@ func forEachYAMLDocument(yamlBytes []byte, fn func(*unstructured.Unstructured) e
 			return fmt.Errorf("decoding YAML document: %w", err)
 		}
 
-		// Skip empty objects (e.g., YAML separators with only comments)
 		if obj.GetAPIVersion() == "" {
 			continue
 		}
@@ -1509,16 +1416,12 @@ func forEachYAMLDocument(yamlBytes []byte, fn func(*unstructured.Unstructured) e
 	return nil
 }
 
-// gvrFromObject infers a GroupVersionResource from an unstructured object.
-// This is a simplified mapper that handles common resource types without
-// requiring a full RESTMapper (which needs API server discovery).
 func gvrFromObject(obj *unstructured.Unstructured) (schema.GroupVersionResource, error) {
 	gv, err := schema.ParseGroupVersion(obj.GetAPIVersion())
 	if err != nil {
 		return schema.GroupVersionResource{}, fmt.Errorf("parsing apiVersion %q: %w", obj.GetAPIVersion(), err)
 	}
 
-	// Map Kind → plural resource name for types we use in tests.
 	kindToResource := map[string]string{
 		"ResourceFlavor": "resourceflavors",
 		"Topology":       "topologies",
@@ -1548,9 +1451,6 @@ func gvrFromObject(obj *unstructured.Unstructured) (schema.GroupVersionResource,
 	}, nil
 }
 
-// DumpCRState fetches a custom resource by GVR and name, marshals it to
-// indented JSON, and writes it to the bundle as "<resource>-<name>.json".
-// Best-effort: logs a warning on error rather than failing the test.
 func (tc *TestContext) DumpCRState(ns string, gvr schema.GroupVersionResource, name string) {
 	tc.Helper()
 	obj, err := tc.dynamicClient.Resource(gvr).Namespace(ns).Get(tc.ctx, name, metav1.GetOptions{})
@@ -1569,10 +1469,6 @@ func (tc *TestContext) DumpCRState(ns string, gvr schema.GroupVersionResource, n
 	}
 }
 
-// DumpCRList fetches all custom resources of a given GVR in a namespace and
-// writes them as a single JSON array to "<resource>-<ns>.json" in the bundle.
-// Use this instead of DumpCRState when the exact resource name is not known
-// (e.g., Kueue Workloads whose names include a generated hash).
 func (tc *TestContext) DumpCRList(ns string, gvr schema.GroupVersionResource) {
 	tc.Helper()
 	list, err := tc.dynamicClient.Resource(gvr).Namespace(ns).List(tc.ctx, metav1.ListOptions{})
@@ -1591,9 +1487,6 @@ func (tc *TestContext) DumpCRList(ns string, gvr schema.GroupVersionResource) {
 	}
 }
 
-// DumpControllerLogs captures the last tailLines of logs from all pods
-// matching labelSelector in ns, and writes them to "controller-<ns>.txt"
-// in the bundle. Best-effort: logs a warning on errors, never fails the test.
 func (tc *TestContext) DumpControllerLogs(ns, labelSelector string, tailLines int64) {
 	tc.Helper()
 	fileName := fmt.Sprintf("controller-%s.txt", ns)
@@ -1624,15 +1517,11 @@ func (tc *TestContext) DumpControllerLogs(ns, labelSelector string, tailLines in
 	}
 }
 
-// sanitizeFileName replaces characters unsafe for filenames with underscores.
 func sanitizeFileName(s string) string {
 	r := strings.NewReplacer("/", "_", "=", "_", ":", "_", " ", "_")
 	return r.Replace(s)
 }
 
-// DumpDeploymentDiagnostics prints deployment, pod, and event diagnostics to
-// stderr AND writes them to a file under the e2e-bundle directory. Use this in
-// TestMain when setup fails and no *testing.T or TestContext is available.
 func DumpDeploymentDiagnostics(ctx context.Context, kubeClient kubernetes.Interface, ns, deploymentName string) {
 	dir := fmt.Sprintf("%s/TestMain-%s", bundle.Root(), ns)
 	_ = os.MkdirAll(dir, 0o755)

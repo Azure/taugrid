@@ -207,14 +207,6 @@ func TestBuildSchedulingMetadataForcesManagedWorkloadAdmissionMarker(t *testing.
 }
 
 func TestRenderRedactsManifestPayloadSecretRefs(t *testing.T) {
-	// Design A (#869 PR2): the redacted manifest copy is no longer a
-	// ConfigMap `data:` key a human can read directly off the rendered
-	// YAML — it's base64-encoded inside the tau-manifest-payload
-	// initContainer's env. Decode it via payload.Decode to assert
-	// redaction, and separately confirm the workload's *own* env still
-	// carries the real secretKeyRef (redaction only applies to the
-	// mounted manifest copy the trainer reads for provenance, never to
-	// the actual Kubernetes-native env wiring the pod runs with).
 	raw := []byte(`
 schema_version: 1
 name: secret-job
@@ -1164,31 +1156,25 @@ runtime:
 		t.Fatalf("Render: %v", err)
 	}
 	s := string(out)
-	// No JobSecret/SecretProviderClass in this case, and no ConfigMaps
-	// anymore (Design A embeds script+manifest as self-contained
-	// payloads directly in the Job) — a single doc, no `---` separators.
 	if c := strings.Count(s, "\n---\n"); c != 0 {
 		t.Errorf("expected 0 doc separators (single self-contained workload doc), got %d", c)
 	}
-	// Substitutions applied
 	for _, want := range []string{
 		scriptPayloadInitContainerName,
 		manifestPayloadInitContainerName,
-		"tau-rendertest",                           // Job name
-		"kueue.x-k8s.io/queue-name: jobqueue",      // Kueue admission path
-		"suspend: true",                            // Kueue flips false on admission
-		"backoffLimit: 0",                          // deterministic trainer failures should not retry
-		`nvidia.com/gpu: "2"`,                      // default GPU mode uses device-plugin resources
-		"--smoke-pairs 6",                          // smoke pairs threaded through
-		"--manifest /manifest/rendertest.yaml",     // manifest path
-		"torchrun --standalone --nproc_per_node=2", // multi-gpu launch
+		"tau-rendertest",
+		"kueue.x-k8s.io/queue-name: jobqueue",
+		"suspend: true",
+		"backoffLimit: 0",
+		`nvidia.com/gpu: "2"`,
+		"--smoke-pairs 6",
+		"--manifest /manifest/rendertest.yaml",
+		"torchrun --standalone --nproc_per_node=2",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered output missing %q", want)
 		}
 	}
-	// The script payload must actually embed train.py (the trainer
-	// entrypoint every workload template invokes as /script/train.py).
 	workload := unmarshalLast(t, out)
 	initContainers := podSpecInitContainers(t, dig(workload, "spec", "template", "spec"))
 	scriptIC := containerByName(t, initContainers, scriptPayloadInitContainerName)
@@ -1586,11 +1572,6 @@ runtime:
 	if got := dig(workerSpec, "containers", 0, "resources", "claims"); got != nil {
 		t.Errorf("CPU-only RayJob worker container should omit resources.claims, got %v", got)
 	}
-	// Worker pods get a script-only payload initContainer (never manifest):
-	// the tau-py SDK wrapper's ray.train.torch.TorchTrainer path re-reads
-	// /script/<trainer-filename> from each worker's own local disk, so CPU-only
-	// jobs need the script embedded on workers too. The manifest stays
-	// head-only: it's parsed once, before any worker actor is spawned.
 	workerInitContainers := podSpecInitContainers(t, workerSpec)
 	if len(workerInitContainers) != 1 {
 		t.Fatalf("CPU-only RayJob worker pod should have exactly 1 payload initContainer (script only), got %d: %v", len(workerInitContainers), workerInitContainers)
@@ -1791,8 +1772,6 @@ runtime:
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// Extra scripts are embedded in the self-contained script payload (no
-	// ConfigMap `data:` key to grep) — decode it and assert on the bytes.
 	workload := unmarshalLast(t, out)
 	initContainers := podSpecInitContainers(t, dig(workload, "spec", "template", "spec"))
 	scriptIC := containerByName(t, initContainers, scriptPayloadInitContainerName)
@@ -1864,10 +1843,6 @@ runtime:
 }
 
 func TestRenderRequiresMainScript(t *testing.T) {
-	// The embedded fallback trainer is gone. Render() must hard-fail
-	// when MainScript is empty so researchers see a clear migration
-	// error instead of silently rendering a workload that crashes
-	// in-pod with "no such file: /script/train.py".
 	raw := []byte(`
 schema_version: 1
 name: needs-main-script
@@ -1881,7 +1856,6 @@ runtime:
 		Manifest:         m,
 		ManifestRaw:      raw,
 		ManifestFilename: "needs-main-script.yaml",
-		// MainScript intentionally omitted.
 	})
 	if err == nil {
 		t.Fatal("expected Render to reject empty MainScript")
@@ -1892,9 +1866,6 @@ runtime:
 }
 
 func TestRenderMainScriptDoesNotBypassExtrasCollision(t *testing.T) {
-	// MainScript is the explicit override path. Extras still get the
-	// collision check so a typo can't accidentally clobber the SDK
-	// wrapper or the embedded trainer via --extra-script train.py.
 	raw := []byte(`
 schema_version: 1
 name: belt-and-braces
@@ -1916,17 +1887,12 @@ runtime:
 	}
 }
 
-// --- RayJob path -----------------------------------------------------------
-
-// splitDocs separates a multi-doc YAML on `\n---\n` boundaries.
 func splitDocs(t *testing.T, out []byte) []string {
 	t.Helper()
 	docs := strings.Split(string(out), "\n---\n")
 	return docs
 }
 
-// unmarshalLast yaml-decodes the final doc (the workload object) into a
-// generic map so tests can assert nested field paths.
 func unmarshalLast(t *testing.T, out []byte) map[string]any {
 	t.Helper()
 	docs := splitDocs(t, out)
@@ -1949,8 +1915,6 @@ func asYAML(t *testing.T, v any) string {
 	return string(data)
 }
 
-// dig walks nested map[string]any by string keys; numeric keys index slices.
-// Returns nil if any segment is missing or has the wrong type.
 func dig(v any, path ...any) any {
 	for _, p := range path {
 		switch step := p.(type) {
@@ -2002,9 +1966,6 @@ func containerByName(t *testing.T, containers []any, name string) map[string]any
 	return nil
 }
 
-// initContainerEnvValue extracts the string value of a plain (non-secretRef)
-// env entry by name from a container/initContainer's env list, as rendered
-// by payloadInitContainerYAML in render.go.
 func initContainerEnvValue(t *testing.T, container map[string]any, name string) string {
 	t.Helper()
 	envList, ok := container["env"].([]any)
@@ -2025,10 +1986,6 @@ func initContainerEnvValue(t *testing.T, container map[string]any, name string) 
 	return ""
 }
 
-// decodePayloadFiles decodes the self-contained payload embedded in an
-// initContainer rendered by payloadInitContainerYAML (see render.go),
-// returning the map of embedded files by name. Used to assert on script/
-// manifest payload contents without a ConfigMap to read `data:` from.
 func decodePayloadFiles(t *testing.T, container map[string]any) map[string][]byte {
 	t.Helper()
 	b64 := initContainerEnvValue(t, container, payload.EnvB64)
@@ -2040,8 +1997,6 @@ func decodePayloadFiles(t *testing.T, container map[string]any) map[string][]byt
 	return files
 }
 
-// podSpecInitContainers digs out a pod spec's initContainers list, failing
-// the test with a helpful message if the path or type doesn't match.
 func podSpecInitContainers(t *testing.T, podSpec any) []any {
 	t.Helper()
 	spec, ok := podSpec.(map[string]any)
@@ -2259,10 +2214,6 @@ runtime:
 			},
 		},
 		{
-			// GPU==0 selects the distinct managed-workflow-rayjob-cpu.yaml.tmpl
-			// asset (see render.go's IsCPUOnly branch) — its entrypoint is
-			// hand-written separately from the GPU rayjob template and
-			// must be validated on its own.
 			name: "rayjob-cpu",
 			raw: []byte(`
 schema_version: 1
@@ -2338,8 +2289,6 @@ runtime:
 		t.Fatalf("Render: %v", err)
 	}
 	s := string(out)
-	// No JobSecret/SecretProviderClass in this case, and no ConfigMaps
-	// anymore — a single self-contained RayJob doc, no `---` separators.
 	if c := strings.Count(s, "\n---\n"); c != 0 {
 		t.Errorf("expected 0 doc separators (single self-contained workload doc), got %d", c)
 	}
@@ -2359,9 +2308,6 @@ runtime:
 			t.Errorf("rendered RayJob output missing %q", want)
 		}
 	}
-	// Structural assertions: walk the parsed RayJob and confirm fields land
-	// where KubeRay's CRD expects them. Substring tests would let an
-	// indentation bug ship; the unmarshal catches that.
 	rj := unmarshalLast(t, out)
 	if got := dig(rj, "kind"); got != "RayJob" {
 		t.Errorf("kind = %v, want RayJob", got)
@@ -2372,9 +2318,6 @@ runtime:
 	if got := dig(rj, "spec", "shutdownAfterJobFinishes"); got != true {
 		t.Errorf("spec.shutdownAfterJobFinishes = %v, want true", got)
 	}
-	// Until this TTL elapses a completed RayJob keeps its pods Running and holding
-	// node capacity. It was 86400 (24h), so a job could report SUCCEEDED and still
-	// consume the cluster all day; mirrors the eval template's assertion.
 	if ttl, ok := dig(rj, "spec", "ttlSecondsAfterFinished").(int); !ok || ttl > 120 {
 		t.Errorf("spec.ttlSecondsAfterFinished = %v; a completed training RayJob must not keep holding node capacity this long", dig(rj, "spec", "ttlSecondsAfterFinished"))
 	}
@@ -2411,12 +2354,10 @@ runtime:
 	assertEnvVar(t, "rayjob head", cl[0].(map[string]any), "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/rjbasic/metrics-history.jsonl")
 	assertEnvVar(t, "rayjob head", cl[0].(map[string]any), "TAU_GROUP", "demo-experiment")
 	assertEnvVar(t, "rayjob head", cl[0].(map[string]any), "TAU_EXPERIMENT", "demo-experiment")
-	// Entrypoint must be the bash launcher (not e.g. an empty string).
 	entry, _ := dig(rj, "spec", "entrypoint").(string)
 	if !strings.Contains(entry, "/script/train.py") {
 		t.Errorf("spec.entrypoint missing trainer invocation: %q", entry)
 	}
-	// The head pod's script payload initContainer must actually embed train.py.
 	scriptIC := containerByName(t, podSpecInitContainers(t, headSpec), scriptPayloadInitContainerName)
 	files := decodePayloadFiles(t, scriptIC)
 	if _, ok := files["train.py"]; !ok {
@@ -2626,10 +2567,6 @@ runtime:
 	if got := dig(wcl[0], "livenessProbe"); got != nil {
 		t.Fatalf("worker livenessProbe = %v, want nil", got)
 	}
-	// CPU-only RayJob workers get a script-only payload initContainer (never
-	// manifest): the tau-py SDK wrapper's ray.train.torch.TorchTrainer path
-	// re-reads /script/<trainer-filename> from each worker's own local disk. The manifest stays
-	// head-only — it's parsed once, before any worker actor is spawned.
 	workerSpec := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec")
 	workerInitContainers := podSpecInitContainers(t, workerSpec)
 	if len(workerInitContainers) != 1 {
@@ -2936,8 +2873,6 @@ runtime:
 	if got := dig(rj, "metadata", "labels", workloadmeta.LabelGPUClass); got != topology.GPUClassA10080GB {
 		t.Errorf("RayJob gpu class label=%v want %s", got, topology.GPUClassA10080GB)
 	}
-	// The control head is topology-free; the execution worker keeps the
-	// single-node NVLink placement request.
 	if tas := dig(rj, "spec", "rayClusterSpec", "headGroupSpec", "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); tas != nil {
 		t.Errorf("control head retained workload topology: %v", tas)
 	}
@@ -3061,12 +2996,6 @@ runtime:
 }
 
 func TestRenderRayJobImageAndTorchPin(t *testing.T) {
-	// The RayJob path deliberately uses the slim TauGrid MCR Ray
-	// base (not Ray ML) and pins torch==2.4.0 in the entrypoint so trainer
-	// behavior matches the single-pod Job path's canonical first-party MCR
-	// image/runtime contract. If either drifts, the two workload kinds will
-	// produce different results from the same manifest — guard against that
-	// here.
 	raw := []byte(`
 schema_version: 1
 name: rjimg
@@ -3227,8 +3156,6 @@ runtime:
 }
 
 func TestRenderJobPathUsesCanonicalMCRImageForTrainerAndPayloads(t *testing.T) {
-	// Image policy: the shipped batch Job and both payload init containers
-	// must stay on the canonical first-party MCR Ray image.
 	raw := []byte(`
 schema_version: 1
 name: jobimg
@@ -3240,7 +3167,6 @@ runtime:
 	m, _ := Parse(raw)
 	out, err := Render(RenderOptions{
 		Manifest: m, ManifestRaw: raw, ManifestFilename: "jobimg.yaml",
-		// WorkloadKind unset → defaults to job.
 		MainScript: []byte("# trainer\n"),
 	})
 	if err != nil {
@@ -3277,7 +3203,6 @@ runtime:
 	m, _ := Parse(raw)
 	out, err := Render(RenderOptions{
 		Manifest: m, ManifestRaw: raw, ManifestFilename: "defaultkind.yaml",
-		// WorkloadKind unset → defaults to job
 		MainScript: []byte("# trainer\n"),
 	})
 	if err != nil {
@@ -3291,8 +3216,6 @@ runtime:
 		t.Errorf("default workload kind should not emit RayJob")
 	}
 }
-
-// --- compute.workers (multi-node) tests ---
 
 func TestRenderRayJobMultiNodeProducesWorkerGroupSpecs(t *testing.T) {
 	raw := []byte(`
@@ -3317,8 +3240,7 @@ runtime:
 		ManifestFilename: "rjmulti.yaml",
 		Namespace:        "ray",
 		WorkloadKind:     WorkloadKindRayJob,
-		// MainScript required for multi-node — use a stub.
-		MainScript: []byte("# stub SDK wrapper\n"),
+		MainScript:       []byte("# stub SDK wrapper\n"),
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -3326,27 +3248,17 @@ runtime:
 	s := string(out)
 	for _, want := range []string{
 		"kind: RayJob",
-		// workerGroupSpecs is no longer the empty-list literal.
 		"groupName: tau-rjmulti-w",
-		// compute.workers counts dedicated execution workers.
 		"replicas: 2",
 		"minReplicas: 2",
 		"maxReplicas: 2",
-		// Worker rayStartParams.num-gpus must equal per-pod GPU count for
-		// Ray's resource view to match the device-plugin allocation.
 		`num-gpus: "8"`,
-		// Worker pods request workload GPUs; the control head does not.
 		`nvidia.com/gpu: "8"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("multi-node RayJob output missing %q", want)
 		}
 	}
-	// torchrun --standalone is single-node only; must NOT appear in the
-	// multi-node entrypoint (would deadlock — it doesn't talk to other pods).
-	// Check the parsed entrypoint specifically — the string can legitimately
-	// appear inside the base64-encoded script payload (it embeds template
-	// assets), which is not what this assertion is checking.
 	rj := unmarshalLast(t, out)
 	entry, _ := dig(rj, "spec", "entrypoint").(string)
 	if strings.Contains(entry, "torchrun --standalone") {
@@ -3359,7 +3271,6 @@ runtime:
 		t.Errorf("expected 2 nvidia.com/gpu entries (request+limit for workers), got %d", c)
 	}
 
-	// Structural assertions on the parsed RayJob.
 	wgs := dig(rj, "spec", "rayClusterSpec", "workerGroupSpecs")
 	wgsList, ok := wgs.([]any)
 	if !ok || len(wgsList) != 1 {
@@ -3387,12 +3298,6 @@ runtime:
 	if got := dig(wcl[0], "resources", "limits", "nvidia.com/gpu"); got != "8" {
 		t.Errorf("worker container resources.limits[nvidia.com/gpu] = %v, want 8", got)
 	}
-	// GPU multi-node workers pull python deps via spec.runtimeEnvYAML
-	// (checked below), but the trainer script itself is re-read from local
-	// disk on every worker by the tau-py SDK wrapper's
-	// ray.train.torch.TorchTrainer path — so workers must carry the
-	// script-only payload initContainer (never the manifest payload, which
-	// stays head-only).
 	workerInitContainers := podSpecInitContainers(t, workerSpec)
 	if len(workerInitContainers) != 1 {
 		t.Fatalf("multi-node RayJob worker pod should have exactly 1 payload initContainer (script only), got %d: %v", len(workerInitContainers), workerInitContainers)
@@ -3410,11 +3315,6 @@ runtime:
 	assertEnvVar(t, "multi-node rayjob head", head, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/rjmulti/metrics-history.jsonl")
 	assertEnvVar(t, "multi-node rayjob worker", worker, "TAU_METRICS_HISTORY", "/data/checkpoints/finetunes/rjmulti/metrics-history.jsonl")
 
-	// runtimeEnvYAML must live at spec.runtimeEnvYAML (RayJob CRD
-	// level), NOT at ray.init's runtime_env, so KubeRay propagates the
-	// pip deps to ALL Train worker actors at job submission time. Without
-	// this, workers come up without torch/reference deps and trainer.fit() fails
-	// at first import.
 	rtEnv, _ := dig(rj, "spec", "runtimeEnvYAML").(string)
 	if rtEnv == "" {
 		t.Fatalf("multi-node RayJob must render spec.runtimeEnvYAML so worker pods get torch + reference trainer deps; got empty")
@@ -3488,9 +3388,6 @@ runtime:
 }
 
 func TestRenderRayJobMultiNodeRequiresMainScript(t *testing.T) {
-	// Multi-node requires the tau-py SDK (--main-script). Without it,
-	// the embedded Sample trainer would run, which is single-node only
-	// and would silently produce wrong results. Render must hard-fail.
 	raw := []byte(`
 schema_version: 1
 name: rjbad
@@ -3505,7 +3402,6 @@ runtime:
 	_, err := Render(RenderOptions{
 		Manifest: m, ManifestRaw: raw, ManifestFilename: "rjbad.yaml",
 		WorkloadKind: WorkloadKindRayJob,
-		// MainScript intentionally omitted.
 	})
 	if err == nil {
 		t.Fatal("expected Render to reject multi-node without MainScript")
@@ -3516,8 +3412,6 @@ runtime:
 }
 
 func TestRenderJobKindRejectsMultiNode(t *testing.T) {
-	// The Job path is single-pod only — k8s batch/v1 can't gang-admit
-	// multiple pods. Multi-node + Job must hard-fail with a clear error.
 	raw := []byte(`
 schema_version: 1
 name: jbad
@@ -3583,30 +3477,23 @@ runtime:
 		manifestPayloadInitContainerName,
 		"name: tau-eval-smoke",
 		"ttlSecondsAfterFinished: 15",
-		// A dedicated worker pod hosts the GPU actor.
 		"groupName: tau-eval-smoke-gpu",
 		`num-gpus: "1"`,
 		`nvidia.com/gpu: "1"`,
-		// CPU worker group pinned to 4 replicas via static gang admission.
 		"groupName: tau-eval-smoke-cpu",
 		"replicas: 4",
 		"minReplicas: 4",
 		"maxReplicas: 4",
 		`num-cpus: "1"`,
 		`num-gpus: "0"`,
-		// TAU_UPSTREAM_CHECKPOINT propagates to all Ray pod groups.
 		`name: TAU_UPSTREAM_CHECKPOINT, value: "/data/checkpoints/train-fullft/last.safetensors"`,
-		// runtimeEnvYAML must propagate Sample deps to CPU worker pods
-		// — they don't run the head's pip install.
 		"runtimeEnvYAML",
-		"microsoft-sample",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("eval RayJob output missing %q", want)
 		}
 	}
 
-	// Head, GPU worker, and CPU worker pods expose the upstream checkpoint.
 	envVarPattern := `name: TAU_UPSTREAM_CHECKPOINT, value:`
 	if c := strings.Count(s, envVarPattern); c != 3 {
 		t.Errorf("expected TAU_UPSTREAM_CHECKPOINT env on all three pod groups (3 occurrences of %q), got %d", envVarPattern, c)
@@ -3649,12 +3536,6 @@ runtime:
 	if got := dig(cpuGroup, "template", "metadata", "annotations", "kueue.x-k8s.io/podset-required-topology"); got != nil {
 		t.Errorf("CPU worker retained GPU topology: %v", got)
 	}
-	// CPU workers run plain ray.remote score tasks against the head's
-	// actor; Ray's own runtime_env working_dir mechanism ships them the
-	// user module but never any --extra-script file, so they get a
-	// script-only payload initContainer (never manifest) — the same
-	// mechanism the two Ray Train templates' workers use. /manifest stays
-	// head-only: it's parsed once, before any worker actor is spawned.
 	workerInitContainers := podSpecInitContainers(t, cpuWorkerSpec)
 	if len(workerInitContainers) != 1 {
 		t.Fatalf("eval CPU worker pod should have exactly 1 payload initContainer (script only), got %d: %v", len(workerInitContainers), workerInitContainers)
@@ -3700,8 +3581,6 @@ runtime:
 		t.Errorf("CPU worker container must NOT request a DRA claim (no GPU); got: %v", cclaims)
 	}
 
-	// Head pod's spec.entrypoint runs the tau-py wrapper directly (no torchrun
-	// — eval is single-pod-driven, not distributed training).
 	entry, _ := dig(rj, "spec", "entrypoint").(string)
 	if !strings.Contains(entry, "python3 /script/train.py") {
 		t.Errorf("eval entrypoint must invoke python3 /script/train.py; got:\n%s", entry)
@@ -3715,10 +3594,6 @@ runtime:
 }
 
 func TestRenderRayJobEvalRequiresCPUWorkers(t *testing.T) {
-	// rayjob-eval without cpu_workers is incoherent — the whole shape
-	// is "system head + 1 GPU actor worker + N CPU workers". If you don't want CPU workers,
-	// just submit as a normal rayjob (which the manifest already
-	// supports for single-GPU work).
 	raw := []byte(`
 schema_version: 1
 name: bad-eval
@@ -3742,9 +3617,6 @@ runtime:
 }
 
 func TestRenderRayJobEvalRequiresMainScript(t *testing.T) {
-	// Like rayjob multi-node, the embedded Sample trainer can't drive an
-	// eval — the user fn lives in their @tau.eval handle, only reachable
-	// via the tau-py wrapper.
 	raw := []byte(`
 schema_version: 1
 name: bad-eval
@@ -3769,9 +3641,6 @@ runtime:
 }
 
 func TestRenderRayJobEvalRejectsMultiNode(t *testing.T) {
-	// Eval is always 1 GPU pod + N CPU pods — multi-node training (>1 GPU
-	// pod) is conceptually wrong here. The user is probably trying to do
-	// distributed eval, which isn't supported in v1.
 	raw := []byte(`
 schema_version: 1
 name: bad-eval
@@ -3796,9 +3665,6 @@ runtime:
 }
 
 func TestRenderJobAndRayJobRejectEvalManifest(t *testing.T) {
-	// If a researcher's manifest has eval.cpu_workers / eval.upstream set
-	// but they pass --workload-kind=rayjob (or omit it, defaulting to job),
-	// dispatch is wrong. Hard-fail with a pointer at the right kind.
 	raw := []byte(`
 schema_version: 1
 name: misdispatched
@@ -3879,7 +3745,6 @@ runtime:
 		}
 	}
 
-	// SPC document should be emitted
 	docs := splitDocs(t, out)
 	foundSPC := false
 	for _, doc := range docs {
@@ -3902,7 +3767,6 @@ runtime:
 		t.Error("no SecretProviderClass document in output")
 	}
 
-	// secretKeyRef env vars
 	for _, want := range []string{
 		`name: "HF_TOKEN"`,
 		`name: "WANDB_KEY"`,
@@ -3951,13 +3815,10 @@ runtime:
 	}
 	s := string(out)
 
-	// WI label on pod
 	if !strings.Contains(s, "azure.workload.identity/use: \"true\"") {
 		t.Error("RayJob with KVSpec missing WI pod label")
 	}
 
-	// CSI volume and mount on head and worker (string-based — appendYAMLBlock
-	// injects raw YAML that template interpolation may render at varying indent)
 	for _, want := range []string{
 		"name: kv-secrets",
 		"secrets-store.csi.k8s.io",
@@ -3969,7 +3830,6 @@ runtime:
 		}
 	}
 
-	// Verify head and worker both have CSI volumes by counting occurrences
 	csiCount := strings.Count(s, "driver: secrets-store.csi.k8s.io")
 	if csiCount < 2 {
 		t.Errorf("expected CSI driver in head+worker, got %d occurrences", csiCount)
@@ -3980,7 +3840,6 @@ runtime:
 		t.Errorf("expected CSI mount in head+worker, got %d occurrences", mountCount)
 	}
 
-	// SPC doc
 	if !strings.Contains(s, "kind: SecretProviderClass") {
 		t.Error("RayJob KV missing SecretProviderClass")
 	}
@@ -4106,20 +3965,6 @@ runtime:
 	}
 }
 
-// --- managedBy, size-limit, and JobSecret-independence coverage ---
-//
-// These tests lock in three PR2 guarantees that are easy to silently
-// regress: (1) Tau never stamps spec.managedBy (KubeRay/Kueue own that
-// field), (2) the two unconstrained embedded payloads (script, manifest) are
-// each capped at payload.MaxDecodedBytes and the fully-rendered workload
-// JSON is additionally capped at maxRenderedWorkloadBytes, and (3) an
-// oversized JobSecret can never hide an oversized workload (the size guard
-// only ever measures the workload document, not the Secret).
-
-// TestRenderNeverSetsManagedBy mirrors internal/rayjobrender's
-// TestRenderNeverSetsManagedBy: Tau must never stamp spec.managedBy on any
-// of the four workload kinds, since KubeRay/Kueue/the job controller decide
-// that field themselves; Tau stamping it would break their ownership model.
 func TestRenderNeverSetsManagedBy(t *testing.T) {
 	cases := []struct {
 		kind string
@@ -4193,12 +4038,6 @@ runtime:
 	}
 }
 
-// TestRenderScriptAndManifestPayloadsAreDistinct proves the two payloads
-// embedded in every workload (script, manifest) never collide: they use
-// different init-container names, different volumes/mount targets, and
-// (since their content always differs) different digests. This is the
-// Design A guarantee that the two payload artifacts are fully unconstrained,
-// not a single shared payload wearing two names.
 func TestRenderScriptAndManifestPayloadsAreDistinct(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
@@ -4249,9 +4088,6 @@ runtime:
 		t.Fatalf("script and manifest payloads must have distinct digests (they carry different content), both are %q", scriptDigest)
 	}
 
-	// Volumes and mounts must also target distinct emptyDirs — same
-	// safety property as the init container/digest checks, but at the
-	// pod-spec/container-mount level.
 	volumes, _ := dig(spec, "volumes").([]any)
 	seenVolumeNames := map[string]bool{}
 	for _, v := range volumes {
@@ -4269,12 +4105,6 @@ runtime:
 	}
 }
 
-// comment of padBytes incompressible ASCII characters appended, used to
-// precisely inflate the manifest payload's decoded size without touching its
-// parsed semantics. The padding is deliberately incompressible: payload
-// envelopes are gzip-compressed, so a run of repeated characters would shrink
-// to almost nothing and could never exercise the size guards these probes
-// exist to pin.
 func sizeProbeManifest(padBytes int) []byte {
 	raw := []byte(`
 schema_version: 1
@@ -4288,12 +4118,6 @@ runtime:
 	return append(raw, []byte(pad)...)
 }
 
-// incompressibleASCII returns n deterministic, effectively incompressible
-// characters drawn from [A-Za-z0-9]. Tests that need to push a payload past a
-// size guard must use this rather than strings.Repeat, because the payload
-// envelope is gzip-compressed before it is embedded. seed varies the output so
-// callers generating many strings (e.g. unique file names) do not hand gzip a
-// set of identical runs to collapse.
 func incompressibleASCII(seed int64, n int) []byte {
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	r := rand.New(rand.NewSource(seed))
@@ -4304,10 +4128,6 @@ func incompressibleASCII(seed int64, n int) []byte {
 	return out
 }
 
-// TestRenderRejectsScriptPayloadOverCap proves the script payload is
-// independently subject to payload.MaxDecodedBytes, and that Render()
-// surfaces the failure with a "script payload:" prefix so the two payloads'
-// errors are distinguishable.
 func TestRenderRejectsScriptPayloadOverCap(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
@@ -4321,8 +4141,6 @@ runtime:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	// train.py ("# trainer\n", 10 bytes) + this extra file must together
-	// decode to just over payload.MaxDecodedBytes.
 	over := make([]byte, payload.MaxDecodedBytes)
 	for i := range over {
 		over[i] = 'a'
@@ -4345,22 +4163,9 @@ runtime:
 	}
 }
 
-// manyLongNamedExtraScripts builds n ExtraScript entries, each with a
-// nameLen-character destination name and 1 byte of content. It exists to
-// prove that payload.MaxDecodedBytes (which sums only file *content* bytes)
-// is insufficient on its own: many small files with long names can stay
-// trivially under that decoded ceiling while their JSON envelope's per-file
-// name/field overhead — after compression and base64 encoding the whole
-// envelope — blows past the limit on the final TAU_PAYLOAD_B64=<encoded>
-// environment entry. Names are drawn from incompressible ASCII so the guard
-// is exercised against real encoded size rather than against a run of
-// characters gzip would collapse.
 func manyLongNamedExtraScripts(n, nameLen int) []ExtraScript {
 	scripts := make([]ExtraScript, 0, n)
 	for i := 0; i < n; i++ {
-		// Destination names must match payloadFileNamePattern
-		// ([A-Za-z0-9._-]+); a numeric prefix keeps them unique and the
-		// incompressible remainder pads each to exactly nameLen characters.
 		prefix := fmt.Sprintf("f%04d", i)
 		name := prefix + string(incompressibleASCII(int64(i), nameLen-len(prefix))) + ".py"
 		scripts = append(scripts, ExtraScript{Name: name, Data: []byte("x")})
@@ -4368,17 +4173,6 @@ func manyLongNamedExtraScripts(n, nameLen int) []ExtraScript {
 	return scripts
 }
 
-// TestRenderRejectsManyFilesOverPayloadEnvArgLimit proves blocker #2 from the
-// autoreview of PR #894: a script payload can be trivially under
-// payload.MaxDecodedBytes (64 KiB of file *content*) while still rendering an
-// encoded TAU_PAYLOAD_B64 environment entry over the 131072 byte Linux
-// MAX_ARG_STRLEN limit, because that cap does not account for per-file name
-// and JSON envelope overhead. 500 files x 200-char names x 1 content byte
-// each decode to only 500 bytes (0.76% of MaxDecodedBytes) but encode to a
-// ~152 KB env value — over the limit by a wide margin, not a boundary case,
-// because base64's 3-byte-to-4-char block quantization makes an exact
-// single-byte crossover impractical to construct deterministically across
-// Go versions/JSON encoders.
 func TestRenderRejectsManyFilesOverPayloadEnvArgLimit(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
@@ -4393,7 +4187,7 @@ runtime:
 		t.Fatalf("Parse: %v", err)
 	}
 	scripts := manyLongNamedExtraScripts(800, 200)
-	decoded := len(scripts) // 1 content byte per file
+	decoded := len(scripts)
 	if decoded >= payload.MaxDecodedBytes {
 		t.Fatalf("test setup bug: decoded size %d must stay under payload.MaxDecodedBytes (%d) to prove this is NOT a MaxDecodedBytes violation", decoded, payload.MaxDecodedBytes)
 	}
@@ -4418,11 +4212,6 @@ runtime:
 	}
 }
 
-// TestRenderAcceptsManyFilesUnderPayloadEnvArgLimit is the contrasting case:
-// a similarly file-count-heavy payload that stays under both
-// payload.MaxDecodedBytes AND the encoded env arg limit must render
-// successfully — proving the env entry guard doesn't false-positive on
-// ordinary multi-file payloads.
 func TestRenderAcceptsManyFilesUnderPayloadEnvArgLimit(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
@@ -4452,20 +4241,11 @@ runtime:
 	initContainers := podSpecInitContainers(t, spec)
 	scriptInit := containerByName(t, initContainers, scriptPayloadInitContainerName)
 	files := decodePayloadFiles(t, scriptInit)
-	if len(files) != len(scripts)+1 { // +1 for MainScript's train.py
+	if len(files) != len(scripts)+1 {
 		t.Errorf("decoded script payload file count = %d, want %d", len(files), len(scripts)+1)
 	}
 }
 
-// TestRenderRejectsWorkloadOverRenderedSizeLimit and
-// TestRenderAcceptsWorkloadUnderRenderedSizeLimit together pin the exact
-// crossover point of the additional maxRenderedWorkloadBytes (200 KiB) hard
-// guard on the fully-rendered workload JSON. Neither payload alone can
-// reach 200 KiB alone, so this probe renders a RayJob, where the script payload
-// appears on both the head and worker templates, plus the head-only manifest
-// payload. This proves the guard measures the combined rendered object rather
-// than just one environment entry. Byte counts below were bisected empirically
-// against the current templates.
 const sizeLimitScriptExtraBytes = 48500
 
 func renderSizeLimitProbe(t *testing.T, manifestPadBytes int) ([]byte, error) {
@@ -4503,8 +4283,6 @@ func TestRenderAcceptsWorkloadUnderRenderedSizeLimit(t *testing.T) {
 }
 
 func TestRenderRejectsWorkloadOverRenderedSizeLimit(t *testing.T) {
-	// Keep enough margin that public identifier length changes cannot move this
-	// fixture back below the rendered-workload limit.
 	out, err := renderSizeLimitProbe(t, 52000)
 	if err == nil {
 		doc := unmarshalLast(t, out)
@@ -4539,9 +4317,6 @@ runtime:
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	// 300 KiB of secret string data — bigger than maxRenderedWorkloadBytes
-	// on its own. If the guard ever mistakenly measured the Secret, or
-	// measured Secret+workload combined, this render would fail.
 	hugeSecretValue := strings.Repeat("s", 300*1024)
 	out, err := Render(RenderOptions{
 		Manifest:         m,
@@ -4679,11 +4454,6 @@ runtime:
 	}
 }
 
-// Every workload template installs runtime.pip into the pod. On the canonical
-// Ray CUDA image a plain install fails with EACCES (pip cannot write to the
-// root-owned site-packages/nvidia) and the workload dies before the trainer
-// starts. All four templates must fall back to the user site; on images that
-// install cleanly, such as the plain non-CUDA ray tags, the fallback no-ops.
 func TestWorkloadTemplatesFallBackToUserSitePip(t *testing.T) {
 	for _, name := range []string{
 		"managed-workflow-job.yaml.tmpl",
@@ -4701,11 +4471,6 @@ func TestWorkloadTemplatesFallBackToUserSitePip(t *testing.T) {
 	}
 }
 
-// A --user install puts console scripts (torchrun, deepspeed) under the user
-// base bin dir, which is not on PATH in the canonical images. The rayjob
-// template invokes `torchrun` as a bare command for single-pod multi-GPU runs,
-// so without this export the pip fallback produces importable libraries and an
-// immediate exit 127. Observed live on an 8-GPU A100 RayJob.
 func TestWorkloadTemplatesPutUserSiteBinOnPath(t *testing.T) {
 	for _, name := range []string{
 		"managed-workflow-job.yaml.tmpl",

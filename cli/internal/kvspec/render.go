@@ -10,7 +10,6 @@ import (
 	"strings"
 )
 
-// RenderSPC renders a SecretProviderClass YAML document.
 func RenderSPC(name, namespace string, spec *Spec) ([]byte, error) {
 	if spec == nil || len(spec.Entries) == 0 {
 		return nil, nil
@@ -53,8 +52,6 @@ func RenderSPC(name, namespace string, spec *Spec) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// VolumeYAML returns the CSI volume block for embedding in a pod spec at the
-// given indent level (number of leading spaces before the "- name:" line).
 func VolumeYAML(spcName string, indent int) string {
 	pad := strings.Repeat(" ", indent)
 	inner := strings.Repeat(" ", indent+2)
@@ -62,8 +59,6 @@ func VolumeYAML(spcName string, indent int) string {
 		pad, inner, inner, inner, inner, inner, spcName)
 }
 
-// VolumeMountYAML returns the volume mount block for containers at the given
-// indent level.
 func VolumeMountYAML(indent int) string {
 	pad := strings.Repeat(" ", indent)
 	inner := strings.Repeat(" ", indent+2)

@@ -215,9 +215,6 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 		"list",
 		"--all-namespaces",
 	}
-	// Helm 4 removed the `--all` aggregate flag from `helm list`; the individual
-	// state flags it expanded to are still accepted by both Helm 3 and Helm 4,
-	// so list them explicitly to stay portable across both major versions.
 	args = append(args, helmListAllStateFlags...)
 	args = append(args, "--output", "json")
 	if kubeContext != "" {
@@ -240,9 +237,6 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 		if r.Name != release {
 			continue
 		}
-		// Helm includes namespace in real list output. Treat an omitted field as
-		// the requested namespace for compatibility with older wrappers and test
-		// fixtures that returned only release names.
 		if r.Namespace == "" || r.Namespace == namespace {
 			foundInTarget = true
 			continue
@@ -263,18 +257,11 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 }
 
 func clusterInstallBootstrapArgs(spec clusterInstallSpec) []string {
-	// The queue-policy pass creates Kueue resources that are admitted through
-	// the webhooks installed by the bootstrap pass. Wait for those Deployments
-	// before asking the API server to call their webhooks.
 	spec.Wait = true
 	args := clusterInstallArgs(spec)
 	return append(args, "--set", "baselineQueue.enabled=false")
 }
 
-// Helm resolves every rendered object's GVK against the live cluster even for
-// --dry-run=client, so a chart that ships CRDs and their custom resources can
-// never dry-run against a cluster that lacks them. Rendering with `helm
-// template` keeps the preview offline.
 func clusterInstallRenderArgs(spec clusterInstallSpec) []string {
 	args := []string{
 		"template", spec.Release, spec.Chart,
@@ -302,8 +289,6 @@ func printRenderedKindSummary(out io.Writer, manifest []byte) error {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		// --dependency-update prints its progress banner on stdout, ahead of the
-		// first document. Skip anything that is not an object and keep decoding.
 		var typeErr *yaml.TypeError
 		if errors.As(err, &typeErr) {
 			continue
@@ -340,9 +325,6 @@ func printRenderedKindSummary(out io.Writer, manifest []byte) error {
 }
 
 func clusterInstallArgs(spec clusterInstallSpec) []string {
-	// Helm >=3.18 replays the previous release's user-supplied values on upgrade.
-	// Without --reset-values the bootstrap pass's baselineQueue.enabled=false
-	// survives into the pass that must create the baseline queue.
 	args := []string{
 		"upgrade", "--install", spec.Release, spec.Chart,
 		"--namespace", spec.Namespace,
@@ -368,8 +350,6 @@ func clusterInstallArgs(spec clusterInstallSpec) []string {
 	return appendHelmValueArgs(appendForceConflicts(args), spec)
 }
 
-// Both Helm verbs must resolve chart values identically, or a dry-run would
-// preview something other than what installs.
 func appendHelmValueArgs(args []string, spec clusterInstallSpec) []string {
 	for _, file := range spec.ValuesFiles {
 		args = append(args, "--values", file)

@@ -123,9 +123,6 @@ func hydrateAdmissionCheckControllers(ctx context.Context, r rawRunner, workload
 	}
 }
 
-// markRunLogsMultiKueueAdmissionCheckFallbacks preserves the pinned exact-name
-// MultiKueue fallback for minimal run-logs snapshots, which intentionally skip
-// AdmissionCheck object lookups to match the read-only manager viewer RBAC.
 func markRunLogsMultiKueueAdmissionCheckFallbacks(workloads []Workload) {
 	for wi := range workloads {
 		for ci := range workloads[wi].AdmissionChecks {

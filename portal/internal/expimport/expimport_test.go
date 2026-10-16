@@ -596,8 +596,6 @@ func TestImportJSONLCleansFilesWhenRecordRunDataFails(t *testing.T) {
 	history := filepath.Join(t.TempDir(), "metrics-history.jsonl")
 	writeJSONLLines(t, history, `{"_step":1,"_timestamp":10,"train/return":10}`)
 
-	// JSONL import preserves existing run metadata, so the conflict is forced
-	// through a run tag the importer always writes.
 	_, err = ImportJSONL(ctx, store, JSONLImportOptions{
 		RunID:          "seed-1",
 		RunGroupID:     "reference-group",

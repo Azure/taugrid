@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package collector implements durable, restart-safe experiment metric collection.
 package collector
 
 import (
@@ -16,7 +15,6 @@ const (
 	CheckpointSchemaV1    = "tau.experiment.metrics_checkpoint.v1"
 )
 
-// MetricEventChunk is the immutable unit delivered to sinks.
 type MetricEventChunk struct {
 	SchemaVersion string
 	Digest        string
@@ -30,7 +28,6 @@ type MetricEventChunk struct {
 	NDJSON        []byte
 }
 
-// DeliveryAck reports one sink delivery attempt.
 type DeliveryAck struct {
 	Samples  int
 	Requests int
@@ -38,8 +35,6 @@ type DeliveryAck struct {
 	Metadata map[string]string
 }
 
-// Sink delivers immutable chunks. ConfigIdentity must change whenever delivery
-// behavior or destination changes.
 type Sink interface {
 	Name() string
 	ConfigIdentity() string

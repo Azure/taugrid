@@ -103,7 +103,6 @@ data:
       lift-attributes = {{ .Values.collector.otelLog.liftAttributes | toJson }}
     {{- end }}
 
-
     {{- if or .Values.collector.journalLogs.enabled .Values.collector.containerLogs.enabled }}
     [[host-log]]
       disable-kube-discovery = {{ not .Values.collector.containerLogs.enabled }}

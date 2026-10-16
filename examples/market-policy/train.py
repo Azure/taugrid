@@ -33,7 +33,6 @@ INPUT_NAMES = (
     "micro_noise",
 )
 
-
 @dataclass(frozen=True)
 class TrainConfig:
     seed: int
@@ -43,7 +42,6 @@ class TrainConfig:
     batch_size: int
     learning_rate: float
     value_loss_weight: float
-
 
 class MarketPolicy(torch.nn.Module):
     """The exact 8 -> 24 -> (3 actor + 1 critic) browser architecture."""
@@ -58,14 +56,11 @@ class MarketPolicy(torch.nn.Module):
         hidden = F.relu(self.hidden(inputs))
         return self.policy(hidden), self.value(hidden).squeeze(-1)
 
-
 def env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
-
 def env_float(name: str, default: float) -> float:
     return float(os.environ.get(name, str(default)))
-
 
 def load_config() -> TrainConfig:
     return TrainConfig(
@@ -77,7 +72,6 @@ def load_config() -> TrainConfig:
         learning_rate=env_float("MARKET_POLICY_LEARNING_RATE", 0.004),
         value_loss_weight=env_float("MARKET_POLICY_VALUE_LOSS_WEIGHT", 1.0),
     )
-
 
 def create_examples(
     rng: np.random.Generator, count: int
@@ -124,7 +118,6 @@ def create_examples(
         values.astype(np.float32),
     )
 
-
 def evaluate(
     model: MarketPolicy,
     observations: torch.Tensor,
@@ -142,10 +135,8 @@ def evaluate(
         "valueRmse": float(rmse.cpu()),
     }
 
-
 def round_values(values: torch.Tensor) -> list[float]:
     return [round(float(value), 7) for value in values.detach().cpu().reshape(-1)]
-
 
 def metrics_history_dir() -> Path | None:
     """Return the Stellar history directory for a Tau-submitted run.
@@ -160,7 +151,6 @@ def metrics_history_dir() -> Path | None:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-
 def metrics_row(
     step: int,
     loss: float,
@@ -174,7 +164,6 @@ def metrics_row(
         "validation/policy_accuracy": metrics["policyAccuracy"],
         "validation/value_rmse": metrics["valueRmse"],
     }
-
 
 def publish_metrics_row(
     directory: Path,
@@ -192,7 +181,6 @@ def publish_metrics_row(
         os.fsync(stream.fileno())
     os.replace(temporary, final)
     return final
-
 
 def export_artifact(
     model: MarketPolicy,
@@ -245,7 +233,6 @@ def export_artifact(
         encoding="utf-8",
     )
 
-
 def default_output_path() -> Path:
     explicit = os.environ.get("MARKET_POLICY_OUTPUT")
     if explicit:
@@ -255,7 +242,6 @@ def default_output_path() -> Path:
         if directory:
             return Path(directory) / "market-policy" / "tau-market-policy.json"
     return Path("/data/checkpoints/market-policy/tau-market-policy.json")
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -269,7 +255,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--smoke-pairs", type=int, default=0)
     return parser.parse_args()
-
 
 def train_and_export(
     config: TrainConfig,
@@ -372,7 +357,6 @@ def train_and_export(
         "torchVersion": torch.__version__,
     }
 
-
 def train_with_ray(config: TrainConfig, output_path: Path) -> dict[str, object]:
     import ray
 
@@ -396,7 +380,6 @@ def train_with_ray(config: TrainConfig, output_path: Path) -> dict[str, object]:
         return summary
     finally:
         ray.shutdown()
-
 
 def main() -> int:
     args = parse_args()
@@ -422,7 +405,6 @@ def main() -> int:
 
     print(json.dumps(summary, sort_keys=True), flush=True)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

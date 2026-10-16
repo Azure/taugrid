@@ -16,8 +16,6 @@ func StampWorkspace(labels map[string]string, workspace string) map[string]strin
 	return labels
 }
 
-// PodCorrelationAnnotations returns annotations used to correlate pod logs
-// with a workspace and experiment.
 func PodCorrelationAnnotations(annotations map[string]string) map[string]string {
 	out := map[string]string{}
 	for key, value := range annotations {

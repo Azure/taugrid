@@ -16,9 +16,6 @@ import (
 	"time"
 )
 
-// fakeBlobStore is an in-memory blobStore for testing the Azure sink and
-// locker without a live Azure subscription. It shares state across blob()
-// calls keyed by blob name.
 type fakeBlobStore struct {
 	mu    sync.Mutex
 	blobs map[string]*fakeBlobState
@@ -34,8 +31,6 @@ type fakeBlobState struct {
 	releaseCount int
 	renewErr     error
 
-	// beforeCommit runs inside CommitBlockList before the overwrite check,
-	// letting a test simulate a concurrent writer winning the race.
 	beforeCommit func()
 }
 
@@ -195,7 +190,6 @@ func TestAzureSink_HashMismatchLeavesUncommitted(t *testing.T) {
 	fs := newFakeBlobStore()
 	sink := newTestSink(fs)
 	data := []byte("real content")
-	// Expected sha for different content → mismatch.
 	wrongSHA := sha256Hex([]byte("other content"))
 	_, err := sink.Write(context.Background(), "x.bin", bytes.NewReader(data), int64(len(data)), wrongSHA)
 	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
@@ -211,7 +205,6 @@ func TestAzureSink_ByteCountMismatchLeavesUncommitted(t *testing.T) {
 	fs := newFakeBlobStore()
 	sink := newTestSink(fs)
 	data := []byte("twelve bytes")
-	// Correct sha but wrong expected byte count.
 	_, err := sink.Write(context.Background(), "x.bin", bytes.NewReader(data), int64(len(data))+5, sha256Hex(data))
 	if err == nil || !strings.Contains(err.Error(), "byte count mismatch") {
 		t.Fatalf("expected byte count mismatch error, got %v", err)
@@ -233,7 +226,6 @@ func TestAzureSink_ExistingMatchSkips(t *testing.T) {
 	if !res.Skipped {
 		t.Fatalf("expected Skipped=true for matching existing blob, got %+v", res)
 	}
-	// No staged blocks should have been produced.
 	if st := fs.blobs["pre/dup.txt"]; len(st.staged) != 0 {
 		t.Fatalf("expected no staged blocks on skip, got %d", len(st.staged))
 	}
@@ -242,7 +234,6 @@ func TestAzureSink_ExistingMatchSkips(t *testing.T) {
 func TestAzureSink_ExistingMismatchFails(t *testing.T) {
 	fs := newFakeBlobStore()
 	sink := newTestSink(fs)
-	// Existing blob has same length but different content.
 	fs.seedCommitted("pre/c.txt", []byte("AAAAAAAA"))
 	newData := []byte("BBBBBBBB")
 	_, err := sink.Write(context.Background(), "c.txt", bytes.NewReader(newData), int64(len(newData)), sha256Hex(newData))
@@ -255,8 +246,6 @@ func TestAzureSink_RaceConflictVerifiesExisting(t *testing.T) {
 	fs := newFakeBlobStore()
 	sink := newTestSink(fs)
 	data := []byte("raced content")
-	// Simulate: Stat initially says not-exist, but just before our commit a
-	// concurrent writer commits identical content, causing errBlobExists.
 	st := fs.state("pre/race.txt")
 	st.beforeCommit = func() {
 		fs.mu.Lock()
@@ -339,11 +328,9 @@ func TestAzureLocker_AcquireReleaseReacquire(t *testing.T) {
 	if err := unlock(); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
-	// Idempotent unlock.
 	if err := unlock(); err != nil {
 		t.Fatalf("second unlock: %v", err)
 	}
-	// Reacquire after release.
 	_, unlock2, err := l.Lock(context.Background(), "ds", "v1")
 	if err != nil {
 		t.Fatalf("reacquire Lock: %v", err)
@@ -366,13 +353,11 @@ func TestAzureLocker_ContentionTimesOutThenSucceeds(t *testing.T) {
 		t.Fatalf("A Lock: %v", err)
 	}
 
-	// B cannot acquire while A holds it → bounded wait times out.
 	_, _, err = b.Lock(context.Background(), "ds", "v1")
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected contention timeout, got %v", err)
 	}
 
-	// Release A; B can now acquire.
 	if err := unlockA(); err != nil {
 		t.Fatalf("unlock A: %v", err)
 	}
@@ -433,7 +418,7 @@ func TestAzureLocker_ContextCancelWhileWaiting(t *testing.T) {
 	fs := newFakeBlobStore()
 	a := newTestLocker(fs)
 	b := newTestLocker(fs)
-	b.maxWait = time.Hour // ensure cancellation, not timeout, ends the wait
+	b.maxWait = time.Hour
 
 	_, unlockA, err := a.Lock(context.Background(), "ds", "v1")
 	if err != nil {

@@ -26,7 +26,6 @@ node_cpu_seconds_total{cpu="0",mode="idle"} 12345.67
 		t.Fatalf("expected 3 metrics, got %d", len(metrics))
 	}
 
-	// First metric.
 	if metrics[0].Name != "DCGM_FI_DEV_ECC_DBE_VOL_TOTAL" {
 		t.Errorf("unexpected name: %s", metrics[0].Name)
 	}
@@ -37,7 +36,6 @@ node_cpu_seconds_total{cpu="0",mode="idle"} 12345.67
 		t.Errorf("unexpected value: %f", metrics[0].Value)
 	}
 
-	// Second metric with non-zero value.
 	if metrics[1].Value != 3 {
 		t.Errorf("expected value 3, got %f", metrics[1].Value)
 	}

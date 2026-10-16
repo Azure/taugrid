@@ -1,20 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package links builds the portal's cross-board ID mapping.
-//
-// Cross-linking is the portal's core value-add over five separate dashboards.
-// The join keys already exist on the Kubernetes objects the runtime stamps:
-// every current Tau Job carries tau.azure.com/run-id (the Tau run identity), and
-// Kueue copies Job-level labels onto the Workload it admits. This package reads
-// the same Kueue Workloads the Jobs board already fetches, projects the run-id
-// plus the compatibility tau.azure.com/job key when present — including admitted
-// (running) workloads, which the researcher-facing queue.Snapshot intentionally
-// drops — and centralizes the cross-link URL scheme so the backend overview and
-// the frontend agree on one contract.
-//
-// It deliberately does not touch queue.Snapshot: that is the `tau queue status`
-// compatibility surface. The portal's board-to-board wiring is additive here.
 package links
 
 import (
@@ -31,79 +17,43 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// WorkloadReader fetches the raw Kueue Workloads list as JSON. Both
-// jobs.Reader and kubeclient.Client satisfy it structurally, so the overview
-// reuses the Jobs board's reader without importing that package.
 type WorkloadReader interface {
 	ListWorkloads(ctx context.Context, namespace string) ([]byte, error)
 }
 
-// Workload is the portal's cross-link projection of a Kueue Workload: the join
-// keys (RunID, Job) plus the queue context and admission state. Unlike
-// queue.PendingWorkload it keeps RunID and surfaces admitted/finished workloads,
-// so the overview can list what is running now and link each row to its
-// experiment.
 type Workload struct {
-	Name      string   `json:"name"`
-	Namespace string   `json:"namespace"`
-	Job       string   `json:"job,omitempty"`
-	RunID     string   `json:"runId,omitempty"`
-	Owners    []string `json:"owners,omitempty"`
-	OwnerUIDs []string `json:"-"`
-	// Resource* is the canonical detail-route owner. Keep it empty for owner
-	// kinds the detail resolver does not support; emitting an arbitrary
-	// controller UID here creates a guaranteed /portal/workloads/{uid} 404.
-	ResourceUID    string    `json:"resourceUid,omitempty"`
-	ResourceKind   string    `json:"resourceKind,omitempty"`
-	ResourceName   string    `json:"resourceName,omitempty"`
-	Queue          string    `json:"queue,omitempty"`
-	ClusterQueue   string    `json:"clusterQueue,omitempty"`
-	Admitted       bool      `json:"admitted"`
-	Finished       bool      `json:"finished"`
-	PendingReason  string    `json:"pendingReason,omitempty"`
-	PendingMessage string    `json:"pendingMessage,omitempty"`
-	CreatedAt      time.Time `json:"createdAt,omitempty"`
-	// Admission priority controls Kueue queue ordering and workload
-	// preemption. Pod priority controls Kubernetes scheduling and pod
-	// preemption after admission.
-	AdmissionPriorityClass     string   `json:"admissionPriorityClass,omitempty"`
-	AdmissionPriorityClassKind string   `json:"admissionPriorityClassKind,omitempty"`
-	AdmissionPriority          *int32   `json:"admissionPriority,omitempty"`
-	PodPriorityClasses         []string `json:"podPriorityClasses,omitempty"`
+	Name                       string    `json:"name"`
+	Namespace                  string    `json:"namespace"`
+	Job                        string    `json:"job,omitempty"`
+	RunID                      string    `json:"runId,omitempty"`
+	Owners                     []string  `json:"owners,omitempty"`
+	OwnerUIDs                  []string  `json:"-"`
+	ResourceUID                string    `json:"resourceUid,omitempty"`
+	ResourceKind               string    `json:"resourceKind,omitempty"`
+	ResourceName               string    `json:"resourceName,omitempty"`
+	Queue                      string    `json:"queue,omitempty"`
+	ClusterQueue               string    `json:"clusterQueue,omitempty"`
+	Admitted                   bool      `json:"admitted"`
+	Finished                   bool      `json:"finished"`
+	PendingReason              string    `json:"pendingReason,omitempty"`
+	PendingMessage             string    `json:"pendingMessage,omitempty"`
+	CreatedAt                  time.Time `json:"createdAt,omitempty"`
+	AdmissionPriorityClass     string    `json:"admissionPriorityClass,omitempty"`
+	AdmissionPriorityClassKind string    `json:"admissionPriorityClassKind,omitempty"`
+	AdmissionPriority          *int32    `json:"admissionPriority,omitempty"`
+	PodPriorityClasses         []string  `json:"podPriorityClasses,omitempty"`
 
-	// Project, Experiment, Group, and Workspace are the Stellar identity every
-	// `tau run` stamps alongside run-id (experiment.Metadata.KubernetesMetadata)
-	// and Kueue copies onto the Workload with the rest of the Job's labels.
-	// Surfacing them here lets the overview group and label a running row by the
-	// experiment it belongs to instead of showing a bare run-id.
-	//
-	// These are LABEL values, so they went through
-	// experiment.KubernetesLabelValue: lowercased and punctuation-normalized. A
-	// project titled "NanoGPT FineWeb" appears here as "nanogpt-fineweb". Stellar
-	// matches ?project= EXACTLY against the Kusto row's project, so these must
-	// not be fed into ExperimentProjectPath — a normalized value that does not
-	// round-trip produces a link that silently resolves to nothing, which is
-	// worse than the unscoped link. The exact values live in the
-	// "tau.azure.com/stellar-*-value" annotations on the Job/RayJob, which Kueue
-	// does not copy; jobdetail reads those from the object itself.
-	Project    string `json:"project,omitempty"`
-	Experiment string `json:"experiment,omitempty"`
-	Group      string `json:"group,omitempty"`
-	Workspace  string `json:"workspace,omitempty"`
-	// ExecutionTarget is observation-only runtime identity. It never gates
-	// status access when the current capability/profile is unavailable.
+	Project         string `json:"project,omitempty"`
+	Experiment      string `json:"experiment,omitempty"`
+	Group           string `json:"group,omitempty"`
+	Workspace       string `json:"workspace,omitempty"`
 	ExecutionTarget string `json:"executionTarget,omitempty"`
 }
 
-// Running reports whether the workload is admitted and not yet finished — the
-// definition of "running now" the overview uses.
 func (w Workload) Running() bool {
 	return w.Admitted && !w.Finished
 }
 
-// ListWorkloads fetches and projects the Kueue Workloads in namespace. An empty
-// namespace lists cluster-wide (subject to the reader's scope). The returned
-// slice is sorted by namespace, then job/name, for stable rendering.
 func ListWorkloads(ctx context.Context, r WorkloadReader, namespace string) ([]Workload, error) {
 	raw, err := r.ListWorkloads(ctx, namespace)
 	if err != nil {
@@ -112,7 +62,6 @@ func ListWorkloads(ctx context.Context, r WorkloadReader, namespace string) ([]W
 	return parseWorkloads(raw)
 }
 
-// parseWorkloads is the pure parser used by ListWorkloads and tests.
 func parseWorkloads(raw []byte) ([]Workload, error) {
 	var list workloadList
 	if err := json.Unmarshal(raw, &list); err != nil {
@@ -221,8 +170,6 @@ func workloadExecutionTarget(it workloadItem) string {
 	return ""
 }
 
-// sortKey orders workloads by job name when present, falling back to the
-// Workload name, so rows group by the researcher-visible job.
 func (w Workload) sortKey() string {
 	if w.Job != "" {
 		return w.Job
@@ -230,8 +177,6 @@ func (w Workload) sortKey() string {
 	return w.Name
 }
 
-// admissionState mirrors queue.workloadConditions: admitted when the Admitted
-// condition is True, finished when the Finished condition is True.
 func admissionState(conditions []kueueapi.Condition) (admitted, finished bool) {
 	for _, c := range conditions {
 		if c.Type == "Admitted" && c.Status == "True" {
@@ -244,10 +189,6 @@ func admissionState(conditions []kueueapi.Condition) (admitted, finished bool) {
 	return admitted, finished
 }
 
-// ExperimentPath returns the portal path that deep-links a run to its
-// Experiments (Stellar) view. It is the single source of truth for the
-// Job→Experiment URL contract; an empty runID yields "" so callers omit the
-// link rather than emit a dead one.
 func ExperimentPath(runID string, workspace ...string) string {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
@@ -256,11 +197,6 @@ func ExperimentPath(runID string, workspace ...string) string {
 	return WorkspacePath("/stellar?target="+url.QueryEscape(runID), firstWorkspace(workspace))
 }
 
-// ExperimentProjectPath is ExperimentPath with an explicit project scope. When a
-// run's durable Kusto row carries a project, appending project= lets Stellar
-// resolve the target unambiguously. An empty runID yields ""; an empty project
-// degrades to the plain target link. The workspace is threaded like
-// ExperimentPath so portal navigation keeps the selected workspace.
 func ExperimentProjectPath(runID, project string, workspace ...string) string {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
@@ -273,15 +209,6 @@ func ExperimentProjectPath(runID, project string, workspace ...string) string {
 	return WorkspacePath(path, firstWorkspace(workspace))
 }
 
-// RayDashboardPath returns the portal path that reverse-proxies a RayJob's own
-// Ray dashboard (port 8265) via the head-Service proxy the Ray board already
-// owns (/api/portal/ray/proxy/{ns}/{cluster}/). It is the single source of truth
-// for the Job→RayDashboard URL contract: the Ray board's buildCluster delegates
-// here rather than reformatting the path itself. The routing prefix constant
-// (portalapi.rayProxyPrefix) that strips this path server-side must stay in sync
-// with the "/api/portal/ray/proxy/" literal below. An empty namespace or
-// rayClusterName yields "" so callers omit the link rather than emit one that
-// cannot resolve; the dashboard is only reachable while the RayCluster is running.
 func RayDashboardPath(namespace, rayClusterName string, workspace ...string) string {
 	namespace = strings.TrimSpace(namespace)
 	rayClusterName = strings.TrimSpace(rayClusterName)
@@ -292,9 +219,6 @@ func RayDashboardPath(namespace, rayClusterName string, workspace ...string) str
 	return WorkspacePath(path, firstWorkspace(workspace))
 }
 
-// ClusterInstancePath deep-links the Cluster Health board to a single node by
-// its GpuHealth() instance. Used to drill from a job/GPU row to that node's
-// health. An empty instance yields "".
 func ClusterInstancePath(instance string, workspace ...string) string {
 	instance = strings.TrimSpace(instance)
 	if instance == "" {
@@ -303,8 +227,6 @@ func ClusterInstancePath(instance string, workspace ...string) string {
 	return WorkspacePath("/portal/cluster?instance="+url.QueryEscape(instance), firstWorkspace(workspace))
 }
 
-// WorkspacePath preserves the selected workspace across portal and Stellar
-// links. Empty workspace IDs keep the legacy URL unchanged.
 func WorkspacePath(path, workspace string) string {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {
@@ -326,8 +248,6 @@ func firstWorkspace(values []string) string {
 	}
 	return values[0]
 }
-
-// --- JSON shapes (subset of a Kueue Workload) ---
 
 type workloadList struct {
 	Items []workloadItem `json:"items"`

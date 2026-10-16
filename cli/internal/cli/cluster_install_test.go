@@ -163,8 +163,6 @@ func TestClusterInstallBootstrapsFreshReleaseWithoutQueuePolicy(t *testing.T) {
 	if containsArgPair(calls[1], "--set", "baselineQueue.enabled=false") {
 		t.Fatalf("final args = %#v, baseline queue must use requested values", calls[1])
 	}
-	// Helm >=3.18 replays the previous release's values, so omitting the flag is
-	// not enough to re-enable the baseline queue.
 	if !containsArg(calls[1], "--reset-values") {
 		t.Fatalf("final args = %#v, want --reset-values so the bootstrap override is not inherited", calls[1])
 	}
@@ -185,8 +183,6 @@ func TestClusterInstallResetsValuesButKeepsRequestedOverrides(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("Helm upgrade calls = %d, want 2", len(calls))
 	}
-	// --reset-values only discards stored release values; every pass resends the
-	// operator's own -f/--set, so opting out of the baseline queue still works.
 	if !containsArgPair(calls[1], "--values", "cluster.yaml") ||
 		!containsArgPair(calls[1], "--set", "baselineQueue.enabled=false") {
 		t.Fatalf("final args = %#v, want requested values resent after reset", calls[1])
@@ -222,9 +218,6 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 }
 
 func TestClusterInstallListAvoidsHelm4RemovedAllFlag(t *testing.T) {
-	// Helm 4 removed `--all` from `helm list`, which made `tau cluster install`
-	// fail with a bare "unknown flag: --all". Assert we send the individual state
-	// flags instead, which both Helm 3 and Helm 4 accept.
 	original := runHelmCommand
 	var listArgs []string
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
@@ -308,8 +301,6 @@ func TestClusterInstallCustomNamespaceFlowsIntoNextSteps(t *testing.T) {
 }
 
 func TestClusterInstallDryRunRendersOffline(t *testing.T) {
-	// Record every Helm call, including `list`, so a regression that reads the
-	// cluster before rendering fails the count assertion.
 	original := runHelmCommand
 	var calls [][]string
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
@@ -348,8 +339,6 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 
 func TestClusterInstallDryRunSkipsDependencyUpdateBanner(t *testing.T) {
 	installFakeHelm(t, func(_ context.Context, _ io.Reader, out, _ io.Writer, _ []string) error {
-		// `helm template --dependency-update` prints this on stdout, ahead of
-		// the first rendered document.
 		_, _ = io.WriteString(out, `Hang tight while we grab the latest from your chart repositories...
 ...Successfully got an update from the "kuberay" chart repository
 Update Complete. ⎈Happy Helming!⎈
@@ -675,10 +664,6 @@ func containsArg(args []string, want string) bool {
 	return false
 }
 
-// The pinned chart version is always passed as --version, so for the default
-// OCI chart it selects the published artifact. A stale constant silently
-// installs the previous chart, and a local-path chart hides it because Helm
-// ignores --version there.
 func TestDefaultChartVersionMatchesChartYAML(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Clean("../../../charts/taugrid/Chart.yaml"))
 	if err != nil {
@@ -696,8 +681,6 @@ func TestDefaultChartVersionMatchesChartYAML(t *testing.T) {
 	}
 }
 
-// The TauGrid umbrella, its first-party child charts, and their MCR images are
-// one release train. GPU monitoring and adx-mon keep independent versions.
 func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 	type chartMetadata struct {
 		Version      string `yaml:"version"`
@@ -778,14 +761,6 @@ func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 	}
 }
 
-// GPU node health monitoring is linked to the Tau control plane rather than
-// carrying an independent default: a cluster that installs the controller must
-// not be able to end up with no GPU health signal. Helm evaluates only the
-// first condition path that exists in values, so the linkage depends on two
-// things that are easy to break silently -- the ordered condition on the
-// dependency, and the continued absence of components.gpuMonitoring from
-// values.yaml. Adding that key back would pin the subchart to its own default
-// and sever the link without failing any template-rendering test.
 func TestTauGridChartLinksGPUMonitoringToController(t *testing.T) {
 	const wantCondition = "components.gpuMonitoring.enabled,components.tauCoreController.enabled"
 

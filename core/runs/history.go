@@ -19,33 +19,24 @@ const (
 	historyStateUnavailable = "history-unavailable"
 )
 
-// HistoryScope is the server- or CLI-resolved durable-history boundary. Callers
-// must not populate it from untrusted browser query parameters.
 type HistoryScope struct {
 	Table       string
 	Cluster     string
 	Namespace   string
 	LocalQueue  string
 	WorkspaceID string
-	// Kind is an optional trusted workload-kind boundary applied before the
-	// durable-history limit. It must not be sourced from browser input.
-	Kind  string
-	Limit int
+	Kind        string
+	Limit       int
 }
 
-// HistoryReader lists durable lifecycle rows within one already-resolved scope.
 type HistoryReader interface {
 	ListHistory(ctx context.Context, scope HistoryScope) ([]Run, error)
 }
 
-// HistoryDetailReader supplies the immutable lifecycle observations for one
-// resource. It intentionally does not depend on Kubernetes reads.
 type HistoryDetailReader interface {
 	GetHistoryTimeline(ctx context.Context, scope HistoryScope, resourceUID string) ([]LifecycleEvent, error)
 }
 
-// LifecycleEvent is one Kusto lifecycle observation rendered by the durable
-// Ray history detail page.
 type LifecycleEvent struct {
 	ObservedAt     string `json:"observedAt"`
 	State          string `json:"state"`
@@ -71,20 +62,13 @@ type LifecycleEvent struct {
 	Kind           string `json:"kind,omitempty"`
 }
 
-// HistoryQueryBuilder builds the KQL for one scoped history request.
 type HistoryQueryBuilder func(HistoryScope) (string, error)
 
-// KustoHistoryReader adapts the portal's existing generic Kusto client to
-// durable run lifecycle rows. The injected builder keeps this package free of
-// lifecycle-schema ownership while making the scope passed to Kusto explicit.
 type KustoHistoryReader struct {
 	Querier      kustoquery.Querier
 	QueryBuilder HistoryQueryBuilder
 }
 
-// NewKustoHistoryReader returns the durable lifecycle adapter used by both the
-// Portal and `tau run list`. It deliberately uses the shared Kusto query seam,
-// not a second authentication client.
 func NewKustoHistoryReader(querier kustoquery.Querier) KustoHistoryReader {
 	return KustoHistoryReader{
 		Querier: querier,
@@ -128,8 +112,6 @@ func (r KustoHistoryReader) ListHistory(ctx context.Context, scope HistoryScope)
 	return out, nil
 }
 
-// GetHistoryTimeline reads the append-only lifecycle rows without consulting
-// the Kubernetes API, so the result remains available after KubeRay cleanup.
 func (r KustoHistoryReader) GetHistoryTimeline(ctx context.Context, scope HistoryScope, resourceUID string) ([]LifecycleEvent, error) {
 	if r.Querier == nil {
 		return nil, fmt.Errorf("durable history querier is not configured")
@@ -232,9 +214,6 @@ func mergeHistory(live, durable []Run) []Run {
 			}
 		}
 		if matched >= 0 {
-			// The Kubernetes object is authoritative while it exists. Preserve
-			// identifiers and exact tracking evidence that may only be present in
-			// the durable projection.
 			if merged[matched].DurableID == "" {
 				merged[matched].DurableID = historical.DurableID
 			}

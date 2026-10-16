@@ -1,42 +1,4 @@
-# Opinionated Tau GPU queue defaults for shared test clusters.
-#
-# Shape: one ClusterQueue owns quota/fairness for the cluster GPU pool, while a
-# small set of namespace-scoped LocalQueues expose the entry points users submit
-# to: `admin`, `test-team-a`, `test-team-b`, `test-team-c`, and `backfill`.
-# This follows the Kueue pattern used by larger batch platforms: LocalQueues are
-# tenant/lane/accounting entry points; the ClusterQueue is the shared quota and
-# preemption boundary.
-#
-# Preemption policy: the ClusterQueue may preempt only lower-priority workloads
-# within the same ClusterQueue. LocalQueue choice does not grant priority by
-# itself; admin/break-glass work must also set `tau-admin-critical`, normal
-# training uses `tau-train-default`, priority training uses
-# `tau-train-priority`, and checkpointable fill work uses `tau-best-effort`
-# / `tau-elastic-low`.
-#
-# CPU, memory, and GPU resources share one Kueue resource group because they
-# are tied to one node pool. The generic flavor has zero GPU quota, so CPU-only
-# workloads select it while GPU workloads select one class-labeled flavor for
-# every requested resource.
-#
-# Upgrade safety: the v2 flavor names below are intentional. Kueue flavor
-# selectors, taints, and topology are immutable while a flavor is in use.
-# Before applying this desired state to an existing queue, stop submissions,
-# set the ClusterQueue to HoldAndDrain, explicitly cancel pending workload
-# owners, and wait for reserving/admitted workloads to reach zero. Resume only
-# after these replacement flavors exist and the ClusterQueue references them.
 ---
-# The vNext workload namespace. Provisioned here so the new LocalQueues and the
-# blob-training /data PVC (applied separately from applications/taugrid/storage/
-# — pick Premium Blob or Lustre) all have a home.
-#
-# Pod Security: enforce=baseline is the real security floor (blocks privileged,
-# hostNetwork, host mounts, etc.). warn/audit are deliberately set to baseline
-# (not restricted) to match enforce: typical GPU training images run as root
-# and use the device plugin without restricted-level hardening
-# (runAsNonRoot / seccompProfile / dropped caps), so restricted-level warnings
-# would fire on every apply and bury real drift in noise. Raising enforce to
-# restricted here would break normal GPU jobs — keep enforce=baseline.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -68,15 +30,6 @@ metadata:
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
-  # tau.azure.com/gpu-class is the exact researcher-facing gpu_class contract:
-  # Tau matches a workload's gpu_class request to a ResourceFlavor by this
-  # node label's value alone, never by parsing/guessing from the
-  # ResourceFlavor's own name (metadata.name above is an arbitrary platform
-  # identifier and may be renamed freely without affecting gpu_class
-  # resolution, as long as this label stays accurate). Interconnect/placement
-  # (NVLink, same-host, multi-node) is expressed separately through a
-  # workload's spec.topology.placement + this flavor's spec.topologyName /
-  # tau.azure.com/gpu-series-style node labels, not through gpu-class.
   nodeLabels:
     kueue.azure.com/gpu-series: ndm-a100-v4
     tau.azure.com/gpu-class: a100-80gb

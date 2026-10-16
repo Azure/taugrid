@@ -52,8 +52,6 @@ mutate workspace policy from the repo scaffold.`,
 	return cmd
 }
 
-// NewRepoGenRoot constructs the standalone `tau-gen` command. It intentionally
-// shares the same renderer and flags as `tau workspace init-repo`.
 func NewRepoGenRoot() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "tau-gen",
@@ -64,9 +62,7 @@ func NewRepoGenRoot() *cobra.Command {
 It is the standalone generator surface for the same scaffold available through
 ` + "`tau workspace init-repo`" + `. It creates local files only; TauWorkspace
 policy remains platform-owned and is selected at run time.`,
-		SilenceUsage: true,
-		// main() prints `error: %v` and exits 1, so cobra must not print the
-		// error too — without this every failure is reported twice.
+		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
 	cmd.AddCommand(newRepoGenInitCmd())
@@ -254,10 +250,6 @@ a storage-backed run fails fast with a clear diagnostic.`
 				if !tauworkspace.Ready(workspace) {
 					return fmt.Errorf("workspace %q is not Ready (phase=%s)", args[0], workspace.Status.Phase)
 				}
-				// A Ready workspace still cannot run storage-backed configs
-				// until the durable PVC exists in its own namespace. Reporting
-				// it here keeps the handoff gate honest; it stays a warning
-				// because storage is opt-in and CPU configs never mount /data.
 				out := cmd.ErrOrStderr()
 				if output == "table" {
 					out = cmd.OutOrStdout()
@@ -281,27 +273,15 @@ a storage-backed run fails fast with a clear diagnostic.`
 	cmd.Flags().StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	cmd.Flags().StringVarP(&output, "output", "o", "table", "output format: table (human-readable) or json (machine-readable)")
 	if check {
-		// No default: TauGrid does not own or name the durable claim, so there
-		// is no canonical value to assume. Opt in by naming your claim.
 		cmd.Flags().StringVar(&dataPVC, "data-pvc", "", "durable /data PVC to verify is Bound in the workspace namespace")
 	}
 	return cmd
 }
 
-// workspaceTargetNamespace returns the namespace the controller actually
-// resolved, falling back to the declared spec when status is not populated yet.
 func workspaceTargetNamespace(w tauworkspace.Workspace) string {
 	return tauworkspace.ResolvedNamespace(w)
 }
 
-// reportWorkspaceDataPVC warns when the durable /data claim is missing or
-// unbound. A conclusive "not found" is a warning, not a failure: a workspace
-// with no storage is a valid state, but silently passing the handoff gate is
-// what leaves a researcher's first storage-backed job Pending with no
-// explanation. Any other lookup failure is inconclusive, and since --data-pvc
-// is opt-in the caller explicitly asked for this verification, so reporting
-// success without having performed it would misdiagnose broken credentials or
-// control-plane access as optional missing storage.
 func reportWorkspaceDataPVC(
 	ctx context.Context,
 	runner validateNodesRunner,
@@ -336,9 +316,6 @@ func reportWorkspaceDataPVC(
 	return nil
 }
 
-// isPVCNotFoundError reports whether the lookup conclusively determined the
-// claim does not exist. Forbidden, timeout, discovery, and transport failures
-// all report the claim's existence as unknown, not absent.
 func isPVCNotFoundError(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "notfound") ||
 		strings.Contains(strings.ToLower(err.Error()), "not found")
@@ -458,13 +435,6 @@ func fetchWorkspace(cmd *cobra.Command, kubeContext, namespace, name string) (ta
 	return tauworkspace.Parse([]byte(raw))
 }
 
-// describeWorkspaceLookupError rewrites the one kubectl failure that is
-// routinely misread. When the Tau CRDs are not registered, kubectl reports
-// `the server doesn't have a resource type "workspaces"`, which reads like a
-// naming mistake in Tau. It is almost always a wrong-cluster mistake: the
-// command reached a cluster that is not a TauGrid cluster. Naming the context
-// turns a dead end into an obvious fix. The original error is wrapped so no
-// diagnostic detail is lost.
 func describeWorkspaceLookupError(err error, kubeContext string) error {
 	if err == nil || !isMissingTauCRDError(err) {
 		return err
@@ -482,10 +452,6 @@ func describeWorkspaceLookupError(err error, kubeContext string) error {
 	)
 }
 
-// isMissingTauCRDError reports whether kubectl failed because the Tau CRDs are
-// absent from the cluster, as opposed to the workspace object being absent,
-// forbidden, or the API server being unreachable. Only CRD absence implies the
-// command reached the wrong cluster, so only that case is rewritten.
 func isMissingTauCRDError(err error) bool {
 	text := strings.ToLower(err.Error())
 	if !strings.Contains(text, "workspace") {

@@ -6,8 +6,6 @@ templates:
 
 tests:
 
-  # ── CRS ConfigMap ─────────────────────────────────────────────────
-
   - it: renders CRS ConfigMap when customResourceState is enabled
     template: charts/kube-state-metrics/templates/crs-configmap.yaml
     asserts:
@@ -70,8 +68,6 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
-
-  # ── Deployment ────────────────────────────────────────────────────
 
   - it: renders KSM Deployment with dalec MCR image
     template: charts/kube-state-metrics/templates/deployment.yaml
@@ -154,8 +150,6 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "--metric-labels-allowlist=namespaces=[tau.azure.com/workspace],pods=[app.kubernetes.io/name,app.kubernetes.io/component,ray.io/is-ray-node],nodes=[node.kubernetes.io/instance-type,kubernetes.azure.com/agentpool]"
 
-  # ── RBAC ──────────────────────────────────────────────────────────
-
   - it: KSM Role includes Kueue CRD RBAC rules
     template: charts/kube-state-metrics/templates/role.yaml
     asserts:
@@ -172,17 +166,12 @@ tests:
               - list
               - watch
 
-
-  # ── Sharding ──────────────────────────────────────────────────────
-
   - it: defaults to 1 replica (no sharding)
     template: charts/kube-state-metrics/templates/deployment.yaml
     asserts:
       - equal:
           path: spec.replicas
           value: 1
-
-  # ── CRS disabled — Deployment omits CRS config ────────────────────
 
   - it: KSM Deployment omits CRS flag and volume when customResourceState is disabled
     template: charts/kube-state-metrics/templates/deployment.yaml
@@ -195,8 +184,6 @@ tests:
           path: spec.template.spec.containers[0].args
           content: "--custom-resource-state-config-file=/etc/customresourcestate/config.yaml"
 
-  # ── ClusterQueue cohort label ─────────────────────────────────────
-
   - it: CRS ConfigMap includes cohort label for ClusterQueue
     template: charts/kube-state-metrics/templates/crs-configmap.yaml
     asserts:
@@ -204,16 +191,12 @@ tests:
           path: data["config.yaml"]
           pattern: "cohort"
 
-  # ── LocalQueue reserving workloads ────────────────────────────────
-
   - it: CRS ConfigMap contains LocalQueue reserving workloads metric
     template: charts/kube-state-metrics/templates/crs-configmap.yaml
     asserts:
       - matchRegex:
           path: data["config.yaml"]
           pattern: "localqueue_reserving_workloads"
-
-  # ── Label path assertions ─────────────────────────────────────────
 
   - it: CRS ConfigMap includes namespace label path for LocalQueue and Workload
     template: charts/kube-state-metrics/templates/crs-configmap.yaml
@@ -228,8 +211,6 @@ tests:
       - matchRegex:
           path: data["config.yaml"]
           pattern: "clusterqueue:\\s*\\n\\s*- status\\s*\\n\\s*- admission\\s*\\n\\s*- clusterQueue"
-
-  # ── Readiness probe port (v2.18.0+ fix) ──────────────────────────
 
   - it: KSM readiness probe targets telemetry port (metrics / 8081) not metrics port (http / 8080)
     template: charts/kube-state-metrics/templates/deployment.yaml

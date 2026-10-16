@@ -97,7 +97,6 @@ export HELM_LOG
 PATH="${TEST_ROOT}/bin:${PATH}"
 export PATH
 
-# Sourcing defines helpers without invoking Helm or deleting existing artifacts.
 mkdir -p \
   "${ISOLATED_REPO}/scripts/ci" \
   "${ISOLATED_REPO}/charts/gpu-monitoring" \
@@ -131,7 +130,6 @@ assert_older 1.2.3-999999999999999999999999999999999999 \
 assert_older 1.2.3-999999999999999999999999999999999999 \
   1.2.3-alpha
 
-# Official SemVer 2.0.0 precedence example.
 assert_older 1.0.0-alpha 1.0.0-alpha.1
 assert_older 1.0.0-alpha.1 1.0.0-alpha.beta
 assert_older 1.0.0-alpha.beta 1.0.0-beta

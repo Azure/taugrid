@@ -1,25 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Static regression coverage for issues #869/#871 PR3/PR3b: every
-// manager-routed RayJob fixture (inference, inference-gpu, fineweb, training,
-// training-gpu, nanogpt) embeds its driver script directly (head-only
-// initContainer + emptyDir, mounted either at /script or -- for the PR3b
-// fixtures -- at /home/ray/scripts, the path their ConfigMaps previously
-// used) instead of mounting it from a ConfigMap, so MultiKueue's
-// worker-cluster dispatch -- which does not replicate ConfigMaps -- has
-// everything the head pod needs inside the RayJob spec it copies over.
-// These tests exercise the fully-substituted
-// fixture bytes (via e2e.ReadFixtureWithSubstitutions, the same path
-// ApplyFixtureWithClient uses at apply time) without touching a live
-// cluster: they decode the embedded payload with the test-only
-// tests/e2e/internal/scriptpayload package (a documented, behaviorally
-// verified mirror of PR1's cli/internal/payload wire format,
-// see scriptpayload's package doc for the duplication boundary/rationale)
-// and assert it round-trips to the real fixtures/*.py source files, that the
-// payload only appears on the head pod template, and that the rendered
-// fixture stays safely under Kubernetes' last-applied-configuration and
-// MAX_ARG_STRLEN limits.
 package stack
 
 import (
@@ -39,31 +20,10 @@ import (
 	"github.com/Azure/taugrid/tests/e2e/internal/taukeys"
 )
 
-// maxArgStrlen is Linux's MAX_ARG_STRLEN: the maximum length, in bytes, of a
-// single argv/envp string an exec* syscall will accept (checked per-string,
-// not against the aggregate argv+envp size). The TAU_PAYLOAD_B64 env value
-// set on the tau-payload initContainer must stay under this or the
-// container never starts. See scriptpayload_test.go's
-// TestEncodedEnvValueStaysUnderMaxArgStrlen for the boundary-cap version of
-// this same guarantee.
 const maxArgStrlen = 131072
 
-// lastAppliedConfigSoftLimit mirrors
-// rayjobrender.TestRenderNearCapPayloadStaysUnderLastAppliedConfigLimit's 200
-// KiB threshold: kubectl/controller-runtime apply stores the full applied
-// object in the kubectl.kubernetes.io/last-applied-configuration annotation,
-// and etcd enforces a ~1.5 MiB per-object hard limit split across all
-// annotations. 200 KiB is a conservative regression guard, not the actual
-// wire-contract cap (that's scriptpayload.MaxDecodedBytes, enforced -- and
-// boundary-tested -- independently in scriptpayload_test.go).
 const lastAppliedConfigSoftLimit = 200 * 1024
 
-// payloadFixtureCase describes one of the six manager-routed RayJob fixtures
-// under test: its file name, the real driver script it embeds, the target
-// directory its tau-payload initContainer writes to (and its script volume
-// is mounted at), and the env vars readFixture/ReadFixtureWithSubstitutions
-// requires to fully render it (RAY_IMAGE and friends have no default and
-// error out if unset).
 type payloadFixtureCase struct {
 	fixture    string
 	scriptFile string
@@ -142,8 +102,6 @@ func payloadFixtureCases() []payloadFixtureCase {
 	}
 }
 
-// renderPayloadFixture sets the required env vars (t.Setenv auto-restores
-// them after the test) and returns the fully-substituted fixture bytes.
 func renderPayloadFixture(t *testing.T, tc payloadFixtureCase) []byte {
 	t.Helper()
 	for k, v := range tc.env {
@@ -214,9 +172,6 @@ func TestFineWebSchedulerRecoveryEligibility(t *testing.T) {
 	}
 }
 
-// rayJobDoc is a minimal typed view over the fields these tests need from a
-// rendered RayJob manifest; it deliberately does not model the full
-// ray.io/v1 RayJob schema.
 type rayJobDoc struct {
 	Metadata struct {
 		Annotations map[string]string `yaml:"annotations"`
@@ -359,18 +314,6 @@ func TestNanoGPTRayJobFixtureOptsIntoTASOnlyForArgoCDQueue(t *testing.T) {
 	}
 }
 
-// TestPayloadFixturesEmbedCorrectDigestAndContent extracts each fixture's
-// ACTUAL tau-payload initContainer command -- the literal
-// `python3 -c <script>` text that ships in the YAML, not a canonical Go
-// constant -- and executes it against a real python3 interpreter with the
-// fixture's own TAU_PAYLOAD_B64/TAU_PAYLOAD_DIGEST env values and a temp
-// target dir. This proves the exact bytes shipped in each fixture are
-// behaviorally correct: a copy-paste error, indentation mistake, or
-// manual-transcription typo in the embedded YAML Python text would fail
-// here (either the process errors out, or the written file doesn't match
-// the real source), whereas calling scriptpayload.Decode directly only
-// proves the Go package round-trips with itself and would not catch a bug
-// in the YAML-embedded copy. It skips if python3 is not on PATH.
 func TestPayloadFixturesEmbedCorrectDigestAndContent(t *testing.T) {
 	python3, err := exec.LookPath("python3")
 	if err != nil {
@@ -402,18 +345,12 @@ func TestPayloadFixturesEmbedCorrectDigestAndContent(t *testing.T) {
 			require.True(t, ok, "%s env %s must be set", scriptpayload.InitContainerName, scriptpayload.EnvTargetDir)
 			require.Equal(t, tc.targetDir, targetDirEnv)
 
-			// Pull the literal command the fixture actually ships, not a
-			// constant from the scriptpayload package.
 			require.Lenf(t, payloadContainer.Command, 3, "%s command must be exactly [python3, -c, <script>], got %v", scriptpayload.InitContainerName, payloadContainer.Command)
 			require.Equal(t, "python3", payloadContainer.Command[0], "%s command[0] must invoke python3", scriptpayload.InitContainerName)
 			require.Equal(t, "-c", payloadContainer.Command[1], "%s command[1] must be -c", scriptpayload.InitContainerName)
 			script := payloadContainer.Command[2]
 			require.NotEmpty(t, script, "%s's embedded script text must not be empty", scriptpayload.InitContainerName)
 
-			// Execute the fixture's real script text for real, against a
-			// real python3 interpreter, writing to a real temp directory --
-			// this is the actual runtime behavior of the fixture, not a
-			// stand-in for it.
 			targetDir := t.TempDir()
 			cmd := exec.Command(python3, "-c", script)
 			cmd.Env = append(os.Environ(),
@@ -434,18 +371,8 @@ func TestPayloadFixturesEmbedCorrectDigestAndContent(t *testing.T) {
 			require.NoError(t, err, "reading real script %s", scriptPath)
 			require.Equal(t, string(want), string(decoded), "%s's embedded tau-payload command, executed for real, must write out %s byte-for-byte", tc.fixture, tc.scriptFile)
 
-			// The wire contract accepts a decoded payload up to and
-			// including MaxDecodedBytes (scriptpayload.Encode only rejects
-			// size > MaxDecodedBytes); exactly 64 KiB is valid, so this must
-			// be <=, not <.
 			require.LessOrEqual(t, len(decoded), scriptpayload.MaxDecodedBytes, "decoded script must stay at or under the 64 KiB payload cap")
 
-			// Recompute the digest independently from the decoded bytes
-			// (via the Go-side Encode, not the executed script's own
-			// internal check) so the digest match isn't solely attested by
-			// the same script that just ran: a fresh Encode of the same
-			// single file must reproduce the exact same digest the fixture
-			// embeds.
 			_, recomputed, err := scriptpayload.Encode(map[string][]byte{tc.scriptFile: decoded})
 			require.NoError(t, err)
 			require.Equal(t, digest, recomputed, "digest recomputed from the decoded bytes must match the embedded digest")
@@ -453,14 +380,6 @@ func TestPayloadFixturesEmbedCorrectDigestAndContent(t *testing.T) {
 	}
 }
 
-// TestPayloadFixturesAreHeadOnly asserts the tau-payload initContainer, its
-// env vars, and the script volume/mount appear ONLY on the head pod
-// template -- never on any worker group's pod template. MultiKueue's
-// worker-cluster dispatch does not replicate ConfigMaps, but it does copy
-// the full RayJob spec (including the head template), so the payload must
-// live there; a worker carrying it too would be redundant and would also
-// mean the head-only invariant this fixture conversion depends on has
-// silently broken.
 func TestPayloadFixturesAreHeadOnly(t *testing.T) {
 	for _, tc := range payloadFixtureCases() {
 		tc := tc
@@ -515,18 +434,6 @@ func TestPayloadFixturesAreHeadOnly(t *testing.T) {
 	}
 }
 
-// renderedFixtureJSONSize parses the fully-substituted fixture YAML into a
-// generic document and re-marshals it as JSON, returning the JSON byte
-// length. This mirrors what kubectl/controller-runtime actually transmit to
-// the API server (and what lands in the
-// kubectl.kubernetes.io/last-applied-configuration annotation): YAML
-// comments are dropped at parse time and never reach the wire. Measuring raw
-// substituted YAML bytes instead would incorrectly count documentation text
-// as if it were part of the applied object -- notably, a header comment
-// that happens to mention a placeholder token gets that token replaced too
-// (readFixture's substitution is a blind whole-file text replace), which can
-// duplicate a large base64 payload into the raw bytes without it ever
-// reaching the actual Kubernetes object.
 func renderedFixtureJSONSize(t *testing.T, data []byte) int {
 	t.Helper()
 	var generic map[string]interface{}
@@ -536,19 +443,6 @@ func renderedFixtureJSONSize(t *testing.T, data []byte) int {
 	return len(jsonBytes)
 }
 
-// TestPayloadFixturesStayUnderSizeLimits guards the two hard runtime limits
-// the payload conversion is designed around: the TAU_PAYLOAD_B64 env value
-// must stay under Linux's MAX_ARG_STRLEN (or the initContainer can't even
-// exec), and the fully rendered fixture -- measured as the parsed-and-JSON-
-// marshaled object, i.e. what actually gets applied, not raw YAML-with-
-// comments bytes -- must stay safely under the last-applied-configuration
-// soft limit used for kubectl/controller-runtime apply. These are
-// regression guards against the *real* scripts these fixtures embed today
-// (a few KB each); the wire-format's actual 64 KiB cap-enforcement is
-// boundary-tested independently in scriptpayload_test.go, and
-// TestRenderedFixtureAtPayloadCapPassesJSONSizeGuard below proves the
-// JSON-based measurement itself correctly accepts an exactly-at-cap
-// payload.
 func TestPayloadFixturesStayUnderSizeLimits(t *testing.T) {
 	for _, tc := range payloadFixtureCases() {
 		tc := tc
@@ -572,26 +466,6 @@ func TestPayloadFixturesStayUnderSizeLimits(t *testing.T) {
 	}
 }
 
-// TestRenderedFixtureAtPayloadCapPassesJSONSizeGuard is a boundary test for
-// the size-measurement method itself (not a real fixture file): it builds a
-// minimal RayJob-shaped YAML document embedding an exactly-64-KiB
-// (scriptpayload.MaxDecodedBytes) contract-valid payload -- the same size
-// scriptpayload_test.go's TestEncodeAcceptsPayloadExactlyAtCap proves the
-// encoder accepts -- and deliberately reproduces the historical duplication
-// bug (a header comment literally mentioning the placeholder token, which
-// readFixture's blind text-replace would substitute into the comment too,
-// just as the real fixtures' header comments do for their *_DIGEST
-// placeholders). It proves that:
-//  1. the raw substituted YAML bytes are inflated well past the 200 KiB
-//     soft limit purely by the comment duplication artifact (a sanity check
-//     that this test is actually exercising the bug), yet
-//  2. the parsed-and-JSON-marshaled size -- what
-//     TestPayloadFixturesStayUnderSizeLimits actually asserts against --
-//     correctly counts the payload once and stays within the soft limit.
-//
-// This demonstrates a contract-valid, exactly-at-cap payload is accepted by
-// the fixture size guard despite the comment-duplication artifact, which a
-// naive raw-YAML-byte-length check would have wrongly rejected.
 func TestRenderedFixtureAtPayloadCapPassesJSONSizeGuard(t *testing.T) {
 	payload := bytes.Repeat([]byte("A"), scriptpayload.MaxDecodedBytes)
 	encoded, digest, err := scriptpayload.Encode(map[string][]byte{"at_cap.py": payload})
@@ -618,9 +492,6 @@ func TestRenderedFixtureAtPayloadCapPassesJSONSizeGuard(t *testing.T) {
 		"            - name: " + scriptpayload.EnvDigest + "\n" +
 		"              value: \"" + digest + "\"\n"
 
-	// Mirror readFixture's actual substitution mechanism: a blind
-	// whole-file string replace, which hits the comment mention as well as
-	// the real env value.
 	rendered := []byte(strings.ReplaceAll(template, placeholder, encoded))
 
 	require.Greaterf(t, len(rendered), lastAppliedConfigSoftLimit,
@@ -633,14 +504,6 @@ func TestRenderedFixtureAtPayloadCapPassesJSONSizeGuard(t *testing.T) {
 		scriptpayload.MaxDecodedBytes, lastAppliedConfigSoftLimit, jsonSize, len(rendered))
 }
 
-// TestDecodedPayloadCapIsInclusiveBoundary makes the wire contract's cap
-// semantics explicit at the point where TestPayloadFixturesEmbedCorrectDigestAndContent
-// asserts against them: the decoded payload cap is inclusive, i.e. exactly
-// scriptpayload.MaxDecodedBytes (65536) is a *valid* payload, and only a
-// payload strictly greater than the cap is rejected. This guards against the
-// off-by-one this test file previously had (require.Less instead of
-// require.LessOrEqual on the decoded-size assertion), which would have
-// wrongly failed a legitimate, contract-valid, exactly-at-cap fixture.
 func TestDecodedPayloadCapIsInclusiveBoundary(t *testing.T) {
 	atCap := bytes.Repeat([]byte("A"), scriptpayload.MaxDecodedBytes)
 	_, _, err := scriptpayload.Encode(map[string][]byte{"at_cap.py": atCap})

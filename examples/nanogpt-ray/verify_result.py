@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -10,7 +9,6 @@ import argparse
 import json
 from pathlib import Path
 
-
 def read_history(path: Path) -> list[dict]:
     rows = []
     with path.open(encoding="utf-8") as handle:
@@ -19,7 +17,6 @@ def read_history(path: Path) -> list[dict]:
             if line:
                 rows.append(json.loads(line))
     return rows
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -82,7 +79,6 @@ def main() -> None:
         "hellaswag_accuracy": hellaswag_accuracy,
     }
     print(json.dumps(summary, indent=2, sort_keys=True))
-
 
 if __name__ == "__main__":
     main()

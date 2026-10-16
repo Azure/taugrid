@@ -1,51 +1,3 @@
-# Sample RayJob template for multi-node Ray Train.
-#
-# Renders a control-only Ray head on the system pool plus ${WORKERS}
-# dedicated GPU execution workers. Kueue admits the head + worker pod sets
-# atomically (gang admission) so the run only starts when all pods can be placed.
-#
-# All RayJob shapes require the tau-py SDK (--main-script): the head entrypoint
-# runs the SDK wrapper as plain python3, which calls ray.init() +
-# ray.train.torch.TorchTrainer to drive training on the execution workers.
-# The wrapper ships
-# torch + reference trainer deps to workers via Ray runtime_env (no per-worker pip
-# install needed in this template).
-#
-# Substitution markers are shell-style ${VAR} (so this file can be hand-
-# rendered with envsubst for debugging); tau translates them to
-# {{.Var}} before text/template parsing. Template conditionals use Go
-# template syntax ({{if gt .Workers 1}} ... {{end}}) directly.
-#
-# Self-contained payload: the trainer script bundle and a redacted copy of
-# the manifest are base64-encoded and embedded directly in the head pod's
-# own initContainers (tau-script-payload, tau-manifest-payload) — see
-# internal/payload. No ConfigMap is created or referenced. Each worker pod gets its own
-# tau-script-payload initContainer (script only, never manifest): the
-# tau-py SDK wrapper's ray.train.torch.TorchTrainer path re-reads
-# /script/<trainer-filename> from each worker's own local disk, so the
-# script must be embedded there too. Workers never read /manifest — it's
-# parsed once, on the head, before any worker actor is spawned.
-#
-# Required substitutions:
-#   ${NAME}              short kebab-case name (matches manifest.name)
-#   ${MANIFEST_NAME}     basename of manifest YAML (embedded in the manifest payload)
-#   ${SMOKE_PAIRS}       int; 0 = use full dataset
-#   ${GPUS}              int; per-pod GPU count (0..8; 0 = CPU-only)
-#   ${WORKERS}           int; dedicated execution-worker count
-#   ${PROFILE_NAME}      tau.azure.com/profile label value
-#   ${LANE_LABEL}        tau.azure.com/lane label value
-#   ${QUEUE_NAME}        kueue.x-k8s.io/queue-name label value (Kueue admission)
-#
-# Image: TauGrid MCR Ray base unless manifest runtime.image overrides it.
-# KubeRay needs Ray present at
-# container start to bootstrap the head node before spec.entrypoint
-# runs, but we deliberately avoid Ray ML images so we can keep the
-# batch Job and RayJob paths on the same first-party MCR base image and
-# pin torch in the manifest/runtime contract (Ray ML images ship their
-# own opinionated torch). Cost: ~30-60s extra cold start while pip pulls
-# torch + reference trainer deps. Benefit: Job and RayJob trainer
-# environments match, so a result reproduced on one path should
-# reproduce on the other.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
@@ -55,27 +7,9 @@ metadata:
     kueue.x-k8s.io/queue-name: ${QUEUE_NAME}
 ${JOB_LABELS}${JOB_ANNOTATIONS_BLOCK}
 spec:
-  # Kueue admits by flipping suspend=false once head + worker pod sets
-  # all have capacity reserved on the LocalQueue above (gang admission).
   suspend: true
   shutdownAfterJobFinishes: true
-  # shutdownAfterJobFinishes and this TTL compose: the TTL is the delay before
-  # cleanup, not an independent knob (KubeRay's own default is 0). Until it elapses
-  # a finished RayJob keeps its head/worker pods Running and holding node capacity,
-  # so a job can report SUCCEEDED while still consuming the cluster.
-  #
-  # Short but non-zero: the log offloader gets five seconds to drain after the
-  # entrypoint completion marker, with margin for KubeRay's reconciliation loop.
-  # This bounds the quota-released / physical-resources-held gap to seconds rather
-  # than a long human log-inspection window.
   ttlSecondsAfterFinished: 15
-  # HTTPMode posts the entrypoint as a single JSON string to the Ray
-  # dashboard /api/jobs/ endpoint. The default K8sJobMode spawns a
-  # submitter pod that runs `ray job submit -- $entrypoint` with the
-  # entrypoint inlined unquoted, which silently truncates any multi-line
-  # script to its first line. This script is multi-line by necessity
-  # (storage probe + pip install + python invocation), so HTTPMode is
-  # required for correctness, not just preference.
   submissionMode: HTTPMode
   entrypoint: |
     set -eu
@@ -110,39 +44,14 @@ ${DRIVER_LOG_COMPLETION_SETUP}
 {{else}}    trap tau_complete_driver_logs EXIT
 {{end}}
 ${STORAGE_PREFLIGHT}
-    # Pin torch in the manifest/runtime contract so the batch Job and
-    # RayJob paths install the same trainer runtime. The torch wheel from
-    # PyPI bundles its own CUDA runtime libs; the TauGrid Ray base
-    # supplies the driver interface and Python runtime. Sample-specific
-    # deps follow.
-    # A plain install fails with EACCES on the canonical Ray CUDA image this
-    # template defaults to: pip cannot write to the root-owned
-    # /usr/lib/python3.12/site-packages/nvidia. Observed on
-    # ray:py3.12-ray2.56.0-cuda13.0. Retry into the user site rather than
-    # requiring every researcher to set PIP_USER=1 by hand. The first form
-    # still wins on images that install cleanly, including the plain
-    # non-CUDA ray tags.
     pip install --quiet --no-cache-dir ${PIP_PACKAGES} \
       || pip install --quiet --no-cache-dir --user ${PIP_PACKAGES}
-    # --user installs console scripts (torchrun, deepspeed, ...) into the user
-    # base bin dir, which is not on PATH for these images. Without this the
-    # fallback yields importable libraries but `torchrun: command not found`.
     PATH="$(python3 -m site --user-base)/bin:$PATH"
     export PATH
-    # The SDK wrapper drives Ray Train (TorchTrainer) on the dedicated execution
-    # workers. The head is control-only even when workers=1, so user code never
-    # executes here and torchrun is reserved for non-Ray Job workloads.
     python3 /script/train.py \
       --manifest /manifest/${MANIFEST_NAME} \
       --smoke-pairs ${SMOKE_PAIRS}
 ${ARTIFACT_FINALIZE}
-  # Worker deps are shipped via RayJob-level runtime_env. Workers do NOT
-  # run the head's bash entrypoint pip install; this is the only path
-  # that gets the SDK runtime libs onto worker pods. The pip list comes
-  # from the manifest's runtime.pip block (rendered here via Go template).
-  # Set runtime.pip explicitly in your manifest to control what ships
-  # to workers; absent that, the renderer falls back to the legacy Sample
-  # list (torch + microsoft-sample + peft + safetensors + pyyaml + xarray).
   runtimeEnvYAML: |
     pip:
 {{- range .RuntimePip }}
@@ -263,10 +172,6 @@ ${DRIVER_LOG_OFFLOAD_SIDECAR}
               emptyDir: { medium: Memory, sizeLimit: 16Gi }
 ${EXTRA_VOLUMES_HEAD}
     workerGroupSpecs:
-      # Render Workers dedicated execution pods. KubeRay
-      # treats head + worker pod sets as separate PodSets in the Kueue
-      # Workload, so admission is gang-style (all-or-nothing across all
-      # pod sets).
       - replicas: {{.WorkerReplicas}}
         minReplicas: {{.WorkerReplicas}}
         maxReplicas: {{.WorkerReplicas}}

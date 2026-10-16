@@ -163,26 +163,12 @@ func topologyOptionsFromSubmit(o jobrender.Options) runtopology.Options {
 }
 
 func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Options, workloadKind string) error {
-	// Workload-kind ↔ lane consistency. Lane is the Kueue-queue selector,
-	// so the eval lane (lane=eval) and the training lanes (training,
-	// elastic, large-memory) route to physically
-	// different ClusterQueues with different priority classes and pod
-	// shapes. Letting them cross-pollinate would silently misdispatch
-	// the workload onto somebody else's quota slice.
 	switch o.Lane {
 	case "", "training", "elastic", "large-memory":
-		// Train lanes (or no explicit lane). REJECT on rayjob-eval —
-		// the eval shape (system head + GPU actor + CPU workers) belongs on lane=workload.
-		// "" passes here because a missing lane is normal for the train
-		// path. On rayjob-eval, however, a non-eval lane would land the
-		// workload on the train queue with the wrong priority class.
 		if workloadKind == manifest.WorkloadKindRayJobEval && o.Lane != "" {
 			return fmt.Errorf("--workload-kind=rayjob-eval requires lane=eval, got lane=%q; select an eval workload profile", o.Lane)
 		}
 	case "eval":
-		// Eval lane is only valid for the rayjob-eval shape (system head +
-		// GPU actor worker + CPU workers). A normal finetune (Job or RayJob multi-node) on
-		// the eval lane would be misdispatched.
 		if workloadKind != manifest.WorkloadKindRayJobEval {
 			return fmt.Errorf("workload profile uses lane=eval, but workload kind is %q; eval lane is only valid for --workload-kind=rayjob-eval", workloadKind)
 		}
@@ -274,17 +260,6 @@ func parseNodeSelectors(specs []string) (map[string]string, error) {
 }
 
 func splitExtraScriptSpec(spec string) (src, dest string) {
-	// SRC[:DEST] split has to handle three shapes:
-	//   posix-no-dest:        /tmp/foo.py
-	//   posix-with-dest:      /tmp/foo.py:bar.py
-	//   windows-no-dest:      C:\Users\...\foo.py        (drive-letter colon!)
-	//   windows-with-dest:    C:\Users\...\foo.py:foo.py
-	//
-	// A naive strings.Cut on first ':' eats the drive-letter colon on Windows;
-	// a naive strings.LastIndex eats it when DEST is absent. Strip the volume
-	// (filepath.VolumeName returns "C:" on Windows, "" on POSIX), then split
-	// the remainder on the last colon. The drive-letter colon never reaches
-	// the separator search.
 	vol := filepath.VolumeName(spec)
 	rest := spec[len(vol):]
 	idx := strings.LastIndex(rest, ":")
@@ -303,18 +278,11 @@ func workloadKindToK8sKind(wk string) string {
 	}
 }
 
-// ownerRefTarget identifies the workload that should own a generated auxiliary
-// object (the run Secret, the per-run SecretProviderClass) so that Kubernetes
-// garbage-collects the two together instead of leaving the auxiliary object
-// behind forever.
 type ownerRefTarget struct {
-	// APIVersion and Kind go into the ownerReference itself.
 	APIVersion string
 	Kind       string
-	// Name is the workload name, used both for the UID lookup and the ref.
-	Name string
-	// Resource is the kubectl resource used to read the owner's UID.
-	Resource string
+	Name       string
+	Resource   string
 }
 
 func ownerRefTargetFor(workloadKind, ownerName string) ownerRefTarget {
@@ -324,16 +292,6 @@ func ownerRefTargetFor(workloadKind, ownerName string) ownerRefTarget {
 	return ownerRefTarget{APIVersion: "batch/v1", Kind: "Job", Name: ownerName, Resource: "jobs.batch"}
 }
 
-// patchOwnerRef adopts an already-applied auxiliary object into its workload's
-// ownerReferences.
-//
-// Ownership cannot be rendered inline: an ownerReference requires the owner's
-// UID, which only exists once the API server has created the workload, and tau
-// submits a multi-document manifest with `kubectl apply`. So the auxiliary
-// object is applied first and adopted immediately afterwards. The window
-// between the two is why every caller also registers the object for cleanup on
-// submission failure — an interrupted run must not leave an unowned object
-// that nothing will ever reclaim.
 func patchOwnerRef(ctx context.Context, r *kube.Runner, namespace, resource, name string, owner ownerRefTarget) error {
 	uidOut, err := r.Raw(ctx, []string{
 		"get", owner.Resource, owner.Name, "-n", namespace,
@@ -363,10 +321,6 @@ func patchSecretOwnerRef(ctx context.Context, r *kube.Runner, namespace string, 
 	return patchOwnerRef(ctx, r, namespace, "secret", secret.Name, ownerRefTargetFor(workloadKind, secret.OwnerName))
 }
 
-// patchSecretProviderClassOwnerRef adopts the per-run SecretProviderClass that
-// manifest.Render emits for Key Vault workloads. It is named after the run
-// (kvspec.SPCName) and is therefore as disposable as the workload itself;
-// without an ownerReference it would accumulate one orphan per Key Vault run.
 func patchSecretProviderClassOwnerRef(ctx context.Context, r *kube.Runner, namespace, spcName, ownerName, workloadKind string) error {
 	return patchOwnerRef(ctx, r, namespace, secretProviderClassResource, spcName, ownerRefTargetFor(workloadKind, ownerName))
 }

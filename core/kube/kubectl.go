@@ -1,19 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package kube centralizes Tau's Kubernetes client identity and execution.
-//
-// Tau intentionally shells out to kubectl for its normal manifest and query
-// paths because:
-//
-//   - kubectl is the contract operators already trust; mirroring its
-//     behaviour (--context, --dry-run=server, --output) keeps surprises low.
-//   - server-side apply and discovery behavior stay aligned with the operator's
-//     installed kubectl.
-//
-// RESTConfig exists for narrow API semantics kubectl does not expose, such as
-// UID-preconditioned deletion. Both paths resolve the same context,
-// kubeconfig, and impersonation identity.
 package kube
 
 import (
@@ -28,14 +15,12 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// Runner runs kubectl with a fixed context (empty = current-context).
 type Runner struct {
 	Context    string
 	Kubeconfig string
-	Path       string // kubectl binary; empty = "kubectl" on PATH
+	Path       string
 }
 
-// New returns a Runner using "kubectl" from PATH.
 func New(kubeContext string) *Runner {
 	return &Runner{Context: kubeContext}
 }
@@ -44,9 +29,6 @@ func NewWithKubeconfig(kubeContext, kubeconfig string) *Runner {
 	return &Runner{Context: kubeContext, Kubeconfig: kubeconfig}
 }
 
-// RESTConfig resolves the same kubeconfig and context used by kubectl calls.
-// Callers that need API behavior kubectl does not expose, such as UID
-// preconditions on deletion, can therefore preserve the exact same identity.
 func (r *Runner) RESTConfig() (*rest.Config, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	if r.Kubeconfig != "" {
@@ -74,18 +56,6 @@ func (r *Runner) baseArgs() []string {
 	return args
 }
 
-// Apply runs `kubectl apply -f <path>` for each path. dryRun is one of
-// "", "client", "server".
-// ApplyOptions controls how Apply invokes kubectl.
-//
-// DryRun: "", "client", or "server".
-// ServerSide: use --server-side (avoids the client-side 3-way merge that
-// fails with `resourceVersion: 0: must be specified for an update` when
-// objects were created by a different field manager, e.g. restored from a
-// snapshot).
-// ForceConflicts: only meaningful with ServerSide=true; passes
-// --force-conflicts so server-side apply takes ownership of fields
-// currently owned by another manager.
 type ApplyOptions struct {
 	DryRun         string
 	ServerSide     bool
@@ -117,7 +87,6 @@ func (r *Runner) Apply(ctx context.Context, paths []string, opts ApplyOptions) (
 	return r.run(ctx, args, nil)
 }
 
-// Get runs `kubectl get <kind> -o <output>`. allNamespaces=true adds -A.
 func (r *Runner) Get(ctx context.Context, kind, output string, allNamespaces bool) (string, error) {
 	args := r.baseArgs()
 	args = append(args, "get", kind)
@@ -130,13 +99,11 @@ func (r *Runner) Get(ctx context.Context, kind, output string, allNamespaces boo
 	return r.run(ctx, args, nil)
 }
 
-// Raw runs kubectl with arbitrary args (context is prepended automatically).
 func (r *Runner) Raw(ctx context.Context, extraArgs []string, stdin []byte) (string, error) {
 	args := append(r.baseArgs(), extraArgs...)
 	return r.run(ctx, args, stdin)
 }
 
-// RawStream runs kubectl with stdout connected directly to out.
 func (r *Runner) RawStream(ctx context.Context, extraArgs []string, stdin []byte, out io.Writer) error {
 	args := append(r.baseArgs(), extraArgs...)
 	cmd := exec.CommandContext(ctx, r.bin(), args...)
@@ -155,10 +122,6 @@ func (r *Runner) RawStream(ctx context.Context, extraArgs []string, stdin []byte
 	return nil
 }
 
-// ExecInteractive runs `kubectl exec` with the process's stdin/stdout/stderr
-// connected directly to the user's TTY. This is the only way `kubectl exec -it`
-// works correctly — capturing into buffers breaks the shell. Blocks until the
-// user exits the remote shell.
 func (r *Runner) ExecInteractive(ctx context.Context, extraArgs []string) error {
 	args := append(r.baseArgs(), extraArgs...)
 	cmd := exec.CommandContext(ctx, r.bin(), args...)

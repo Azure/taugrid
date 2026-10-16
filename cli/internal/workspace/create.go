@@ -20,9 +20,6 @@ const (
 	DefaultResearcherRole = "researcher"
 	LegacyResearcherRole  = "tau-researcher-v1"
 
-	// Entra asserts groups by object ID, so a subject naming a group that does
-	// not exist binds nobody. GitHub asserts team slugs, which share a shape
-	// with workspace names, so the same fallback there could bind a real team.
 	PrincipalProviderEntra  = "entra"
 	PrincipalProviderGitHub = "github"
 
@@ -30,27 +27,9 @@ const (
 	SubjectKindUser           = "User"
 	SubjectKindServiceAccount = "ServiceAccount"
 
-	// DefaultWorkspaceName is the workspace every TauGrid v0 cluster gets
-	// unless an operator deliberately picks another name.
-	//
-	// v0 activates exactly one workspace per cluster, so leaving the name
-	// unset made every install differ in the one place researchers could see:
-	// the workload namespace, which is derived from this name. Defaulting it
-	// means a stock install of TauGrid looks the same everywhere, which is
-	// what lets docs, examples, and tooling assume a shape instead of
-	// parameterising over an operator's choice.
-	//
-	// The name is still customisable; nothing may depend on this value being
-	// literal. `tau` resolves the active workspace from the cluster rather
-	// than assuming this constant.
-	//
-	// This shares a name with the taugrid-default PriorityClass. That is a
-	// different resource kind, so the two never collide.
 	DefaultWorkspaceName = workloadmeta.DefaultWorkspaceName
 )
 
-// IsResearcherRole accepts the logical role and its legacy ClusterRole name.
-// Both names grant the same fixed permissions; neither selects arbitrary RBAC.
 func IsResearcherRole(role string) bool {
 	return role == DefaultResearcherRole || role == LegacyResearcherRole
 }
@@ -69,9 +48,6 @@ type CreateOptions struct {
 	ServiceAccountName       string
 	WorkloadIdentityClientID string
 
-	// DefaultPrincipalToName lets an unset --principal-name fall back to the
-	// workspace name. The caller sets it from flag presence, because an
-	// explicitly-empty value means a shell variable did not expand.
 	DefaultPrincipalToName bool
 }
 
@@ -95,34 +71,14 @@ func (r CreateReport) Summary() string {
 	)
 }
 
-// entraObjectID matches the shape AKS puts in a token's groups claim. Entra
-// asserts groups by object ID, so a name of this shape is the one string that
-// could make a "nobody asserts this" subject real.
 var entraObjectID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// defaultedPrincipalBindsNobody reports whether falling back to the workspace
-// name would produce a subject no identity provider can assert. It is the whole
-// safety argument for defaulting --principal-name, so it fails closed: every
-// combination not proven inert has to name its principal.
-//
-// Entra Groups are the one proven case, and only for a name that cannot be an
-// object ID. The AKS groups claim carries object IDs, so a Group named after a
-// workspace matches nothing — unless the workspace was itself named after one,
-// which a UUID-shaped name allows because it is a valid DNS-1123 subdomain.
-//
-// Entra Users assert by UPN, GitHub by team slug, and both share a shape with
-// workspace names. A ServiceAccount is worse still: the controller can create
-// one in the workspace namespace, so the subject could become real without
-// anyone naming it.
 func defaultedPrincipalBindsNobody(provider, subjectKind, name string) bool {
 	return provider == PrincipalProviderEntra &&
 		subjectKind == SubjectKindGroup &&
 		!entraObjectID.MatchString(name)
 }
 
-// PrincipalWasDefaulted reports whether these options ended up with a principal
-// nobody asserts. The CLI uses it to warn, and reads the answer from the same
-// resolution the manifest is rendered from rather than re-deriving it.
 func (o CreateOptions) PrincipalWasDefaulted() bool {
 	resolved := o.withDefaults()
 	return o.PrincipalName == "" && o.KubernetesSubjectName == "" &&
@@ -130,8 +86,6 @@ func (o CreateOptions) PrincipalWasDefaulted() bool {
 		defaultedPrincipalBindsNobody(resolved.PrincipalProvider, resolved.KubernetesSubjectKind, resolved.Name)
 }
 
-// ResolvedSystemNamespace is the namespace the manifest is created in, after
-// defaulting. User-facing messages must name this, not the raw flag.
 func (o CreateOptions) ResolvedSystemNamespace() string {
 	return o.withDefaults().SystemNamespace
 }
@@ -152,13 +106,6 @@ func (o CreateOptions) withDefaults() CreateOptions {
 	if o.KubernetesSubjectKind == "" {
 		o.KubernetesSubjectKind = SubjectKindGroup
 	}
-	// Resolve the provider and subject kind first: whether the principal may
-	// default at all depends on both, and reading the raw flags here would
-	// decide it from a value the manifest never uses.
-	//
-	// The caller decides whether the flag was given at all: an explicitly-empty
-	// --principal-name is a shell variable that failed to expand, not a request
-	// for the default.
 	if o.PrincipalName == "" && o.DefaultPrincipalToName && defaultedPrincipalBindsNobody(o.PrincipalProvider, o.KubernetesSubjectKind, o.Name) {
 		o.PrincipalName = o.Name
 	}
@@ -221,8 +168,6 @@ func validateCreateOptions(options CreateOptions) error {
 		return fmt.Errorf("--principal-provider must be one of: entra, github")
 	}
 	if strings.TrimSpace(o.PrincipalName) == "" {
-		// Name why this combination refused: the same blank principal is fine
-		// on entra+Group with an ordinary name, and not otherwise.
 		if entraObjectID.MatchString(o.Name) &&
 			o.PrincipalProvider == PrincipalProviderEntra &&
 			o.KubernetesSubjectKind == SubjectKindGroup {

@@ -19,18 +19,13 @@ import (
 )
 
 type runResultRef struct {
-	Path          string
-	PVC           string
-	Publication   string
-	PublicationID string
-	// CheckpointArtifact is the storage.checkpoint value the run declared,
-	// empty when it declared none. Presence is what lets an empty result
-	// directory be reported as a missing promised artifact rather than as an
-	// ordinary empty listing.
+	Path               string
+	PVC                string
+	Publication        string
+	PublicationID      string
 	CheckpointArtifact string
 }
 
-// cleanRelativeArtifact keeps --artifact inside the run's result directory.
 func cleanRelativeArtifact(artifact string) (string, error) {
 	if strings.HasPrefix(artifact, "/") {
 		return "", fmt.Errorf("--artifact must be relative, got %s", artifact)
@@ -116,7 +111,6 @@ or already deleted workload with no Tau result annotations, pass both flags.`,
 			}
 
 			isDir := looksLikeDirectory(resultPath)
-			// Single artifact path: treat as file fetch (joins onto the dir).
 			if isDir && artifact != "" {
 				cleanArtifact, err := cleanRelativeArtifact(artifact)
 				if err != nil {
@@ -151,9 +145,6 @@ or already deleted workload with no Tau result annotations, pass both flags.`,
 	return cmd
 }
 
-// runResultRefFor reads result metadata from the user-owned Job or RayJob.
-// After Kubernetes metadata is deleted, callers may still fetch durable output
-// by supplying both --path and --pvc.
 func runResultRefFor(ctx context.Context, kubeContext, namespace, name string) (runResultRef, error) {
 	return runResultRefWithReader(ctx, kube.New(kubeContext), namespace, name)
 }
@@ -218,9 +209,6 @@ func parseRunResultRef(raw []byte, resource string) (runResultRef, error) {
 	}, nil
 }
 
-// looksLikeDirectory is a heuristic: a path with no extension on its final
-// segment is treated as a directory. Researchers can always force file or dir
-// semantics with --path or --artifact.
 func looksLikeDirectory(p string) bool {
 	base := filepath.Base(filepath.Clean(p))
 	if base == "" || base == "." || base == "/" {
@@ -263,7 +251,7 @@ func writeRunGet(cmd *cobra.Command, output string, raw []byte, entries []string
 		buf = append(buf, '\n')
 		_, err = w.Write(buf)
 		return err
-	default: // "table"
+	default:
 		if raw != nil {
 			fmt.Fprintf(w, "PATH: %s\nPVC:  %s\n---\n", path, pvc)
 			_, err := w.Write(raw)
@@ -278,9 +266,6 @@ func writeRunGet(cmd *cobra.Command, output string, raw []byte, entries []string
 		fmt.Fprintf(w, "PATH: %s (directory)\nPVC:  %s\n", path, pvc)
 		if len(entries) == 0 {
 			fmt.Fprintln(w, "(empty)")
-			// A run that declared storage.checkpoint promised a servable
-			// model, and nothing else in run get mentions that. The index lives
-			// outside this path, so point at it rather than claim it is missing.
 			if checkpointArtifact != "" {
 				fmt.Fprintf(w, "storage.checkpoint %q was declared; the artifact index is written\n"+
 					"outside this path and is what 'tau serve deploy --from-finetune' reads. If the\n"+

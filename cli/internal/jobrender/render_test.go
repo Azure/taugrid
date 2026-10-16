@@ -29,8 +29,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// trainProfile is a representative resolved profile mirroring
-// a representative multi-GPU training profile.
 func trainProfile() profile.Profile {
 	return profile.Profile{
 		Name:  "ai-train-gpu-l",
@@ -603,7 +601,6 @@ func TestRender_RDMAInjectsSecurityContextAndNetworkTopology(t *testing.T) {
 	pod := template["spec"].(map[string]any)
 	c := pod["containers"].([]any)[0].(map[string]any)
 
-	// Verify securityContext capabilities.
 	sc := c["securityContext"].(map[string]any)
 	caps := sc["capabilities"].(map[string]any)
 	add := caps["add"].([]any)
@@ -633,7 +630,6 @@ func TestRender_RDMAInjectsSecurityContextAndNetworkTopology(t *testing.T) {
 		t.Errorf("resource limits=%v, want GPU only", limits)
 	}
 
-	// Verify /dev/shm size is 32Gi.
 	volumes := pod["volumes"].([]any)
 	var shmSize string
 	for _, v := range volumes {
@@ -671,7 +667,6 @@ func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 	c := pod["containers"].([]any)[0].(map[string]any)
 	sc := c["securityContext"].(map[string]any)
 
-	// RDMA-specific fields must be set.
 	caps := sc["capabilities"].(map[string]any)
 	add := caps["add"].([]any)
 	if len(add) != 3 || add[0] != "IPC_LOCK" {
@@ -681,7 +676,6 @@ func TestRender_RDMAPreservesUnrelatedProfileSecurityFields(t *testing.T) {
 		t.Errorf("runAsUser should be 0, got %v", sc["runAsUser"])
 	}
 
-	// Unrelated profile fields must survive the merge.
 	if sc["readOnlyRootFilesystem"] != true {
 		t.Errorf("readOnlyRootFilesystem should be preserved, got %v", sc["readOnlyRootFilesystem"])
 	}
@@ -725,8 +719,6 @@ func TestNormalizeRDMA(t *testing.T) {
 	})
 }
 
-// podTolerations returns the rendered pod tolerations as key|operator|value|effect
-// strings, which keeps the assertions below readable and order-unconstrained.
 func podTolerations(t *testing.T, out []byte) []string {
 	t.Helper()
 	m := parseYAML(t, out)
@@ -825,7 +817,6 @@ func TestRender_ScriptPath_Base64Encoded(t *testing.T) {
 	if !strings.Contains(s, "exec /tmp/run.sh") {
 		t.Errorf("shell shebang was not honored:\n%s", s)
 	}
-	// Sanity: the literal script content must NOT appear unencoded.
 	if strings.Contains(s, "echo hello") {
 		t.Errorf("script content leaked unencoded:\n%s", s)
 	}
@@ -928,10 +919,6 @@ func TestRender_ScriptPathDoesNotStageSourceTree(t *testing.T) {
 	}
 }
 
-// TestRender_ScriptArgs_ForwardedToScript ensures positional args after `--`
-// reach the in-pod script as $1, $2, ... — without this, dispatch SDKs that
-// pass a script *plus* runtime arguments cannot use a direct tau run Job, because
-// --script alone cannot communicate runtime args to the script body.
 func TestRender_ScriptArgs_ForwardedToScript(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "bench.sh")
@@ -948,15 +935,11 @@ func TestRender_ScriptArgs_ForwardedToScript(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	s := string(out)
-	// The args must appear (quoted) on the bash -c command line that exec's
-	// the decoded script, so the in-pod bash sees them as $@.
 	if !strings.Contains(s, "exec /tmp/run.sh liger-perkernel --kernel rmsnorm --out /data/x.json") {
 		t.Errorf("script args not appended to exec line:\n%s", s)
 	}
 }
 
-// TestRender_ScriptArgs_UnsafeCharsAreShellQuoted ensures args with spaces
-// or special chars round-trip through bash without splitting.
 func TestRender_ScriptArgs_UnsafeCharsAreShellQuoted(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "bench.sh")
@@ -1582,7 +1565,6 @@ func TestRender_DevicePluginDoesNotUseClaims(t *testing.T) {
 	}
 }
 
-// envFromContainer returns the rendered container's env as a flat map.
 func envFromContainer(t *testing.T, m map[string]any) map[string]string {
 	t.Helper()
 	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
@@ -1648,12 +1630,6 @@ func TestRender_EnvFlagAcceptsRetryEnvVars(t *testing.T) {
 	}
 }
 
-// tauEnvContractCases spans both sides of the namespace rule. The permitted
-// keys are derived from runconfig rather than retyped, so a key added there is
-// covered here without an edit; the fixed extras cover keys the old denylist
-// named, a key no list mentions, a lowercase spelling, and names that only look
-// Tau-prefixed. No expected verdict is written down -- it is read from
-// runconfig, so this list cannot encode a second opinion.
 var tauEnvContractCases = append(slices.Clone(runconfig.TauEnvAllowed),
 	"TAU_DIST_BACKEND",
 	"TAU_WORLD_SIZE",
@@ -1666,12 +1642,6 @@ var tauEnvContractCases = append(slices.Clone(runconfig.TauEnvAllowed),
 	"MY_VAR",
 )
 
-// This renderer used to carry its own copy of the TAU_ allowlist, byte-identical
-// to the RayJob renderer's and unrelated to the denylist that ran earlier in
-// core/runconfig. Divergence between any two of the three presented as "this env
-// var works for a Job but not a RayJob". Driving Render rather than calling the
-// predicate directly is the point: this fails if the wiring is dropped, not just
-// if the rule changes.
 func TestRender_TauEnvGateAgreesWithRunconfig(t *testing.T) {
 	for _, name := range tauEnvContractCases {
 		t.Run(name, func(t *testing.T) {
@@ -1991,7 +1961,6 @@ func TestRender_Profiler_RejectsUnknownMode(t *testing.T) {
 }
 
 func TestRender_Profiler_RequiresCommand(t *testing.T) {
-	// Image-only entrypoint (no Command, no Script) cannot be wrapped.
 	_, err := Render(trainProfile(), Options{
 		Name:      "j1",
 		Namespace: "tau",
@@ -2021,8 +1990,6 @@ func TestRender_Profiler_RequiresDurableOutput(t *testing.T) {
 }
 
 func TestRender_OutputAnnotationsRoundtripFromCLI(t *testing.T) {
-	// Render-level surface only sees Annotations; the CLI builds them. This
-	// asserts they survive the render unchanged so tau run get can read them.
 	out, err := Render(trainProfile(), Options{
 		Name:      "j1",
 		Namespace: "tau",
@@ -2317,8 +2284,6 @@ func TestRender_Torchrun_ShellEntrypointRejected(t *testing.T) {
 	}
 }
 
-// The default launcher decodes to /tmp/run.sh and execs it, so the shebang
-// picks the interpreter. Shell entrypoints must keep working there.
 func TestRender_PythonLauncher_ShellEntrypointAccepted(t *testing.T) {
 	script := shellScript(t)
 	out, err := Render(trainProfile(), Options{
@@ -2764,7 +2729,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 		t.Errorf("second document should be Job, got %v", job["kind"])
 	}
 
-	// Verify headless Service.
 	svcMeta := svc["metadata"].(map[string]any)
 	if svcMeta["name"] != "ddp-multi-headless" {
 		t.Errorf("service name=%v, want ddp-multi-headless", svcMeta["name"])
@@ -2787,7 +2751,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 		t.Errorf("selector job-name=%v, want ddp-multi", selector["batch.kubernetes.io/job-name"])
 	}
 
-	// Verify Indexed Job fields.
 	jobSpec := job["spec"].(map[string]any)
 	if jobSpec["completionMode"] != "Indexed" {
 		t.Errorf("completionMode=%v, want Indexed", jobSpec["completionMode"])
@@ -2808,7 +2771,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 		t.Errorf("required topology=%v, want tau.azure.com/network-domain", got)
 	}
 
-	// Verify pod subdomain.
 	pod := template["spec"].(map[string]any)
 	if pod["subdomain"] != "ddp-multi-headless" {
 		t.Errorf("subdomain=%v, want ddp-multi-headless", pod["subdomain"])
@@ -2833,7 +2795,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 		t.Errorf("anti-affinity job selector=%v, want ddp-multi", got)
 	}
 
-	// Verify torchrun command args.
 	s := string(out)
 	if !strings.Contains(s, "--nnodes=2") {
 		t.Errorf("missing --nnodes=2:\n%s", s)
@@ -2857,7 +2818,6 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 		t.Errorf("multi-node should NOT use --standalone:\n%s", s)
 	}
 
-	// Verify env vars.
 	env := envFromContainer(t, job)
 	if env["MASTER_ADDR"] != "ddp-multi-0.ddp-multi-headless" {
 		t.Errorf("MASTER_ADDR=%q, want ddp-multi-0.ddp-multi-headless", env["MASTER_ADDR"])
@@ -3120,8 +3080,6 @@ func TestRender_ExtraFlags_Torchrun(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	s := string(out)
-	// Extra flags must appear between managed torchrun args and the script path.
-	// The command should be: ...--nproc_per_node=4 --log-dir=/data/logs --max-restarts=3 /tmp/tau-entrypoint.py
 	if !strings.Contains(s, "--nproc_per_node=4 --log-dir=/data/logs --max-restarts=3 /tmp/tau-entrypoint.py") {
 		t.Errorf("extra flags not in expected position:\n%s", s)
 	}
@@ -3146,7 +3104,6 @@ func TestRender_ExtraFlags_Python(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	s := string(out)
-	// Extra flags must appear after the script path in the exec line.
 	if !strings.Contains(s, "exec /tmp/run.sh --batch=32 --epochs=10") {
 		t.Errorf("extra flags not appended after script:\n%s", s)
 	}
@@ -3172,9 +3129,6 @@ func TestRender_ExtraFlags_EmptyValueRendersBareFlag(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	s := string(out)
-	// --debug and --verbose have empty values → bare flags (no =).
-	// --output has a value → --output=/tmp/out.
-	// Sorted: debug, output, verbose.
 	if !strings.Contains(s, "--debug --output=/tmp/out --verbose") {
 		t.Errorf("bare flags not rendered correctly:\n%s", s)
 	}

@@ -18,8 +18,6 @@ const (
 	defaultMetricsOffloadInterval = metricsoffload.DefaultInterval
 )
 
-// MetricsOffloadOptions configures the sidecar-only RayJob metrics offload
-// path. Image is the enabling field and must be pinned.
 type MetricsOffloadOptions = metricsoffload.Options
 
 type metricsOffloadRuntime struct {

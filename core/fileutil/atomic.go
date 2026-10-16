@@ -10,8 +10,6 @@ import (
 	"syscall"
 )
 
-// WriteFileAtomic writes raw to path by writing a temp file in the same
-// directory and renaming it into place.
 func WriteFileAtomic(path string, raw []byte, perm os.FileMode) error {
 	return writeFileAtomic(path, raw, perm, func(f *os.File) error {
 		return f.Sync()
@@ -55,10 +53,6 @@ func writeFileAtomic(path string, raw []byte, perm os.FileMode, syncFile func(*o
 	return nil
 }
 
-// ChmodUnsupported reports whether err indicates the underlying filesystem does
-// not support chmod (e.g. BlobFuse mounts, which fix file mode at mount time).
-// On such filesystems the temp file already carries a usable mode, so a failed
-// chmod is non-fatal and the atomic rename can proceed.
 func ChmodUnsupported(err error) bool {
 	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
 }

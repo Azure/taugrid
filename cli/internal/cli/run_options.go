@@ -30,8 +30,6 @@ type runRouting struct {
 type runRoutingInput struct {
 	workspaceExplicit   bool
 	kubeContextExplicit bool
-	// kubeContextFromFlag distinguishes an explicit --context from one inherited
-	// through TAU_CONTEXT when reconciling a workspace connection descriptor.
 	kubeContextFromFlag bool
 }
 
@@ -238,9 +236,6 @@ type runResilienceInput struct {
 	backoffMax     time.Duration
 }
 
-// unresolvedRunOptions is the mutable input model used while config, flags,
-// connection metadata, workspace defaults, retry/resume overrides, and engine
-// inference are still being combined. resolveRunTarget is its terminal boundary.
 type unresolvedRunOptions struct {
 	runDispatchInput
 	runRouting

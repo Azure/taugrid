@@ -55,9 +55,7 @@ from torch.distributed.fsdp import (
 )
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-
 DEFAULT_FINEWEB_VOCAB_SIZE = 65536
-
 
 @dataclass(frozen=True)
 class GPTConfig:
@@ -67,7 +65,6 @@ class GPTConfig:
     n_head: int = 16
     n_embd: int = 2048
     dropout: float = 0.0
-
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -99,7 +96,6 @@ class CausalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(bsz, seq_len, channels)
         return self.c_proj(y)
 
-
 class MLP(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
@@ -108,7 +104,6 @@ class MLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.c_proj(F.gelu(self.c_fc(x)))
-
 
 class Block(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -121,7 +116,6 @@ class Block(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.ln_1(x))
         return x + self.mlp(self.ln_2(x))
-
 
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -136,9 +130,6 @@ class GPT(nn.Module):
             }
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # Weight tying keeps the param count at ~1.7B (vs ~1.8B untied). wte and
-        # lm_head both live in the root FSDP unit (Blocks are wrapped separately),
-        # so the shared tensor is preserved under use_orig_params=True.
         self.transformer["wte"].weight = self.lm_head.weight
         self.apply(self._init_weights)
 
@@ -163,7 +154,6 @@ class GPT(nn.Module):
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
         return logits, loss
 
-
 def csv_values(name: str, required: bool = True) -> list[str]:
     raw = os.environ.get(name, "")
     values = [item.strip() for item in raw.split(",") if item.strip()]
@@ -171,24 +161,20 @@ def csv_values(name: str, required: bool = True) -> list[str]:
         raise RuntimeError(f"{name} must be set to a comma-separated list")
     return values
 
-
 def env_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "")
     if raw == "":
         return default
     return int(raw)
 
-
 def effective_vocab_size(configured_vocab_size: int) -> int:
     if configured_vocab_size <= 0:
         raise RuntimeError(f"vocab_size must be positive, got {configured_vocab_size}")
     return max(configured_vocab_size, DEFAULT_FINEWEB_VOCAB_SIZE)
 
-
 def safe_uri(uri: str) -> str:
     parsed = urllib.parse.urlsplit(uri)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -196,7 +182,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
 
 def download_shard(uri: str, expected_sha256: str, rank: int) -> Path:
     cache_dir = Path("/tmp/fineweb-shards")
@@ -230,7 +215,6 @@ def download_shard(uri: str, expected_sha256: str, rank: int) -> Path:
             time.sleep((2**attempt) + random.uniform(0, 3))
     raise AssertionError("unreachable")
 
-
 def parse_dataset_contract() -> tuple[list[str], list[str], list[int]]:
     uris = csv_values("FINEWEB_DATASET_URIS")
     sha256s = csv_values("FINEWEB_DATASET_SHA256S")
@@ -246,7 +230,6 @@ def parse_dataset_contract() -> tuple[list[str], list[str], list[int]]:
             f"dataset has {total_tokens} declared tokens, below required minimum {min_total_tokens}"
         )
     return uris, sha256s, token_counts
-
 
 def get_batch(
     tokens: np.memmap,
@@ -271,7 +254,6 @@ def get_batch(
         )
     return torch.from_numpy(x).to(device), torch.from_numpy(y).to(device)
 
-
 def get_synthetic_batch(
     batch_size: int,
     block_size: int,
@@ -290,7 +272,6 @@ def get_synthetic_batch(
         generator=generator,
     )
     return tokens[:, :-1], tokens[:, 1:]
-
 
 def build_fsdp_model(config: GPTConfig, device: torch.device) -> tuple[FSDP, int]:
     """Construct the GPT on CPU, count its (deduplicated, tie-aware) parameters,
@@ -316,7 +297,6 @@ def build_fsdp_model(config: GPTConfig, device: torch.device) -> tuple[FSDP, int
         use_orig_params=True,
     )
     return fsdp_model, param_count
-
 
 def save_first_checkpoint(
     model: FSDP,
@@ -354,7 +334,6 @@ def save_first_checkpoint(
 
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
-
 
 def train_loop(config: dict) -> None:
     ctx = train.get_context()
@@ -465,7 +444,6 @@ def train_loop(config: dict) -> None:
     if not first_checkpoint_done:
         raise RuntimeError(f"rank={rank} finished {steps} steps without writing a checkpoint")
 
-
 def final_metrics_from_result(result) -> dict:
     metrics = getattr(result, "metrics", None)
     if metrics:
@@ -476,7 +454,6 @@ def final_metrics_from_result(result) -> dict:
         return dict(metrics_dataframe.iloc[-1].to_dict())
 
     return {}
-
 
 def main() -> None:
     data_mode = os.environ.get("FINEWEB_DATA_MODE", "dataset").strip().lower()
@@ -556,7 +533,6 @@ def main() -> None:
         f"data_mode={data_mode} dataset_tokens={sum(token_counts)}",
         flush=True,
     )
-
 
 if __name__ == "__main__":
     main()

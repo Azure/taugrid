@@ -15,21 +15,14 @@ import (
 )
 
 const (
-	// rayOriginLabel is set by KubeRay on the RayCluster it creates for a RayJob.
-	rayOriginLabel = "ray.io/originated-from-cr-name"
-	// rayClusterLabel is set by KubeRay on every pod belonging to a RayCluster.
-	rayClusterLabel = "ray.io/cluster"
-	// defaultComputeReleaseTimeout covers the 600s terminationGracePeriodSeconds
-	// Tau puts on Ray worker pods, plus slack for GC and kubelet.
+	rayOriginLabel                = "ray.io/originated-from-cr-name"
+	rayClusterLabel               = "ray.io/cluster"
 	defaultComputeReleaseTimeout  = 12 * time.Minute
 	defaultComputeReleaseInterval = 5 * time.Second
 )
 
 type computeReleaseOptions struct {
-	// Enabled turns on the post-delete compute-release check. It is off by
-	// default so callers that only exercise manager cleanup are unaffected.
-	Enabled bool
-	// Wait reports whether to block until compute is actually released.
+	Enabled  bool
 	Wait     bool
 	Timeout  time.Duration
 	Interval time.Duration
@@ -40,8 +33,6 @@ type computeReleaseHooks struct {
 	now  func() time.Time
 }
 
-// heldCompute is what a run still holds: its RayCluster, and the pods that are
-// still occupying nodes.
 type heldCompute struct {
 	Clusters []string
 	Pods     int
@@ -88,21 +79,6 @@ func normalizeComputeReleaseHooks(hooks computeReleaseHooks) computeReleaseHooks
 	return hooks
 }
 
-// waitForComputeRelease blocks until the run's RayCluster and its pods are
-// gone, so that "cancelled" means the node is actually free.
-//
-// This exists because deleting the RayJob does not release compute. KubeRay's
-// RayJob deletion path only stops the Ray job and drops its finalizer; the
-// RayCluster goes away through Kubernetes owner-reference garbage collection,
-// and the pods then drain through a termination grace period that Tau sets to
-// 600s. `kubectl delete rayjob` returns as soon as the RayJob object is gone,
-// which is seconds before any of that finishes.
-//
-// Reporting success at that point is what makes the obvious recovery action --
-// cancel, then resubmit -- the thing that breaks the cluster: the new run is
-// admitted by Kueue against quota the old pods are still consuming, lands on a
-// node it cannot fit on, and Ray's autoscaler then wedges with
-// "No available node types can fulfill cluster constraint" indefinitely.
 func waitForComputeRelease(
 	ctx context.Context,
 	r kubeRawRunner,
@@ -180,8 +156,6 @@ func waitComputeReleaseInterval(ctx context.Context, hooks computeReleaseHooks, 
 	return nil
 }
 
-// reportAsyncTeardown states plainly that compute is still held, so --wait=false
-// cannot be mistaken for "the node is free now".
 func reportAsyncTeardown(ctx context.Context, r kubeRawRunner, ns, runName, capturedCluster string, w io.Writer) {
 	held, err := computeHeldByRun(ctx, r, ns, runName, capturedCluster)
 	if err != nil {
@@ -207,9 +181,6 @@ func computeReleaseTimeoutError(timeout time.Duration, ns, runName string, held 
 	)
 }
 
-// computeHeldByRun reports the RayClusters and pods the run still has on nodes.
-// Pods are read even when no RayCluster remains, because they outlive it while
-// they drain -- and it is the pods, not the RayCluster object, that hold quota.
 func computeHeldByRun(ctx context.Context, r kubeRawRunner, ns, runName, capturedCluster string) (heldCompute, error) {
 	clusters, err := listRunRayClusters(ctx, r, ns, runName, capturedCluster)
 	if err != nil {
@@ -292,9 +263,6 @@ func listRunRayClusters(ctx context.Context, r kubeRawRunner, ns, runName, captu
 	return names, nil
 }
 
-// holdsCapacity reports whether a pod in this phase still occupies its node.
-// Terminating pods report Running, which is correct here: they hold capacity
-// until they are gone.
 func holdsCapacity(phase string) bool {
 	switch phase {
 	case "Succeeded", "Failed":

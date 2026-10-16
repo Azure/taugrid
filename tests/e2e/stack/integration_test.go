@@ -1,19 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package stack contains full-stack integration tests that exercise the seam
-// between charts rather than validating each one in isolation.
-//
-// TestInferenceRayJob runs a real image-classification inference workload through
-// the full Kueue → KubeRay → Ray Data pipeline on a CPU-only CI cluster:
-//
-//  1. A RayJob is submitted with a Kueue queue-name label.
-//  2. Kueue gang-admits the Workload (2 workers = 4 CPU).
-//  3. KubeRay spawns head + 2 worker pods.
-//  4. Ray Data distributes inference over 10 synthetic images across 2 actors.
-//  5. The job reaches SUCCEEDED and its logs contain valid predictions.
-//
-// See docs/design/2026-04-17-e2e-stack-inference-test.md for the full design.
 package stack
 
 import (
@@ -63,8 +50,6 @@ const (
 	defaultFineWebTrainSteps   = 60
 	fixtureCleanupTimeout      = 3 * time.Minute
 
-	// FineWeb conformance asserts the runtime param count lands in the ~1.7B band
-	// (1.716B at the default 32L/2048d config); the workload also self-checks this.
 	fineWebMinParams = 1_600_000_000
 	fineWebMaxParams = 1_800_000_000
 )
@@ -78,7 +63,6 @@ var localQueueGVR = schema.GroupVersionResource{
 var stackNamespace = stackNamespaceForRun()
 
 func TestMain(m *testing.M) {
-	// Skip all setup if e2e tests are not enabled.
 	if os.Getenv("AI_RUNTIME_E2E") != "1" {
 		os.Exit(m.Run())
 	}
@@ -117,8 +101,6 @@ func runTests(m *testing.M) int {
 				return 1
 			}
 		}
-		// Setup order matters: the Kueue fixture must create the namespace before
-		// any RayJob fixtures are applied into it.
 		if err := e2e.ApplyFixtureWithClient(ctx, dynamicClient, "stack-kueue-resources.yaml"); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to setup stack Kueue resources: %v\n", err)
 			e2e.DumpDeploymentDiagnostics(ctx, kubeClient, "kueue-system", "kueue-controller-manager")
@@ -219,7 +201,6 @@ func recordOutcomeWithWorkflowSuffix(t *testing.T, tc *e2e.TestContext) {
 func TestInferenceRayJob(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 
-	// CR-specific diagnostics on failure (controller logs are auto-captured by NewTestContext).
 	tc.OnFailure(func() {
 		tc.DumpCRState(stackNamespace, e2e.RayJobGVR, rayJobName)
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
@@ -229,31 +210,20 @@ func TestInferenceRayJob(t *testing.T) {
 		tc.DumpPods("kuberay-system", "")
 	})
 
-	// Step 1: Submit the RayJob. t.Cleanup deletes it when the test finishes.
-	// Note: ApplyFixture resolves {{RAY_IMAGE}} (from RAY_E2E_IMAGE env var) and
-	// {{RAY_VERSION}} (from RAY_E2E_VERSION/image tag, then Makefile fallback)
-	// via readFixture() in testcontext.go.
 	applyRayJobFixture(t, tc, "inference-rayjob.yaml", rayJobName)
 
-	// Step 2: Kueue admits the workload gang (head + 2 workers).
 	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobName, 30*time.Second)
 	require.NoError(t, err, "Kueue should admit the inference RayJob workload")
 
-	// Step 3: Head + 2 workers must reach Running+Ready before Ray will run the job.
 	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, 3*time.Minute)
 	require.NoError(t, err, "Ray head should be running and ready")
 
 	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", 2, 3*time.Minute)
 	require.NoError(t, err, "Both Ray workers should be running and ready")
 
-	// Step 4: RayJob runs inference. 8 min covers pip install (~60s on warm PyPI,
-	// longer on cold CI) + model init + classification across 2 actors.
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobName, "SUCCEEDED", 8*time.Minute)
 	require.NoError(t, err, "RayJob should reach SUCCEEDED status")
 
-	// Step 5: Verify inference output in the submitter pod logs.
-	// KubeRay creates a Job named after the RayJob that runs `ray job submit`; its pod logs
-	// stream the remote driver's stdout, which includes the classification predictions.
 	_, err = tc.WaitForPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName), []string{
 		"Label:",
 		"SUCCESS: All images classified",
@@ -261,9 +231,6 @@ func TestInferenceRayJob(t *testing.T) {
 	require.NoError(t, err, "submitter logs should show classification predictions and inference success")
 }
 
-// TestInferenceRayJobGPU is the GPU variant: the worker requests nvidia.com/gpu: 1
-// and the inference script auto-detects CUDA. Gated on E2E_GPU=1 so it only runs on
-// CI clusters that actually have GPU nodes (see chart-integration-test.yaml).
 func TestInferenceRayJobGPU(t *testing.T) {
 	if os.Getenv("E2E_GPU") != "1" {
 		t.Skip("set E2E_GPU=1 to run the GPU inference test (requires nvidia.com/gpu-capable nodes)")
@@ -295,8 +262,6 @@ func TestInferenceRayJobGPU(t *testing.T) {
 	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"GPU inference worker should run on the selected GPU node")
 
-	// GPU path: CUDA torch wheel + nvidia.com/gpu allocation can push RayCluster
-	// readiness and runtime env setup longer than CPU, especially on cold H100 nodes.
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameGPU, "SUCCEEDED", gpuRayJobTimeout)
 	require.NoError(t, err, "GPU RayJob should reach SUCCEEDED status")
 
@@ -309,12 +274,6 @@ func TestInferenceRayJobGPU(t *testing.T) {
 		"GPU inference submitter should stay on the selected CPU node pool")
 }
 
-// TestTrainingRayJobGPU validates the training half of the advertised
-// feature set: a Ray worker with nvidia.com/gpu=1 runs a tiny PyTorch SGD
-// loop on CUDA and loss decreases.
-//
-// Intentionally short-running — this exists to catch "GPU training path is
-// broken" regressions, not to validate model quality. Guarded by E2E_GPU=1.
 func TestTrainingRayJobGPU(t *testing.T) {
 	if os.Getenv("E2E_GPU") != "1" {
 		t.Skip("set E2E_GPU=1 to run the GPU training test (requires nvidia.com/gpu-capable nodes)")
@@ -346,8 +305,6 @@ func TestTrainingRayJobGPU(t *testing.T) {
 	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"GPU training worker should run on the selected GPU node")
 
-	// Training loop is tiny but CUDA torch wheel install dominates; mirror the GPU
-	// inference budget.
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameTrainGPU, "SUCCEEDED", gpuRayJobTimeout)
 	require.NoError(t, err, "GPU training RayJob should reach SUCCEEDED status")
 
@@ -360,9 +317,6 @@ func TestTrainingRayJobGPU(t *testing.T) {
 		"GPU training submitter should stay on the selected CPU node pool")
 }
 
-// TestNanoGPTRayTrainLargeGPU validates the live large-GPU conformance path:
-// Kueue admits a KubeRay RayJob, Ray schedules 16 GPU workers, and Ray Train
-// completes the configured optimizer steps of a bounded nanoGPT-style workload on CUDA.
 func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	if os.Getenv("E2E_GPU") != "1" {
 		t.Skip("set E2E_GPU=1 to run GPU stack tests")
@@ -381,11 +335,6 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 	recordOutcomeWithWorkflowSuffix(t, tc)
 
-	// Skip-if-busy guard: the scheduled workflow uses this as a second check
-	// after its capacity preflight so a late-arriving H200 workload skips instead
-	// of turning the conformance run red before the test can make progress. The
-	// manager route cannot inspect worker nodes, so its separate platform
-	// preflight owns this assertion.
 	if os.Getenv("NANOGPT_SKIP_IF_BUSY") == "1" && !managerWorkloadAccess {
 		if available := availableGPUsOnSelectedNodes(t, tc); available < workers {
 			t.Skipf("NANOGPT_SKIP_IF_BUSY=1 and only %d/%d GPUs available on the selected GPU nodes; skipping (cluster busy)", available, workers)
@@ -393,8 +342,6 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	}
 
 	tc.OnFailure(func() {
-		// Do not dump the RayJob spec here: the runtimeEnv can include short-lived
-		// dataset SAS URIs.
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		if managerWorkloadAccess {
 			return
@@ -414,10 +361,6 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	require.NoError(t, err, "Kueue should admit the 16-GPU nanoGPT RayJob workload")
 
 	if managerWorkloadAccess {
-		// MultiKueue mirrors RayJob completion to the manager, but worker pods,
-		// node labels, kubelet health, and submitter logs remain worker-cluster
-		// evidence. Keep the researcher credential on the manager and defer those
-		// assertions until manager-side result/placement evidence is available.
 		err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameNanoGPT, "SUCCEEDED", largeGPURayJobTimeout)
 		require.NoError(t, err, "manager-routed 16-GPU nanoGPT RayJob should mirror SUCCEEDED status")
 		return
@@ -528,15 +471,6 @@ func largeGPUUsesManagerWorkloadAccess() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("LARGE_GPU_WORKLOAD_ACCESS_MODE")), "manager")
 }
 
-// TestFineWebRayTrain16xH200IB validates the live FineWeb InfiniBand conformance
-// path: Kueue admits a 16-GPU KubeRay RayJob whose workers shard a ~1.7B GPT with
-// FSDP across both H200 nodes (split 8+8), NCCL runs over InfiniBand
-// (network-domain TAS + IPC_LOCK + a real /dev/shm), and Ray Train reaches and
-// persists its FIRST checkpoint. Gated by E2E_GPU=1 + E2E_FINEWEB=1.
-//
-// The success contract is "reach + persist the first checkpoint", not
-// convergence. The job is bounded (default 60 steps, first checkpoint at 50) so it
-// also completes cleanly to RayJob SUCCEEDED.
 func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	if os.Getenv("E2E_GPU") != "1" {
 		t.Skip("set E2E_GPU=1 to run GPU stack tests")
@@ -551,9 +485,6 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 	recordOutcomeWithWorkflowSuffix(t, tc)
 
-	// Skip-if-busy guard (longhaul-friendly): when another workload is already
-	// consuming the H200 GPUs, skip gracefully instead of failing. Only active
-	// when explicitly opted in so direct test runs stay fail-hard by default.
 	if os.Getenv("FINEWEB_SKIP_IF_BUSY") == "1" {
 		if available := availableGPUsOnSelectedNodes(t, tc); available < workers {
 			t.Skipf("FINEWEB_SKIP_IF_BUSY=1 and only %d/%d GPUs available on the selected H200 nodes; skipping (cluster busy)", available, workers)
@@ -561,8 +492,6 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	}
 
 	tc.OnFailure(func() {
-		// Do not dump the RayJob spec here: the runtimeEnv can include short-lived
-		// dataset SAS URIs (mirrors the nanoGPT large-GPU path).
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		tc.DumpPods(stackNamespace, "")
 		tc.DumpEvents(stackNamespace)
@@ -601,15 +530,8 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"FineWeb Ray Train workers should run on the selected H200 nodes")
 
-	// Assert the 16 workers split evenly 8+8 across exactly the two H200 nodes,
-	// keyed on the dedicated worker label so the spread/placement check never
-	// matches unrelated Ray pods.
 	requireWorkersSplitEvenlyAcrossNodes(t, tc, "e2e-test=fineweb-16xh200-ib", 2, workers/2)
 
-	// The RayJob completion timeout defaults to the large-GPU value (sized for the
-	// bounded ~60-step conformance run). A longhaul/soak dispatch can raise the step
-	// count well beyond that, so allow the timeout to scale via
-	// FINEWEB_RAYJOB_TIMEOUT_MINUTES without weakening the default.
 	rayJobTimeout := largeGPURayJobTimeout
 	if mins := envInt(t, "FINEWEB_RAYJOB_TIMEOUT_MINUTES", 0); mins > 0 {
 		rayJobTimeout = time.Duration(mins) * time.Minute
@@ -617,13 +539,6 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameFineWeb, "SUCCEEDED", rayJobTimeout)
 	require.NoError(t, err, "16-GPU FineWeb IB RayJob should reach SUCCEEDED status")
 
-	// Wait for the IB net marker, the first-checkpoint sentinel, and the success
-	// marker together in the submitter logs (KubeRay streams worker stdout to the
-	// submitter). These markers span the whole run — the early NCCL NET/IB init line
-	// and the late checkpoint/success sentinels would never coexist in a tailed
-	// window of verbose (NCCL_DEBUG=INFO) output across 16 workers — so read the FULL
-	// submitter log. The returned logs are then parsed for strict IB engagement and
-	// the persisted-checkpoint contract.
 	logs, err := tc.WaitForFullPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameFineWeb), []string{
 		"NET/IB",
 		"FINEWEB_FIRST_CHECKPOINT",
@@ -640,21 +555,12 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 		"FineWeb submitter should stay on the selected CPU node pool")
 }
 
-// fineWebFirstCheckpointRE parses the FINEWEB_FIRST_CHECKPOINT sentinel emitted by
-// rank 0 after the full state dict is gathered and persisted.
 var fineWebFirstCheckpointRE = regexp.MustCompile(`FINEWEB_FIRST_CHECKPOINT step=(\d+) path=(\S+) bytes=(\d+) params=(\d+)`)
 
-// ncclIBUsingRE matches a positive NCCL InfiniBand selection line, e.g.
-// "NET/IB : Using [0]mlx5_ib0:1/IB". A bare "NET/IB" substring is too weak: NCCL
-// logs "NET/IB : No device found" before falling back to sockets.
 var ncclIBUsingRE = regexp.MustCompile(`NET/IB\s*:\s*Using`)
 
-// ncclSocketUsingRE matches the NCCL socket-transport fallback selection line. Its
-// presence means NCCL did NOT use InfiniBand for the data plane.
 var ncclSocketUsingRE = regexp.MustCompile(`NET/Socket\s*:\s*Using`)
 
-// requireInfiniBandEngaged asserts the worker NCCL logs prove IB was used: a
-// positive "NET/IB : Using" line and no "NET/Socket : Using" fallback line.
 func requireInfiniBandEngaged(t *testing.T, logs string) {
 	t.Helper()
 	require.Regexp(t, ncclIBUsingRE, logs,
@@ -663,8 +569,6 @@ func requireInfiniBandEngaged(t *testing.T, logs string) {
 		"NCCL fell back to the socket transport (NET/Socket : Using ...); InfiniBand was not used for the data plane")
 }
 
-// requireFirstCheckpointPersisted asserts the first-checkpoint sentinel reports a
-// non-empty artifact and a runtime param count in the ~1.7B conformance band.
 func requireFirstCheckpointPersisted(t *testing.T, logs string) {
 	t.Helper()
 	match := fineWebFirstCheckpointRE.FindStringSubmatch(logs)
@@ -684,9 +588,6 @@ func requireFirstCheckpointPersisted(t *testing.T, logs string) {
 	require.LessOrEqual(t, params, fineWebMaxParams, "model should have ~1.7B params, got %d (above band)", params)
 }
 
-// requireWorkersSplitEvenlyAcrossNodes asserts that the pods matching podSelector
-// are scheduled across exactly wantNodes distinct nodes with exactly perNode pods
-// on each — i.e. the 8+8 split across the two H200 nodes.
 func requireWorkersSplitEvenlyAcrossNodes(t *testing.T, tc *e2e.TestContext, podSelector string, wantNodes, perNode int) {
 	t.Helper()
 	pods, err := tc.KubeClient().CoreV1().Pods(stackNamespace).List(tc.Ctx(), metav1.ListOptions{
@@ -723,9 +624,6 @@ func eligibleForFineWebSchedulerRecovery(workers int, state e2e.SchedulerRecover
 		state.HasInsufficientEvent
 }
 
-// availableGPUsOnSelectedNodes computes how many nvidia.com/gpu are free on the
-// Ready, schedulable GPU-selected nodes: allocatable minus GPUs requested by
-// non-terminal pods already on those nodes. Used by the skip-if-busy guard.
 func availableGPUsOnSelectedNodes(t *testing.T, tc *e2e.TestContext) int {
 	t.Helper()
 	key := os.Getenv("GPU_NODE_SELECTOR_KEY")
@@ -921,10 +819,6 @@ func envInt(t *testing.T, key string, defaultValue int) int {
 	return parsed
 }
 
-// TestTrainingRayJob exercises the "run Ray training jobs queued by Kueue" claim.
-// Submits a RayJob whose entrypoint runs a short distributed SGD loop over Ray Data
-// actors; asserts Kueue gang-admits it, head + workers come up, RayJob reaches
-// SUCCEEDED, and the driver logs show loss decreasing across epochs.
 func TestTrainingRayJob(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 

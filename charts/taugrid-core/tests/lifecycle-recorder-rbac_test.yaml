@@ -4,11 +4,6 @@ templates:
 values:
   - lifecycle-recorder-values.yaml
 tests:
-  # The recorder reads pods to explain terminal batch Job failures. A Job's own
-  # Failed condition only says "BackoffLimitExceeded"; the exit code or OOM kill
-  # lives on the pods, and those pods are deleted with the Job once
-  # ttlSecondsAfterFinished elapses. Without this permission the durable
-  # lifecycle row silently degrades to the useless generic reason.
   - it: lets the recorder read the pods behind observed workloads
     documentSelector:
       path: kind

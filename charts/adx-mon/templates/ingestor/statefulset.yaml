@@ -93,10 +93,6 @@ spec:
               name: ingestor
             - containerPort: 9091
               name: metrics
-          # Liveness uses tcpSocket: upstream ingestor has no /healthz, and /readyz
-          # fails on transient ADX outages causing restart loops (see PR #134).
-          # tcpSocket checks the process is listening without depending on backend health.
-          # Required for AKS Automatic compatibility.
           livenessProbe:
             tcpSocket:
               port: 9090
@@ -107,7 +103,7 @@ spec:
             httpGet:
               path: /readyz
               port: 9090
-              scheme: HTTPS  # ingestor always serves TLS on 9090 (real or fake certs)
+              scheme: HTTPS
             initialDelaySeconds: 10
             periodSeconds: 5
           resources:

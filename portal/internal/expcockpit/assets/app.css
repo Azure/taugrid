@@ -183,10 +183,6 @@ body.embedded .boot-shell {
   margin: 0 auto;
 }
 
-/* Embedded in the unified portal's Experiments iframe (body.embedded): the
-   sidebar already narrows the frame, so drop the full-page 48px gutter and the
-   1180px centered cap and let the landing fill the iframe width. Standalone
-   full-page /stellar keeps the rules above. */
 body.embedded .stellar-landing-app {
   padding: 16px;
 }

@@ -16,32 +16,22 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-metrics-collector/internal/state"
 )
 
-// Rule defines a threshold check against a scraped metric.
 type Rule struct {
-	Name       string `yaml:"name"`
-	MetricName string `yaml:"metricName,omitempty"`
-	// MetricNames checks every listed family on the same physical identities.
-	// Thresholds apply to each series, not to a sum that could hide counter resets.
-	MetricNames   []string          `yaml:"metricNames,omitempty"`
-	Labels        map[string]string `yaml:"labels,omitempty"`
-	ConditionType string            `yaml:"conditionType"`
-	// Threshold evaluation mode.
-	// "instant": fire if current value > Threshold
-	// "rate": fire if increase over Window > Threshold
-	Mode      string        `yaml:"mode"` // "instant" or "rate"
-	Threshold float64       `yaml:"threshold"`
-	Window    time.Duration `yaml:"window,omitempty"`
-	// Duration the condition must persist before firing.
-	For time.Duration `yaml:"for,omitempty"`
-	// MinSamples opts a continuous rule into coverage checks. Zero preserves
-	// optional/sparse-event behavior. SampleLabel counts distinct identities.
-	MinSamples           int           `yaml:"minSamples,omitempty"`
-	SampleLabel          string        `yaml:"sampleLabel,omitempty"`
-	RequiredSampleValues []string      `yaml:"requiredSampleValues,omitempty"`
-	MaxSampleAge         time.Duration `yaml:"maxSampleAge,omitempty"`
+	Name                 string            `yaml:"name"`
+	MetricName           string            `yaml:"metricName,omitempty"`
+	MetricNames          []string          `yaml:"metricNames,omitempty"`
+	Labels               map[string]string `yaml:"labels,omitempty"`
+	ConditionType        string            `yaml:"conditionType"`
+	Mode                 string            `yaml:"mode"`
+	Threshold            float64           `yaml:"threshold"`
+	Window               time.Duration     `yaml:"window,omitempty"`
+	For                  time.Duration     `yaml:"for,omitempty"`
+	MinSamples           int               `yaml:"minSamples,omitempty"`
+	SampleLabel          string            `yaml:"sampleLabel,omitempty"`
+	RequiredSampleValues []string          `yaml:"requiredSampleValues,omitempty"`
+	MaxSampleAge         time.Duration     `yaml:"maxSampleAge,omitempty"`
 }
 
-// MetricSources returns the rule's explicit input families.
 func (r Rule) MetricSources() []string {
 	if len(r.MetricNames) > 0 {
 		return r.MetricNames
@@ -49,7 +39,6 @@ func (r Rule) MetricSources() []string {
 	return []string{r.MetricName}
 }
 
-// Result is the evaluation outcome of a single rule.
 type Result struct {
 	ConditionType string
 	Firing        bool
@@ -60,16 +49,15 @@ type Result struct {
 
 const DefaultMaxSampleAge = 2 * time.Minute
 
-// Engine evaluates rules against scraped metrics.
 type Engine struct {
 	rules              []Rule
 	historyMetricNames map[string]struct{}
 	mu                 sync.Mutex
-	history            map[string][]sample // metric key → time series for rate calculations
+	history            map[string][]sample
 	rateBreaks         map[int]map[string]int
-	pending            map[string]time.Time // conditionType → first time condition was met (for "for" duration)
-	evalCounter        int                  // tracks cycles for periodic cleanup
-	retention          time.Duration        // how long to keep history samples
+	pending            map[string]time.Time
+	evalCounter        int
+	retention          time.Duration
 }
 
 type sample struct {
@@ -78,9 +66,7 @@ type sample struct {
 	cycle int
 }
 
-// NewEngine creates a rule engine.
 func NewEngine(rules []Rule) *Engine {
-	// Compute max window across all rate rules for history retention.
 	var maxWindow time.Duration
 	historyMetricNames := make(map[string]struct{})
 	for _, r := range rules {
@@ -93,7 +79,6 @@ func NewEngine(rules []Rule) *Engine {
 			}
 		}
 	}
-	// Retain at least 15m, or the longest rule window + 1m buffer.
 	retention := maxWindow + 1*time.Minute
 	if retention < 15*time.Minute {
 		retention = 15 * time.Minute
@@ -109,7 +94,6 @@ func NewEngine(rules []Rule) *Engine {
 	}
 }
 
-// Evaluate runs all rules against the current metrics and returns results.
 func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -119,12 +103,10 @@ func (e *Engine) Evaluate(metrics []scraper.Metric) []Result {
 	e.breakMissingRateContinuity(metrics)
 	e.recordMetrics(metrics, now, e.evalCounter)
 
-	// Cleanup stale history every ~60 cycles (~15min at 15s interval).
 	if e.evalCounter%60 == 0 {
 		e.cleanupStaleHistory(now, 1*time.Hour)
 	}
 
-	// Build index for fast lookup.
 	idx := indexMetrics(metrics)
 
 	var results []Result
@@ -268,15 +250,14 @@ func (e *Engine) evaluateRule(ruleIndex int, rule Rule, idx map[string][]scraper
 		return result
 	}
 
-	// Apply "for" duration if configured.
 	if rule.For > 0 {
 		firstSeen, exists := e.pending[rule.ConditionType]
 		if !exists {
 			e.pending[rule.ConditionType] = now
-			return result // Not firing yet — pending duration.
+			return result
 		}
 		if now.Sub(firstSeen) < rule.For {
-			return result // Still within "for" window.
+			return result
 		}
 	}
 
@@ -401,7 +382,6 @@ func (e *Engine) computeRate(ruleIndex int, key string, window time.Duration, no
 	}
 	increase := latest.value - oldest.value
 	if increase < 0 {
-		// Counter reset detected — use latest value as the increase since reset.
 		return latest.value, true
 	}
 	return increase, true
@@ -429,7 +409,6 @@ func metricNameFromKey(key string) string {
 	return name
 }
 
-// cleanupStaleHistory removes history entries for metrics not seen within maxAge.
 func (e *Engine) cleanupStaleHistory(now time.Time, maxAge time.Duration) {
 	cutoff := now.Add(-maxAge)
 	for key, samples := range e.history {
@@ -477,7 +456,6 @@ func labelsMatch(have, want map[string]string) bool {
 	return true
 }
 
-// ExportState returns the engine's history and pending state for persistence.
 func (e *Engine) ExportState() (map[string][]state.Sample, map[string]time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -499,7 +477,6 @@ func (e *Engine) ExportState() (map[string][]state.Sample, map[string]time.Time)
 	return history, pending
 }
 
-// RestoreState loads previously persisted history and pending state.
 func (e *Engine) RestoreState(history map[string][]state.Sample, pending map[string]time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

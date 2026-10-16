@@ -151,10 +151,6 @@ See: tau run explain-config`,
 				connection := activeWorkspace.Connection
 				targetOptions.workspace = firstNonEmpty(activeWorkspace.Placement.Workspace, targetOptions.workspace)
 				targetOptions.kubeContext = firstNonEmpty(activeWorkspace.Context, targetOptions.kubeContext)
-				// TauGrid v0 activates exactly one workspace per cluster, so a
-				// researcher should not have to name it. Connected profile
-				// resolution remains fail-closed; only workspace-name discovery
-				// is best-effort for clusters without a TauWorkspace.
 				if activeWorkspace.Connected {
 					targetOptions, err = applyWorkspaceDefaultsWithConnection(
 						targetOptions,

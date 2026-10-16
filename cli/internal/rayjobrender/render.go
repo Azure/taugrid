@@ -1,14 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package rayjobrender renders researcher-authored Ray Train scripts as Kueue
-// admitted RayJob workloads. Rendered RayJobs are self-contained: the driver
-// script is embedded directly in the RayJob's pod templates (see the
-// internal/payload package) instead of depending on a per-run ConfigMap, so
-// the workload can be dispatched to any MultiKueue worker without a separate
-// object to mirror or pre-provision. Plain Ray drivers stage source only on the
-// head; Ray Tune also stages it on workers because TorchTrainer reloads the
-// researcher function there.
 package rayjobrender
 
 import (
@@ -47,19 +39,6 @@ const (
 	clientPort               = 10001
 	maxRayJobResourceNameLen = 47
 
-	// rayJobTTLSecondsAfterFinished bounds how long a completed RayJob keeps its
-	// RayCluster — and the node capacity its head/worker pods occupy — alive.
-	//
-	// It is deliberately short rather than zero. The raylogoffload sidecar drains
-	// for five seconds after the entrypoint completion marker, and KubeRay reconciles
-	// on a roughly three-second cadence. Fifteen seconds leaves margin for both while
-	// bounding the interval in which Kueue has released quota but the RayCluster still
-	// holds physical devices.
-	//
-	// It is not longer because nothing else survives the window: the head pod goes
-	// NotReady before GC, so the portal already greys out the Ray dashboard link
-	// (see portal jobdetail.DetailLinks.RayDashboardReachable). Time beyond this is
-	// pure capacity hoarding.
 	rayJobTTLSecondsAfterFinished = 15
 )
 
@@ -70,27 +49,10 @@ var (
 	pythonModuleNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// payloadTargetDir is where the tau-payload initContainer materialises the
-// embedded payload inside each pod.
 const payloadTargetDir = "/script"
 
-// projectArchiveFilename is the payload entry holding the project zip that Ray
-// consumes as working_dir.
 const projectArchiveFilename = "_tau_project.zip"
 
-// MaxProjectArchiveBytes bounds the packaged working_dir archive.
-//
-// Ray resolves a file:// working_dir independently on every node, so the
-// archive has to be embedded in the head template *and* every worker
-// template. That doubling, not MAX_ARG_STRLEN, is the binding constraint
-// here: the rendered object is stored verbatim in kubectl's
-// last-applied-configuration annotation, which Kubernetes caps at ~256 KiB.
-// Two copies of the encoded payload plus the rest of the spec has to fit in
-// that with margin, which puts the ceiling near 45 KiB of archive.
-//
-// This is far less restrictive than it sounds: the archive is deflated, and
-// Python source compresses roughly 3.5x, so 64 KiB of archive is on the order
-// of 200+ KiB of real source spread across as many files as the project likes.
 const MaxProjectArchiveBytes = 45 << 10
 
 type Options struct {
@@ -99,41 +61,29 @@ type Options struct {
 	ServiceAccountName string
 	ScriptName         string
 	Script             []byte
-	// ProjectArchive is a deterministic zip of the project directory. When
-	// set, it is shipped to every node and handed to Ray as a runtime_env
-	// working_dir, which puts the unpacked tree on PYTHONPATH so sibling
-	// modules and local packages import correctly in workers as well as the
-	// driver. When empty, the run keeps the single-file behaviour of
-	// embedding only ScriptName.
-	ProjectArchive []byte
-	Image          string
-	// Workers is the execution-worker count. RayJobs add a separate control-only
-	// head on the system pool.
-	Workers         int
-	GPUsPerWorker   int
-	Launcher        string
-	GPUResourceMode string
-	MIGProfile      string
-	RuntimePip      []string
-	Env             map[string]string
-	EnvSecrets      []envspec.Var
-	RedactSecrets   bool
-	SecurityMode    string
-	RDMA            runconfig.NormalizedRDMA
-	DataPVC         string
-	Profile         profile.Profile
-	TopologyOptions topology.Options
-	NodeSelector    map[string]string
-	Labels          map[string]string
-	Annotations     map[string]string
-	Resources       Resources
-	OutputDir       string
-	ArtifactPublish artifactpublish.Runtime
+	ProjectArchive     []byte
+	Image              string
+	Workers            int
+	GPUsPerWorker      int
+	Launcher           string
+	GPUResourceMode    string
+	MIGProfile         string
+	RuntimePip         []string
+	Env                map[string]string
+	EnvSecrets         []envspec.Var
+	RedactSecrets      bool
+	SecurityMode       string
+	RDMA               runconfig.NormalizedRDMA
+	DataPVC            string
+	Profile            profile.Profile
+	TopologyOptions    topology.Options
+	NodeSelector       map[string]string
+	Labels             map[string]string
+	Annotations        map[string]string
+	Resources          Resources
+	OutputDir          string
+	ArtifactPublish    artifactpublish.Runtime
 
-	// CheckpointArtifact is storage.checkpoint: the file or directory,
-	// relative to the run checkpoint dir, that this run produces as its
-	// servable model. When set, the entrypoint writes an artifact index
-	// after the training script exits successfully.
 	CheckpointArtifact string
 	MetricsOffload     metricsoffload.Runtime
 
@@ -141,7 +91,7 @@ type Options struct {
 	TuneMode                string
 	TuneNumSamples          int
 	TuneMaxConcurrentTrials int
-	TuneParamSpace          string // JSON-encoded param space
+	TuneParamSpace          string
 
 	AzureWorkloadIdentity bool
 
@@ -174,8 +124,6 @@ func Render(o Options) ([]byte, error) {
 		files[tuneDriverFilename] = []byte(tuneDriverScript)
 	}
 	if len(o.ProjectArchive) > 0 {
-		// The archive already contains the entrypoint, so shipping the loose
-		// copy as well would double the payload for no benefit.
 		files = map[string][]byte{projectArchiveFilename: o.ProjectArchive}
 		if isTuneLauncher(o.Launcher) {
 			files[tuneDriverFilename] = []byte(tuneDriverScript)
@@ -238,8 +186,6 @@ func (o Options) validate() error {
 		return fmt.Errorf("script name is required")
 	}
 	if len(o.ProjectArchive) > 0 {
-		// The entrypoint is a module path relative to the project root, so
-		// nested paths are legitimate here; entrypointModule rejects escapes.
 		if _, err := entrypointModule(o.ScriptName); err != nil {
 			return err
 		}
@@ -379,8 +325,6 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	annotations := map[string]any{
 		payload.AnnotationDigest: payloadDigest,
 	}
-	// Record the declaration on the workload so `tau run get` can tell a run
-	// that produced nothing from one whose promised artifact is missing.
 	if checkpoint := strings.TrimSpace(o.CheckpointArtifact); checkpoint != "" {
 		annotations[workloadmeta.AnnotationCheckpointArtifact] = checkpoint
 	}
@@ -476,16 +420,9 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	spec := map[string]any{
 		"suspend":                  true,
 		"shutdownAfterJobFinishes": true,
-		// shutdownAfterJobFinishes and this TTL compose: the TTL is the delay before
-		// cleanup, not an independent knob (KubeRay's own default is 0). Until it
-		// elapses a finished RayJob keeps its head/worker pods Running and holding
-		// node CPU/GPU, so a job can report SUCCEEDED while still consuming the
-		// cluster. Keep a short grace window so `tau logs` can still read from
-		// the Ray dashboard just after completion, then release the capacity.
-		// Matches the eval/CPU templates, which delete immediately for the same reason.
-		"ttlSecondsAfterFinished": int64(rayJobTTLSecondsAfterFinished),
-		"submissionMode":          "HTTPMode",
-		"entrypoint":              jobEntrypoint,
+		"ttlSecondsAfterFinished":  int64(rayJobTTLSecondsAfterFinished),
+		"submissionMode":           "HTTPMode",
+		"entrypoint":               jobEntrypoint,
 		"rayClusterSpec": map[string]any{
 			"rayVersion":       rayVersionString(image),
 			"headGroupSpec":    head,
@@ -510,13 +447,6 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	}, nil
 }
 
-// buildPodSpec renders a pod template for either the Ray head or a worker
-// group. Plain Ray drivers carry the embedded payload only on the head because
-// the Ray Job Submission API runs their entrypoint there. Ray Tune is
-// different: TorchTrainer deserializes the generated train loop on execution
-// workers, where it reloads the researcher function from local staged source.
-// Project archives likewise have to exist on every node for Ray's file://
-// working_dir resolution.
 func buildPodSpec(o Options, image, containerName string, nodeSelector map[string]string, priorityClass string, encodedPayload, payloadDigest string, isHead bool) (map[string]any, error) {
 	env, err := envList(o, isHead)
 	if err != nil {
@@ -543,8 +473,6 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			},
 		}
 	}
-	// Only set explicit probes on workers. Head probes are omitted so KubeRay
-	// injects its version-aware defaults (raylet + GCS health).
 	if containerName != "ray-head" {
 		container["startupProbe"] = workerStartupProbe(parseRayVersion(image))
 		container["readinessProbe"] = tcpHealthProbe(60, 10, 3, 10)
@@ -581,10 +509,6 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		}
 		pod["initContainers"] = initContainers
 	} else if workerNeedsSourcePayload(o) {
-		// Project archives must exist on every node for file:// working_dir
-		// resolution. Tune's single-file contract likewise needs the staged
-		// researcher module on every TorchTrainer worker. Neither case needs
-		// the head-only log/metrics plumbing.
 		pod["initContainers"] = []any{
 			payloadInitContainer(image, encodedPayload, payloadDigest),
 		}
@@ -616,11 +540,6 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 	return pod, nil
 }
 
-// payloadInitContainer decodes, verifies, and writes the embedded payload
-// into the shared "script" emptyDir before the main Ray container starts. It
-// reuses the workload's own image (rather than pulling an additional one)
-// because every Tau-managed Ray image already ships Python 3, which is all
-// InitContainerScript needs.
 func payloadInitContainer(image, encodedPayload, payloadDigest string) map[string]any {
 	return map[string]any{
 		"name":    payload.InitContainerName,
@@ -659,9 +578,6 @@ func containerPort(name string, port int) map[string]any {
 	return map[string]any{"name": name, "containerPort": int64(port), "protocol": "TCP"}
 }
 
-// parseRayVersion extracts the Ray major.minor from an image tag (e.g.
-// "ray:py3.10-ray2.39.0-cuda13.0" → [2,39]). Falls back to the compiled
-// RayVersion constant if the image tag doesn't match.
 func parseRayVersion(image string) [2]int {
 	if m := rayImageVersionRE.FindStringSubmatch(image); m != nil {
 		major, _ := strconv.Atoi(m[2])
@@ -674,8 +590,6 @@ func parseRayVersion(image string) [2]int {
 	return [2]int{major, minor}
 }
 
-// rayVersionString extracts the full Ray version string from an image tag
-// (e.g. "ray:py3.10-ray2.39.0-..." → "2.39.0"). Falls back to RayVersion.
 func rayVersionString(image string) string {
 	if m := rayImageVersionRE.FindStringSubmatch(image); m != nil {
 		return m[1]
@@ -683,9 +597,6 @@ func rayVersionString(image string) string {
 	return RayVersion
 }
 
-// workerStartupProbe returns an HTTP startup probe for workers. The unified
-// /api/healthz endpoint was introduced in Ray 2.53; older versions only serve
-// /api/local_raylet_healthz on the agent port.
 func workerStartupProbe(ver [2]int) map[string]any {
 	path := "/api/healthz"
 	if ver[0] < 2 || (ver[0] == 2 && ver[1] < 53) {
@@ -702,9 +613,6 @@ func workerStartupProbe(ver [2]int) map[string]any {
 	}
 }
 
-// tcpHealthProbe returns a TCP socket probe on the agent port. Under heavy GPU
-// training load the dashboard agent's HTTP handler can stall, causing
-// false-positive probe failures. TCP avoids this while detecting a dead process.
 func tcpHealthProbe(initialDelay, period, failureThreshold, timeout int) map[string]any {
 	return map[string]any{
 		"tcpSocket": map[string]any{
@@ -720,15 +628,7 @@ func tcpHealthProbe(initialDelay, period, failureThreshold, timeout int) map[str
 func entrypoint(o Options) (string, error) {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
-	// A plain install fails with EACCES on the canonical Ray CUDA image
-	// (DefaultGPUImage): pip cannot write to the root-owned
-	// /usr/lib/python3.12/site-packages/nvidia. Observed on
-	// ray:py3.12-ray2.56.0-cuda13.0. It installs cleanly on DefaultCPUImage,
-	// where this fallback simply never fires. Retry into the user site rather
-	// than making every researcher set PIP_USER=1 by hand.
 	b.WriteString("if [ -s /script/requirements.txt ]; then python3 -m pip install --quiet --no-cache-dir -r /script/requirements.txt || python3 -m pip install --quiet --no-cache-dir --user -r /script/requirements.txt; fi\n")
-	// --user drops console scripts in the user base bin dir, which is not on
-	// PATH here; without this `torchrun` and friends are installed but unusable.
 	b.WriteString("PATH=\"$(python3 -m site --user-base)/bin:$PATH\"; export PATH\n")
 	if len(o.RuntimePip) > 0 {
 		var pkgs strings.Builder
@@ -746,11 +646,6 @@ func entrypoint(o Options) (string, error) {
 		b.WriteString("python3 " + payloadTargetDir + "/")
 		b.WriteString(tuneDriverFilename)
 	case len(o.ProjectArchive) > 0:
-		// In working_dir mode the entrypoint lives inside the archive that
-		// Ray unpacks per node, not at a path we control, so it is run as a
-		// module. Ray prepends the unpacked directory to PYTHONPATH, which
-		// makes -m resolve the entrypoint and its siblings from the same
-		// tree regardless of the working directory.
 		module, err := entrypointModule(o.ScriptName)
 		if err != nil {
 			return "", err
@@ -764,12 +659,7 @@ func entrypoint(o Options) (string, error) {
 	b.WriteByte('\n')
 	script := b.String()
 	var err error
-	// Index the declared checkpoint after a successful run so
-	// `tau serve deploy --from-finetune` can resolve this run by name.
 	if strings.TrimSpace(o.CheckpointArtifact) != "" {
-		// Without a PVC the "data" volume is an emptyDir (see volumes), so the
-		// checkpoint and artifacts.json would be deleted along with the pod and
-		// `tau serve deploy --from-finetune` would resolve a missing model.
 		if strings.TrimSpace(o.DataPVC) == "" {
 			return "", fmt.Errorf("storage.checkpoint requires writable durable PVC storage to write the artifact index")
 		}
@@ -795,8 +685,6 @@ func entrypoint(o Options) (string, error) {
 	return raylogoffload.WrapShellScript(script), nil
 }
 
-// entrypointModule converts an archive-relative script path into the dotted
-// module name `python3 -m` expects.
 func entrypointModule(scriptName string) (string, error) {
 	clean := strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(scriptName)), "./")
 	if !strings.HasSuffix(clean, ".py") {
@@ -830,14 +718,6 @@ func tuneModuleName(o Options) (string, error) {
 	return "_tau_user_train", nil
 }
 
-// runtimeEnvYAML renders the RayJob runtime environment.
-//
-// working_dir is emitted as a file:// URI rather than a bare path because Ray
-// resolves working_dir through parse_uri, which rejects any value without a
-// recognised scheme. file:// is resolved independently on each node against
-// its own filesystem, which is exactly what the per-pod tau-payload
-// initContainer provides, so no object store, credential, or shared volume is
-// involved and the workload stays self-contained.
 func runtimeEnvYAML(pkgs []string, projectArchive []byte) string {
 	if len(pkgs) == 0 && len(projectArchive) == 0 {
 		return ""
@@ -936,8 +816,6 @@ func envList(o Options, isHead bool) ([]any, error) {
 		env[k] = v
 	}
 
-	// Execution contract vars are authoritative — set AFTER user merge so
-	// they cannot be overridden by user env.
 	backend := "gloo"
 	if o.GPUsPerWorker > 0 {
 		backend = "nccl"
@@ -1002,7 +880,6 @@ func envList(o Options, isHead bool) ([]any, error) {
 	return envspec.K8sList(vars), nil
 }
 
-// volumes returns the pod-level volumes for a Ray head or worker template.
 func volumes(o Options, isHead bool) []any {
 	data := map[string]any{"name": "data"}
 	if o.DataPVC != "" {
@@ -1018,10 +895,6 @@ func volumes(o Options, isHead bool) []any {
 		})
 	}
 	if isHead {
-		// "script" is populated at runtime by the tau-payload initContainer
-		// from the payload embedded directly in this pod spec, so the RayJob
-		// no longer depends on a per-run ConfigMap being present on whichever
-		// cluster the workload is dispatched to.
 		vols = append(vols, map[string]any{
 			"name":     "script",
 			"emptyDir": map[string]any{},
@@ -1037,9 +910,6 @@ func volumes(o Options, isHead bool) []any {
 	)
 }
 
-// volumeMounts returns the main container's volume mounts. The script mount is
-// head-only for plain Ray drivers. Project archives and Tune source are mounted
-// on workers for their respective distributed loading contracts.
 func volumeMounts(o Options, isHead bool) []any {
 	mounts := []any{}
 	if !isHead && workerNeedsSourcePayload(o) {

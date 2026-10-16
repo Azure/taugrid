@@ -113,9 +113,6 @@ Markdown, including every supported key, its type, default, and description.`,
 }
 
 func validateRunDispatchOptions(o unresolvedRunOptions) error {
-	// Only the direct engines execute run.entrypoint. Managed workflows embed
-	// run.main_script at /script/train.py and always invoke python3 on that, so
-	// their entrypoint is not what the launcher runs.
 	if strings.TrimSpace(o.file) == "" && strings.EqualFold(strings.TrimSpace(o.launcher), "torchrun") {
 		if err := jobrender.RequirePythonEntrypoint(o.script); err != nil {
 			return err
@@ -124,26 +121,13 @@ func validateRunDispatchOptions(o unresolvedRunOptions) error {
 	return checkEntrypointImports(o)
 }
 
-// checkEntrypointImports fails at submit time when the entrypoint imports a
-// local module the run will not carry. Tau ships the entrypoint plus any
-// explicitly listed extra scripts and nothing else, so an ordinary sibling
-// import otherwise survives validation and admission and only fails inside a
-// Ray worker once the cluster is already up.
 func checkEntrypointImports(o unresolvedRunOptions) error {
 	if o.source != nil {
-		// The immutable source image supplies the complete project tree and the
-		// main container runs from its staged root.
 		return nil
 	}
 	if strings.TrimSpace(o.workingDir.rayProjectPath()) != "" {
-		// The whole project directory ships and Ray puts it on PYTHONPATH, so
-		// local imports resolve on the driver and on every worker.
 		return nil
 	}
-	// Managed workflows execute the main script, which a config may set
-	// independently of run.entrypoint; runManagedWorkflow resolves it the same
-	// way. The direct engines execute the entrypoint, so checking mainScript
-	// there would validate a file the run never runs.
 	script := o.script
 	if strings.TrimSpace(o.file) != "" {
 		script = firstNonEmpty(o.mainScript, o.script)
@@ -153,12 +137,8 @@ func checkEntrypointImports(o unresolvedRunOptions) error {
 		return nil
 	}
 	if _, err := os.Stat(script); err != nil {
-		// Missing or unreadable entrypoints are reported by the dispatch path
-		// with better context; do not duplicate that failure here.
 		return nil
 	}
-	// Extra scripts are SRC[:DEST] specs but stage under DEST, so compare
-	// against the destination name the module will actually have at runtime.
 	shipped := []string{filepath.Base(script)}
 	for _, spec := range o.extraScripts {
 		src, dest := splitExtraScriptSpec(spec)
@@ -167,9 +147,6 @@ func checkEntrypointImports(o unresolvedRunOptions) error {
 		}
 		shipped = append(shipped, dest)
 	}
-	// Also search the project root: a common layout puts the entrypoint in a
-	// subdirectory and shared modules at the top level, which resolve at
-	// author time but are still not shipped.
 	findings, err := pyimports.Check(script, shipped, o.configDir)
 	if err != nil {
 		return nil

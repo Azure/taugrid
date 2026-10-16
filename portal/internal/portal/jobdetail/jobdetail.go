@@ -1,28 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package jobdetail builds the portal's job detail page: everything about one
-// Tau-managed workload, gathered from the seams the other boards already own.
-//
-// From the Runs board a researcher clicks a job and lands on
-// /portal/runs/<ns>/<name>; this package assembles the backing snapshot in three
-// independently-degrading tiers:
-//
-//   - Tier 1 (Kubernetes truth): the Job or RayJob object, the Kueue Workloads
-//     admitted for it (queue/admission state), its Pods (phase/node/restarts),
-//     and recent Events. Sourced from the client-go reads in
-//     internal/portal/kubeclient.
-//   - Tier 2 (cross-links): an "Open in Stellar" deep-link backed by indexed
-//     metrics and a per-pod Cluster board link (links.ClusterInstancePath).
-//   - Tier 3 (durable Kusto): optional. When a Querier is configured, the run's
-//     terminal lifecycle is derived from the `tau/run_status` marker row the
-//     metrics-offload sidecar remote-writes into the ExperimentMetrics table
-//     (state/reason/completion/artifact_uri/checkpoint_uri) — the same signal
-//     Stellar's cockpit reads — so results survive the K8s object's garbage
-//     collection and stay consistent with the Stellar dashboard.
-//
-// The status vocabulary (Job/RayJob → display status, age formatting) is reused
-// from internal/portal/runs so the detail page and the Runs board never diverge.
 package jobdetail
 
 import (
@@ -47,26 +25,16 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/workloadtelemetry"
 )
 
-// rayClusterLabel is the label KubeRay stamps on a RayJob's pods (value is the
-// owning RayCluster's name). Used to select a RayJob's pods.
 const (
 	rayClusterLabel       = "ray.io/cluster"
 	jobNameLabel          = "job-name"
 	qualifiedJobNameLabel = "batch.kubernetes.io/job-name"
 )
 
-// ErrNotFound signals the requested job (Job and RayJob) does not exist, so the
-// handler can return 404 rather than a soft-degraded empty page.
 var ErrNotFound = errors.New("job not found")
 
-// errDecode signals a successful API read whose payload could not be parsed (bad
-// JSON, or a valid object missing metadata.name). It is distinct from
-// ErrNotFound so the handler returns 502 for an upstream decode/schema failure
-// rather than a misleading 404 that implies the object is absent.
 var errDecode = errors.New("jobdetail: object read succeeded but payload could not be parsed")
 
-// Reader is the client-go read surface the detail page needs. kubeclient.Client
-// satisfies it structurally; tests supply a fake so no live API is required.
 type Reader interface {
 	GetJob(ctx context.Context, namespace, name string) ([]byte, error)
 	GetRayJob(ctx context.Context, namespace, name string) ([]byte, error)
@@ -74,11 +42,6 @@ type Reader interface {
 	ListPods(ctx context.Context, namespace string) ([]byte, error)
 	ListEvents(ctx context.Context, namespace string) ([]byte, error)
 	ListWorkloads(ctx context.Context, namespace string) ([]byte, error)
-	// ListServices backs the Ray dashboard reachability check: the link is only
-	// live when the RayCluster's head Service is discoverable by the same
-	// head-Service scan the portal's proxy uses (ray.Board), so "button lit" and
-	// "proxy resolves" stay in lockstep and a finished/GC'd RayJob whose head
-	// Service no longer matches never shows a clickable-but-404 link.
 	ListServices(ctx context.Context, namespace string) ([]byte, error)
 }
 
@@ -86,45 +49,33 @@ type rayServiceReader interface {
 	GetRayService(ctx context.Context, namespace, name string) ([]byte, error)
 }
 
-// Options scopes the detail read to one object by namespace and name.
 type Options struct {
-	Namespace string
-	Name      string
-	// WorkspaceID is the authoritative selected workspace, not a normalized
-	// object label. Empty retains legacy cross-workspace discovery.
+	Namespace   string
+	Name        string
 	WorkspaceID string
 	Cluster     string
 }
 
-// Snapshot is the job detail payload, designed for the page rather than reusing
-// a board shape. Optional tiers are omitted when empty so the frontend can
-// render each independently.
 type Snapshot struct {
-	Namespace   string                     `json:"namespace"`
-	Name        string                     `json:"name"`
-	Kind        string                     `json:"kind"` // Job | RayJob | Pod | RayService
-	ResourceUID string                     `json:"resourceUid,omitempty"`
-	ObjectState string                     `json:"objectState"` // live | deleted
-	Status      string                     `json:"status"`
-	RunID       string                     `json:"runId,omitempty"`
-	Object      ObjectDetail               `json:"object"`
-	Workloads   []links.Workload           `json:"workloads,omitempty"`
-	Pods        []PodDetail                `json:"pods,omitempty"`
-	Events      []EventDetail              `json:"events,omitempty"`
-	Links       DetailLinks                `json:"links"`
-	Lifecycle   *LifecycleRow              `json:"lifecycle,omitempty"`
-	History     []runs.LifecycleEvent      `json:"history,omitempty"`
-	Telemetry   *workloadtelemetry.Summary `json:"telemetry,omitempty"`
-	Stages      LifecycleStages            `json:"stages"`
-	// ResourceRelease distinguishes scheduler quota accounting from physical
-	// Ray pod teardown. It is populated for RayJobs after Workloads and Pods are
-	// read so the UI never treats "Finished" as proof that GPUs are reusable.
-	ResourceRelease *ResourceReleaseDetail `json:"resourceRelease,omitempty"`
-	// Experiment is the Stellar identity `tau run` stamped on this object. It is
-	// omitted for a workload that carries none (a bare Job, or a run submitted
-	// without experiment metadata).
-	Experiment  *ExperimentIdentity `json:"experiment,omitempty"`
-	Diagnostics Diagnostics         `json:"diagnostics"`
+	Namespace       string                     `json:"namespace"`
+	Name            string                     `json:"name"`
+	Kind            string                     `json:"kind"`
+	ResourceUID     string                     `json:"resourceUid,omitempty"`
+	ObjectState     string                     `json:"objectState"`
+	Status          string                     `json:"status"`
+	RunID           string                     `json:"runId,omitempty"`
+	Object          ObjectDetail               `json:"object"`
+	Workloads       []links.Workload           `json:"workloads,omitempty"`
+	Pods            []PodDetail                `json:"pods,omitempty"`
+	Events          []EventDetail              `json:"events,omitempty"`
+	Links           DetailLinks                `json:"links"`
+	Lifecycle       *LifecycleRow              `json:"lifecycle,omitempty"`
+	History         []runs.LifecycleEvent      `json:"history,omitempty"`
+	Telemetry       *workloadtelemetry.Summary `json:"telemetry,omitempty"`
+	Stages          LifecycleStages            `json:"stages"`
+	ResourceRelease *ResourceReleaseDetail     `json:"resourceRelease,omitempty"`
+	Experiment      *ExperimentIdentity        `json:"experiment,omitempty"`
+	Diagnostics     Diagnostics                `json:"diagnostics"`
 }
 
 type WorkloadReference struct {
@@ -145,7 +96,6 @@ func SupportsKind(r Reader, kind string) bool {
 	}
 }
 
-// Diagnostics keeps source failures distinct from successful empty reads.
 type Diagnostics struct {
 	Workloads SourceDiagnostic `json:"workloads"`
 	Pods      SourceDiagnostic `json:"pods"`
@@ -163,7 +113,7 @@ type LifecycleStages struct {
 }
 
 type SourceDiagnostic struct {
-	State   string `json:"state"` // ready | empty | unavailable | not_configured
+	State   string `json:"state"`
 	Message string `json:"message,omitempty"`
 }
 
@@ -177,14 +127,6 @@ func sourceDiagnostic(source string, count int, err error) SourceDiagnostic {
 	return SourceDiagnostic{State: "ready"}
 }
 
-// ExperimentIdentity is the Stellar identity every Tau run path stamps on its
-// Job/RayJob via experiment.Metadata.KubernetesMetadata. It is read from the
-// "tau.azure.com/stellar-*-value" ANNOTATIONS rather than the matching labels:
-// the labels are normalized by experiment.KubernetesLabelValue (lowercased,
-// punctuation folded) while Stellar matches ?project= exactly against the Kusto
-// row, so only the annotation round-trips. Kueue does not copy annotations onto
-// the Workload, which is why this is resolved from the object here and left out
-// of links.Workload.
 type ExperimentIdentity struct {
 	Project      string `json:"project,omitempty"`
 	ExperimentID string `json:"experimentId,omitempty"`
@@ -192,12 +134,10 @@ type ExperimentIdentity struct {
 	Group        string `json:"group,omitempty"`
 }
 
-// empty reports whether no Stellar identity was stamped at all.
 func (e ExperimentIdentity) empty() bool {
 	return e.Project == "" && e.ExperimentID == "" && e.Title == "" && e.Group == ""
 }
 
-// experimentIdentity extracts the Stellar identity from an object's annotations.
 func experimentIdentity(annotations map[string]string) ExperimentIdentity {
 	experimentID := strings.TrimSpace(annotations[workloadmeta.AnnotationStellarExperimentID])
 	if experimentID == "" {
@@ -211,35 +151,28 @@ func experimentIdentity(annotations map[string]string) ExperimentIdentity {
 	}
 }
 
-// ObjectDetail is the tier-1 object header: identity fields plus the RayJob-
-// native status the Runs board's status mapping does not surface.
 type ObjectDetail struct {
-	// Created is a pointer so an unparseable/absent creationTimestamp is omitted
-	// rather than serialized as the false "0001-01-01T00:00:00Z" zero time, which
-	// the frontend would render as a real (and misleading) date.
-	Created     *time.Time        `json:"created,omitempty"`
-	Age         string            `json:"age"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
-	// RayJob-native fields (empty for a plain Job).
-	JobDeploymentStatus string `json:"jobDeploymentStatus,omitempty"`
-	RayClusterName      string `json:"rayClusterName,omitempty"`
-	JobID               string `json:"jobId,omitempty"`
-	ManagedBy           string `json:"managedBy,omitempty"`
-	ExecutionTarget     string `json:"executionTarget,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	Message             string `json:"message,omitempty"`
+	Created             *time.Time        `json:"created,omitempty"`
+	Age                 string            `json:"age"`
+	Labels              map[string]string `json:"labels,omitempty"`
+	Annotations         map[string]string `json:"annotations,omitempty"`
+	JobDeploymentStatus string            `json:"jobDeploymentStatus,omitempty"`
+	RayClusterName      string            `json:"rayClusterName,omitempty"`
+	JobID               string            `json:"jobId,omitempty"`
+	ManagedBy           string            `json:"managedBy,omitempty"`
+	ExecutionTarget     string            `json:"executionTarget,omitempty"`
+	Reason              string            `json:"reason,omitempty"`
+	Message             string            `json:"message,omitempty"`
 }
 
 type ResourceReleaseDetail struct {
-	QuotaState   string   `json:"quotaState"`   // unknown | pending | reserved | released
-	ComputeState string   `json:"computeState"` // unknown | in-use | releasing | reusable
+	QuotaState   string   `json:"quotaState"`
+	ComputeState string   `json:"computeState"`
 	ActivePods   int      `json:"activePods"`
 	Nodes        []string `json:"nodes,omitempty"`
 	Message      string   `json:"message"`
 }
 
-// PodDetail is one pod backing the run: phase, placement, and restart count.
 type PodDetail struct {
 	Name       string            `json:"name"`
 	Phase      string            `json:"phase"`
@@ -247,9 +180,7 @@ type PodDetail struct {
 	Restarts   int               `json:"restarts"`
 	Containers []ContainerDetail `json:"containers,omitempty"`
 	StartedAt  *time.Time        `json:"startedAt,omitempty"`
-	// NodePath deep-links the Cluster board to this pod's node (empty when the
-	// pod is unscheduled).
-	NodePath string `json:"nodePath,omitempty"`
+	NodePath   string            `json:"nodePath,omitempty"`
 }
 
 type ContainerDetail struct {
@@ -262,12 +193,6 @@ type ContainerDetail struct {
 	PreviousAvailable bool   `json:"previousAvailable,omitempty"`
 }
 
-// EventDetail is one recent Kubernetes event for troubleshooting. Last is a
-// pointer so an event with no resolvable timestamp is omitted rather than
-// serialized as the false "0001-01-01T00:00:00Z" zero time (which the frontend
-// would render as a truthy date). Modern core/v1 Events may leave the legacy
-// lastTimestamp empty and carry the time in eventTime or series.lastObservedTime
-// instead, so parseEvents falls back through all three.
 type EventDetail struct {
 	Type             string     `json:"type"`
 	Reason           string     `json:"reason"`
@@ -278,28 +203,12 @@ type EventDetail struct {
 	RedactionApplied bool       `json:"redactionApplied,omitempty"`
 }
 
-// DetailLinks holds the tier-2 cross-links. StellarPath requires indexed metrics
-// or a terminal lifecycle marker with an unambiguous project/workspace identity.
-// RayDashboardPath is set only for a RayJob that has a named RayCluster: it
-// reverse-proxies that cluster's own Ray dashboard (tasks/actors/logs) and is
-// only reachable while the cluster is running.
 type DetailLinks struct {
-	StellarPath      string `json:"stellarPath,omitempty"`
-	RayDashboardPath string `json:"rayDashboardPath,omitempty"`
-	// RayDashboardReachable reports whether the RayCluster head pod is currently
-	// Ready, i.e. the reverse-proxied dashboard at RayDashboardPath will actually
-	// serve. The head Service (and thus the proxy path) can outlive the head pod
-	// after a RayJob finishes — shutdownAfterJobFinishes keeps the cluster up for
-	// ttlSecondsAfterFinished (24h) but the pod goes NotReady before GC — so a
-	// non-empty RayDashboardPath does not imply reachability. The frontend greys
-	// the link out (rather than hiding it) when this is false. It defaults to true
-	// when readiness cannot be determined (pod list unavailable or head pod absent)
-	// so a transient read failure never greys a healthy link. Not omitempty: false
-	// must serialize so the frontend can distinguish "unreachable" from "unknown".
-	RayDashboardReachable bool `json:"rayDashboardReachable"`
+	StellarPath           string `json:"stellarPath,omitempty"`
+	RayDashboardPath      string `json:"rayDashboardPath,omitempty"`
+	RayDashboardReachable bool   `json:"rayDashboardReachable"`
 }
 
-// LifecycleRow is the tier-3 durable projection of the run from Kusto.
 type LifecycleRow struct {
 	State          string `json:"state,omitempty"`
 	EffectiveState string `json:"effectiveState,omitempty"`
@@ -308,17 +217,9 @@ type LifecycleRow struct {
 	CompletionTime string `json:"completionTime,omitempty"`
 	ArtifactURI    string `json:"artifactUri,omitempty"`
 	CheckpointURI  string `json:"checkpointUri,omitempty"`
-	// Project is the Kusto project the run belongs to, extracted from the
-	// remote-write row's Labels['project']. It disambiguates the Stellar
-	// deep-link when a run-id matches more than one project.
-	Project string `json:"project,omitempty"`
+	Project        string `json:"project,omitempty"`
 }
 
-// Detail assembles the snapshot. It first resolves the object (RayJob preferred,
-// then Job); when neither exists it returns ErrNotFound. Tiers 1b (workloads,
-// pods, events) and 3 (Kusto) degrade independently: a per-source read error
-// drops just that section rather than failing the page. Querier may be nil (no
-// --kusto-query-command), which skips tier 3.
 func Detail(ctx context.Context, r Reader, q kustoquery.Querier, opts Options) (Snapshot, error) {
 	if r == nil {
 		return Snapshot{}, errors.New("jobdetail: nil reader")
@@ -357,7 +258,6 @@ func detailResolved(ctx context.Context, r Reader, q kustoquery.Querier, opts Op
 		snap.Experiment = &identity
 	}
 
-	// Tier 1b: Workloads admitted for this job (best-effort).
 	wls, workloadErr := links.ListWorkloads(ctx, r, opts.Namespace)
 	if workloadErr == nil {
 		snap.Workloads = filterWorkloads(wls, obj)
@@ -385,17 +285,11 @@ func detailResolved(ctx context.Context, r Reader, q kustoquery.Querier, opts Op
 		}
 	}
 
-	// Tier 2: per-job Ray dashboard deep-link. UID-bearing RayJobs only expose
-	// the link after proving the named RayCluster belongs to this incarnation.
-	// Legacy UID-less payloads retain name-based compatibility behavior.
 	if obj.rayClusterName != "" && (obj.uid == "" || rayOwnershipErr == nil && rayClusterUID != "") {
 		snap.Links.RayDashboardPath = links.RayDashboardPath(opts.Namespace, obj.rayClusterName)
-		// Reachability uses the same head-Service discovery as the Ray proxy.
 		snap.Links.RayDashboardReachable = rayClusterDiscoverable(ctx, r, opts.Namespace, obj.rayClusterName)
 	}
 
-	// Tier 1b: Pods backing the run (best-effort). Labels discover compatible
-	// candidates; owner UID proves they belong to this object incarnation.
 	podUIDs := map[string]string{}
 	var podErr error
 	if rayOwnershipErr != nil {
@@ -417,12 +311,8 @@ func detailResolved(ctx context.Context, r Reader, q kustoquery.Querier, opts Op
 		snap.ResourceRelease = rayResourceRelease(obj.detail, snap.Workloads, snap.Pods, podsVisible)
 	}
 
-	// Tier 1b: recent Events (best-effort).
 	rawEvents, eventErr := r.ListEvents(ctx, opts.Namespace)
 	if eventErr == nil && obj.uid != "" && podErr != nil {
-		// UID-fenced Pod Events depend on a complete ownership set. Treat a
-		// failed Pod or RayCluster ownership read as an Event-section outage so
-		// the frontend can retain the last complete same-incarnation evidence.
 		eventErr = fmt.Errorf("resolve event ownership: %w", podErr)
 	}
 	if eventErr == nil {
@@ -553,7 +443,6 @@ func workloadTelemetry(ctx context.Context, q kustoquery.Querier, snap Snapshot,
 	return &summary, SourceDiagnostic{State: "ready"}
 }
 
-// resolved carries the fields extracted from whichever object was found.
 type resolved struct {
 	kind           string
 	name           string
@@ -567,21 +456,6 @@ type resolved struct {
 	directPod      bool
 }
 
-// resolveObject tries the RayJob first (its pods and native status are richer),
-// then the plain Job. It distinguishes four outcomes:
-//   - found: a readable object → (res, nil)
-//   - genuinely absent: both reads return a Kubernetes NotFound (the object does
-//     not exist, or its CRD is not installed) → (zero, ErrNotFound)
-//   - unreadable: a read failed for another reason (RBAC forbidden, API timeout,
-//     transient 5xx) → (zero, that error), so the handler surfaces 502/503
-//     instead of a misleading 404.
-//   - undecodable: a read succeeded (err == nil) but the payload could not be
-//     parsed (malformed JSON, or a valid object missing metadata.name) →
-//     (zero, errDecode). A successful-but-garbage response proves the API
-//     answered, not that the object is absent, so it must not collapse to 404.
-//
-// A NotFound on one kind but a hard error on the other still returns the hard
-// error: we cannot prove absence when a read did not complete.
 func resolveObject(ctx context.Context, r Reader, opts Options) (resolved, error) {
 	rayRaw, rayErr := r.GetRayJob(ctx, opts.Namespace, opts.Name)
 	if rayErr == nil {
@@ -595,19 +469,13 @@ func resolveObject(ctx context.Context, r Reader, opts Options) (resolved, error
 			return res, nil
 		}
 	}
-	// Neither object was usable. A non-NotFound read error means we could not
-	// prove absence, so propagate it (→ 502/503).
 	if rayErr != nil && !apierrors.IsNotFound(rayErr) {
 		return resolved{}, rayErr
 	}
 	if jobErr != nil && !apierrors.IsNotFound(jobErr) {
 		return resolved{}, jobErr
 	}
-	// A read that succeeded but did not parse is a decode failure, not absence:
-	// the API answered, so 404 would be misleading. Only when every read was a
-	// genuine NotFound do we conclude the object is absent.
 	if rayErr == nil || jobErr == nil {
-		// At least one read returned (payload, nil) but failed to parse.
 		return resolved{}, errDecode
 	}
 	return resolved{}, ErrNotFound
@@ -666,7 +534,6 @@ func resolveReference(ctx context.Context, r Reader, opts Options, ref WorkloadR
 	return obj, nil
 }
 
-// objectMeta is the metadata subset shared by Job and RayJob.
 type objectMeta struct {
 	Name              string            `json:"name"`
 	Namespace         string            `json:"namespace"`
@@ -683,12 +550,7 @@ type jobObject struct {
 	} `json:"spec"`
 	Status struct {
 		Conditions []struct {
-			Type string `json:"type"`
-			// Reason and Message carry the Job's terminal explanation
-			// ("BackoffLimitExceeded", "DeadlineExceeded"). RayJobs expose the
-			// equivalent on status directly and it has always been surfaced;
-			// discarding it here made batch Jobs the only workload kind whose
-			// terminal cause was invisible in the UI.
+			Type    string `json:"type"`
 			Status  string `json:"status"`
 			Reason  string `json:"reason"`
 			Message string `json:"message"`
@@ -763,9 +625,6 @@ func parseJob(data []byte) (resolved, bool) {
 			ManagedBy:       o.Spec.ManagedBy,
 			ExecutionTarget: executionTarget,
 		},
-		// Kubernetes Job controller labels are canonical pod ownership. run-id is
-		// Tau's run identity; tau.azure.com/job remains a reader-only compatibility
-		// selector for workloads produced by older or custom clients.
 		podSelectors: []podLabelSelector{
 			{key: jobNameLabel, value: o.Metadata.Name},
 			{key: qualifiedJobNameLabel, value: o.Metadata.Name},
@@ -775,9 +634,6 @@ func parseJob(data []byte) (resolved, bool) {
 	}, true
 }
 
-// jobTerminalExplanation returns the reason and message of the Job's terminal
-// condition. Only Complete and Failed are terminal; a transient condition such
-// as Suspended would otherwise present itself as the outcome.
 func jobTerminalExplanation(o jobObject) (string, string) {
 	for i := len(o.Status.Conditions) - 1; i >= 0; i-- {
 		c := o.Status.Conditions[i]
@@ -891,9 +747,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// filterWorkloads uses Kueue's owner UID as proof of the exact Job/RayJob
-// incarnation. Name and Tau-label matching is retained only for legacy test or
-// imported payloads that omit the Kubernetes-assigned object UID.
 func filterWorkloads(all []links.Workload, obj resolved) []links.Workload {
 	out := make([]links.Workload, 0, len(all))
 	for _, w := range all {
@@ -916,7 +769,6 @@ func filterWorkloads(all []links.Workload, obj resolved) []links.Workload {
 	return out
 }
 
-// ownedByName is the compatibility path for UID-less payloads.
 func ownedByName(w links.Workload, objName string) bool {
 	if objName == "" {
 		return false
@@ -967,7 +819,6 @@ func parseOwnedObjectUID(data []byte, ownerUID string) (string, error) {
 	return "", errors.New("object is not controlled by the resolved owner UID")
 }
 
-// podList is the subset of the core v1 Pod list the detail page reads.
 type podList struct {
 	Items []podItem `json:"items"`
 }
@@ -1024,8 +875,6 @@ type podLabelSelector struct {
 	value string
 }
 
-// parsePodsWithStatus uses labels to discover candidates, then validates the
-// controller owner UID whenever the resolved Job/RayJob carries a UID.
 func parsePodsWithStatus(data []byte, ownerUID string, requireOwnerUID bool, selectors []podLabelSelector) ([]PodDetail, map[string]string, error) {
 	if requireOwnerUID && ownerUID == "" || !requireOwnerUID && !hasUsablePodSelector(selectors) {
 		return nil, nil, nil
@@ -1262,10 +1111,6 @@ func rayResourceRelease(object ObjectDetail, workloads []links.Workload, pods []
 	return detail
 }
 
-// eventList is the subset of the core v1 Event list the detail page reads.
-// A modern core/v1.Event may leave the legacy lastTimestamp empty and instead
-// carry the time in eventTime (a single MicroTime) or, for aggregated events, in
-// series.lastObservedTime; parseEvents falls back through all three.
 type eventList struct {
 	Items []struct {
 		Type          string `json:"type"`
@@ -1285,9 +1130,6 @@ type eventList struct {
 	} `json:"items"`
 }
 
-// parseEvents matches involvedObject.uid against the resolved workload,
-// RayCluster, and Pod UID set. Name-prefix matching remains only for UID-less
-// compatibility payloads. Newest last-timestamp first.
 func parseEvents(data []byte, objectKinds map[string]string, requireUID bool, jobName, rayClusterName string) ([]EventDetail, error) {
 	var list eventList
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -1326,11 +1168,6 @@ func parseEvents(data []byte, objectKinds map[string]string, requireUID bool, jo
 	return out, nil
 }
 
-// eventBelongsTo reports whether an event's involved-object name belongs to the
-// given owner: either the object itself (exact match) or one of its Pods, which
-// KubeRay/Job controllers name <owner>-<suffix>. The owner+"-" prefix guard
-// stops a sibling whose name merely starts with the same string (e.g. "train"
-// must not swallow "train-big"'s events). An empty owner matches nothing.
 func eventBelongsTo(name, owner string) bool {
 	if owner == "" {
 		return false
@@ -1382,7 +1219,6 @@ func tracking(ctx context.Context, q kustoquery.Querier, runID string, opts Opti
 	return links.ExperimentProjectPath(runID, project, workspace), lifecycleRow, SourceDiagnostic{State: "ready"}
 }
 
-// lifecycle derives only final status, independently of tracking existence.
 func lifecycle(rows []kustoquery.Row) (*LifecycleRow, bool) {
 	row, ok := latestRunStatusRow(rows)
 	if !ok {
@@ -1391,7 +1227,6 @@ func lifecycle(rows []kustoquery.Row) (*LifecycleRow, bool) {
 	tags := runStatusTags(row)
 	state := runStatusState(row, tags)
 	if state != "succeeded" && state != "failed" && state != "cancelled" {
-		// A running marker is not a final lifecycle result.
 		return nil, false
 	}
 	return &LifecycleRow{
@@ -1406,14 +1241,9 @@ func lifecycle(rows []kustoquery.Row) (*LifecycleRow, bool) {
 	}, true
 }
 
-// trackingQuery uses the same step/value eligibility as Stellar metrics while
-// retaining step-less lifecycle markers. Two row kinds per identity suffice;
-// three returned rows are enough to detect ambiguous projects/workspaces.
 func trackingQuery(runID, workspaceID, cluster string) string {
 	var b strings.Builder
 	b.WriteString(expkusto.DefaultRemoteWriteTable + "\n")
-	// Labels['project'] uses bracket notation because `project` is a KQL reserved
-	// keyword; the dotted form Labels.project fails to parse (HTTP 400).
 	b.WriteString("| extend run_id=tostring(Labels.run_id), metric_name=tostring(Labels.metric_name), tags=tostring(Labels.tags), project_id=tostring(Labels['project']), workspace_id=tostring(Labels.workspace_id), cluster=tostring(Cluster), step=tolong(Labels.step), value=todouble(Value), wall_time=Timestamp\n")
 	b.WriteString("| where run_id == " + kustoquery.QuoteString(runID) + "\n")
 	if workspaceID != "" {
@@ -1431,8 +1261,6 @@ func trackingQuery(runID, workspaceID, cluster string) string {
 	return b.String()
 }
 
-// latestRunStatusRow returns the newest tau/run_status row without treating
-// ordinary positive-valued training metrics as completion markers.
 func latestRunStatusRow(rows []kustoquery.Row) (kustoquery.Row, bool) {
 	var latest kustoquery.Row
 	var latestWall time.Time
@@ -1451,9 +1279,7 @@ func latestRunStatusRow(rows []kustoquery.Row) (kustoquery.Row, bool) {
 	return latest, ok
 }
 
-// parseRunStatusWallTime parses the marker's wall_time. ADX renders a datetime
 // as RFC3339 (often with nanosecond precision), so try that first; on failure
-// return the zero time so a malformed value sorts oldest rather than winning.
 func parseRunStatusWallTime(s string) time.Time {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -1467,9 +1293,6 @@ func parseRunStatusWallTime(s string) time.Time {
 	return time.Time{}
 }
 
-// runStatusState mirrors expcockpit.kustoRunStatusState: prefer the explicit
-// tau.status.state tag, else derive from the value sign (>0 succeeded, <-1
-// cancelled, <0 failed, else running).
 func runStatusState(row kustoquery.Row, tags map[string]string) string {
 	if state := normalizeRunStatusState(tags[expkusto.RunStatusStateTag]); state != "" {
 		switch state {
@@ -1502,7 +1325,6 @@ func normalizeRunStatusState(value string) string {
 	}
 }
 
-// runStatusTags JSON-decodes the marker's tags column into a string map.
 func runStatusTags(row kustoquery.Row) map[string]string {
 	raw := strings.TrimSpace(row.Str("tags"))
 	if raw == "" || raw == "{}" {
@@ -1524,8 +1346,6 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-// optionalTime returns nil for an unparseable/absent (zero) time so a false
-// "0001-01-01T00:00:00Z" is never serialized; otherwise a pointer to the value.
 func optionalTime(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil
@@ -1533,10 +1353,6 @@ func optionalTime(t time.Time) *time.Time {
 	return &t
 }
 
-// resolveEventTime parses the given timestamp sources in order (lastTimestamp →
-// eventTime → series.lastObservedTime) and returns the first that parses. When
-// none parse it returns nil so the event's Last is omitted rather than emitted
-// as the false zero time.
 func resolveEventTime(sources ...string) *time.Time {
 	for _, s := range sources {
 		if t := parseTime(s); !t.IsZero() {
@@ -1546,8 +1362,6 @@ func resolveEventTime(sources ...string) *time.Time {
 	return nil
 }
 
-// sortEventsNewestFirst orders events by Last descending. A nil Last (no
-// resolvable timestamp) sorts oldest so timestamped events lead.
 func sortEventsNewestFirst(events []EventDetail) {
 	for i := 1; i < len(events); i++ {
 		for j := i; j > 0 && eventLater(events[j].Last, events[j-1].Last); j-- {
@@ -1556,7 +1370,6 @@ func sortEventsNewestFirst(events []EventDetail) {
 	}
 }
 
-// eventLater reports whether a is strictly newer than b, treating nil as oldest.
 func eventLater(a, b *time.Time) bool {
 	if a == nil {
 		return false
@@ -1567,10 +1380,6 @@ func eventLater(a, b *time.Time) bool {
 	return a.After(*b)
 }
 
-// rayClusterDiscoverable reports whether <namespace>/<cluster> has a
-// discoverable head Service and a reachable dashboard according to ray.Board.
-// A list error or absent cluster yields false rather than guessing that a stale
-// Service still has a ready head Pod.
 func rayClusterDiscoverable(ctx context.Context, r ray.Reader, namespace, cluster string) bool {
 	snap, err := ray.Board(ctx, r, ray.Options{Namespace: namespace})
 	if err != nil {

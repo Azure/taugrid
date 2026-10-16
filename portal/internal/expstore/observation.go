@@ -32,10 +32,6 @@ var allowedObservationScopes = map[string]string{
 	"metric":     "",
 }
 
-// observationScopeNames returns the accepted scope names in a stable order so
-// the validation error message is derived from allowedObservationScopes rather
-// than duplicated as a literal that silently drifts when a scope is added or
-// removed.
 func observationScopeNames() []string {
 	names := make([]string, 0, len(allowedObservationScopes))
 	for name := range allowedObservationScopes {
@@ -211,8 +207,6 @@ func validateObservationScope(ctx context.Context, tx *sql.Tx, scopeType, scopeI
 		"event":      "event_id",
 	}[scopeType]
 	if !ok {
-		// Fail closed. An unmapped scope previously produced "WHERE  = ?",
-		// which surfaced to users as an opaque SQL syntax error.
 		return fmt.Errorf("unsupported observation scope %q", scopeType)
 	}
 	var exists int

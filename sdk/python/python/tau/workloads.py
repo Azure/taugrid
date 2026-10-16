@@ -40,7 +40,6 @@ _RESERVED_SCRIPT_DESTINATIONS = frozenset({"train.py", _USER_MODULE_FILENAME})
 
 DEFAULT_WORKLOAD_KIND = "rayjob"
 
-
 def _handle_call_signature(
     fn: Callable[..., Any],
     *,
@@ -74,10 +73,8 @@ def _handle_call_signature(
 
     return signature.replace(parameters=parameters)
 
-
 def _running_in_tau_job() -> bool:
     return bool(os.environ.get("TAU_DATA_DIR"))
-
 
 def _refuse_cluster_submit(action: str = ".submit()") -> None:
     if _running_in_tau_job():
@@ -88,11 +85,9 @@ def _refuse_cluster_submit(action: str = ".submit()") -> None:
             "(TAU_DATA_DIR is set). Submit from your local machine."
         )
 
-
 def _check_dry_run(value: Optional[str]) -> None:
     if value is not None and value not in ("client", "server"):
         raise ValueError("dry_run must be 'client' or 'server'")
-
 
 def _completed_process_kwargs(capture: bool) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {"check": not capture}
@@ -100,7 +95,6 @@ def _completed_process_kwargs(capture: bool) -> Dict[str, Any]:
         kwargs["capture_output"] = True
         kwargs["text"] = True
     return kwargs
-
 
 def _write_submission_files(
     tmp_path: pathlib.Path,
@@ -128,7 +122,6 @@ def _write_submission_files(
     for src, dest in extra_scripts:
         extra_args.append(str(src) + ":" + dest)
     return manifest_path, wrapper_path, extra_args
-
 
 def _generated_run_config(
     manifest: Mapping[str, Any],
@@ -200,7 +193,6 @@ def _generated_run_config(
         generated.pop("profiler", None)
     return generated
 
-
 def _update_generated_run_config(
     manifest_path: pathlib.Path,
     *,
@@ -253,7 +245,6 @@ def _update_generated_run_config(
     with manifest_path.open("w") as f:
         yaml.safe_dump(generated, f, sort_keys=False)
 
-
 def _job_secret_name(manifest: Dict[str, Any]) -> str:
     name = str(manifest.get("name") or "")
     prefix = "tau"
@@ -261,7 +252,6 @@ def _job_secret_name(manifest: Dict[str, Any]) -> str:
     if isinstance(raw_naming, Mapping) and raw_naming.get("prefix"):
         prefix = str(raw_naming["prefix"])
     return f"{prefix}-{name}-secrets"
-
 
 def _collect_secret_sources(env: Mapping[str, Any] | Sequence[Any] | None) -> Dict[str, SecretSource]:
     if not isinstance(env, Mapping):
@@ -271,7 +261,6 @@ def _collect_secret_sources(env: Mapping[str, Any] | Sequence[Any] | None) -> Di
         if isinstance(value, SecretSource):
             sources[str(env_name)] = value
     return sources
-
 
 def _collect_manifest_secret_sources(manifest: Mapping[str, Any]) -> Dict[str, SecretSource]:
     runtime = manifest.get("runtime")
@@ -298,12 +287,10 @@ def _collect_manifest_secret_sources(manifest: Mapping[str, Any]) -> Dict[str, S
         )
     return sources
 
-
 @dataclass(frozen=True)
 class _ResolvedSecretValues:
     string_data: Dict[str, str]
     env_to_key: Dict[str, str]
-
 
 def _resolve_secret_payload(
     manifest: Dict[str, Any],
@@ -314,7 +301,6 @@ def _resolve_secret_payload(
         return rewritten, {}
     values = _resolve_secret_values(sources)
     return rewritten, _build_secret_payload(secret_name, values.string_data)
-
 
 def _prepare_secret_references(
     manifest: Dict[str, Any],
@@ -329,7 +315,6 @@ def _prepare_secret_references(
     out = _rewrite_generated_secret_refs(manifest, secret_name, env_to_key)
     return out, sources, secret_name
 
-
 def _resolve_secret_values(sources: Mapping[str, SecretSource]) -> _ResolvedSecretValues:
     string_data: Dict[str, str] = {}
     env_to_key: Dict[str, str] = {}
@@ -337,7 +322,6 @@ def _resolve_secret_values(sources: Mapping[str, SecretSource]) -> _ResolvedSecr
         string_data[source.key] = _read_secret_source_value(env_name, source)
         env_to_key[env_name] = source.key
     return _ResolvedSecretValues(string_data=string_data, env_to_key=env_to_key)
-
 
 def _read_secret_source_value(env_name: str, source: SecretSource) -> str:
     if source.env:
@@ -356,10 +340,8 @@ def _read_secret_source_value(env_name: str, source: SecretSource) -> str:
         )
     return path.read_text().rstrip("\n")
 
-
 def _build_secret_payload(secret_name: str, string_data: Mapping[str, str]) -> Dict[str, Any]:
     return {"name": secret_name, "stringData": dict(string_data)}
-
 
 def _rewrite_generated_secret_refs(
     manifest: Dict[str, Any],
@@ -390,7 +372,6 @@ def _rewrite_generated_secret_refs(
     out["runtime"] = runtime
     return out
 
-
 def _write_job_secret_file(tmp_path: pathlib.Path, payload: Mapping[str, Any]) -> Optional[pathlib.Path]:
     if not payload:
         return None
@@ -401,11 +382,9 @@ def _write_job_secret_file(tmp_path: pathlib.Path, payload: Mapping[str, Any]) -
         json.dump(payload, f)
     return path
 
-
 def _append_optional_flag(argv: List[str], flag: str, value: Any) -> None:
     if value:
         argv.extend([flag, str(value)])
-
 
 def _normalize_node_selectors(selectors: Any) -> List[str]:
     if selectors is None:
@@ -426,7 +405,6 @@ def _normalize_node_selectors(selectors: Any) -> List[str]:
         out.append(key.strip() + "=" + value.strip())
     return out
 
-
 def _require_runtime_pip(manifest: Dict[str, Any], submit_name: str) -> None:
     runtime_block = manifest.get("runtime") if isinstance(manifest, dict) else None
     if isinstance(runtime_block, dict) and runtime_block.get("pip"):
@@ -439,14 +417,12 @@ def _require_runtime_pip(manifest: Dict[str, Any], submit_name: str) -> None:
         "default pip list." % submit_name
     )
 
-
 def _validate_checkpoint_artifact(path: str) -> str:
     return validate_checkpoint_artifact(
         path,
         subject="tau-py: checkpoint_artifact",
         error_type=ValueError,
     )
-
 
 def _with_checkpoint_artifact(manifest: Dict[str, Any], checkpoint_artifact: str) -> Dict[str, Any]:
     artifact_path = _validate_checkpoint_artifact(checkpoint_artifact)
@@ -466,7 +442,6 @@ def _with_checkpoint_artifact(manifest: Dict[str, Any], checkpoint_artifact: str
     out["artifacts"] = artifacts
     return out
 
-
 def _with_runtime_pip(manifest: Dict[str, Any], runtime_pip: Optional[Sequence[str]]) -> Dict[str, Any]:
     if runtime_pip is None:
         return manifest
@@ -478,7 +453,6 @@ def _with_runtime_pip(manifest: Dict[str, Any], runtime_pip: Optional[Sequence[s
     runtime["pip"] = pip
     out["runtime"] = runtime
     return out
-
 
 def _with_runtime_env(
     manifest: Dict[str, Any],
@@ -493,13 +467,11 @@ def _with_runtime_env(
     out["runtime"] = runtime
     return out
 
-
 def _storage_block(manifest: Dict[str, Any]) -> Dict[str, Any]:
     raw_storage = manifest.get("storage") or {}
     if not isinstance(raw_storage, dict):
         raise ValueError("tau-py: config/extra_manifest['storage'] must be a dict")
     return dict(raw_storage)
-
 
 def _with_storage_mounts(manifest: Dict[str, Any], mounts: Optional[Sequence[Any]]) -> Dict[str, Any]:
     normalized = normalize_mounts(mounts)
@@ -513,7 +485,6 @@ def _with_storage_mounts(manifest: Dict[str, Any], mounts: Optional[Sequence[Any
     storage["mounts"] = [*existing, *normalized]
     out["storage"] = storage
     return out
-
 
 def _with_data_pvc(
     manifest: Dict[str, Any],
@@ -536,7 +507,6 @@ def _with_data_pvc(
     out["storage"] = storage
     return out
 
-
 def _positive_int(value: Optional[int], name: str) -> Optional[int]:
     if value is None:
         return None
@@ -545,7 +515,6 @@ def _positive_int(value: Optional[int], name: str) -> Optional[int]:
         raise ValueError("tau-py: %s must be >= 1 (got %s)" % (name, normalized))
     return normalized
 
-
 def _nonblank_text(value: Optional[str], name: str) -> Optional[str]:
     if value is None:
         return None
@@ -553,7 +522,6 @@ def _nonblank_text(value: Optional[str], name: str) -> Optional[str]:
     if not normalized or normalized.strip() != normalized:
         raise ValueError("tau-py: %s must not be empty or have surrounding whitespace" % name)
     return normalized
-
 
 def _compute_resource_overrides(
     *,
@@ -578,13 +546,11 @@ def _compute_resource_overrides(
     }
     return {k: v for k, v in raw.items() if v is not None}
 
-
 def _compute_block(manifest: Dict[str, Any]) -> Dict[str, Any]:
     raw_compute = manifest.get("compute") or {}
     if not isinstance(raw_compute, dict):
         raise ValueError("tau-py: config['compute'] must be a dict")
     return dict(raw_compute)
-
 
 def _with_compute_resources(
     manifest: Dict[str, Any],
@@ -600,13 +566,11 @@ def _with_compute_resources(
     out["compute"] = compute
     return out
 
-
 def _runtime_block(manifest: Dict[str, Any]) -> Dict[str, Any]:
     raw_runtime = manifest.get("runtime") or {}
     if not isinstance(raw_runtime, dict):
         raise ValueError("tau-py: config/extra_manifest['runtime'] must be a dict")
     return dict(raw_runtime)
-
 
 def _validate_model_name(name: str) -> str:
     value = name.strip()
@@ -618,7 +582,6 @@ def _validate_model_name(name: str) -> str:
         if not (ch.isdigit() or ("a" <= ch <= "z") or ch == "-"):
             raise ValueError("tau-py: model name must use lowercase alphanumerics with internal hyphens")
     return value
-
 
 def _model_metadata(
     *,
@@ -657,7 +620,6 @@ def _model_metadata(
         metadata["metric_direction"] = metric_direction
     return metadata
 
-
 def _with_model_metadata(manifest: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
     if not metadata:
         return manifest
@@ -692,7 +654,6 @@ def _with_model_metadata(manifest: Dict[str, Any], metadata: Dict[str, Any]) -> 
     out["model"] = model_block
     return out
 
-
 @dataclass(frozen=True)
 class _EntrypointSpec:
     local_script: pathlib.Path | None
@@ -712,7 +673,6 @@ class _EntrypointSpec:
             "pass_ctx": bool(self.pass_ctx),
         }
 
-
 def _parse_entrypoint(value: str | pathlib.Path) -> tuple[str, str]:
     raw = str(value).strip()
     if not raw:
@@ -725,7 +685,6 @@ def _parse_entrypoint(value: str | pathlib.Path) -> tuple[str, str]:
     if not function or not function.isidentifier():
         raise ValueError("tau-py: entrypoint function must be a Python identifier")
     return script, function
-
 
 def _jsonable_entrypoint_payload(
     args: Sequence[Any] | None,
@@ -740,7 +699,6 @@ def _jsonable_entrypoint_payload(
         raise ValueError("tau-py: entrypoint_args and entrypoint_kwargs must be JSON-serializable") from exc
     return tuple(decoded["args"]), dict(decoded["kwargs"])
 
-
 def _script_dest(path: pathlib.Path, *, prefix: str = "") -> str:
     name = path.name
     if not name or name in {".", ".."}:
@@ -749,7 +707,6 @@ def _script_dest(path: pathlib.Path, *, prefix: str = "") -> str:
     if "/" in dest or "\\" in dest or dest in _RESERVED_SCRIPT_DESTINATIONS:
         raise ValueError(f"tau-py: script destination {dest!r} is reserved or invalid")
     return dest
-
 
 def _normalize_extra_scripts(extra_scripts: Sequence[str | pathlib.Path] | None) -> list[tuple[pathlib.Path, str]]:
     staged: list[tuple[pathlib.Path, str]] = []
@@ -764,7 +721,6 @@ def _normalize_extra_scripts(extra_scripts: Sequence[str | pathlib.Path] | None)
         seen.add(dest)
         staged.append((path, dest))
     return staged
-
 
 def _normalize_entrypoint_spec(
     entrypoint: str | pathlib.Path,
@@ -806,7 +762,6 @@ def _normalize_entrypoint_spec(
         staged_scripts=tuple(staged),
     )
 
-
 def _with_entrypoint_metadata(manifest: Dict[str, Any], spec: _EntrypointSpec | None) -> Dict[str, Any]:
     if spec is None:
         return manifest
@@ -815,7 +770,6 @@ def _with_entrypoint_metadata(manifest: Dict[str, Any], spec: _EntrypointSpec | 
     out = dict(manifest)
     out["entrypoint"] = spec.manifest_block()
     return out
-
 
 def _entrypoint_local_fn(spec: _EntrypointSpec) -> Callable[["Ctx"], Any]:
     def _tau_entrypoint_train(ctx: "Ctx") -> Any:
@@ -826,10 +780,8 @@ def _entrypoint_local_fn(spec: _EntrypointSpec) -> Callable[["Ctx"], Any]:
     _tau_entrypoint_train.__name__ = "_tau_entrypoint_train"
     return _tau_entrypoint_train
 
-
 def _render_entrypoint_user_module() -> str:
     return '''import tau
-
 
 @tau.train(name="tau-entrypoint")
 def _tau_entrypoint_train(ctx):
@@ -844,7 +796,6 @@ def _tau_entrypoint_train(ctx):
         return tau.call_staged_function(script, function, ctx, *args, **kwargs)
     return tau.call_staged_function(script, function, *args, **kwargs)
 '''
-
 
 @dataclass
 class Ctx:
@@ -869,7 +820,6 @@ class Ctx:
     storage_hot_write_mbps: Optional[float] = None
     is_remote: bool = False
 
-
 @dataclass(frozen=True)
 class _TrainParams:
     name: str
@@ -890,7 +840,6 @@ class _TrainParams:
     data_pvc: Optional[str] = None
     compute_resources: Dict[str, Any] = field(default_factory=dict)
 
-
 @dataclass(frozen=True)
 class _EvalParams:
     name: str
@@ -905,7 +854,6 @@ class _EvalParams:
     namespace: Optional[str] = None
     team: Optional[str] = None
     preset: Optional[str] = None
-
 
 class _TrainHandle:
     """Decorator handle with local call and remote submit paths."""
@@ -966,12 +914,6 @@ class _TrainHandle:
                 "tau-py: workers must be >= 1 (got " + str(resolved_workers) + ")"
             )
         if lane == "eval":
-            # @tau.train is for training shapes; @tau.eval is its own
-            # decorator with the eval Kueue queue + GPU-actor + CPU-workers
-            # topology. Allowing lane="eval" here would silently land a
-            # multi-GPU train on the eval queue (wrong priority class,
-            # wrong shape). The Go validator would catch it on submit, but
-            # surfacing it at decoration time saves a round-trip.
             raise ValueError(
                 "tau-py: @tau.train cannot use lane=\"eval\"; "
                 "use @tau.eval for eval workloads."
@@ -1024,13 +966,11 @@ class _TrainHandle:
         functools.update_wrapper(self, fn, updated=())
         self.__signature__ = _handle_call_signature(fn)
 
-    # ----- introspection ---------------------------------------------------
-
     @staticmethod
     def _resolve_source_path(fn: Callable) -> pathlib.Path:
         try:
             src = inspect.getfile(fn)
-        except TypeError as e:  # builtins, etc.
+        except TypeError as e:
             raise RuntimeError(
                 "tau-py: cannot determine source file of training "
                 "function; @train must decorate a function defined in a "
@@ -1075,8 +1015,6 @@ class _TrainHandle:
         m = _with_entrypoint_metadata(m, self._entrypoint_spec)
         return _with_checkpoint_artifact(m, params.checkpoint_artifact)
 
-    # ----- local execution -------------------------------------------------
-
     def __call__(self, *args, **kwargs):
         """Run the training function locally with a cwd-rooted Ctx.
 
@@ -1098,8 +1036,6 @@ class _TrainHandle:
             is_remote=False,
         )
         return self._fn(ctx, *args, **kwargs)
-
-    # ----- remote submission ----------------------------------------------
 
     def _submission_manifest(
         self,
@@ -1307,7 +1243,6 @@ class _TrainHandle:
 
             return subprocess.run(argv, **_completed_process_kwargs(capture))
 
-
 def train(
     *,
     name: Optional[str] = None,
@@ -1452,9 +1387,7 @@ def train(
 
     return decorator
 
-
 EVAL_WORKLOAD_KIND = "rayjob-eval"
-
 
 class _EvalHandle:
     """Decorator handle for the eval RayJob shape."""
@@ -1780,7 +1713,6 @@ class _EvalHandle:
 
             return subprocess.run(argv, **_completed_process_kwargs(capture))
 
-
 def eval(
     *,
     name: str,
@@ -1881,7 +1813,6 @@ def eval(
 
     return decorator
 
-
 def _find_tau_binary() -> str:
     """Locate the tau Go CLI on PATH; honor TAU_BINARY env override."""
     override = os.environ.get("TAU_BINARY")
@@ -1897,7 +1828,6 @@ def _find_tau_binary() -> str:
         )
     return found
 
-
 def _binary_has_experiment_verb(binary: str) -> bool:
     """Report whether ``binary`` still exposes the ``experiment`` command group."""
     try:
@@ -1911,7 +1841,6 @@ def _binary_has_experiment_verb(binary: str) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return completed.returncode == 0
-
 
 def _find_portal_binary() -> str:
     """Locate the taugrid-portal CLI, which owns the Stellar experiment store.

@@ -33,7 +33,6 @@ func TestJSONLSink_WritesOneLinePerOutcome(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	// Read back and verify.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -97,8 +96,6 @@ func TestMulti_FansOutToAll(t *testing.T) {
 }
 
 func TestRunID_DefaultsToZero(t *testing.T) {
-	// Clear both the GHA and ADO provenance vars so the result is deterministic
-	// even when the test itself runs inside an ADO job (where BUILD_BUILDID is set).
 	t.Setenv("GITHUB_RUN_ID", "")
 	t.Setenv("BUILD_BUILDID", "")
 	if id := RunID(); id != 0 {
@@ -108,16 +105,13 @@ func TestRunID_DefaultsToZero(t *testing.T) {
 
 func TestRunID_ParsesEnvVar(t *testing.T) {
 	t.Setenv("GITHUB_RUN_ID", "12345678")
-	t.Setenv("BUILD_BUILDID", "99999") // GHA must win over ADO fallback
+	t.Setenv("BUILD_BUILDID", "99999")
 	if id := RunID(); id != 12345678 {
 		t.Errorf("RunID() = %d, want 12345678", id)
 	}
 }
 
 func TestRunAttempt_DefaultsToOneWhenUnset(t *testing.T) {
-	// GitHub guarantees GITHUB_RUN_ATTEMPT on hosted runners, but we default to
-	// 1 for local runs and old self-hosted images that may not set it.
-	// Clear the ADO fallback too so the test is hermetic on an ADO agent.
 	t.Setenv("GITHUB_RUN_ATTEMPT", "")
 	t.Setenv("SYSTEM_JOBATTEMPT", "")
 	if n := RunAttempt(); n != 1 {
@@ -151,8 +145,6 @@ func TestRunAttempt_DefaultsToOneOnZeroOrNegative(t *testing.T) {
 }
 
 func TestBranch_PullRequestUsesHeadRef(t *testing.T) {
-	// On pull_request events, GITHUB_HEAD_REF is the PR head branch.
-	// GITHUB_REF_NAME is "<pr_number>/merge" — should be ignored.
 	t.Setenv("GITHUB_HEAD_REF", "contributor/fix-race")
 	t.Setenv("GITHUB_REF_NAME", "123/merge")
 	t.Setenv("SYSTEM_PULLREQUEST_SOURCEBRANCH", "")
@@ -163,7 +155,6 @@ func TestBranch_PullRequestUsesHeadRef(t *testing.T) {
 }
 
 func TestBranch_PushUsesRefName(t *testing.T) {
-	// On push events, GITHUB_HEAD_REF is empty.
 	t.Setenv("GITHUB_HEAD_REF", "")
 	t.Setenv("GITHUB_REF_NAME", "main")
 	t.Setenv("SYSTEM_PULLREQUEST_SOURCEBRANCH", "")
@@ -174,7 +165,6 @@ func TestBranch_PushUsesRefName(t *testing.T) {
 }
 
 func TestBranch_LocalRunReturnsEmpty(t *testing.T) {
-	// Clear GHA and ADO branch vars so "local run" is deterministic on any agent.
 	t.Setenv("GITHUB_HEAD_REF", "")
 	t.Setenv("GITHUB_REF_NAME", "")
 	t.Setenv("SYSTEM_PULLREQUEST_SOURCEBRANCH", "")
@@ -184,10 +174,7 @@ func TestBranch_LocalRunReturnsEmpty(t *testing.T) {
 	}
 }
 
-// --- Azure DevOps provenance fallback coverage (added per review on PR #1184) ---
-
 func TestRunID_FallsBackToBuildBuildID(t *testing.T) {
-	// No GHA var, ADO var present → resolves BUILD_BUILDID.
 	t.Setenv("GITHUB_RUN_ID", "")
 	t.Setenv("BUILD_BUILDID", "174002598")
 	if id := RunID(); id != 174002598 {
@@ -220,7 +207,6 @@ func TestRunAttempt_GitHubWinsOverADO(t *testing.T) {
 }
 
 func TestBranch_FallsBackToADOPullRequestSourceBranch(t *testing.T) {
-	// No GHA branch vars; ADO PR build → strip refs/heads/ prefix.
 	t.Setenv("GITHUB_HEAD_REF", "")
 	t.Setenv("GITHUB_REF_NAME", "")
 	t.Setenv("SYSTEM_PULLREQUEST_SOURCEBRANCH", "refs/heads/contributor/fix-race")
@@ -231,7 +217,6 @@ func TestBranch_FallsBackToADOPullRequestSourceBranch(t *testing.T) {
 }
 
 func TestBranch_FallsBackToADOBuildSourceBranchName(t *testing.T) {
-	// No GHA branch vars, no ADO PR var → ADO branch/manual build.
 	t.Setenv("GITHUB_HEAD_REF", "")
 	t.Setenv("GITHUB_REF_NAME", "")
 	t.Setenv("SYSTEM_PULLREQUEST_SOURCEBRANCH", "")

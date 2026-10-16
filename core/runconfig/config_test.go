@@ -34,14 +34,6 @@ compute:
 	}
 }
 
-// TestRunConfigRejectsCheckpointEvery locks in that policy.checkpoint_every is
-// not part of the direct run config contract. No renderer or runtime consumer
-// parses a checkpoint cadence: the value's only downstream effect was
-// contract.hasCheckpoint = true in core/topology/topology.go, which satisfies
-// the "mode=elastic requires checkpoint/restart semantics" guard. Exposing it
-// would let an elastic/preemptible job pass validation and still lose all
-// progress on eviction. Re-add it only alongside a real checkpoint-and-resume
-// contract and a preemption/resume regression test.
 func TestRunConfigRejectsCheckpointEvery(t *testing.T) {
 	_, err := parse([]byte(`name: elastic-run
 engine: job
@@ -1115,13 +1107,6 @@ func TestReferenceMarkdownCallsOutScopeAndUnsupportedFields(t *testing.T) {
 	}
 }
 
-// Fields a config path rejects outright, mapped to the path that accepts them.
-//
-// This list is maintained by hand. A fail-closed guard would have to walk the
-// rejection sites, and those straddle two modules -- core/runconfig/config.go
-// and cli/internal/cli/run.go -- so a walk rooted here would see only half of
-// them and read as complete. Adding a path-scoped rejection means adding the
-// field here too.
 var pathScopedStatuses = map[string]FieldStatus{
 	"runtime.env_kv":             statusWorkflowOnly,
 	"runtime.working_dir":        statusDirectOnly,
@@ -1129,8 +1114,6 @@ var pathScopedStatuses = map[string]FieldStatus{
 	"policy.clear_node_selector": statusDirectOnly,
 }
 
-// The rendered table is what researchers actually read, so assert the status
-// reaches it rather than trusting the catalog alone.
 func TestReferenceMarkdownShowsPathScopedStatus(t *testing.T) {
 	got := ReferenceMarkdown()
 	for path, want := range pathScopedStatuses {
@@ -1154,9 +1137,6 @@ func TestValidateReservedEnvKeys(t *testing.T) {
 		{"TAU_DIST_BACKEND", map[string]string{"TAU_DIST_BACKEND": "nccl"}, "TAU_DIST_BACKEND"},
 		{"TAU_WORLD_SIZE", map[string]string{"TAU_WORLD_SIZE": "8"}, "TAU_WORLD_SIZE"},
 		{"TAU_NUM_WORKERS", map[string]string{"TAU_NUM_WORKERS": "4"}, "TAU_NUM_WORKERS"},
-		// The namespace rule is what makes config validation agree with the
-		// renderers. Under the old exact-key denylist these three passed here
-		// and were rejected later, at render.
 		{"unlisted TAU_ key", map[string]string{"TAU_EXPERIMENT": "x"}, "TAU_EXPERIMENT"},
 		{"TAU_ key added after this build", map[string]string{"TAU_SOME_FUTURE_KEY": "x"}, "TAU_SOME_FUTURE_KEY"},
 		{"lowercase TAU_ key", map[string]string{"tau_experiment": "x"}, "tau_experiment"},
@@ -1164,8 +1144,6 @@ func TestValidateReservedEnvKeys(t *testing.T) {
 		{"NCCL prefix other", map[string]string{"NCCL_SOCKET_IFNAME": "ib0"}, "NCCL_SOCKET_IFNAME"},
 		{"case-insensitive", map[string]string{"master_addr": "x"}, "master_addr"},
 		{"allowed key passes", map[string]string{"MY_VAR": "ok"}, ""},
-		// Injected by the retry loop and read back by researcher code, so they
-		// have to survive a round trip through runtime.env.
 		{"retry key passes", map[string]string{"TAU_RESUME_FROM": "/data/ckpt"}, ""},
 		{"multiple conflicts first reported", map[string]string{"MASTER_ADDR": "x", "NCCL_DEBUG": "INFO"}, "MASTER_ADDR"},
 	}
@@ -1189,10 +1167,6 @@ func TestValidateReservedEnvKeys(t *testing.T) {
 	}
 }
 
-// TestReservedTauEnvKeyIsANamespaceRule pins the shape of the reservation, not
-// just its current membership. The bug this replaces was two gates built as
-// opposites -- a denylist that defaults to permit in front of an allowlist that
-// defaults to deny -- so the case that matters most is the unlisted key.
 func TestReservedTauEnvKeyIsANamespaceRule(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1205,21 +1179,11 @@ func TestReservedTauEnvKeyIsANamespaceRule(t *testing.T) {
 		{"TAU_EXPERIMENT", true},
 		{"TAU_DIST_BACKEND", true},
 		{"TAU_", true},
-		// The namespace test is case-insensitive but the escape hatch is not.
-		// `tau_resume_from` is a different env var from the one the retry loop
-		// injects, so permitting it would hand the researcher a silent miss on
-		// the retry path; rejecting it surfaces the misspelling.
 		{"tau_resume_from", true},
 		{"Tau_Resume_From", true},
 		{"tau_experiment", true},
-		// Surrounding space is not trimmed away: a legal env name has none, so
-		// trimming could only let a malformed name read as a permitted key. A
-		// leading space is a different case -- the name no longer starts with
-		// TAU_, so it is outside this namespace entirely. envspec.Validate
-		// rejects both as malformed.
 		{"TAU_RESUME_FROM ", true},
 		{" TAU_RESUME_FROM", false},
-		// The prefix has to be anchored: these are ordinary user keys.
 		{"MY_TAU_VAR", false},
 		{"TAUX_THING", false},
 		{"MY_VAR", false},
@@ -1233,9 +1197,6 @@ func TestReservedTauEnvKeyIsANamespaceRule(t *testing.T) {
 	}
 }
 
-// The rejection message has to name the way forward. Its NCCL sibling names an
-// exact config key; this one previously named nothing, so the reader's next
-// action was undefined.
 func TestReservedTauEnvKeyErrorNamesThePermittedKeys(t *testing.T) {
 	msg := ReservedTauEnvKeyError("TAU_EXPERIMENT").Error()
 	if !strings.Contains(msg, "TAU_EXPERIMENT") {
@@ -1248,11 +1209,6 @@ func TestReservedTauEnvKeyErrorNamesThePermittedKeys(t *testing.T) {
 	}
 }
 
-// A leading space was raised as a possible bypass of the TAU_ prefix check.
-// It is not one: no path renders such a name. envspec's C_IDENTIFIER rule
-// rejects any surrounding space, on the Job map path via envspec.Merge and
-// everywhere else via envspec.Validate. This pins that so the reasoning is
-// enforced rather than only argued in a comment.
 func TestWhitespaceEnvNamesNeverReachAWorkload(t *testing.T) {
 	for _, name := range []string{" TAU_RESUME_FROM", "TAU_RESUME_FROM ", " PATH", "MY_VAR "} {
 		if err := envspec.Validate([]envspec.Var{{Name: name, Value: "v"}}); err == nil {
@@ -1330,29 +1286,24 @@ func TestValidateExecution(t *testing.T) {
 		execution Execution
 		wantErr   string
 	}{
-		// --- engine: rayjob valid combinations ---
 		{name: "rayjob/ray-train", engine: "rayjob", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: ""},
 		{name: "rayjob/ray-tune", engine: "rayjob", execution: Execution{Launcher: strPtr("ray-tune"), Metric: "loss", Configs: map[string]any{"lr": []any{0.01}}}, wantErr: ""},
 		{name: "rayjob/nil-launcher", engine: "rayjob", execution: Execution{}, wantErr: ""},
 		{name: "legacy-ray-alias", engine: "ray", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: ""},
 
-		// --- engine: rayjob cross-engine rejections ---
 		{name: "rayjob/torchrun", engine: "rayjob", execution: Execution{Launcher: strPtr("torchrun")}, wantErr: "torchrun is for engine: job"},
 		{name: "rayjob/python", engine: "rayjob", execution: Execution{Launcher: strPtr("python")}, wantErr: "python is for engine: job"},
 		{name: "rayjob/unknown", engine: "rayjob", execution: Execution{Launcher: strPtr("vllm")}, wantErr: "not valid for engine: rayjob"},
 		{name: "rayjob/nodes>1", engine: "rayjob", execution: Execution{Nodes: intPtr(2)}, wantErr: "execution.nodes is for engine: job"},
 
-		// --- engine: job valid combinations ---
 		{name: "job/python", engine: "job", execution: Execution{Launcher: strPtr("python")}, wantErr: ""},
 		{name: "job/torchrun", engine: "job", execution: Execution{Launcher: strPtr("torchrun")}, wantErr: ""},
 		{name: "job/nil-launcher", engine: "job", execution: Execution{}, wantErr: ""},
 
-		// --- engine: job cross-engine rejections ---
 		{name: "job/ray-train", engine: "job", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: "requires engine: rayjob"},
 		{name: "job/ray-tune", engine: "job", execution: Execution{Launcher: strPtr("ray-tune")}, wantErr: "requires engine: rayjob"},
 		{name: "job/unknown", engine: "job", execution: Execution{Launcher: strPtr("deepspeed")}, wantErr: "not valid for engine: job"},
 
-		// --- inferred engine (empty string) ---
 		{name: "inferred/torchrun", engine: "", execution: Execution{Launcher: strPtr("torchrun")}, wantErr: ""},
 		{name: "inferred/python", engine: "", execution: Execution{Launcher: strPtr("python")}, wantErr: ""},
 		{name: "inferred/nil-launcher", engine: "", execution: Execution{}, wantErr: ""},
@@ -1360,23 +1311,19 @@ func TestValidateExecution(t *testing.T) {
 		{name: "inferred/ray-train-requires-engine", engine: "", execution: Execution{Launcher: strPtr("ray-train")}, wantErr: "requires engine: rayjob"},
 		{name: "inferred/ray-tune-requires-engine", engine: "", execution: Execution{Launcher: strPtr("ray-tune")}, wantErr: "requires engine: rayjob"},
 
-		// --- processes_per_node constraints ---
 		{name: "ppn/torchrun-ok", engine: "job", execution: Execution{Launcher: strPtr("torchrun"), ProcessesPerNode: intPtr(4)}, wantErr: ""},
 		{name: "ppn/python-ppn1-ok", engine: "job", execution: Execution{Launcher: strPtr("python"), ProcessesPerNode: intPtr(1)}, wantErr: ""},
 		{name: "ppn/python-ppn2-rejected", engine: "job", execution: Execution{Launcher: strPtr("python"), ProcessesPerNode: intPtr(2)}, wantErr: "requires execution.launcher: torchrun"},
 		{name: "ppn/ray-train-rejected", engine: "rayjob", execution: Execution{Launcher: strPtr("ray-train"), ProcessesPerNode: intPtr(4)}, wantErr: "requires execution.launcher: torchrun"},
 		{name: "ppn/nil-launcher-rejected", engine: "job", execution: Execution{ProcessesPerNode: intPtr(2)}, wantErr: "requires execution.launcher: torchrun"},
 
-		// --- nodes constraints ---
 		{name: "nodes<1", engine: "job", execution: Execution{Nodes: intPtr(0)}, wantErr: "execution.nodes must be >= 1"},
 		{name: "nodes=1/rayjob-ok", engine: "rayjob", execution: Execution{Nodes: intPtr(1)}, wantErr: ""},
 		{name: "nodes=2/job-ok", engine: "job", execution: Execution{Nodes: intPtr(2)}, wantErr: ""},
 
-		// --- case insensitivity ---
 		{name: "case/Ray-Train", engine: "RayJob", execution: Execution{Launcher: strPtr("Ray-Train")}, wantErr: ""},
 		{name: "case/TORCHRUN", engine: "job", execution: Execution{Launcher: strPtr("TORCHRUN")}, wantErr: ""},
 
-		// --- ray-tune field validation ---
 		{name: "tune/valid", engine: "rayjob", execution: Execution{
 			Launcher: strPtr("ray-tune"), Metric: "val_loss", Mode: "min",
 			NumSamples: intPtr(5), MaxConcurrentTrials: intPtr(2),

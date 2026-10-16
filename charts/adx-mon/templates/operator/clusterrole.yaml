@@ -6,23 +6,18 @@ metadata:
   labels:
     {{- include "adx-mon.componentLabels" (dict "root" . "component" "operator") | nindent 4 }}
 rules:
-  # Core resources needed by controller-runtime and operator reconciliation
   - apiGroups: [""]
     resources: [namespaces, pods, services, configmaps, serviceaccounts]
     verbs: [get, list, watch, create, update, delete]
-  # Workload resources the operator creates for adx-mon components
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, delete]
-  # RBAC — read-only; component roles are installed by Helm, not created by operator at runtime
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [clusterroles, clusterrolebindings]
     verbs: [get, list, watch]
-  # Events — controller-runtime records reconciliation events
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
-  # All adx-mon CRD types — full CRUD for reconciliation
   - apiGroups: [adx-mon.azure.com]
     resources:
       - adxclusters

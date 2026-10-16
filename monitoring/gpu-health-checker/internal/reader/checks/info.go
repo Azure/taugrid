@@ -12,12 +12,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// InfoReader validates GPU count, driver version, and VBIOS version from the
-// collector-populated gpu_info table. Device-file presence (/dev/nvidia*) is
-// intentionally NOT checked here — the reader runs inside the NPD container
-// which does not mount /dev, and a missing device would already cause DCGM
-// operations in the collector to fail, making the collector the authoritative
-// signal for device accessibility.
 type InfoReader struct{}
 
 func (r *InfoReader) Name() string { return "info" }

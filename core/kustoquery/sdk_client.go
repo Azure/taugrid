@@ -1,12 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// SDKClient is the portal's native Azure Kusto access path. Unlike Client — which
-// shells out to an external --kusto-query-command (outsourcing auth + transport,
-// which forces IMDS-token and JSON-escaping hacks in the adapter script) —
-// SDKClient talks to ADX directly through azure-kusto-go with
-// DefaultAzureCredential (workload identity, managed identity, az login, ...).
-// It reuses ParseRows so board code sees the same generic Rows.
 package kustoquery
 
 import (
@@ -22,11 +16,6 @@ import (
 	"github.com/Azure/taugrid/core/expkusto"
 )
 
-// SDKClient executes KQL against ADX using the native azure-kusto-go SDK. The
-// zero endpoint disables the client (Query returns ErrNoQueryCommand); the zero
-// database falls back to the Metrics ADX default. queryJSON is an injectable
-// transport seam: nil means "use the real DefaultAzureCredential-backed client",
-// and tests fake it to exercise the parse path without a live cluster.
 type SDKClient struct {
 	Endpoint  string
 	Database  string
@@ -45,7 +34,6 @@ type sharedADXQuery struct {
 
 var sharedADXQueries sync.Map
 
-// Query runs kql against ADX and parses the JSON response into generic Rows.
 func (c *SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
 	raw, err := c.RawQuery(ctx, query)
 	if err != nil {
@@ -58,7 +46,6 @@ func (c *SDKClient) Query(ctx context.Context, query string) ([]Row, error) {
 	return rows, nil
 }
 
-// RawQuery runs kql through a lazily initialized, reusable SDK transport.
 func (c *SDKClient) RawQuery(ctx context.Context, query string) (string, error) {
 	endpoint := strings.TrimSpace(c.Endpoint)
 	if endpoint == "" {
@@ -86,16 +73,11 @@ func (c *SDKClient) RawQuery(ctx context.Context, query string) (string, error) 
 	return raw, nil
 }
 
-// NewRawSDKQuery returns a raw ADX query function backed by one reusable SDK
-// client. Stellar parses its own result schema, so it uses this instead of Query.
 func NewRawSDKQuery(endpoint, database string) func(context.Context, string) (string, error) {
 	client := &SDKClient{Endpoint: endpoint, Database: database}
 	return client.RawQuery
 }
 
-// newADXQuery returns the endpoint-wide production transport. Every native
-// caller for the same endpoint shares credentials, HTTP connections, and SDK
-// client state while still choosing its database per query.
 func newADXQuery(endpoint string) (func(context.Context, string, string) (string, error), error) {
 	value, _ := sharedADXQueries.LoadOrStore(endpoint, &sharedADXQuery{})
 	shared := value.(*sharedADXQuery)

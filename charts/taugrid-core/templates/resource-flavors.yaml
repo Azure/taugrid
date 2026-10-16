@@ -1,7 +1,3 @@
-{{- /*
-Generates optional Kueue ResourceFlavors for clusters that want taugrid-core to
-own flavor objects. Most clusters manage these through lane manifests/GitOps.
-*/ -}}
 {{- $resourceFlavors := default dict .Values.resourceFlavors -}}
 {{- if (default false $resourceFlavors.enabled) }}
 {{- range (default list $resourceFlavors.items) }}

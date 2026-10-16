@@ -19,8 +19,6 @@ func TestGeneratedAssetsUseExperimentCommand(t *testing.T) {
 	if strings.Contains(asset, "tau exp ") {
 		t.Fatalf("generated cockpit asset must not depend on the removed exp compatibility root")
 	}
-	// Stellar split out of the tau CLI, so `tau experiment ...` no longer
-	// resolves. Copy shown to users must name the binary that has the verb.
 	if strings.Contains(asset, "\"tau experiment") || strings.Contains(asset, ", \"tau ") {
 		t.Fatalf("generated cockpit asset must not tell users to run the tau binary; Stellar lives in taugrid-portal")
 	}

@@ -64,7 +64,6 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --kusto-endpoint=CostTracking=https://mycluster.westus2.kusto.windows.net
 
-
   - it: includes CostTracking kusto endpoint when clusterUrl is set
     template: alerter/deployment.yaml
     set:

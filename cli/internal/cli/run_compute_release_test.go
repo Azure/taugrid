@@ -13,16 +13,13 @@ import (
 	"github.com/Azure/taugrid/core/status"
 )
 
-// computeReleaseRunner answers the reads computeHeldByRun makes, and lets
-// a test change the answers after N polls so teardown can be simulated.
 type computeReleaseRunner struct {
 	clusters []string
 	pods     []string
 	calls    []string
 	polls    int
-	// onPoll runs before each RayCluster list and may mutate the state.
-	onPoll func(r *computeReleaseRunner, poll int)
-	errs   map[string]error
+	onPoll   func(r *computeReleaseRunner, poll int)
+	errs     map[string]error
 }
 
 func (r *computeReleaseRunner) Raw(_ context.Context, args []string, _ []byte) (string, error) {
@@ -79,8 +76,6 @@ func testComputeReleaseHooks() computeReleaseHooks {
 	}
 }
 
-// TestWaitForComputeRelease_BlocksUntilPodsAreActuallyGone is the core
-// regression: cancel must not report success while pods still hold the node.
 func TestWaitForComputeRelease_BlocksUntilPodsAreActuallyGone(t *testing.T) {
 	r := &computeReleaseRunner{
 		clusters: []string{rayClusterJSON("run-a-raycluster", "run-a")},
@@ -89,7 +84,6 @@ func TestWaitForComputeRelease_BlocksUntilPodsAreActuallyGone(t *testing.T) {
 			rayPodJSON("worker-0", "run-a-raycluster", "node-1"),
 		},
 		onPoll: func(r *computeReleaseRunner, poll int) {
-			// GC removes the cluster, then pods drain.
 			if poll == 1 {
 				r.clusters = nil
 			}
@@ -208,8 +202,6 @@ func TestWaitForComputeRelease_MissingRayCRDIsTolerated(t *testing.T) {
 	}
 }
 
-// cancelFlowRunner drives the whole cancel path: deletes first, then the
-// compute-release reads.
 type cancelFlowRunner struct {
 	computeReleaseRunner
 }
@@ -225,12 +217,8 @@ func (r *cancelFlowRunner) Raw(ctx context.Context, args []string, stdin []byte)
 	return r.computeReleaseRunner.Raw(ctx, args, stdin)
 }
 
-// TestDeleteWorkloadAndWaitForManagerCleanup_CapturesRayClusterNameBeforeDelete
-// pins the reason the original bug could not self-diagnose: once the RayJob is
-// deleted its .status.rayClusterName is gone, so the name must be read first.
 func TestDeleteWorkloadAndWaitForManagerCleanup_CapturesRayClusterNameBeforeDelete(t *testing.T) {
 	r := &cancelFlowRunner{computeReleaseRunner: computeReleaseRunner{
-		// No origin label, so only the pre-delete captured name can match.
 		clusters: []string{`{"metadata":{"name":"captured-raycluster","creationTimestamp":"2024-01-01T00:00:00Z"}}`},
 		pods:     []string{rayPodJSON("head", "captured-raycluster", "node-1")},
 		onPoll: func(r *computeReleaseRunner, poll int) {
@@ -265,8 +253,6 @@ func TestDeleteWorkloadAndWaitForManagerCleanup_CapturesRayClusterNameBeforeDele
 	if !strings.Contains(out.String(), "captured-raycluster") {
 		t.Fatalf("expected the pre-delete RayCluster name to be used after delete, got %q", out.String())
 	}
-	// The compute-release wait must run even on the direct/unqueued path,
-	// which returns early from the Kueue manager wait.
 	if !r.sawCall("get rayclusters.ray.io") {
 		t.Fatalf("expected compute release to run on the unqueued path, calls: %v", r.calls)
 	}

@@ -465,8 +465,6 @@ func tauClusterStatus(
 	}
 
 	if mode == tauv1alpha1.ClusterManagementModeReconcile {
-		// Queue and workspace aggregation are deliberately out of scope, so an
-		// otherwise healthy singleton must still be able to report Ready.
 		nodesReady := nodes.nodesCondition.Status == metav1.ConditionTrue
 		queuesReady := topology.queuesCondition.Status == metav1.ConditionTrue
 		if !nodes.reconciliationFailed && !topology.reconciliationFailed && nodesReady && queuesReady {

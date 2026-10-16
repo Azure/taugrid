@@ -44,7 +44,6 @@ export function App() {
   const params = new URLSearchParams(location.search);
   const workspace = params.get('workspace') || '';
   const directory = useDirectory(workspace);
-  // Never display a cached authorized scope after a failed directory refresh.
   const data = directory.isError ? undefined : directory.data;
   const scope = data?.selected, managed = data?.managed === true;
   const previousBoardScope = useRef<{ identity: string; queryKey: readonly unknown[] } | undefined>(undefined);

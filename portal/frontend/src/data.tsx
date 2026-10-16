@@ -27,14 +27,12 @@ export function createPortalQueryClient() {
     const { query, action } = event;
     if (action.type === 'success' && !action.manual) denied.delete(query);
     if (requestRejected(query.state.error) || requestRejected(query.state.fetchFailureReason)) denied.add(query);
-    // A later failure or cancellation must not restore a rejected payload.
     if (denied.has(query) && query.state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 });
   });
   return new QueryClient({ queryCache: cache, defaultOptions: { queries: { retry: false, staleTime: boardStaleTimeMs } } });
 }
 
 export function readableQuery<T>(query: UseQueryResult<T, Error>) {
-  // A refetch can still have success status while a rejected attempt is retrying.
   const error = requestRejected(query.failureReason) ? query.failureReason : query.error || query.failureReason;
   return { ...query, error, isError: !!error, data: requestRejected(error) ? undefined : query.data };
 }
@@ -64,7 +62,6 @@ export async function fetchJSON<T>(url: string, signal: AbortSignal): Promise<T>
         if ('state' in body && typeof body.state === 'string') state = body.state;
       }
     } catch (error) {
-      // Non-JSON proxy errors are displayed verbatim as text.
       if (!(error instanceof SyntaxError)) throw error;
     }
     throw new APIError(response.status, state, detail);
@@ -153,7 +150,6 @@ export function useBoard<T>(
   const url = scopedURL(path, scope.workspace, managed, scope.source);
   const queryKey = [...boardScopeKey(scope, managed), url];
   return useQuery({
-    // Include resolved authorization/data-source identity, not just a board name.
     queryKey,
     queryFn: async ({ signal }) => {
       const next = await fetchJSON<T>(url, signal);

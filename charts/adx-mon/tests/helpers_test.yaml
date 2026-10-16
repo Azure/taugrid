@@ -2,11 +2,8 @@ suite: helpers and values.yaml contract
 templates:
   - test_fixture.yaml
 
-# All tests set _test.enabled=true to render the fixture template
-
 tests:
 
-  # ── adx-mon.name ─────────────────────────────────────────────────────
   - it: name defaults to chart name
     set:
       _test.enabled: true
@@ -24,7 +21,6 @@ tests:
           path: data.name
           value: my-adx
 
-  # ── adx-mon.fullname ──────────────────────────────────────────────
   - it: fullname is RELEASE-NAME-adx-mon when release name differs from chart name
     set:
       _test.enabled: true
@@ -42,7 +38,6 @@ tests:
           path: data.fullname
           value: custom-fullname
 
-  # ── adx-mon.labels ───────────────────────────────────────────────
   - it: labels include app.kubernetes.io/name
     set:
       _test.enabled: true
@@ -83,7 +78,6 @@ tests:
           path: metadata.labels["helm.sh/chart"]
           pattern: ^adx-mon-
 
-  # ── adx-mon.selectorLabels ─────────────────────────────────────────
   - it: selectorLabels contain name and instance
     set:
       _test.enabled: true
@@ -103,7 +97,6 @@ tests:
           path: data.selectorLabels
           pattern: "app.kubernetes.io/version"
 
-  # ── adx-mon.componentSelectorLabels ─────────────────────────────────
   - it: componentSelectorLabels include component=operator
     set:
       _test.enabled: true
@@ -112,7 +105,6 @@ tests:
           path: data.componentSelectorLabels
           pattern: "app.kubernetes.io/component: operator"
 
-  # ── adx-mon.componentLabels ──────────────────────────────────────────
   - it: componentLabels include common labels plus component
     set:
       _test.enabled: true
@@ -130,7 +122,6 @@ tests:
           path: data.componentLabels
           pattern: "app.kubernetes.io/version"
 
-  # ── adx-mon.serviceAccountName ─────────────────────────────────────
   - it: serviceAccountName for operator includes component suffix
     set:
       _test.enabled: true
@@ -155,7 +146,6 @@ tests:
           path: data.saIngestor
           value: RELEASE-NAME-adx-mon-ingestor
 
-  # ── adx-mon.imageTag (appVersion fallback) ────────────────────────
   - it: imageTag falls back to chart appVersion when operator.image.tag is empty
     set:
       _test.enabled: true
@@ -174,7 +164,6 @@ tests:
           path: data.imageTag
           value: "v0.3.0"
 
-  # ── adx-mon.image (full reference) ──────────────────────────────
   - it: image reference uses MCR default repo and appVersion tag
     set:
       _test.enabled: true
@@ -202,7 +191,6 @@ tests:
           path: data.image
           value: myregistry.io/adx-mon/operator:custom
 
-  # ── adx-mon.namespace ────────────────────────────────────────────────
   - it: namespace defaults to release namespace when global.namespace is empty
     set:
       _test.enabled: true
@@ -221,7 +209,6 @@ tests:
           path: data.namespace
           value: custom-ns
 
-  # ── values.yaml defaults contract ───────────────────────────────────
   - it: fixture does not render in production (default _test.enabled=false)
     asserts:
       - hasDocuments:

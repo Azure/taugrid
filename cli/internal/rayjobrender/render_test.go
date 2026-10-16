@@ -789,10 +789,6 @@ func TestRenderCustomOlderRayImageUsesOldProbeEndpoint(t *testing.T) {
 }
 
 func TestRenderReleasesCapacityShortlyAfterCompletion(t *testing.T) {
-	// Until this TTL elapses a completed RayJob keeps its pods Running and holding
-	// node capacity. It was 86400 (24h), so a job could report SUCCEEDED and still
-	// consume the cluster all day. Keep it short so finished runs cannot block
-	// follow-on jobs.
 	out, err := Render(Options{
 		Name:       "ray-ttl",
 		Namespace:  "ray",
@@ -1037,12 +1033,6 @@ func TestRenderAcceptsRetryEnvVars(t *testing.T) {
 	}
 }
 
-// tauEnvContractCases mirrors the Job renderer's list. The permitted keys are
-// derived from runconfig rather than retyped, so a key added there is covered
-// here without an edit; the fixed extras cover keys the old denylist named, a
-// key no list mentions, a lowercase spelling, and names that only look
-// Tau-prefixed. No expected verdict is written down -- it is read from
-// runconfig, so this list cannot encode a second opinion.
 var tauEnvContractCases = append(slices.Clone(runconfig.TauEnvAllowed),
 	"TAU_DIST_BACKEND",
 	"TAU_WORLD_SIZE",
@@ -1055,11 +1045,6 @@ var tauEnvContractCases = append(slices.Clone(runconfig.TauEnvAllowed),
 	"MY_VAR",
 )
 
-// The Job renderer runs the same assertions over the same cases. Both read the
-// verdict from runconfig rather than restating it, so the two renderers can no
-// longer drift into "this env var works for a Job but not a RayJob" -- which
-// this renderer already did for lowercase spellings, before the gates were
-// unified.
 func TestRenderTauEnvGateAgreesWithRunconfig(t *testing.T) {
 	for _, name := range tauEnvContractCases {
 		t.Run(name, func(t *testing.T) {
@@ -1269,8 +1254,8 @@ func TestParseRayVersionFromImage(t *testing.T) {
 		{"mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0", [2]int{2, 54}},
 		{"registry.example.com/taugrid/ray:py3.10-ray2.39.0-gpu-rdma-jammy-custom", [2]int{2, 39}},
 		{"custom-registry.io/ray:py3.11-ray2.40.1-custom", [2]int{2, 40}},
-		{"no-version-tag:latest", [2]int{2, 56}}, // falls back to RayVersion constant
-		{"", [2]int{2, 56}},                      // empty falls back
+		{"no-version-tag:latest", [2]int{2, 56}},
+		{"", [2]int{2, 56}},
 	}
 	for _, tt := range tests {
 		got := parseRayVersion(tt.image)
@@ -1416,12 +1401,6 @@ func containerNames(t *testing.T, containers []any) string {
 	return strings.Join(names, ",")
 }
 
-// TestRenderIsSelfContained locks in the PR1 conversion: the rendered RayJob
-// must not depend on any external ConfigMap for its driver script. Instead
-// the payload is embedded and decoded at pod startup by a tau-payload
-// initContainer into an emptyDir mounted at /script. This plain non-Tune run
-// keeps that wiring head-only: its entrypoint runs on the head and workers do
-// not reload researcher source.
 func TestRenderIsSelfContained(t *testing.T) {
 	script := []byte("print('hello from tau')\n")
 	out, err := Render(Options{
@@ -1451,7 +1430,7 @@ func TestRenderIsSelfContained(t *testing.T) {
 	if digest == "" {
 		t.Fatalf("expected %s annotation on RayJob metadata: %v", payload.AnnotationDigest, annotations)
 	}
-	if len(digest) != 64 { // hex-encoded sha256
+	if len(digest) != 64 {
 		t.Fatalf("payload digest annotation does not look like a sha256 hex digest: %q", digest)
 	}
 
@@ -1517,8 +1496,6 @@ func TestRenderIsSelfContained(t *testing.T) {
 		}
 	}
 
-	// checkWorkerPodHasNoPayload guards the plain Ray contract. Tune and
-	// project-archive runs have separate tests that require worker payloads.
 	checkWorkerPodHasNoPayload := func(tpl map[string]any) {
 		t.Helper()
 		pod := tpl["spec"].(map[string]any)
@@ -1551,10 +1528,6 @@ func TestRenderIsSelfContained(t *testing.T) {
 	checkWorkerPodHasNoPayload(worker["template"].(map[string]any))
 }
 
-// TestRenderNeverSetsManagedBy is a regression guard: Kueue v0.18.1 owns
-// manager-side defaulting of spec.managedBy for MultiKueue dispatch. Tau
-// must never stamp this field itself, or it could conflict with (or bypass)
-// Kueue's own admission/dispatch logic.
 func TestRenderNeverSetsManagedBy(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "managed-by-check",
@@ -1578,9 +1551,6 @@ func TestRenderNeverSetsManagedBy(t *testing.T) {
 	}
 }
 
-// TestRenderRejectsScriptOverPayloadCap ensures an oversized driver script
-// surfaces an actionable error instead of silently truncating or rendering
-// an object that will fail admission later.
 func TestRenderRejectsScriptOverPayloadCap(t *testing.T) {
 	_, err := Render(Options{
 		Name:          "too-big",
@@ -1600,19 +1570,6 @@ func TestRenderRejectsScriptOverPayloadCap(t *testing.T) {
 	}
 }
 
-// TestRenderNearCapPayloadStaysUnderLastAppliedConfigLimit exercises the
-// worst case for the embedded-payload design: a script whose encoded payload
-// sits at the binding environment-entry budget, embedded once on the head
-// template (workers carry no payload; see
-// TestRenderIsSelfContained). The relevant constraint for PR1's client-side
-// `kubectl apply` workflow is not raw etcd object size but the
-// kubectl.kubernetes.io/last-applied-configuration annotation, which stores
-// the fully-applied object as JSON. This test marshals the rendered RayJob
-// to JSON (matching what client-side apply stores in that annotation, not
-// the YAML wire format) and asserts it stays comfortably under Kubernetes'
-// ~256 KiB annotation size ceiling, leaving headroom for the rest of the
-// object's metadata/spec fields. Server-side apply (which doesn't have this
-// annotation constraint) is out of scope for PR1.
 func TestRenderNearCapPayloadStaysUnderLastAppliedConfigLimit(t *testing.T) {
 	script := incompressibleScript(t, payload.MaxEnvEntryBytes)
 	out, err := Render(Options{
@@ -1635,7 +1592,7 @@ func TestRenderNearCapPayloadStaysUnderLastAppliedConfigLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal rendered RayJob as JSON: %v", err)
 	}
-	const lastAppliedConfigHeadroom = 200 * 1024 // leave margin under k8s' ~256 KiB last-applied-configuration annotation ceiling.
+	const lastAppliedConfigHeadroom = 200 * 1024
 	if len(jsonBytes) > lastAppliedConfigHeadroom {
 		t.Fatalf("rendered RayJob at payload cap serializes to %d JSON bytes, want <= %d (last-applied-configuration headroom)",
 			len(jsonBytes), lastAppliedConfigHeadroom)
@@ -1644,10 +1601,6 @@ func TestRenderNearCapPayloadStaysUnderLastAppliedConfigLimit(t *testing.T) {
 		len(script), len(jsonBytes), lastAppliedConfigHeadroom, lastAppliedConfigHeadroom-len(jsonBytes))
 }
 
-// incompressibleScript returns the largest deterministic, effectively
-// incompressible script that still encodes within payload.MaxEnvEntryBytes.
-// Payload envelopes are gzip-compressed, so a run of repeated bytes would
-// shrink to nothing and could not exercise the worst case this test is about.
 func incompressibleScript(t *testing.T, ceiling int) []byte {
 	t.Helper()
 	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -1910,7 +1863,6 @@ func TestAllowNCCLOverrideEnvSecretsValidation(t *testing.T) {
 		t.Fatalf("error should mention NCCL_P2P_DISABLE, got: %v", err)
 	}
 
-	// With override enabled, should pass.
 	_, err = Render(Options{
 		Name:              "nccl-secret-ok",
 		Namespace:         "ray",
@@ -1951,7 +1903,6 @@ func TestRayTrainConfigRendersEnvJSON(t *testing.T) {
 	if !strings.Contains(rendered, "TAU_RAY_TRAIN_CONFIG_JSON") {
 		t.Fatalf("rendered output should contain TAU_RAY_TRAIN_CONFIG_JSON:\n%s", rendered)
 	}
-	// Verify sorted keys: failure_config comes before torch_config.
 	idx1 := strings.Index(rendered, "failure_config")
 	idx2 := strings.Index(rendered, "torch_config")
 	if idx1 < 0 || idx2 < 0 {
@@ -1960,7 +1911,6 @@ func TestRayTrainConfigRendersEnvJSON(t *testing.T) {
 	if idx1 > idx2 {
 		t.Fatalf("JSON keys should be sorted (failure_config before torch_config):\n%s", rendered)
 	}
-	// Verify max_failures value is present.
 	if !strings.Contains(rendered, `"max_failures":3`) {
 		t.Fatalf("rendered output should contain max_failures:3:\n%s", rendered)
 	}
@@ -2040,14 +1990,6 @@ func TestEnvValidationRejectsMASTERKeys(t *testing.T) {
 	}
 }
 
-// --- working_dir project archive -------------------------------------------
-//
-// Ray resolves runtime_env working_dir independently on every node and
-// prepends the unpacked tree to PYTHONPATH. These tests pin the three things
-// that have to line up for that to work: a scheme-bearing URI (Ray's parse_uri
-// rejects bare paths), the archive present on head AND workers, and an
-// entrypoint invocation that does not depend on cwd.
-
 func renderWithArchive(t *testing.T, o Options) map[string]any {
 	t.Helper()
 	raw, err := Render(o)
@@ -2080,8 +2022,6 @@ func TestRenderProjectArchiveEmitsFileURIWorkingDir(t *testing.T) {
 	if !ok {
 		t.Fatalf("runtimeEnvYAML missing: %v", spec)
 	}
-	// A bare path fails server-side in Ray's parse_uri with "Invalid
-	// protocol"; the file:// scheme is what makes it resolvable per node.
 	if !strings.Contains(runtimeEnv, `working_dir: "file:///script/_tau_project.zip"`) {
 		t.Fatalf("working_dir must be a file:// URI, got: %q", runtimeEnv)
 	}
@@ -2102,8 +2042,6 @@ func TestRenderProjectArchiveShipsPayloadToWorkersToo(t *testing.T) {
 		t.Fatalf("unexpected worker initContainer %q", name)
 	}
 
-	// The runtime_env agent runs inside the ray container, so the archive has
-	// to be mounted there, not only in the initContainer.
 	container := pod["containers"].([]any)[0].(map[string]any)
 	if !hasMount(container, "script", "/script") {
 		t.Fatalf("worker ray container must mount the archive: %v", container["volumeMounts"])
@@ -2138,8 +2076,6 @@ func TestRenderProjectArchiveRunsEntrypointAsModule(t *testing.T) {
 	o.ScriptName = "pkg/train.py"
 	doc := renderWithArchive(t, o)
 	entry := doc["spec"].(map[string]any)["entrypoint"].(string)
-	// -m resolves through PYTHONPATH, which Ray sets to the unpacked
-	// working_dir, so it survives the entrypoint's own `cd /data`.
 	if !strings.Contains(entry, "python3 -m pkg.train") {
 		t.Fatalf("entrypoint should run the archived module, got: %q", entry)
 	}
@@ -2158,8 +2094,6 @@ func TestRenderProjectArchiveRejectsEntrypointOutsideProject(t *testing.T) {
 
 func TestRenderProjectArchiveDoesNotShipLooseScriptCopy(t *testing.T) {
 	o := archiveOptions()
-	// Incompressible, so the embedded payload dominates the rendered size and
-	// the comparison actually measures the duplicate copy.
 	o.Script = incompressibleScript(t, 40<<10)
 	withArchive, err := Render(o)
 	if err != nil {
@@ -2170,8 +2104,6 @@ func TestRenderProjectArchiveDoesNotShipLooseScriptCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	// The archive already contains the entrypoint; embedding the loose copy
-	// as well would double the payload for nothing.
 	if len(withArchive) >= len(withoutArchive) {
 		t.Fatalf("working_dir render (%d bytes) should not carry a duplicate script copy (%d bytes)",
 			len(withArchive), len(withoutArchive))
@@ -2199,13 +2131,6 @@ func hasVolume(pod map[string]any, name string) bool {
 	return false
 }
 
-// TestRenderMaxProjectArchiveStaysUnderLastAppliedConfigLimit pins the
-// constraint that actually bounds working_dir. Because Ray resolves a file://
-// working_dir on every node, the archive is embedded in the head template and
-// in each worker template, so it counts more than once against the
-// kubectl.kubernetes.io/last-applied-configuration annotation (~256 KiB).
-// Without MaxProjectArchiveBytes a project sized to the env-entry budget
-// rendered to ~215 KiB of JSON and blew the 200 KiB working budget.
 func TestRenderMaxProjectArchiveStaysUnderLastAppliedConfigLimit(t *testing.T) {
 	archive := incompressibleScript(t, MaxProjectArchiveBytes)
 	out, err := Render(Options{
@@ -2235,11 +2160,6 @@ func TestRenderMaxProjectArchiveStaysUnderLastAppliedConfigLimit(t *testing.T) {
 		len(archive), len(jsonBytes), lastAppliedConfigHeadroom, lastAppliedConfigHeadroom-len(jsonBytes))
 }
 
-// On the canonical Ray CUDA image a plain `pip install` fails with EACCES (pip
-// cannot write to the root-owned site-packages/nvidia) and runtime.pip is
-// silently unusable. The entrypoint must fall back to the user site so
-// researchers do not have to discover PIP_USER=1 for themselves. On the plain
-// non-CUDA image the install succeeds and the fallback never fires.
 func TestEntrypointFallsBackToUserSiteWhenPipInstallIsNotPermitted(t *testing.T) {
 	got, err := entrypoint(Options{
 		ScriptName: "train.py",
@@ -2258,8 +2178,6 @@ func TestEntrypointFallsBackToUserSiteWhenPipInstallIsNotPermitted(t *testing.T)
 	}
 }
 
-// Same contract as the managed-workflow templates: the --user fallback must be
-// followed by a PATH export, or console scripts installed by pip are unusable.
 func TestEntrypointPutsUserSiteBinOnPath(t *testing.T) {
 	got, err := entrypoint(Options{
 		ScriptName: "train.py",
@@ -2277,9 +2195,6 @@ func TestEntrypointPutsUserSiteBinOnPath(t *testing.T) {
 	}
 }
 
-// A checkpoint written to an emptyDir-backed /data is deleted with the pod, so
-// `tau serve deploy --from-finetune` would resolve a model that no longer
-// exists. Refuse the render instead of producing that silent data loss.
 func TestRenderRejectsCheckpointArtifactWithoutDurablePVC(t *testing.T) {
 	base := func() Options {
 		return Options{

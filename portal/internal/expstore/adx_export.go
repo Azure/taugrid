@@ -552,8 +552,6 @@ func (s *Store) metricFileProjectionPath(relPath string) (string, error) {
 	return path, nil
 }
 
-// experimentIDsByRun maps run_id -> experiment_id so the metrics projection can
-// carry the experiment axis without duplicating it into the Parquet schema.
 func (s *Store) experimentIDsByRun(ctx context.Context) (map[string]string, error) {
 	records, err := s.queryRows(ctx, `SELECT run_id, experiment_id FROM runs`, nil)
 	if err != nil {
@@ -640,7 +638,6 @@ func (s *Store) prepareADXDestination(opts ADXExportOptions) (string, error) {
 	return dest, nil
 }
 
-// ADXSourceStoreID identifies the store independently of an export iteration.
 func (s *Store) ADXSourceStoreID() (string, error) {
 	payload := struct {
 		SchemaVersion string `json:"schema_version"`

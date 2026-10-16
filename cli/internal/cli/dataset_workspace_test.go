@@ -19,11 +19,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ---------------------------------------------------------------------------
-// Fakes: an injectable kube runner and workspace fetcher so the whole
-// render → apply → wait → logs → cleanup flow runs with NO live cluster.
-// ---------------------------------------------------------------------------
-
 type fakeRunnerCall struct {
 	args  []string
 	stdin string
@@ -31,9 +26,9 @@ type fakeRunnerCall struct {
 
 type fakeKubeRunner struct {
 	calls           []fakeRunnerCall
-	succeeded       string // returned for {.status.succeeded}
-	failedCondition string // returned for the terminal Failed Job condition
-	logs            string // returned for `logs`
+	succeeded       string
+	failedCondition string
+	logs            string
 }
 
 type retryingJobRunner struct {
@@ -61,7 +56,6 @@ func (r *retryingJobRunner) Raw(_ context.Context, extraArgs []string, _ []byte)
 }
 
 func newFakeKubeRunner() *fakeKubeRunner {
-	// Default: the Job succeeds immediately so waitForJob returns without polling.
 	return &fakeKubeRunner{succeeded: "1"}
 }
 
@@ -84,7 +78,6 @@ func (f *fakeKubeRunner) Raw(_ context.Context, extraArgs []string, stdin []byte
 	}
 }
 
-// appliedManifests returns the stdin of every `apply` call in order.
 func (f *fakeKubeRunner) appliedManifests() []string {
 	var out []string
 	for _, c := range f.calls {
@@ -104,7 +97,6 @@ func (f *fakeKubeRunner) sawArg(sub string) bool {
 	return false
 }
 
-// installFakes swaps in the fake runner + workspace and returns a restore func.
 func installFakes(t *testing.T, runner datasetKubeRunner, ws tauworkspace.Workspace, wsErr error) {
 	t.Helper()
 	origRunner := newDatasetKubeRunner
@@ -140,10 +132,6 @@ func readyDatasetWorkspace() tauworkspace.Workspace {
 const testDigestImage = "registry.example.com/taugrid/tau@sha256:" +
 	"abcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcabcab"
 
-// ---------------------------------------------------------------------------
-// validateWorkspaceForJob
-// ---------------------------------------------------------------------------
-
 func TestValidateWorkspaceForJob_Ready(t *testing.T) {
 	id, err := validateWorkspaceForJob(readyDatasetWorkspace())
 	if err != nil {
@@ -164,7 +152,7 @@ func TestValidateWorkspaceForJob_NotReady(t *testing.T) {
 
 func TestValidateWorkspaceForJob_StaleObservedGeneration(t *testing.T) {
 	ws := readyDatasetWorkspace()
-	ws.Metadata.Generation = 2 // status only observed gen 1
+	ws.Metadata.Generation = 2
 	if _, err := validateWorkspaceForJob(ws); err == nil {
 		t.Fatalf("stale observedGeneration must fail")
 	}
@@ -194,10 +182,6 @@ func TestValidateWorkspaceForJob_MissingNamespace(t *testing.T) {
 		t.Fatalf("missing namespace must fail")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// renderDatasetWorkerJob: identity + security must always be present.
-// ---------------------------------------------------------------------------
 
 func TestRenderDatasetWorkerJob_IdentityAndSecurity(t *testing.T) {
 	manifest, err := renderDatasetWorkerJob(datasetWorkerJobSpec{
@@ -304,10 +288,6 @@ func TestRenderDatasetWorkerJob_ConfigMapMount(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// datasetJobName: deterministic + DNS-1123 bounded.
-// ---------------------------------------------------------------------------
-
 func TestDatasetJobName_DeterministicAndBounded(t *testing.T) {
 	a := datasetJobName("tau-ds-ingest", "ds", "v1")
 	b := datasetJobName("tau-ds-ingest", "ds", "v1")
@@ -352,10 +332,6 @@ func TestWaitForJob_IgnoresRetryableFailedPodCount(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// runIngestWorkspace: dry-run renders but does NOT apply.
-// ---------------------------------------------------------------------------
-
 func ingestTestRecord() dataset.Record {
 	rec := dataset.Record{
 		SchemaVersion: dataset.SchemaVersion,
@@ -390,7 +366,6 @@ func TestRunIngestWorkspace_DryRunDoesNotApply(t *testing.T) {
 	if len(runner.calls) != 0 {
 		t.Fatalf("dry-run must not call the runner, got %d calls", len(runner.calls))
 	}
-	// Rendered manifest must carry the security/identity fields.
 	if !strings.Contains(out.String(), "azure.workload.identity/use") ||
 		!strings.Contains(out.String(), "serviceAccountName: sample-sa") ||
 		!strings.Contains(out.String(), "restartPolicy: Never") {
@@ -502,7 +477,6 @@ func TestRunIngestWorkspace_WaitSuccessBuildsResultWithReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait ingest: %v", err)
 	}
-	// Command sequence: apply, get succeeded, logs.
 	if !runner.sawArg("apply") || !runner.sawArg("{.status.succeeded}") || !runner.sawArg("logs") {
 		t.Fatalf("expected apply/get/logs sequence, got %+v", runner.calls)
 	}
@@ -557,17 +531,11 @@ func TestRunIngestWorkspace_NotReadyWorkspaceFails(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Direct local ingest validates an explicit destination against the immutable
-// record before it runs.
-// ---------------------------------------------------------------------------
-
 func TestDatasetIngest_DestinationMismatchFailsBeforeApply(t *testing.T) {
 	_, root := fileRegistryWithIngest(t)
 	reg := dataset.NewRegistry(newFileBackend(root), datasetRegistryPaths(), nil)
 	ingestRecord(t, reg, "ds", "v1", []dataset.File{{Path: "a.bin", Bytes: 4, SHA256: strings.Repeat("a", 64)}})
 
-	// A fake runner that fails the test if it is ever called (no apply must happen).
 	runner := newFakeKubeRunner()
 	installFakes(t, runner, readyDatasetWorkspace(), nil)
 
@@ -589,10 +557,6 @@ func TestDatasetIngest_DestinationMismatchFailsBeforeApply(t *testing.T) {
 		t.Fatalf("no Job should be applied when destination mismatches")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// runStatusWorkspace: reads IngestStatus from worker logs.
-// ---------------------------------------------------------------------------
 
 func validReadyStatus(name, version string) dataset.IngestStatus {
 	return dataset.IngestStatus{
@@ -668,10 +632,6 @@ func TestRunStatusWorkspace_RequiresWait(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// runRegisterWorkspace: idempotence/drift/cleanup/size-limit/non-wait.
-// ---------------------------------------------------------------------------
-
 func registerTestRecord() dataset.Record {
 	return dataset.Record{
 		SchemaVersion: dataset.SchemaVersion,
@@ -701,7 +661,6 @@ func TestRunRegisterWorkspace_SuccessAppliesAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("register workspace: %v", err)
 	}
-	// Both ConfigMap and Job must be applied.
 	applied := runner.appliedManifests()
 	if len(applied) != 2 {
 		t.Fatalf("want 2 apply calls (ConfigMap + Job), got %d", len(applied))
@@ -719,7 +678,6 @@ func TestRunRegisterWorkspace_SuccessAppliesAndCleansUp(t *testing.T) {
 	if got := strings.Join(job.Spec.Template.Spec.Containers[0].Command, " "); got != "tau data dataset register-worker" {
 		t.Fatalf("register worker command = %q, want public dataset command", got)
 	}
-	// Transient ConfigMap must be cleaned up.
 	if !runner.sawArg("delete configmap/") && !runner.sawArg("configmap/") {
 		t.Fatalf("transient ConfigMap must be deleted; calls=%+v", runner.calls)
 	}
@@ -764,7 +722,6 @@ func TestRunRegisterWorkspace_DriftFails(t *testing.T) {
 	if !strings.Contains(errOut.String(), "drift detected") {
 		t.Fatalf("drift error must surface worker logs, got:\n%s", errOut.String())
 	}
-	// Even on failure, the transient ConfigMap must be cleaned up.
 	if !runner.sawArg("configmap/") {
 		t.Fatalf("ConfigMap must be cleaned up even on failure")
 	}
@@ -805,7 +762,6 @@ func TestRunRegisterWorkspace_DryRunRendersNoApply(t *testing.T) {
 
 func TestRunRegisterWorkspace_SizeLimitEnforced(t *testing.T) {
 	rec := registerTestRecord()
-	// Build a record whose JSON exceeds the ConfigMap transport limit.
 	rec.Files = nil
 	for i := 0; i < 6000; i++ {
 		rec.Files = append(rec.Files, dataset.File{
@@ -840,12 +796,7 @@ func TestRunRegisterWorkspace_RejectsMutableImage(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// register command wiring: --workspace --manifest end-to-end (no cluster).
-// ---------------------------------------------------------------------------
-
 func TestDatasetRegisterCommand_WorkspaceManifest(t *testing.T) {
-	// Write a minimal manifest.
 	dir := t.TempDir()
 	manifestPath := filepath.Join(dir, "manifest.json")
 	man := datasetManifest{
@@ -888,7 +839,6 @@ func TestDatasetRegisterCommand_WorkspaceManifest(t *testing.T) {
 	}
 }
 
-// itoa avoids importing strconv just for a tiny helper.
 func itoa(i int) string {
 	if i == 0 {
 		return "0"

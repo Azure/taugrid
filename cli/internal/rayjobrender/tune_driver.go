@@ -8,7 +8,6 @@ const tuneDriverScript = `import importlib, importlib.util, json, os, sys
 module_name = os.environ["TAU_TUNE_TRAIN_MODULE"]
 module_path = os.environ.get("TAU_TUNE_TRAIN_PATH")
 
-
 def load_train_func():
     if module_path:
         spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -23,7 +22,6 @@ def load_train_func():
     if not callable(train_func):
         raise TypeError(f"{module_name}.train_func must be callable")
     return train_func
-
 
 # Preserve the previous fail-fast behavior: syntax/import/contract errors are
 # reported by the driver before Tune allocates trial resources.
@@ -51,10 +49,8 @@ mode = os.environ.get("TAU_TUNE_MODE", "min")
 num_samples = int(os.environ.get("TAU_TUNE_NUM_SAMPLES", "1"))
 max_concurrent = int(os.environ.get("TAU_TUNE_MAX_CONCURRENT_TRIALS", "1"))
 
-
 def train_loop(config):
     return load_train_func()(config)
-
 
 def train_driver(config):
     trainer = TorchTrainer(
@@ -65,7 +61,6 @@ def train_driver(config):
         run_config=RunConfig(callbacks=[TuneReportCallback()]),
     )
     trainer.fit()
-
 
 if not ray.is_initialized():
     ray.init()

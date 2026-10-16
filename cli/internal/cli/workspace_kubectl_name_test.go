@@ -15,9 +15,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Every file that tells a human or a script to name the workspace resource to
-// kubectl. Listing them explicitly rather than walking the tree keeps the
-// guard from silently going quiet if a file is moved or renamed.
 var workspaceKubectlHintFiles = []string{
 	repoPath("cli", "internal", "cli", "cluster_install.go"),
 	repoPath("cli", "internal", "cli", "workspace_create.go"),
@@ -28,15 +25,6 @@ var workspaceKubectlHintFiles = []string{
 	repoPath("examples", "aks-gpu-quickstart", "cleanup.sh"),
 }
 
-// kubectl resolves a resource argument against a CRD's plural, singular, and
-// shortNames — never its kind. `kubectl get tauworkspace` therefore fails even
-// though the kind is TauWorkspace, and the error reads as "the CRDs failed to
-// install" rather than "wrong name", which is how it cost an operator an
-// afternoon on a working cluster (issue #1308, blocker 6).
-//
-// This derives the accepted names from the CRD instead of asserting a literal,
-// so renaming the plural fails here rather than shipping hints that no longer
-// resolve.
 func TestWorkspaceKubectlHintsUseAResolvableResourceName(t *testing.T) {
 	accepted := acceptedKubectlNames(t, repoPath("controllers", "tau-core", "config", "crd", "bases", "tau.azure.com_workspaces.yaml"))
 
@@ -61,24 +49,16 @@ func TestWorkspaceKubectlHintsUseAResolvableResourceName(t *testing.T) {
 	}
 }
 
-// kubectlWorkspaceArgument matches a kubectl invocation whose resource
-// argument mentions "workspace", tolerating any flags before it (`--context`,
-// `-n`, `-o`) so a hint cannot slip past by ordering them differently. The
-// trailing `/NAME` form is stripped by the capture group's character class.
 var kubectlWorkspaceArgument = regexp.MustCompile(
 	`kubectl\s+(?:(?:-{1,2}[A-Za-z0-9-]+(?:[= ]\S+)?)\s+)*` +
 		`(?:get|edit|describe|delete|wait|patch|apply)\s+` +
 		`(?:(?:-{1,2}[A-Za-z0-9-]+(?:[= ]\S+)?)\s+)*` +
 		`"?([A-Za-z0-9.-]*[Ww]orkspace[A-Za-z0-9.-]*)`)
 
-// workspaceKubectlHints returns the resource argument of every kubectl
-// invocation that targets a workspace. Matching on "workspace" keeps unrelated
-// hints (namespaces, localqueues) out without enumerating them.
 func workspaceKubectlHints(body string) []string {
 	var found []string
 	for _, match := range kubectlWorkspaceArgument.FindAllStringSubmatch(joinContinuedLines(body), -1) {
 		resource := match[1]
-		// Roles and bindings named after a workspace are a different kind.
 		if strings.Contains(strings.ToLower(resource), "-workspace-") {
 			continue
 		}
@@ -87,9 +67,6 @@ func workspaceKubectlHints(body string) []string {
 	return found
 }
 
-// joinContinuedLines folds shell line continuations onto one line. Docs wrap
-// long kubectl invocations that way, and the resource argument routinely lands
-// on a later line than the verb.
 var shellContinuation = regexp.MustCompile(`\\\s*\n\s*`)
 
 func joinContinuedLines(body string) string {
@@ -120,7 +97,6 @@ func acceptedKubectlNames(t *testing.T, crdPath string) map[string]bool {
 		t.Fatalf("%s: CRD is missing spec.group or spec.names.plural", crdPath)
 	}
 
-	// A bare argument resolves against plural, singular, and shortNames only.
 	accepted := map[string]bool{}
 	for _, name := range append([]string{crd.Spec.Names.Plural, crd.Spec.Names.Singular}, crd.Spec.Names.ShortNames...) {
 		if name == "" {
@@ -129,19 +105,12 @@ func acceptedKubectlNames(t *testing.T, crdPath string) map[string]bool {
 		accepted[name] = true
 		accepted[name+"."+crd.Spec.Group] = true
 	}
-	// Group-qualified, kubectl also matches the lowercased kind, which is why
-	// `tauworkspace.tau.azure.com` resolves while bare `tauworkspace` does not.
 	if kind := crd.Spec.Names.Kind; kind != "" {
 		accepted[strings.ToLower(kind)+"."+crd.Spec.Group] = true
 	}
 	return accepted
 }
 
-// kubectl resolves a bare argument against plural/singular/shortNames, but a
-// group-qualified one also matches the lowercased kind. Both halves verified
-// against a live cluster (kubectl v1.35.3): `kubectl get tauworkspace` fails,
-// `kubectl get tauworkspace.tau.azure.com` succeeds. Accepting only the first
-// rule would make the guard reject a hint that works.
 func TestAcceptedKubectlNamesFollowBothResolutionRules(t *testing.T) {
 	accepted := acceptedKubectlNames(t, repoPath("controllers", "tau-core", "config", "crd", "bases", "tau.azure.com_workspaces.yaml"))
 
@@ -154,15 +123,11 @@ func TestAcceptedKubectlNamesFollowBothResolutionRules(t *testing.T) {
 			t.Errorf("kubectl resolves %q, but the guard would reject it", name)
 		}
 	}
-	// The bare kind is the original bug and must stay rejected.
 	if accepted["tauworkspace"] {
 		t.Error("bare `tauworkspace` does not resolve; accepting it would readmit issue #1308 blocker 6")
 	}
 }
 
-// The regex is the guard's whole reach, so exercise the forms it has to catch.
-// Every hint in the repo that carries --context reached this shape, which the
-// first version of this pattern missed.
 func TestWorkspaceKubectlHintsMatchEveryFlagOrdering(t *testing.T) {
 	for _, tc := range []struct{ name, line, want string }{
 		{"plain", "kubectl get tauworkspace -n tau-system", "tauworkspace"},
@@ -185,8 +150,6 @@ func TestWorkspaceKubectlHintsMatchEveryFlagOrdering(t *testing.T) {
 		})
 	}
 
-	// Resources that merely mention a workspace in their name are a different
-	// kind and must not be reported as unresolvable.
 	for _, line := range []string{
 		"kubectl -n tau-system get role tau-workspace-reader-demo",
 		"kubectl get rolebinding tau-workspace-reader-demo",

@@ -10,8 +10,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// The `tau run --config` engine:job path must emit the artifact index that
-// `tau serve deploy --from-finetune` reads, or CLI-only train->serve is broken.
 func TestRenderEmitsArtifactIndexWhenCheckpointDeclared(t *testing.T) {
 	out, err := Render(trainProfile(), Options{
 		Name:               "idx-job",
@@ -30,11 +28,6 @@ func TestRenderEmitsArtifactIndexWhenCheckpointDeclared(t *testing.T) {
 	if !strings.Contains(s, "last.safetensors") {
 		t.Errorf("declared checkpoint name absent from render")
 	}
-	// The wrap is `bash -lc 'set -e; "$@"; <index>' -- tau-entrypoint python train.py,
-	// so the training command reaches argv BEFORE the index text in the -c
-	// string. The property that matters is execution order inside that string:
-	// `"$@"` must precede the index, and `set -e` must precede both so a failed
-	// training run never reaches the bookkeeping step.
 	setE := strings.Index(s, "set -e")
 	dollarAt := strings.Index(s, `"$@"`)
 	idx := strings.Index(s, "artifacts.json")
@@ -62,10 +55,6 @@ func TestRenderOmitsArtifactIndexWhenNoCheckpointDeclared(t *testing.T) {
 	}
 }
 
-// The declared checkpoint has to be legible from the workload itself, not only
-// from the entrypoint text. Without it no later command can distinguish "this
-// run produced no artifacts" from "this run promised an artifact and did not
-// deliver one", which is what makes BUG-26 read as an ordinary empty result.
 func TestRenderAnnotatesDeclaredCheckpoint(t *testing.T) {
 	out, err := Render(trainProfile(), Options{
 		Name:               "idx-job",
@@ -82,9 +71,6 @@ func TestRenderAnnotatesDeclaredCheckpoint(t *testing.T) {
 	}
 }
 
-// The annotation must be absent, not empty: `tau run get` treats presence as
-// "a checkpoint was declared", so an empty-string annotation would make every
-// run without a checkpoint look like a run whose index went missing.
 func TestRenderOmitsCheckpointAnnotationWhenNoneDeclared(t *testing.T) {
 	out, err := Render(trainProfile(), Options{
 		Name:      "idx-job",
@@ -100,11 +86,6 @@ func TestRenderOmitsCheckpointAnnotationWhenNoneDeclared(t *testing.T) {
 	}
 }
 
-// Options is passed by value but carries a map, whose header is shared with
-// the caller. Stamping the annotation through o.Annotations would leak it onto
-// the caller's next render — and because run get treats presence as the
-// declaration, that second run would be reported as having promised a
-// checkpoint it never declared.
 func TestRenderDoesNotLeakCheckpointAnnotationIntoCallerOptions(t *testing.T) {
 	shared := map[string]string{workloadmeta.AnnotationTauCommand: "tau run"}
 	base := Options{

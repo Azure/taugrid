@@ -1,18 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package status fetches and renders the lifecycle of a tau-submitted job.
-//
-// The shape mirrors the earlier shell CLI's `status` output (Kueue
-// workload + Job/RayJob + Pods), but split into two layers:
-//
-//   - Render: pure function (Snapshot → string). Unit-testable, no kubectl.
-//   - Fetch:  shells to kubectl with structured -o jsonpath queries to
-//     populate a Snapshot. Integration-testable.
-//
-// Why split: rendering bugs (missing column, bad ordering) are way more
-// common than fetch bugs, and they're the user-facing surface. Cheap unit
-// tests on Render catch most regressions.
 package status
 
 import (
@@ -23,7 +11,6 @@ import (
 	"time"
 )
 
-// Snapshot is the data Render needs to produce the status view.
 type Snapshot struct {
 	Name      string
 	Namespace string
@@ -31,35 +18,23 @@ type Snapshot struct {
 	Labels      map[string]string
 	Annotations map[string]string
 
-	// Job (batch/v1) info.
 	JobFound       bool
 	JobSuspended   bool
 	JobActive      int
 	JobSucceeded   int
 	JobFailed      int
-	JobConditions  []Condition // typically Complete, Failed
+	JobConditions  []Condition
 	JobAgeSeconds  int64
 	JobUID         string
 	JobCreatedAt   time.Time
 	JobStartedAt   time.Time
 	JobFinishedAt  time.Time
 	JobParallelism int
-	// JobManagedBy mirrors spec.managedBy on the batch/v1 Job. It is an
-	// immutable opt-in flag set at admission time (not a live routing
-	// indicator): Kueue's MultiKueue integration sets it to
-	// "kueue.x-k8s.io/multikueue" to declare that the Job is managed by
-	// MultiKueue. Actual worker-cluster placement progress is tracked
-	// separately via Workload.ClusterName / NominatedClusterNames /
-	// AdmissionChecks.
-	JobManagedBy string
+	JobManagedBy   string
 
-	// RayJob info. Tau can submit either a batch/v1 Job or a KubeRay RayJob;
-	// status keeps both in one snapshot so renderers can show the two-stage
-	// RayCluster + submitter lifecycle when present.
-	RayJob RayJob
-	// RayJob compatibility fields used by run-profile/export paths.
+	RayJob           RayJob
 	RayJobFound      bool
-	RayJobStatus     string // jobDeploymentStatus: New/Initializing/Running/Complete/Failed/Suspended
+	RayJobStatus     string
 	RayJobReason     string
 	RayClusterName   string
 	RayJobID         string
@@ -67,24 +42,15 @@ type Snapshot struct {
 	RayJobCreatedAt  time.Time
 	RayJobFinishedAt time.Time
 
-	// Kueue Workload(s). Usually one per Job; we tolerate multiples.
 	Workloads []Workload
 
-	// Pods carrying job-name=<name>, ray.io/cluster=<clusterName>, or tau.azure.com/job=<name>.
-	Pods []Pod
-	// PodsObserved is true when at least one pod-list query succeeded, including
-	// a successful empty result. Without it, an empty Pods slice may mean RBAC or
-	// a transient API failure rather than reusable compute.
+	Pods         []Pod
 	PodsObserved bool
 
-	// DRA ResourceClaims referenced by Pods.
 	ResourceClaims []ResourceClaim
 
-	// GPURuntime is populated on demand for the --run-profile view. Ordinary
-	// status avoids the extra exporter discovery and proxy requests.
 	GPURuntime GPURuntimeEvidence
 
-	// Events for the Job/RayJob, Kueue Workload, Pods, and ResourceClaims.
 	Events []Event
 }
 
@@ -96,51 +62,23 @@ type Condition struct {
 }
 
 type Workload struct {
-	Name     string `json:"name"`
-	Queue    string `json:"queue,omitempty"` // local queue name
-	Admitted bool   `json:"admitted"`
-	Phase    string `json:"phase"` // pending|admitted|finished|...
-	Reason   string `json:"reason,omitempty"`
-	// Message is the condition message explaining why a workload is not
-	// admitted. Kueue puts the actionable detail here (which flavors and
-	// nodes were excluded, and why) while Reason is often just "Pending".
+	Name       string `json:"name"`
+	Queue      string `json:"queue,omitempty"`
+	Admitted   bool   `json:"admitted"`
+	Phase      string `json:"phase"`
+	Reason     string `json:"reason,omitempty"`
 	Message    string `json:"message,omitempty"`
 	Preemption string `json:"preemption,omitempty"`
 
-	// MultiKueue fields, populated only from manager-visible Workload
-	// status — never from worker-cluster credentials or objects.
-	//
-	// ClusterName is status.clusterName: the worker cluster Kueue has
-	// selected for this workload. Empty until selection happens.
-	ClusterName string `json:"clusterName,omitempty"`
-	// NominatedClusterNames is status.nominatedClusterNames: candidate
-	// worker clusters under consideration before a cluster is selected.
-	// Mutually exclusive with ClusterName upstream (Kueue resets one
-	// when the other is set), but both are modeled so hydration never
-	// has to guess which is authoritative.
-	NominatedClusterNames []string `json:"nominatedClusterNames,omitempty"`
-	// AdmissionChecks lists status.admissionChecks, sorted by name for
-	// deterministic output. The MultiKueue admission check controller
-	// reports selection/placement progress here (Pending/Ready/Retry/
-	// Rejected).
-	AdmissionChecks []AdmissionCheck `json:"admissionChecks,omitempty"`
+	ClusterName           string           `json:"clusterName,omitempty"`
+	NominatedClusterNames []string         `json:"nominatedClusterNames,omitempty"`
+	AdmissionChecks       []AdmissionCheck `json:"admissionChecks,omitempty"`
 }
 
-// waiting reports whether Kueue has neither admitted nor finished this
-// workload — the state in which Reason and Message explain the hold-up.
-// Once either happens they describe a past state and are cleared.
 func (w Workload) waiting() bool {
 	return !w.Admitted && !strings.EqualFold(w.Phase, "Finished")
 }
 
-// AdmissionCheck is one entry from a Kueue Workload's
-// status.admissionChecks[]. State is one of Pending, Ready, Retry, or
-// Rejected (see the Kueue Workload CRD). ControllerName is resolved from
-// the manager-cluster AdmissionCheck object when RBAC allows it. When the
-// lookup fails (for example because the batch-user role cannot get
-// AdmissionChecks yet), ControllerLookupFailed is set so manager-side
-// placement can fall back to the exact upstream MultiKueue check name until
-// platform RBAC and activation tests lock that contract down.
 type AdmissionCheck struct {
 	Name                   string    `json:"name"`
 	State                  string    `json:"state"`
@@ -157,7 +95,7 @@ type Pod struct {
 	Phase           string      `json:"phase"`
 	Node            string      `json:"node,omitempty"`
 	Restarts        int         `json:"restarts"`
-	Ready           string      `json:"ready"` // "1/1"
+	Ready           string      `json:"ready"`
 	StartedAt       time.Time   `json:"startedAt,omitempty,omitzero"`
 	ResourceClaims  []string    `json:"resourceClaims,omitempty"`
 	ContainerReason string      `json:"containerReason,omitempty"`
@@ -173,7 +111,7 @@ type Container struct {
 	Image        string    `json:"image,omitempty"`
 	Ready        bool      `json:"ready"`
 	RestartCount int       `json:"restartCount"`
-	State        string    `json:"state"` // waiting|running|terminated
+	State        string    `json:"state"`
 	Reason       string    `json:"reason,omitempty"`
 	Message      string    `json:"message,omitempty"`
 	LastReason   string    `json:"lastReason,omitempty"`
@@ -220,18 +158,9 @@ type RayJob struct {
 	Reason              string      `json:"reason,omitempty"`
 	Message             string      `json:"message,omitempty"`
 	Conditions          []Condition `json:"conditions,omitempty"`
-	// ManagedBy mirrors spec.managedBy on the RayJob. It is an immutable
-	// opt-in flag set at admission time (not a live routing indicator):
-	// KubeRay's MultiKueue integration sets it to
-	// "kueue.x-k8s.io/multikueue" to declare that the RayJob is managed
-	// by MultiKueue; the default (single-cluster) value is
-	// "ray.io/kuberay-operator". Actual worker-cluster placement progress
-	// is tracked separately via Workload.ClusterName /
-	// NominatedClusterNames / AdmissionChecks.
-	ManagedBy string `json:"managedBy,omitempty"`
+	ManagedBy           string      `json:"managedBy,omitempty"`
 }
 
-// LifecycleState is the stable, finite run state exposed to machine consumers.
 type LifecycleState string
 
 const (
@@ -243,13 +172,10 @@ const (
 	LifecycleFailed    LifecycleState = "failed"
 )
 
-// RunFound reports whether the snapshot contains a batch Job or RayJob.
 func RunFound(s Snapshot) bool {
 	return s.JobFound || snapshotRayJob(s).Found
 }
 
-// CanonicalLifecycleState maps Kubernetes, Kueue, and Ray states onto the
-// versioned finite state set used by machine consumers.
 func CanonicalLifecycleState(s Snapshot) LifecycleState {
 	if !RunFound(s) {
 		return LifecycleNotFound
@@ -286,13 +212,10 @@ func CanonicalLifecycleState(s Snapshot) LifecycleState {
 	return LifecycleStarting
 }
 
-// CanonicalRayJob returns the hydrated RayJob, including compatibility fields
-// used by older snapshot producers.
 func CanonicalRayJob(s Snapshot) RayJob {
 	return snapshotRayJob(s)
 }
 
-// HeadlineState returns the same lifecycle state used by the human renderer.
 func HeadlineState(s Snapshot) string {
 	switch CanonicalLifecycleState(s) {
 	case LifecycleNotFound:
@@ -306,7 +229,6 @@ func HeadlineState(s Snapshot) string {
 	}
 }
 
-// Render returns a human-readable multi-section status view.
 func Render(s Snapshot) string {
 	var b strings.Builder
 	rj := snapshotRayJob(s)
@@ -382,12 +304,6 @@ func Render(s Snapshot) string {
 		fmt.Fprintln(tw, "  "+strings.Join(cols, "\t"))
 		for _, w := range s.Workloads {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\t%t\t%s\n", w.Name, w.Queue, w.Phase, w.Admitted, w.Reason)
-			// Kueue's message is the only place that says which flavors and
-			// nodes were excluded. It goes in the trailing cell — the one
-			// tabwriter does not pad — so its length cannot widen the
-			// aligned columns. The tab run must reach that last cell, or
-			// the short line ends the column block and re-aligns the rows
-			// below it.
 			if w.waiting() && w.Message != "" {
 				fmt.Fprintf(tw, "  %s└─ %s\n", strings.Repeat("\t", len(cols)-1), singleLine(w.Message))
 			}
@@ -409,7 +325,6 @@ func Render(s Snapshot) string {
 			b.WriteString("  (none — workload is suspended or not yet admitted)\n")
 		}
 	} else {
-		// Stable sort by phase then name to keep output deterministic.
 		sorted := append([]Pod(nil), s.Pods...)
 		sort.Slice(sorted, func(i, j int) bool {
 			if sorted[i].Phase != sorted[j].Phase {
@@ -479,15 +394,6 @@ func multiKueuePlacementDisplayState(s Snapshot) string {
 	return string(s.MultiKueueState())
 }
 
-// deriveState returns a one-word headline state.
-//
-// For RayJobs, maps jobDeploymentStatus directly. For batch/v1 Jobs:
-//
-//	Failed     — a Failed condition is true
-//	Complete   — a Complete condition is true
-//	Running    — at least one Active pod
-//	Pending    — Job exists, suspended (Kueue not yet admitted)
-//	Admitted   — Job exists, not suspended, no active pods yet
 func deriveState(s Snapshot) string {
 	if s.ManagerOnlyMultiKueueView() {
 		if state, ok := multiKueueTerminalState(s); ok {

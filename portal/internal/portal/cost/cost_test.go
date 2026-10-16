@@ -12,9 +12,6 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
-// scriptedQuerier returns a different result per call so the two-query board
-// (namespace chargeback, then idle GPUs) can be driven from one fake. It records
-// each KQL it received in order.
 type scriptedQuerier struct {
 	results [][]kustoquery.Row
 	err     error
@@ -46,7 +43,7 @@ var idleRows = []kustoquery.Row{
 	{"instance": "node-3", "gpu": "2", "modelName": "A100", "namespace": "infra", "pod": "idle-pod",
 		"AvgUtil": 3.5, "Samples": 240.0, "ObservedSamples": 250.0},
 	{"instance": "node-9", "gpu": "0", "modelName": "H100", "namespace": "", "pod": "",
-		"AvgUtil": "12", "Samples": "50", "ObservedSamples": "50"}, // numeric strings (Kusto tostring())
+		"AvgUtil": "12", "Samples": "50", "ObservedSamples": "50"},
 }
 
 func TestBoardAssemblesBothQueries(t *testing.T) {
@@ -63,7 +60,6 @@ func TestBoardAssemblesBothQueries(t *testing.T) {
 		t.Fatalf("window = %q, want %q", snap.Window, DefaultWindow.String())
 	}
 
-	// Workspaces sorted by GPU-hours desc; totals are rounded sums.
 	if len(snap.Workspaces) != 2 {
 		t.Fatalf("workspaces = %d, want 2", len(snap.Workspaces))
 	}
@@ -81,7 +77,6 @@ func TestBoardAssemblesBothQueries(t *testing.T) {
 		t.Fatalf("total estimated cost = %v, want 486.28", snap.TotalEstimatedCostUSD)
 	}
 
-	// Idle GPUs sorted by avg util asc; numeric-string values parse.
 	if len(snap.IdleGPUs) != 2 {
 		t.Fatalf("idle gpus = %d, want 2", len(snap.IdleGPUs))
 	}
@@ -102,7 +97,6 @@ func TestBoardEmpty(t *testing.T) {
 	if snap.TotalGPUHours != 0 || snap.TotalEstimatedCostUSD != 0 || len(snap.Workspaces) != 0 || len(snap.IdleGPUs) != 0 {
 		t.Fatalf("empty snapshot = %#v", snap)
 	}
-	// Slices must be non-nil so they serialize as [] not null.
 	if snap.Workspaces == nil || snap.IdleGPUs == nil {
 		t.Fatal("empty slices are nil, want non-nil")
 	}
@@ -138,7 +132,7 @@ func TestBuildWorkspaceKQL(t *testing.T) {
 	kql := buildWorkspaceKQL(DefaultWindow, "", "research", "")
 	for _, want := range []string{
 		"database(@'CostTracking').GpuCostHourly",
-		"| where Timestamp > ago(604800s)", // 7d
+		"| where Timestamp > ago(604800s)",
 		"namespace == @'research'",
 		"workspace=iff(isempty(workspace), namespace, workspace)",
 		"schema_version == 4",
@@ -186,7 +180,6 @@ func TestBuildWorkspaceKQLClusterScopeExcludesUnattributableLegacyRows(t *testin
 
 func TestBuildIdleKQLThreshold(t *testing.T) {
 	kql := buildIdleKQL(DefaultWindow, "", "")
-	// Classification now happens after querying, so the query must retain all GPUs.
 	if strings.Contains(kql, "| where AvgUtil") || strings.Contains(kql, "| where Samples") {
 		t.Fatalf("idle KQL must not apply the classification threshold:\n%s", kql)
 	}
@@ -195,7 +188,6 @@ func TestBuildIdleKQLThreshold(t *testing.T) {
 	}
 }
 
-// TestBoardCustomThreshold verifies classification uses the requested threshold.
 func TestBoardCustomThreshold(t *testing.T) {
 	q := &scriptedQuerier{results: [][]kustoquery.Row{nil, idleRows}}
 	snap, err := Board(context.Background(), q, Options{IdleThresholdPct: 5})
@@ -207,8 +199,6 @@ func TestBoardCustomThreshold(t *testing.T) {
 	}
 }
 
-// TestBuildNamespaceKQLInjection verifies a namespace filter with an embedded
-// quote is escaped, not able to break out of the KQL literal.
 func TestBuildNamespaceKQLInjection(t *testing.T) {
 	kql := buildWorkspaceKQL(DefaultWindow, "", "ns' | project", "")
 	if !strings.Contains(kql, "namespace == @'ns'' | project'") {
@@ -216,8 +206,6 @@ func TestBuildNamespaceKQLInjection(t *testing.T) {
 	}
 }
 
-// TestBuildKQLClusterScope verifies a cluster value scopes both queries and is
-// escaped as a safe KQL literal.
 func TestBuildKQLClusterScope(t *testing.T) {
 	nsKQL := buildWorkspaceKQL(DefaultWindow, "", "", "taugrid-flex")
 	if !strings.Contains(nsKQL, "Cluster == @'taugrid-flex'") {
@@ -227,7 +215,6 @@ func TestBuildKQLClusterScope(t *testing.T) {
 	if !strings.Contains(idleKQL, "Cluster == @'taugrid-flex'") {
 		t.Fatalf("idle KQL missing cluster scope:\n%s", idleKQL)
 	}
-	// Injection through the cluster value is escaped, not able to break out.
 	inj := buildWorkspaceKQL(DefaultWindow, "", "", "c' | project")
 	if !strings.Contains(inj, "Cluster == @'c'' | project'") {
 		t.Fatalf("cluster injection not escaped:\n%s", inj)
@@ -241,7 +228,6 @@ func TestBuildWorkspaceKQLQuotesDatabase(t *testing.T) {
 	}
 }
 
-// TestBoardThreadsCluster verifies Options.Cluster reaches both queries.
 func TestBoardThreadsCluster(t *testing.T) {
 	q := &scriptedQuerier{results: [][]kustoquery.Row{nil, nil}}
 	_, err := Board(context.Background(), q, Options{Cluster: "taugrid-flex"})

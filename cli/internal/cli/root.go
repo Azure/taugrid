@@ -1,24 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package cli wires the tau cobra command tree.
-//
-// One file per public command group. Tau v0.5 keeps the visible surface small:
-//
-//	cluster    install, uninstall, and validate the TauGrid distribution
-//	workspace  inspect workspaces, request quota, scaffold repos
-//	run        submit a workload from a config, then drive its lifecycle
-//	logs       discover a run through configured workspaces and stream its logs
-//	serve      deploy, scale, inspect, and delete model endpoints
-//	data       dataset registry and model checkpoint registry
-//	python     proxy to the Tau Python SDK helper commands
-//	version    print build metadata
-//
-// `platform` is registered but hidden: operator-only, read-only tooling that is
-// never invoked by the researcher path.
-//
-// Experiment tracking (`experiment`/Stellar) and the observability `portal` are
-// deliberately NOT in this binary — they ship as `taugrid-portal`.
 package cli
 
 import (
@@ -27,7 +9,6 @@ import (
 	"github.com/Azure/taugrid/core/version"
 )
 
-// NewRoot constructs the top-level `tau` command with all subcommands attached.
 func NewRoot() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "tau",
@@ -45,9 +26,7 @@ contract; the Go CLI remains the Kubernetes executor.`,
   tau logs train -f
   tau serve deploy my-7b --profile model-serve --image vllm/vllm-openai:v0.6.3
   tau data dataset list`,
-		SilenceUsage: true,
-		// main() prints `error: %v` and exits 1, so cobra must not print the
-		// error too — without this every failure is reported twice.
+		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version.Version,
 	}

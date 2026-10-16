@@ -1,24 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package runs builds the portal's Jobs board: the list of Tau-managed
-// workloads — batch/v1 Jobs and ray.io RayJobs — in a namespace.
-//
-// This is distinct from the Jobs/Queue board (internal/portal/jobs), which
-// reports Kueue *queue* pressure (admission, quota, headroom). This board
-// answers a researcher's question instead: "what did I submit, and what state
-// is it in?" — name, kind, status, and age per workload.
-//
-// The parsing/aggregation here is the single source of truth shared by both the
-// portal (/api/portal/runs, via internal/portal/kubeclient) and the CLI
-// (`tau run list`, via internal/kube). Both hand it the API's raw list JSON, so
-// the filter/dedup/status/age rules live in exactly one place.
-//
-// Only workloads created by Tau (carrying an tau.azure.com/ label) are shown;
-// KubeRay-internal Jobs (owned by a RayJob) are excluded to avoid duplicates.
-// The board degrades gracefully: a missing RayJob CRD (KubeRay not installed)
-// drops just the RayJob rows, and a portal without Kubernetes access disables
-// the board entirely (the handler returns 503).
 package runs
 
 import (
@@ -32,8 +14,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// tauLabelPrefix marks a workload as Tau-managed. Any label under this prefix
-// (e.g. tau.azure.com/job, tau.azure.com/run) qualifies.
 const tauLabelPrefix = workloadmeta.Domain
 
 const (
@@ -45,8 +25,6 @@ const (
 	experimentTrackingUnavailable = "unavailable"
 )
 
-// ExperimentSurfaceState describes whether the caller's resolved workspace has
-// a usable experiment surface. It is intentionally not per-run evidence.
 type ExperimentSurfaceState string
 
 const (
@@ -55,18 +33,11 @@ const (
 	ExperimentSurfaceUnavailable  ExperimentSurfaceState = "unavailable"
 )
 
-// Reader lists the raw Jobs and RayJobs JSON the board needs. Both
-// kubeclient.Client (portal, client-go) and a kubectl shim (CLI) satisfy this;
-// tests supply a fake so no live API is required.
 type Reader interface {
-	// ListJobs returns the namespaced batch/v1 Jobs list as raw JSON.
 	ListJobs(ctx context.Context, namespace string) ([]byte, error)
-	// ListRayJobs returns the namespaced ray.io RayJobs list as raw JSON.
 	ListRayJobs(ctx context.Context, namespace string) ([]byte, error)
 }
 
-// Options scopes the listing. Namespace, when set, restricts both listings to
-// one namespace.
 type Options struct {
 	Namespace         string
 	Queue             string
@@ -76,12 +47,6 @@ type Options struct {
 	HistoryScope      HistoryScope
 }
 
-// Run is one Tau-managed workload. Created is the object's creation time (for
-// transparent sorting); Age is that time preformatted with the same buckets the
-// CLI prints (e.g. "30s"/"45m"/"2h"/"3d"), so the portal frontend and the CLI
-// show identical age strings without duplicating the formatting logic.
-// ExperimentTracking is "tracked" only with exact per-run evidence; "available"
-// describes the workspace surface, not confirmed membership for this run.
 type Run struct {
 	Name               string    `json:"name"`
 	Kind               string    `json:"kind"`
@@ -100,7 +65,6 @@ type Run struct {
 	ExecutionTarget    string    `json:"executionTarget,omitempty"`
 }
 
-// Snapshot is the Jobs board payload: the Tau-managed workloads, newest first.
 type Snapshot struct {
 	Namespace         string `json:"namespace,omitempty"`
 	Total             int    `json:"total"`
@@ -109,11 +73,6 @@ type Snapshot struct {
 	HistoryDiagnostic string `json:"historyDiagnostic,omitempty"`
 }
 
-// Board lists Jobs and RayJobs via the Reader and aggregates them. Each source
-// degrades on its own: a listing error drops that source's rows (a missing
-// RayJob CRD is normal when KubeRay is absent). Only when *both* listings fail
-// does Board return an error, so the handler can surface a real outage (502)
-// rather than an empty board.
 func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	jobsJSON, jobsErr := r.ListJobs(ctx, opts.Namespace)
 	if jobsErr != nil {
@@ -220,12 +179,10 @@ func sortRuns(runs []Run) {
 	})
 }
 
-// ownerRef is the subset of an ownerReference the board reads.
 type ownerRef struct {
 	Kind string `json:"kind"`
 }
 
-// jobList is the subset of a batch/v1 Job list the board reads.
 type jobList struct {
 	Items []struct {
 		Metadata struct {
@@ -249,7 +206,6 @@ type jobList struct {
 	} `json:"items"`
 }
 
-// rayJobList is the subset of a ray.io RayJob list the board reads.
 type rayJobList struct {
 	Items []struct {
 		Metadata struct {
@@ -270,9 +226,6 @@ type rayJobList struct {
 	} `json:"items"`
 }
 
-// parseJobs decodes the Jobs list and keeps Tau-managed, non-RayJob-owned Jobs.
-// Invalid JSON (e.g. a "CRD not found" message where JSON was expected) yields no
-// rows rather than an error, matching the board's graceful-degradation contract.
 func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 	var list jobList
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -315,7 +268,6 @@ func parseJobs(now time.Time, data []byte, includeExternal bool) []Run {
 	return out
 }
 
-// parseRayJobs decodes the RayJobs list and keeps Tau-managed RayJobs.
 func parseRayJobs(now time.Time, data []byte, includeExternal bool) []Run {
 	var list rayJobList
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -363,7 +315,6 @@ func runtimeExecutionTarget(managedBy string) string {
 	return ""
 }
 
-// hasTauLabel reports whether any label key is under the Tau prefix.
 func hasTauLabel(labels map[string]string) bool {
 	for k := range labels {
 		if strings.HasPrefix(k, tauLabelPrefix) {
@@ -417,8 +368,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// ownedByRayJob reports whether any owner reference is a RayJob, so the
-// KubeRay-created submitter Job can be excluded (the RayJob itself is listed).
 func ownedByRayJob(refs []ownerRef) bool {
 	for _, ref := range refs {
 		if ref.Kind == "RayJob" {
@@ -428,17 +377,11 @@ func ownedByRayJob(refs []ownerRef) bool {
 	return false
 }
 
-// StatusCondition is the minimal Job condition shape (type + status) the status
-// mappers read. Exported so callers outside the package (e.g. the Job detail
-// board) can reuse JobStatus without re-deriving the display mapping.
 type StatusCondition struct {
 	Type   string
 	Status string
 }
 
-// JobStatus maps a batch/v1 Job's conditions and counters to the same display
-// status the runs board shows. First matching true condition wins in slice
-// order (Complete/Failed/Suspended), then active>0 is Running, else Pending.
 func JobStatus(conditions []StatusCondition, active, succeeded, failed int) string {
 	for _, c := range conditions {
 		if c.Status != "True" {
@@ -459,9 +402,6 @@ func JobStatus(conditions []StatusCondition, active, succeeded, failed int) stri
 	return "Pending"
 }
 
-// RayJobStatus maps a RayJob's deployment/job status to the same display status
-// the runs board shows, preferring the deployment status and falling back to
-// Pending. Exported so the Job detail board reuses the identical mapping.
 func RayJobStatus(deploymentStatus, jobStatus string) string {
 	if deploymentStatus != "" {
 		return deploymentStatus
@@ -472,18 +412,11 @@ func RayJobStatus(deploymentStatus, jobStatus string) string {
 	return "Pending"
 }
 
-// parseTime parses an RFC3339 creation timestamp, returning the zero time on any
-// error so a malformed/absent timestamp reads as "unknown" age rather than
-// failing the row.
 func parseTime(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)
 	return t
 }
 
-// FormatAge renders the age of an object created at `created` as of `now`, using
-// coarse single-unit buckets (seconds, minutes, hours, days). A zero created
-// time reads "<unknown>". Exported so the CLI renders the exact same column the
-// portal serves.
 func FormatAge(now, created time.Time) string {
 	if created.IsZero() {
 		return "<unknown>"

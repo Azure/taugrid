@@ -1,4 +1,3 @@
-# CI test values — Spark (1-GPU, RoCE, NVMe)
 gpuSkus:
   spark:
     instanceTypes:

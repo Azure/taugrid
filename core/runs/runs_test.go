@@ -422,8 +422,6 @@ func TestFormatAge(t *testing.T) {
 	}
 }
 
-// TestAggregate exercises the whole fold: Tau-label filtering, RayJob-owned Job
-// exclusion, status mapping across both kinds, and newest-first ordering.
 func TestAggregate(t *testing.T) {
 	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
 	jobsJSON := []byte(`{"items":[
@@ -445,13 +443,10 @@ func TestAggregate(t *testing.T) {
 
 	snap := aggregateWithExternal(now, jobsJSON, rayJSON, false)
 
-	// Expect 3 kept: tau-job, tau-complete (Jobs), tau-rayjob (RayJob).
-	// Excluded: not-tau (no label), rayjob-submitter (RayJob-owned), not-tau-ray (no label).
 	if snap.Total != 3 {
 		t.Fatalf("Total = %d, want 3", snap.Total)
 	}
 
-	// Newest first: tau-rayjob (11:45) > tau-job (10:00) > tau-complete (09:00).
 	wantOrder := []struct{ name, kind, status string }{
 		{"tau-rayjob", "RayJob", "Running"},
 		{"tau-job", "Job", "Running"},
@@ -515,8 +510,6 @@ func TestAggregateDerivesLiveTrackingFromWorkloadEvidence(t *testing.T) {
 	}
 }
 
-// TestAggregateToleratesInvalidJSON confirms a source that returns non-JSON
-// (e.g. a "CRD not found" message) contributes no rows instead of failing.
 func TestAggregateToleratesInvalidJSON(t *testing.T) {
 	now := time.Now()
 	jobsJSON := []byte(`{"items":[{"metadata":{"name":"tau-job","labels":{"` + workloadmeta.LabelJob + `":"t"}},"status":{"active":1}}]}`)
@@ -526,7 +519,6 @@ func TestAggregateToleratesInvalidJSON(t *testing.T) {
 	}
 }
 
-// fakeReader drives Board() without a live API.
 type fakeReader struct {
 	jobs   []byte
 	ray    []byte
@@ -559,8 +551,6 @@ func TestBoardSetsNamespaceAndAggregates(t *testing.T) {
 	}
 }
 
-// TestBoardDropsFailedSource confirms one failing lister (missing RayJob CRD)
-// still yields the other source's rows without an error.
 func TestBoardDropsFailedSource(t *testing.T) {
 	r := fakeReader{
 		jobs:   []byte(`{"items":[{"metadata":{"name":"j","creationTimestamp":"2026-07-02T10:00:00Z","labels":{"` + workloadmeta.LabelJob + `":"t"}},"status":{"active":1}}]}`),
@@ -575,8 +565,6 @@ func TestBoardDropsFailedSource(t *testing.T) {
 	}
 }
 
-// TestBoardErrorsWhenBothSourcesFail confirms a real outage (no Kubernetes)
-// surfaces as an error so the handler can return 502.
 func TestBoardErrorsWhenBothSourcesFail(t *testing.T) {
 	r := fakeReader{
 		jobErr: errors.New("connection refused"),

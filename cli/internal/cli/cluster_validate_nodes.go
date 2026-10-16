@@ -99,20 +99,12 @@ func runClusterValidateNodes(ctx context.Context, r validateNodesRunner, spec va
 
 	fmt.Fprintln(out, "...")
 
-	// One node fetch feeds both the GPU inventory and the stranded-node report,
-	// so the two views can never disagree about what the cluster looks like.
 	items, err := fetchNodeItems(ctx, r, selector)
 	if err != nil {
 		return fmt.Errorf("discover GPU nodes: %w", err)
 	}
 	draDevices := nodesWithResourceSlices(ctx, r)
 	nodes := classifyGPUNodes(items, draDevices)
-	// GPUs reach the scheduler either as device-plugin extended resources
-	// (nvidia.com/*) or as DRA ResourceSlices. A node offering neither has
-	// nothing registered: AKS installs the NVIDIA *driver* automatically but no
-	// device plugin, so a perfectly healthy GPU node can report zero capacity.
-	// Reported explicitly, because the bare "no GPU nodes found" below sends
-	// people looking at quota and node pools instead of at device registration.
 	if stranded := classifyStrandedGPUNodes(items, draDevices); len(stranded) > 0 {
 		fmt.Fprintf(out, "\n%d node(s) look like GPU hardware but expose no schedulable GPUs:\n", len(stranded))
 		for _, n := range stranded {
@@ -174,9 +166,6 @@ func selectorReferencesGPUClass(selector string) bool {
 	return false
 }
 
-// gpuSource records how a node's GPUs reach the scheduler. Managed workflows
-// can submit against device-plugin, DRA, or MIG resources, so detection has to
-// understand all of them.
 type gpuSource string
 
 const (
@@ -189,12 +178,9 @@ type gpuNodeInfo struct {
 	Name         string
 	GPUClass     string
 	InstanceType string
-	// AllocGPU is the schedulable whole-GPU count. It is 0 for MIG nodes,
-	// where allocatable capacity is measured in profile slices and the
-	// physical GPU count is not derivable from it.
-	AllocGPU  int
-	Source    gpuSource
-	MIGSlices int
+	AllocGPU     int
+	Source       gpuSource
+	MIGSlices    int
 }
 
 type nodeItem struct {
@@ -232,21 +218,6 @@ func nodeInstanceType(labels map[string]string) string {
 	return labels["beta.kubernetes.io/instance-type"]
 }
 
-// classifyGPUNodes turns raw nodes into the GPU inventory to validate.
-//
-// Precedence is deliberate and each node matches at most one arm, so a node
-// that advertises a device-plugin resource *and* publishes DRA ResourceSlices
-// (a driver mid-migration, or a cluster running both) is counted exactly once.
-//
-//	nvidia.com/gpu: N   -> N whole GPUs, device plugin
-//	nvidia.com/mig-*    -> MIG; slice inventory recorded, whole-GPU count unknown
-//	ResourceSlices      -> DRA device count
-//
-// MIG deliberately does not try to infer physical GPUs from slice counts:
-// nvidia.com/mig-1g.10gb: 7 is one A100 with seven 1g profiles or several
-// partly-partitioned GPUs, and the quantity alone cannot tell them apart. The
-// physical count comes from nvidia-smi during validation instead, so the node
-// is reported with a real number rather than 0 or a misleading slice total.
 func classifyGPUNodes(items []nodeItem, draDevices map[string]int) []gpuNodeInfo {
 	var nodes []gpuNodeInfo
 	for _, it := range items {
@@ -274,10 +245,6 @@ func classifyGPUNodes(items []nodeItem, draDevices map[string]int) []gpuNodeInfo
 	return nodes
 }
 
-// countNVIDIAResources splits allocatable nvidia.com/* capacity into whole GPUs
-// (nvidia.com/gpu) and MIG profile slices (nvidia.com/mig-<profile>, summed
-// across profiles since a node may expose several). Any other nvidia.com/*
-// resource is a resourceName override for whole GPUs and counts as such.
 func countNVIDIAResources(allocatable map[string]string) (whole, mig int) {
 	for name, qty := range allocatable {
 		suffix, ok := strings.CutPrefix(name, "nvidia.com/")
@@ -285,34 +252,6 @@ func countNVIDIAResources(allocatable map[string]string) (whole, mig int) {
 			continue
 		}
 		n, err := strconv.Atoi(qty)
-		// The zero-quantity skip below is redundant today, and no test catches
-		// its removal -- do not read this comment as a claim that one will.
-		// The property it backstops is real, and comes from real hardware:
-		//
-		//   MIG-capable cards running in whole-GPU mode advertise their
-		//   profiles at quantity 0 alongside a normal whole-GPU count. An H200
-		//   on <cluster> reports nvidia.com/gpu:8 with mig-1g.18gb,
-		//   mig-2g.35gb and mig-3g.71gb all "0". A profile with no capacity is
-		//   not a partition, and such a node must stay on the device-plugin
-		//   arm; classified as MIG it reports AllocGPU 0 for 8 healthy GPUs.
-		//
-		// What actually holds that property is summing advertised quantities
-		// rather than counting profile keys. That is not silent to change:
-		// TestClassifyGPUNodesReportsMIGSlicesWithoutFakingWholeGPUs asserts a
-		// summed slice total across two profiles, so a switch to key counting
-		// fails immediately, for its own reasons and regardless of this skip.
-		// You therefore cannot reach a state where this skip is load-bearing
-		// without tripping that test on the way. Only if someone changes both
-		// does the zero-quantity property itself break, and
-		// TestCountNVIDIAResourcesIgnoresZeroQuantityMIGProfiles is what names
-		// it. TestClassifyGPUNodesAgainstRealClusterInventory does not: the
-		// device-plugin arm is decided on the whole-GPU count before MIG is
-		// consulted, so the real H200 classifies correctly either way.
-		//
-		// Note for anyone verifying by mutation: grep for the code, not for a
-		// phrase this comment also contains, or an unapplied mutation and an
-		// applied one look identical. Check the build separately too -- a
-		// mutation that does not compile also prints FAIL.
 		if err != nil || n <= 0 {
 			continue
 		}
@@ -325,10 +264,6 @@ func countNVIDIAResources(allocatable map[string]string) (whole, mig int) {
 	return whole, mig
 }
 
-// discoverStrandedGPUNodes returns nodes that advertise no allocatable
-// nvidia.com/gpu but carry the labels AKS puts on GPU SKUs. Those nodes have
-// physical GPUs that nothing has registered, which is what a missing device
-// plugin looks like from the API server.
 func discoverStrandedGPUNodes(ctx context.Context, r validateNodesRunner, selector string) ([]gpuNodeInfo, error) {
 	items, err := fetchNodeItems(ctx, r, selector)
 	if err != nil {
@@ -340,17 +275,9 @@ func discoverStrandedGPUNodes(ctx context.Context, r validateNodesRunner, select
 func classifyStrandedGPUNodes(items []nodeItem, draDevices map[string]int) []gpuNodeInfo {
 	var nodes []gpuNodeInfo
 	for _, it := range items {
-		// Not just nvidia.com/gpu: MIG advertises partition resources such as
-		// nvidia.com/mig-1g.10gb. Any nvidia.com/* resource means something has
-		// registered the devices.
 		if advertisesNVIDIAResource(it.Status.Allocatable) {
 			continue
 		}
-		// DRA publishes GPUs as ResourceSlices instead of node extended
-		// resources, so a healthy DRA node legitimately advertises no
-		// nvidia.com/* resource and is not stranded. Presence, not device
-		// count: a driver that has claimed the node has registered, even if it
-		// is momentarily publishing an empty device list.
 		if _, claimed := draDevices[it.Metadata.Name]; claimed {
 			continue
 		}
@@ -368,9 +295,6 @@ func classifyStrandedGPUNodes(items []nodeItem, draDevices map[string]int) []gpu
 	return nodes
 }
 
-// advertisesNVIDIAResource reports whether any nvidia.com/* extended resource is
-// allocatable on the node. Covers whole GPUs (nvidia.com/gpu) and MIG
-// partitions (nvidia.com/mig-1g.10gb).
 func advertisesNVIDIAResource(allocatable map[string]string) bool {
 	for name, qty := range allocatable {
 		if !strings.HasPrefix(name, "nvidia.com/") {
@@ -383,16 +307,6 @@ func advertisesNVIDIAResource(allocatable map[string]string) bool {
 	return false
 }
 
-// nodesWithResourceSlices returns, per node, the number of distinct GPU devices
-// published through DRA ResourceSlices. Best effort: clusters without the
-// resource.k8s.io API, or without permission to list it, simply yield an empty
-// map, and the caller falls back to extended-resource detection alone.
-//
-// Devices are deduplicated by (driver, pool, device name) because a pool can be
-// split across several slices, and slices are re-published on driver restart.
-// MIG devices exposed through DRA collapse onto their parent GPU for the same
-// reason the extended-resource path refuses to infer physical GPUs from slice
-// counts: the researcher-visible unit is the GPU, not the partition.
 func nodesWithResourceSlices(ctx context.Context, r validateNodesRunner) map[string]int {
 	out, err := fetchNodesWithResourceSlices(ctx, r)
 	if err != nil {
@@ -401,10 +315,6 @@ func nodesWithResourceSlices(ctx context.Context, r validateNodesRunner) map[str
 	return out
 }
 
-// fetchNodesWithResourceSlices is the strict form used when a ClusterQueue
-// explicitly accounts GPUs through DRA. Unlike the best-effort node inventory,
-// topology validation cannot treat an unavailable API or missing RBAC as an
-// empty GPU pool because that would misdiagnose a healthy DRA cluster.
 func fetchNodesWithResourceSlices(ctx context.Context, r validateNodesRunner) (map[string]int, error) {
 	raw, err := r.Raw(ctx, []string{"get", "resourceslices", "-o", "json"}, nil)
 	if err != nil {
@@ -443,9 +353,6 @@ func fetchNodesWithResourceSlices(ctx context.Context, r validateNodesRunner) (m
 			seen[node][it.Spec.Driver+"/"+it.Spec.Pool.Name+"/"+draParentDevice(dev.Name)] = true
 		}
 	}
-	// Nodes are keyed even when their slice currently lists no devices: the key
-	// records that a GPU DRA driver has claimed the node, which is what the
-	// stranded-node report needs, while the count is what the inventory needs.
 	out := make(map[string]int, len(seen))
 	for node, devices := range seen {
 		out[node] = len(devices)
@@ -453,12 +360,6 @@ func fetchNodesWithResourceSlices(ctx context.Context, r validateNodesRunner) (m
 	return out, nil
 }
 
-// isGPUDRADriver reports whether a DRA driver publishes GPUs. DRA is a generic
-// device framework, so counting every driver's devices as GPUs would credit a
-// node for its NICs. The NVIDIA driver registers as gpu.nvidia.com; the match
-// stays loose enough to cover vendor and fork naming. An unset driver is not
-// excluded — the filter exists to drop drivers that are known not to be GPU
-// drivers, not to drop everything it cannot positively identify.
 func isGPUDRADriver(driver string) bool {
 	d := strings.ToLower(strings.TrimSpace(driver))
 	if d == "" {
@@ -467,9 +368,6 @@ func isGPUDRADriver(driver string) bool {
 	return strings.Contains(d, "gpu") || strings.Contains(d, "nvidia")
 }
 
-// draParentDevice maps a MIG device name published through DRA back to the
-// physical GPU that owns it, so seven 1g profiles on one A100 count as one GPU.
-// Non-MIG device names are returned unchanged.
 func draParentDevice(name string) string {
 	if parent, _, found := strings.Cut(name, "-mig-"); found && parent != "" {
 		return parent
@@ -477,10 +375,6 @@ func draParentDevice(name string) string {
 	return name
 }
 
-// looksLikeGPUNode reports whether a node is GPU hardware independent of
-// whether anything has registered the devices. AKS sets
-// kubernetes.azure.com/accelerator on GPU node pools, and the NVIDIA GPU VM
-// families are the N-series (NC/ND/NV), which is what the instance type encodes.
 func looksLikeGPUNode(labels map[string]string, instanceType string) bool {
 	if labels["kubernetes.azure.com/accelerator"] != "" || labels["accelerator"] != "" {
 		return true
@@ -794,19 +688,11 @@ func assessHealth(d validationData, node gpuNodeInfo) nodeHealthResult {
 		return res
 	}
 
-	// MIG being enabled is not itself a fault. What is a fault is MIG enabled
-	// with zero instances configured: nvidia-smi still
-	// reports a healthy GPU, but there is no device to open, so every workload
-	// dies at the first cuInit() with 100 CUDA_ERROR_NO_DEVICE. That state is
-	// the AKS default on some A100 SKUs and is otherwise very hard to read.
 	if strings.EqualFold(d.MIGMode, "Enabled") && d.MIGInstances == 0 {
 		res.Status = statusUnhealthy
 		res.Reasons = append(res.Reasons, "MIG is enabled but no MIG instances are configured; CUDA cannot create a context (configure MIG instances, or run `nvidia-smi -mig 0` and restart the node)")
 	}
 
-	// AllocGPU is 0 on MIG nodes, where allocatable capacity is counted in
-	// profile slices, so this comparison is skipped there by construction
-	// rather than firing on every healthy MIG node.
 	if node.AllocGPU > 0 && d.GPUCount < node.AllocGPU {
 		res.Status = statusUnhealthy
 		res.Reasons = append(res.Reasons, fmt.Sprintf("GPU count %d < expected %d", d.GPUCount, node.AllocGPU))
@@ -852,8 +738,6 @@ func printNodeHealthTable(out io.Writer, results []nodeHealthResult) {
 		gpus := "-"
 		switch {
 		case r.Source == gpuSourceMIG:
-			// AllocGPU is meaningless on MIG nodes, so show what is actually
-			// known: physical GPUs seen by nvidia-smi, and the slice inventory.
 			gpus = fmt.Sprintf("%d (%d slices)", r.GPUCount, r.MIGSlices)
 		case r.AllocGPU > 0 || r.GPUCount > 0:
 			gpus = fmt.Sprintf("%d/%d", r.GPUCount, r.AllocGPU)

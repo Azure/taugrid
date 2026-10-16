@@ -17,31 +17,20 @@ const (
 	registerWorkerCmdName = "register-worker"
 	statusWorkerCmdName   = "status-worker"
 
-	// datasetRecordMountPath is where the transport ConfigMap is mounted in the
-	// register worker pod, and datasetRecordFileName is the key inside it.
 	datasetRecordMountPath = "/etc/tau-dataset"
 	datasetRecordFileName  = "record.json"
 )
 
-// datasetRegisterResult is the stable JSON emitted by the register worker (and
-// by workspace-mode register) so the orchestrator can report idempotence.
 type datasetRegisterResult struct {
 	SchemaVersion int    `json:"schema_version"`
 	Name          string `json:"name"`
 	Version       string `json:"version"`
 	Digest        string `json:"digest"`
-	// Created is true when this call registered a new record, false when an
-	// identical record already existed (idempotent no-op).
-	Created bool `json:"created"`
+	Created       bool   `json:"created"`
 }
 
 const datasetRegisterResultSchemaVersion = 1
 
-// newDatasetRegisterWorkerCmd returns the hidden register-worker subcommand.
-// It is invoked by the batch/v1 Job rendered by `tau data dataset register`
-// (workspace mode). It reads the immutable record from a mounted ConfigMap and
-// registers it idempotently under the workspace's workload identity using the
-// SDK-backed registry backend (no `az` binary required).
 func newDatasetRegisterWorkerCmd() *cobra.Command {
 	var rf registryFlags
 	var recordFile string
@@ -69,7 +58,6 @@ func newDatasetRegisterWorkerCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Establish the ingest-status baseline so `dataset status` works.
 			if _, _, err := reg.InitIngestStatus(cmd.Context(), written); err != nil {
 				return fmt.Errorf("init ingest status: %w", err)
 			}
@@ -87,10 +75,6 @@ func newDatasetRegisterWorkerCmd() *cobra.Command {
 	return cmd
 }
 
-// newDatasetStatusWorkerCmd returns the hidden status-worker subcommand. It is
-// invoked by the Job rendered by `tau data dataset status --workspace` so a
-// researcher without direct Azure RBAC can read a project's ingest status via
-// the workspace workload identity. It prints the IngestStatus JSON to stdout.
 func newDatasetStatusWorkerCmd() *cobra.Command {
 	var rf registryFlags
 	cmd := &cobra.Command{

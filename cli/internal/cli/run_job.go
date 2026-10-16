@@ -45,10 +45,6 @@ func newRunJobRequest(options unresolvedRunOptions, name string) (runJobRequest,
 		return runJobRequest{}, err
 	}
 	if strings.TrimSpace(options.workingDir.rayProjectPath()) != "" {
-		// working_dir is delivered through Ray's runtime_env, which a plain
-		// Kubernetes Job has no equivalent of. Accepting it silently here
-		// would suppress the submit-time import check and hand the user back
-		// the ModuleNotFoundError-after-startup failure it exists to prevent.
 		return runJobRequest{}, fmt.Errorf(
 			"run.working_dir is not supported with engine: job.\n" +
 				"It is delivered through Ray's runtime_env, so it applies to engine: rayjob only.\n" +
@@ -246,11 +242,6 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		return err
 	}
 	if o.dryRun == "client" {
-		// Queue and namespace resolution both need a live cluster, so a client
-		// dry-run can never carry the real values. jobrender fails closed on an
-		// empty queue to stop permanently-suspended Jobs from being submitted;
-		// substitute self-describing placeholders so the offline render still
-		// works and no reader mistakes them for what the submit path resolves.
 		var unresolved []string
 		if strings.TrimSpace(opts.QueueName) == "" {
 			opts.QueueName = clientDryRunQueuePlaceholder
@@ -320,7 +311,6 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	)
 	capture = addRunWorkspaceMetadata(capture, o.workspace, o.workspaceResultScope)
 	capture = addLaunchMetadata(capture, opts.GPUClass, resolvedProfileName, o.script, o.launcher, max(1, o.nodes), gpuCountFromProfile(p))
-	// Direct Job rendering only supports the standard device-plugin resource.
 	capture = addLaunchGPUResources(capture, "device-plugin", "")
 	opts.MetricsOffload.Tags = addStableMetricsLaunchTag(opts.MetricsOffload.Tags, capture)
 	opts.Labels, opts.Annotations = experiment.MergeMetadata(opts.Labels, opts.Annotations, capture)
@@ -590,16 +580,6 @@ func resolveResolvedMetricsOffload(o resolvedDirectRunOptions, runID, namespace,
 	if err := validateMetricsSessionID(o.metricsSessionID); err != nil {
 		return metricsoffload.Runtime{}, err
 	}
-	// The SQLite index (Store) is the only buffer that needs POSIX file locks;
-	// BlobFuse-backed /data does not provide them, so SQLite fails schema init
-	// with SQLITE_BUSY there. Root Store under the sidecar's /var/run/tau
-	// emptyDir instead. The spool (Out) is written with WriteFileAtomic and
-	// needs no locks, so it defaults to durable /data. That lets a retry
-	// (resilience.max_retries or tau run resume) resume from attempt 1's
-	// undrained rows instead of re-baselining to end-of-file and silently
-	// dropping them. Platforms whose PVCs cannot support the atomic checkpoint
-	// write may override Out to the shared /var/run/tau emptyDir and accept
-	// pod-local checkpoint durability.
 	runtimeRoot := path.Join(metricsoffload.RuntimeMountPath, "metrics", o.metricsSessionID)
 	durableRoot := path.Join(outputDir, ".tau", "metrics", o.metricsSessionID)
 	doneTimeout, err := metricsoffload.TerminalDrainTimeout(

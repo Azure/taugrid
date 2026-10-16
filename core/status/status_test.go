@@ -47,7 +47,6 @@ func TestRender_Running_StateAndPods(t *testing.T) {
 	if !strings.Contains(out, "Running") {
 		t.Errorf("expected Running headline, got:\n%s", out)
 	}
-	// Sort: Pending pods come before Running alphabetically — verify deterministic ordering.
 	pendingIdx := strings.Index(out, "j-abc")
 	runningIdx := strings.Index(out, "j-xyz")
 	if pendingIdx == -1 || runningIdx == -1 || pendingIdx > runningIdx {
@@ -1947,18 +1946,10 @@ func TestRender_NotAdmittedWorkloadShowsKueueMessageWithoutBreakingColumns(t *te
 	if !strings.Contains(out, "excluded: resource \"cpu\": 3") {
 		t.Errorf("expected Kueue message detail in output, got:\n%s", out)
 	}
-	// Newlines in the message would split the tabwriter row.
 	if strings.Contains(out, "└─ couldn't assign flavors to pod set main:\n") {
 		t.Errorf("message was not collapsed to a single line, got:\n%s", out)
 	}
 
-	// The long message must not break the table. A continuation line with
-	// too few tabs ends tabwriter's column block, and every row after it
-	// re-aligns to its own widths. Checking one named column would miss
-	// that: the drift lands in the columns *after* the break, so a column
-	// chosen up front stays put while the table is visibly broken. Assert
-	// instead that every row still starts each of its cells at the header's
-	// column offsets — true regardless of how many columns the table grows.
 	var header, pending, admitted string
 	for _, line := range strings.Split(out, "\n") {
 		switch {
@@ -1973,14 +1964,12 @@ func TestRender_NotAdmittedWorkloadShowsKueueMessageWithoutBreakingColumns(t *te
 	if header == "" || pending == "" || admitted == "" {
 		t.Fatalf("missing expected rows in output:\n%s", out)
 	}
-	// Header cell offsets are the column grid every data row must land on.
 	var columns []int
 	for i := range header {
 		if header[i] != ' ' && (i == 0 || header[i-1] == ' ') {
 			columns = append(columns, i)
 		}
 	}
-	// Every non-empty cell in a data row must begin exactly on one of them.
 	for _, row := range []struct{ name, line string }{{"pending", pending}, {"admitted", admitted}} {
 		for i := range row.line {
 			if row.line[i] == ' ' || (i > 0 && row.line[i-1] != ' ') {

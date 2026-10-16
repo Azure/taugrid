@@ -372,9 +372,6 @@ func TestHydrateWorkloads_DropsStaleMessageOnceAdmitted(t *testing.T) {
 	}
 }
 
-// Kueue emits only QuotaReserved while a workload waits for flavor
-// assignment — there is no Admitted condition to fall back on. Observed on
-// the `ai` cluster with a workload that could not fit any node.
 func TestHydrateWorkloads_QuotaReservedOnlyPopulatesReasonAndMessage(t *testing.T) {
 	data := []byte(`{"items":[{"metadata":{"name":"job-bug13-repro-b5426"},"spec":{"queueName":"jobqueue"},"status":{"conditions":[
 		{"type":"QuotaReserved","status":"False","reason":"Pending","message":"couldn't assign flavors to pod set main: topology \"default-node-topology\" doesn't allow to fit any of 1 pod(s). Total nodes: 4; excluded: resource \"cpu\": 3, taint \"nvidia.com/gpu:NoSchedule\": 1"}

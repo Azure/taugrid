@@ -10,10 +10,6 @@ import (
 	"github.com/Azure/taugrid/core/experiment"
 )
 
-// The run-experiment metadata contract is owned by taucore/experiment: the tau
-// CLI attaches it when submitting a run, and these commands read the same
-// identity back out of a run config. Aliasing rather than redefining is what
-// keeps the two products from drifting apart on project and experiment ids.
 type runExperimentMetadata = experiment.RunMetadata
 
 func withRunExperimentMetadata(ctx context.Context, meta runExperimentMetadata) context.Context {

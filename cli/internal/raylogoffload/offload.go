@@ -120,8 +120,6 @@ tau_complete_driver_logs() {
   exit "$tau_driver_status"
 }`
 
-// WrapShellScript records completion only after every nested lifecycle wrapper
-// (metrics offload and artifact publication) has finished.
 func WrapShellScript(command string) string {
 	return fmt.Sprintf(`set +e
 %s

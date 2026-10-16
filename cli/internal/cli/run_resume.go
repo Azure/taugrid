@@ -209,7 +209,7 @@ func resolveResumeRouting(
 type resumePlan struct {
 	Reason        resume.FailureReason
 	CheckpointDir string
-	ConfigWarning string // non-empty if config hash changed
+	ConfigWarning string
 }
 
 func resumePreflight(snap status.Snapshot, name, configHash, from string, force bool) (resumePlan, error) {
@@ -428,10 +428,6 @@ func runResumeCommand(
 		return err
 	}
 	applyResumeOverrides(&targetOptions, routing.Namespace, routing.KubeContext, dryRun)
-	// Status and failure inspection above remain available regardless of the
-	// current profile readiness and applicability checks. Resolve the
-	// replacement profile only after observation, and always before deleting
-	// the failed workload.
 	productionExecution := hooks.executeTarget == nil && hooks.validateTarget == nil
 	if hooks.resolveProfile != nil || productionExecution {
 		targetOptions, err = hooks.profile(cmd.Context(), targetOptions)

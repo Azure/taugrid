@@ -7,7 +7,6 @@ from helpers import ScriptTestCase
 
 ALLOWED = '("96.00.BC.00.02" "96.00.BC.00.01")'
 
-
 class GpuVbiosTests(ScriptTestCase):
     def run_allow_list(self, versions, expected=0, allow_list=ALLOWED):
         return self.run_script(
@@ -102,7 +101,6 @@ class GpuVbiosTests(ScriptTestCase):
                     env={**env, "NVIDIA_SMI_NO_VBIOS": "1"},
                 )
                 self.assertIn("No VBIOS version found", output)
-
 
 if __name__ == "__main__":
     unittest.main()

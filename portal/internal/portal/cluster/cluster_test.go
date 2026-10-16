@@ -12,8 +12,6 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
-// fakeQuerier records the KQL it was asked to run and returns canned rows, so
-// Board is exercised without a live Kusto.
 type fakeQuerier struct {
 	rows    []kustoquery.Row
 	err     error
@@ -25,9 +23,6 @@ func (f *fakeQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row, er
 	return f.rows, f.err
 }
 
-// pivotedRows is the shape GpuHealth() | evaluate pivot(...) produces: one row
-// per GPU with each metric as a column. Values arrive as JSON numbers/strings
-// exactly like the shell-out parser yields.
 var pivotedRows = []kustoquery.Row{
 	{
 		"Cluster": "cluster-a", "instance": "node-0", "gpu": "0", "modelName": "H100",
@@ -39,12 +34,11 @@ var pivotedRows = []kustoquery.Row{
 	{
 		"Cluster": "cluster-a", "instance": "node-0", "gpu": "1", "modelName": "H100",
 		"gpu_utilization": 5.0, "gpu_temperature_celsius": 40.0, "gpu_power_watts": 90.0,
-		// This GPU has an uncorrectable remapped row → unhealthy.
 		"uncorrectable_remapped_rows": 1.0, "row_remap_failure": 0.0,
 	},
 	{
 		"Cluster": "cluster-a", "instance": "node-1", "gpu": "0", "modelName": "A100",
-		"gpu_utilization":   "77", // numeric string (Kusto tostring())
+		"gpu_utilization":   "77",
 		"row_remap_failure": 3.0,
 	},
 }
@@ -58,7 +52,6 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 	if snap.TotalGPUs != 3 {
 		t.Fatalf("TotalGPUs = %d, want 3", snap.TotalGPUs)
 	}
-	// node-0/gpu1 (uncorrectable) and node-1/gpu0 (row_remap_failure) → 2 errors.
 	if snap.ErrorGPUs != 2 {
 		t.Fatalf("ErrorGPUs = %d, want 2", snap.ErrorGPUs)
 	}
@@ -66,7 +59,6 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 		t.Fatalf("Window = %q, want %q", snap.Window, DefaultWindow.String())
 	}
 
-	// Models sorted by GPU count desc: H100 (2) before A100 (1).
 	if len(snap.Models) != 2 {
 		t.Fatalf("models = %d, want 2: %#v", len(snap.Models), snap.Models)
 	}
@@ -77,7 +69,6 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 		t.Fatalf("models[1] = %#v, want A100:1", snap.Models[1])
 	}
 
-	// First GPU: healthy, values mapped through.
 	g0 := snap.GPUs[0]
 	if g0.Instance != "node-0" || g0.GPU != "0" || g0.Healthy == nil || !*g0.Healthy {
 		t.Fatalf("gpu0 = %#v, want node-0/0 healthy", g0)
@@ -91,7 +82,6 @@ func TestBoardAggregatesPivotedRows(t *testing.T) {
 		t.Fatalf("gpu0 correctable = %v, want 2", g0.CorrectableRemappedRows)
 	}
 
-	// Third GPU: numeric-string utilization parsed, unhealthy via row_remap_failure.
 	g2 := snap.GPUs[2]
 	if g2.UtilizationPct == nil || *g2.UtilizationPct != 77 {
 		t.Fatalf("gpu2 utilization = %v, want 77 (from string)", g2.UtilizationPct)
@@ -110,7 +100,6 @@ func TestBoardEmpty(t *testing.T) {
 	if snap.TotalGPUs != 0 || snap.ErrorGPUs != 0 || len(snap.GPUs) != 0 {
 		t.Fatalf("empty snapshot = %#v", snap)
 	}
-	// GPUs and Models must be non-nil slices so they serialize as [] not null.
 	if snap.GPUs == nil {
 		t.Fatal("GPUs is nil, want empty slice")
 	}
@@ -140,7 +129,7 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 
 	for _, want := range []string{
 		"GpuHealth()",
-		"| where Timestamp > ago(900s)", // DefaultWindow = 15m
+		"| where Timestamp > ago(900s)",
 		"Cluster == @'prod-eastus'",
 		"namespace == @'team-alpha'",
 		"instance == @'node-7'",
@@ -178,15 +167,12 @@ func TestBuildKQLNoFilters(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
 	_, _ = Board(context.Background(), q, Options{})
 	kql := q.lastKQL
-	// With no filters, no Cluster/instance/modelName equality clauses appear.
 	if strings.Contains(kql, "Cluster ==") || strings.Contains(kql, "namespace ==") ||
 		strings.Contains(kql, "instance ==") || strings.Contains(kql, "modelName ==") {
 		t.Fatalf("unfiltered KQL should have no equality filters:\n%s", kql)
 	}
 }
 
-// TestBuildKQLQuotesInjection verifies a filter value with an embedded quote is
-// escaped, not able to break out of the KQL string literal.
 func TestBuildKQLQuotesInjection(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
 	_, _ = Board(context.Background(), q, Options{Instance: "node' | project"})

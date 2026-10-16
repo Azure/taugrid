@@ -3,7 +3,6 @@
 
 package storage
 
-// RuntimeEnv returns the stable runtime paths for typed storage mounts.
 func RuntimeEnv() map[string]string {
 	return map[string]string{
 		"TAU_DATA_DIR":                DurableRoot,

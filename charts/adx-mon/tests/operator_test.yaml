@@ -7,7 +7,6 @@ templates:
 
 tests:
 
-  # ── Deployment ────────────────────────────────────────────────────
   - it: renders operator Deployment by default
     template: operator/deployment.yaml
     asserts:
@@ -196,7 +195,6 @@ tests:
             resources: [events]
             verbs: [create, patch]
 
-    # ── ServiceAccount ────────────────────────────────────────────────
   - it: renders operator ServiceAccount
     template: operator/serviceaccount.yaml
     asserts:
@@ -217,7 +215,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── ClusterRole ────────────────────────────────────────────────
   - it: renders operator ClusterRole with CRD permissions
     template: operator/clusterrole.yaml
     asserts:
@@ -246,7 +243,6 @@ tests:
               - summaryrules
             verbs: [get, list, watch, create, update, patch, delete]
 
-  # ── ClusterRoleBinding ────────────────────────────────────────────
   - it: renders operator ClusterRoleBinding
     template: operator/clusterrolebinding.yaml
     asserts:

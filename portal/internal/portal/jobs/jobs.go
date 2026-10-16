@@ -1,13 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package jobs builds the portal's Jobs/Queue board.
-//
-// It is the client-go analogue of queue.Fetch(): it reads the same three Kueue
-// object lists, but through internal/portal/kubeclient instead of kubectl, then
-// reuses the pure aggregator queue.BuildSnapshot() unchanged. Only the fetch
-// layer differs; the Kueue-parsing and GPU-quota math are shared verbatim with
-// `tau queue status`.
 package jobs
 
 import (
@@ -23,28 +16,22 @@ import (
 	"github.com/Azure/taugrid/core/topology"
 )
 
-// Reader fetches the raw Kueue list JSON the board needs. kubeclient.Client
-// satisfies this; tests supply a fake so no live API is required.
 type Reader interface {
 	ListLocalQueues(ctx context.Context, namespace string) ([]byte, error)
 	ListClusterQueues(ctx context.Context) ([]byte, error)
 	ListWorkloads(ctx context.Context, namespace string) ([]byte, error)
 }
 
-// ProfileReader reads the current singleton TauCluster workload-profile status.
-// The concrete portal kubeclient delegates this to resourceprofile.Provider.
 type ProfileReader interface {
 	ProfileSet(ctx context.Context) (profile.ProfileSet, error)
 }
 
-// Scope is one explicitly configured or authorized LocalQueue view.
 type Scope struct {
 	Team      string
 	Namespace string
 	Queue     string
 }
 
-// Options controls the board fetch and post-fetch filtering.
 type Options struct {
 	Scopes   []Scope
 	Profiles ProfileReader
@@ -53,8 +40,6 @@ type Options struct {
 	GPUClass string
 }
 
-// ProfileAvailability is the read-only workload-profile state attached to every
-// Jobs response. Profile read failures never suppress live Kueue observations.
 type ProfileAvailability struct {
 	Available        bool             `json:"available"`
 	Error            string           `json:"error,omitempty"`
@@ -65,7 +50,6 @@ type ProfileAvailability struct {
 	SelectionEnabled bool             `json:"selectionEnabled"`
 }
 
-// ProfileSummary is one current, Ready profile authorized for a viewed scope.
 type ProfileSummary struct {
 	Name              string                  `json:"name"`
 	ExecutionTarget   profile.ExecutionTarget `json:"executionTarget"`
@@ -75,14 +59,11 @@ type ProfileSummary struct {
 	WorkerCount       int32                   `json:"workerCount"`
 }
 
-// Snapshot keeps the queue.Snapshot wire contract while attaching profile
-// readiness. Portal has no workload submission or profile-selection surface.
 type Snapshot struct {
 	queue.Snapshot
 	WorkloadProfiles ProfileAvailability `json:"workloadProfiles"`
 }
 
-// Summary is the deduplicated Overview headline for a queue Snapshot.
 type Summary struct {
 	Pending     int
 	Admitted    int
@@ -90,14 +71,11 @@ type Summary struct {
 	GPUHeadroom int64
 }
 
-// ValidateScopes verifies that scopes are complete and unambiguous.
 func ValidateScopes(scopes []Scope) error {
 	_, err := normalizeScopes(scopes)
 	return err
 }
 
-// Board fetches each explicit scope and aggregates it with queue.BuildSnapshot.
-// LocalQueue names never select a namespace or team; callers must provide both.
 func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	scopes, err := normalizeScopes(opts.Scopes)
 	if err != nil {
@@ -142,8 +120,6 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 		if err != nil {
 			return Snapshot{}, err
 		}
-		// This policy is an in-memory projection of the explicitly authorized,
-		// live LocalQueue binding. It is not a profile catalog or fallback source.
 		observed := topology.Policy{Presets: map[string]topology.Preset{
 			"portal-observed-scope": {
 				Name: "portal-observed-scope", Team: scope.Team,
@@ -213,8 +189,6 @@ func liveClusterQueue(raw []byte, scope Scope) (string, error) {
 	return clusterQueue, nil
 }
 
-// ReadProfiles fetches and filters the profile set on every request. A failure
-// is data attached to the response, not a failure of queue/status observation.
 func ReadProfiles(ctx context.Context, reader ProfileReader, scopes []Scope, lane string) ProfileAvailability {
 	out := ProfileAvailability{ReadyProfiles: []ProfileSummary{}, ReadOnly: true}
 	if reader == nil {
@@ -262,8 +236,6 @@ func profileMatchesAnyScope(candidate profile.ResolvedWorkloadProfile, scopes []
 	return false
 }
 
-// Summarize counts each LocalQueue and ClusterQueue flavor once even when
-// several topology groups project the same underlying Kueue object.
 func Summarize(snapshot queue.Snapshot) Summary {
 	var out Summary
 	queueSeen := map[string]struct{}{}

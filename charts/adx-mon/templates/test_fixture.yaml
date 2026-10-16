@@ -1,8 +1,3 @@
-{{/*
-Test fixture — only rendered when _test.enabled=true (set by helm-unittest).
-Exercises all helpers from _helpers.tpl for unit test coverage.
-Never rendered in production installs.
-*/}}
 {{- if .Values._test.enabled }}
 apiVersion: v1
 kind: ConfigMap

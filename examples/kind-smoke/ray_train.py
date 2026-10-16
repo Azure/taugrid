@@ -6,12 +6,10 @@ import time
 
 import ray
 
-
 @ray.remote(num_cpus=1)
 class WorkerProbe:
     def location(self) -> str:
         return ray.get_runtime_context().get_node_id()
-
 
 def wait_for_ray_cpus(minimum: int, timeout_seconds: int = 120) -> dict[str, float]:
     deadline = time.monotonic() + timeout_seconds
@@ -20,7 +18,6 @@ def wait_for_ray_cpus(minimum: int, timeout_seconds: int = 120) -> dict[str, flo
         time.sleep(2)
         resources = ray.cluster_resources()
     return resources
-
 
 def main() -> None:
     ray.init(address="auto")
@@ -37,7 +34,6 @@ def main() -> None:
     if len(set(worker_nodes)) != 2:
         raise SystemExit(f"expected tasks on two Ray workers, got {worker_nodes}")
     print("tau kind ray smoke complete")
-
 
 if __name__ == "__main__":
     main()

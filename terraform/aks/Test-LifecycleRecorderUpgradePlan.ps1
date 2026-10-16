@@ -116,8 +116,6 @@ if ($after.id -cne $ExpectedAssignmentId -or
     throw "The grant does not match the independently recorded pre-plan ARM ID, client ID, and tenant ID. Do not apply."
 }
 
-# In the locked AzAPI 2.12.0 model only these configured attributes are marked
-# skip_on:"update". Other differences can cause a PUT even with the same grant.
 $stateOnlyAttributes = @("retry", "timeouts")
 $keys = @($before.Keys) + @($after.Keys) | Sort-Object -Unique
 foreach ($key in $keys) {

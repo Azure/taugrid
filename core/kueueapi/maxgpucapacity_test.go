@@ -17,8 +17,6 @@ func clusterQueueFrom(t *testing.T, raw string) ClusterQueue {
 	return cq
 }
 
-// gpuFlavors renders a ClusterQueue whose flavors each carry one
-// nvidia.com/gpu nominalQuota, so the tests below only vary what matters.
 func gpuFlavors(t *testing.T, quotas map[string]string) ClusterQueue {
 	t.Helper()
 	raw := `{"spec":{"resourceGroups":[{"flavors":[`
@@ -34,8 +32,6 @@ func gpuFlavors(t *testing.T, quotas map[string]string) ClusterQueue {
 	return clusterQueueFrom(t, raw)
 }
 
-// A workload lands on exactly one flavor, so the unpinned ceiling is the
-// largest single flavor -- not the sum.
 func TestMaxGPUCapacityUnpinnedReportsLargestFlavorNotSum(t *testing.T) {
 	cq := gpuFlavors(t, map[string]string{"a100": "8", "h100": "24", "h200": "16"})
 	got, ok := cq.MaxGPUCapacity("", "nvidia.com/gpu")
@@ -76,8 +72,6 @@ func TestMaxGPUCapacityNamedFlavorIgnoresOtherFlavors(t *testing.T) {
 	}
 }
 
-// borrowingLimit is part of what a single flavor can admit, so it still counts
-// toward that flavor's capacity -- the fix only changes how flavors combine.
 func TestMaxGPUCapacityIncludesBorrowingLimitPerFlavor(t *testing.T) {
 	cq := clusterQueueFrom(t, `{"spec":{"resourceGroups":[{"flavors":[
       {"name":"a100","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8","borrowingLimit":"4"}]},

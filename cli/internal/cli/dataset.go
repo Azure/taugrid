@@ -60,9 +60,6 @@ ingested from a laptop or CI before any cluster exists.`,
 	return cmd
 }
 
-// registryFlags are shared backend-selection flags. The default backend is the
-// in-cluster helper-pod-over-blob-training PVC; --registry az://acct/container
-// selects the no-cluster Azure-blob backend.
 type registryFlags struct {
 	registry        string
 	namespace       string
@@ -77,12 +74,6 @@ func (f *registryFlags) bind(cmd *cobra.Command, defaultRegistry string) {
 	cmd.Flags().StringVar(&f.systemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
 	cmd.Flags().StringVar(&f.kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 
-	// The pvc backend reads the registry off the workload PVC, so it needs the
-	// namespace the workspace actually submits into. Resolving in PreRunE keeps
-	// every `tau data dataset` subcommand on the workspace-first path without
-	// threading a *cobra.Command through registryClient and its ~14 callers,
-	// and lets the kubeconfig swap live for the whole command rather than being
-	// restored the moment the backend is constructed.
 	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("system-namespace") {
 			f.systemNamespace = systemNamespaceFromCommand(cmd)
@@ -119,11 +110,6 @@ func (f *registryFlags) registryClient() (*dataset.Registry, error) {
 	return dataset.NewRegistry(backend, datasetRegistryPaths(), time.Now), nil
 }
 
-// inClusterRegistryClient builds a registry for the hidden in-cluster worker /
-// register / status paths. It differs from registryClient only for az://
-// registries: it selects the SDK-backed backend (azidentity + azblob) instead
-// of the az-CLI backend, because the distroless Tau image has no `az` binary.
-// pvc and file backends are identical to registryClient.
 func (f *registryFlags) inClusterRegistryClient() (*dataset.Registry, error) {
 	backend, err := f.inClusterBackend()
 	if err != nil {
@@ -173,7 +159,6 @@ func (f *registryFlags) backend() (dataset.Backend, error) {
 	}
 }
 
-// parseAzURL parses az://<account>/<container>[/<prefix>].
 func parseAzURL(u string) (account, container, prefix string, err error) {
 	rest := strings.TrimPrefix(u, "az://")
 	if rest == u {
@@ -532,7 +517,6 @@ tau data dataset alias set. Requires --yes.`,
 	return cmd
 }
 
-// resolveRecord resolves NAME, NAME@VERSION, or NAME@ALIAS to a record.
 func resolveRecord(ctx context.Context, reg *dataset.Registry, arg string) (dataset.Record, error) {
 	ref, err := dataset.ParseRef(arg)
 	if err != nil {
@@ -629,10 +613,6 @@ func writeDatasetDetail(w io.Writer, r dataset.Record) error {
 	return tw.Flush()
 }
 
-// writeRefEnv emits FineWeb-compatible env lines. The shard URIs come from
-// --staged-root (file:// URIs for already-staged shards, preserving the
-// existing urllib loader contract) or --base-url. Private blob bytes are never
-// emitted as SAS URLs.
 func writeRefEnv(w io.Writer, ref dataset.ResolvedReference, prefix, stagedRoot, baseURL string) error {
 	if prefix == "" {
 		prefix = "FINEWEB_DATASET"
@@ -662,9 +642,6 @@ func writeRefEnv(w io.Writer, ref dataset.ResolvedReference, prefix, stagedRoot,
 		default:
 			uri = strings.TrimSuffix(baseURL, "/") + "/" + f.Path
 		}
-		// The FineWeb loader requires a real per-shard token count to size its
-		// sampling; a record registered without verified token accounting would
-		// otherwise silently emit zeros and corrupt training.
 		if f.TokenCount <= 0 {
 			return fmt.Errorf("-o env requires a positive token_count for every shard, but %s has %d; re-register the dataset as a verified %s pretraining dataset", f.Path, f.TokenCount, dataset.FormatTokenizedBinUint16)
 		}
@@ -695,7 +672,6 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f%ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
-// dataSourceFor selects the bytes source for register/verify.
 func dataSourceFor(from string, rec dataset.Record) (dataSource, error) {
 	if from == "" {
 		if rec.Account == "" || rec.Container == "" {
@@ -721,7 +697,6 @@ func dataSourceFor(from string, rec dataset.Record) (dataSource, error) {
 	return localDataSource{root: from}, nil
 }
 
-// verifyResult reports a verification outcome.
 type verifyResult struct {
 	Name         string   `json:"name"`
 	Version      string   `json:"version"`
@@ -761,8 +736,6 @@ func verifyRecord(ctx context.Context, rec dataset.Record, src dataSource) (veri
 		}
 		rebuilt.Files = append(rebuilt.Files, dataset.File{Path: got.Path, SHA256: got.SHA256})
 	}
-	// Extra files under the source that the immutable record does not list mean
-	// the byte source drifted after registration; fail closed.
 	extra := make([]string, 0)
 	for p := range have {
 		if !expected[p] {

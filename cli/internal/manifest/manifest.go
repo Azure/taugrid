@@ -1,55 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package manifest implements the schema_version: 1 managed workflow
-// manifest: the schema used to parse, validate, and render researcher-
-// authored (and Tau Python SDK-generated) configs for `tau run --config`.
-//
-// `tau run --config tau.yaml` renders a single self-contained workload
-// object from a researcher-authored manifest:
-//
-//  1. Workload <prefix>-<name> — Job or RayJob (single-pod or multi-node,
-//     selected by --workload-kind). The trainer script and the (redacted)
-//     manifest are embedded directly in the workload's pod spec via
-//     init containers (see internal/payload) that unpack them to /script
-//     and /manifest at pod startup — no separate ConfigMaps are created.
-//     The manifest payload is always head-only (/manifest is never needed
-//     by workers). The script payload is head-only for a single-pod Job,
-//     but is embedded on BOTH the head and every worker pod template for
-//     all three RayJob templates: tau-py's Ray Train TorchTrainer path
-//     re-imports the user's training module from each GPU/CPU worker's
-//     own local /script disk, and rayjob-eval's CPU workers need the same
-//     local /script disk because Ray's runtime_env working_dir mechanism
-//     only ships the single user-module file to them — never any
-//     --extra-script file — so a worker-side script payload is required
-//     for parity with any extra helper module a researcher's eval task
-//     may import (see internal/manifest/assets/managed-workflow-rayjob*.yaml.tmpl).
-//
-// Researchers never see the payload plumbing. The public path is the
-// config-first `tau run --config` surface; this package remains the internal
-// renderer for schema_version: 1 managed workflow configs.
-//
-// The generated manifest schema is documented by the public run-config guide.
-// Validator here enforces the contract that scheduling relies on:
-//
-//   - schema_version == 1
-//   - GPU mode: compute.gpus ∈ {1, 2, 3, 4, 5, 6, 7, 8}
-//     (DRA claim templates; per-worker)
-//   - CPU mode: compute.gpus == 0 with optional CPU pod sizing fields.
-//   - compute.workers ≥ 1 (default 1; >1 requires workload_kind=rayjob).
-//     Multi-node dispatch is enforced at the CLI/Render layer, not here.
-//   - eval.cpu_workers ≥ 0 (default 0; >0 only meaningful for
-//     workload_kind=rayjob-eval).
-//   - eval.upstream is the optional name of an upstream finetune job whose
-//     checkpoint the eval reads via the TAU_UPSTREAM_CHECKPOINT env var.
-//   - runtime.pip is REQUIRED — declares the per-pod Python environment
-//     shipped to head + workers via Ray runtime_env.
-//   - runtime.rdma is optional and opt-in for RayJob pods that need RDMA
-//     devices and NCCL verbs memlock privileges.
-//   - artifacts.checkpoint, when set, is a relative pod path for the
-//     completed-train checkpoint artifact.
-//   - model.* fields are optional registry metadata used for durable model
-//     discovery; checkpoint ownership still lives in artifacts.*.
 package manifest
 
 import (
@@ -71,26 +22,12 @@ const (
 
 var resourceNamePartRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-// Manifest is the subset of the v1 managed workflow manifest we need to make
-// scheduling decisions. The user's trainer reads the full manifest itself
-// (embedded in the workload's manifest payload); we only validate the
-// fields whose mistakes would cause silent or expensive failures (wrong GPU
-// claim, etc.).
 type Manifest struct {
 	SchemaVersion int    `yaml:"schema_version"`
 	Name          string `yaml:"name"`
 	Eval          struct {
-		// CPUWorkers is the number of CPU-only Ray worker pods to provision
-		// when this manifest is rendered as a rayjob-eval (Ray actor on a
-		// dedicated GPU worker + ray.remote tasks fanned out across CPU pods). Optional;
-		// 0 (default) means "no separate CPU workers" — only meaningful when
-		// the workload kind is rayjob-eval.
-		CPUWorkers int `yaml:"cpu_workers,omitempty"`
-		// Upstream is the optional name of an upstream managed workflow job
-		// whose checkpoint this eval reads. Used by the tau-py orchestrator
-		// to wire TAU_UPSTREAM_CHECKPOINT into the eval pod's env. Purely
-		// descriptive — no admission ordering is enforced from here.
-		Upstream string `yaml:"upstream,omitempty"`
+		CPUWorkers int    `yaml:"cpu_workers,omitempty"`
+		Upstream   string `yaml:"upstream,omitempty"`
 	} `yaml:"eval"`
 	Compute struct {
 		GPUs              int    `yaml:"gpus"`
@@ -104,11 +41,6 @@ type Manifest struct {
 		WorkerMemoryLimit string `yaml:"worker_memory_limit,omitempty"`
 		Workers           int    `yaml:"workers"`
 	} `yaml:"compute"`
-	// Runtime declares the per-pod environment shipped to head + workers.
-	// Required: tau does not ship a fallback pip list. The user's manifest
-	// must declare the exact deps the trainer needs.
-	//
-	// Image overrides the Ray base image for RayJob workloads.
 	Runtime struct {
 		Pip   []string          `yaml:"pip,omitempty"`
 		Image string            `yaml:"image,omitempty"`
@@ -132,8 +64,6 @@ type Manifest struct {
 	} `yaml:"resource_naming,omitempty"`
 }
 
-// RuntimeRDMA is an alias for the shared RDMA input struct. Existing tests
-// that reference the manifest type by name continue to compile.
 type RuntimeRDMA = runconfig.RDMA
 
 type ModelMetadata struct {
@@ -152,8 +82,6 @@ type StorageMount struct {
 	ReadOnly  bool   `yaml:"readOnly,omitempty"`
 }
 
-// Parse loads + validates a manifest YAML from raw bytes. Returns the parsed
-// Manifest on success, or an error pointing at the first violation.
 func Parse(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := yaml.Unmarshal(data, &m); err != nil {
@@ -165,7 +93,6 @@ func Parse(data []byte) (*Manifest, error) {
 	return &m, nil
 }
 
-// Validate checks the subset of fields tau cares about for scheduling.
 func (m *Manifest) Validate() error {
 	if m.SchemaVersion != 1 {
 		return fmt.Errorf("schema_version: want 1, got %d", m.SchemaVersion)
@@ -188,9 +115,6 @@ func (m *Manifest) Validate() error {
 	if g < 0 || g > 8 {
 		return fmt.Errorf("compute.gpus: want 0..8 (per-worker; 0 = CPU-only), got %d", g)
 	}
-	// compute.workers is additive optional; absent (yaml zero) → 1. Coerce
-	// here so downstream callers (render, preset matching, cluster ctx) see
-	// a normalized value.
 	if m.Compute.Workers == 0 {
 		m.Compute.Workers = 1
 	}
@@ -239,9 +163,6 @@ func (m *Manifest) Validate() error {
 	} else if g < 1 || g > 8 {
 		return fmt.Errorf("compute.gpus: want 1..8 (per-worker), got %d", g)
 	}
-	// Eval-only optional fields. cpu_workers must be non-negative when set;
-	// the dispatch layer (render.go) is responsible for cross-checking that
-	// it's only meaningful for the rayjob-eval workload kind.
 	if m.Eval.CPUWorkers < 0 {
 		return fmt.Errorf("eval.cpu_workers: want ≥ 0, got %d", m.Eval.CPUWorkers)
 	}
@@ -488,8 +409,6 @@ func validateModelMetadata(model ModelMetadata) error {
 	return nil
 }
 
-// ValidateRayJobResourceName checks KubeRay's stricter RayJob metadata.name
-// limit. Kubernetes allows 63 chars, but KubeRay rejects RayJob names above 47.
 func (m *Manifest) ValidateRayJobResourceName() error {
 	resourceName := m.ResourceName()
 	if len(resourceName) <= maxRayJobResourceNameLen {
@@ -503,9 +422,6 @@ func (m *Manifest) ValidateRayJobResourceName() error {
 	return fmt.Errorf("RayJob name %q is too long (%d chars; KubeRay limit is %d). With resource_naming.prefix=%q, manifest name must be at most %d chars; shorten name or prefix", resourceName, len(resourceName), maxRayJobResourceNameLen, prefix, budget)
 }
 
-// ResourcePrefix returns the resource-name prefix for new Kubernetes objects.
-// The breaking v1 contract is "tau-<name>" by default; downstream projects can
-// set resource_naming.prefix to render e.g. "diffusion-<name>".
 func (m *Manifest) ResourcePrefix() string {
 	prefix := strings.TrimSpace(m.ResourceNaming.Prefix)
 	if prefix == "" {
@@ -514,14 +430,10 @@ func (m *Manifest) ResourcePrefix() string {
 	return prefix
 }
 
-// ResourceName is the Kubernetes object name used for the workload and its
-// optional JobSecret.
 func (m *Manifest) ResourceName() string {
 	return m.ResourcePrefix() + "-" + m.Name
 }
 
-// RuntimePip returns a defensive copy of the runtime pip list. The list is
-// validated as non-empty by Validate(); callers can rely on len(pip) > 0.
 func (m *Manifest) RuntimePip() []string {
 	out := make([]string, len(m.Runtime.Pip))
 	copy(out, m.Runtime.Pip)
@@ -538,12 +450,10 @@ func (m *Manifest) ResearchExperiment() string {
 	return strings.TrimSpace(m.Research.Experiment)
 }
 
-// RuntimeImage returns the Ray image requested by the manifest.
 func (m *Manifest) RuntimeImage() string {
 	return strings.TrimSpace(m.Runtime.Image)
 }
 
-// RuntimeRDMA returns the normalized opt-in RDMA pod config.
 func (m *Manifest) RuntimeRDMA() runconfig.NormalizedRDMA {
 	return runconfig.NormalizeRDMA(m.Runtime.RDMA)
 }
@@ -558,32 +468,18 @@ func (m *Manifest) StorageMounts() []StorageMount {
 	return out
 }
 
-// IsCPUOnly reports whether the manifest opts out of GPU DRA and should render
-// as a CPU-only RayJob.
 func (m *Manifest) IsCPUOnly() bool {
 	return m.Compute.GPUs == 0
 }
 
-// IsEval reports whether this manifest describes an eval workload (i.e.
-// it sets eval.cpu_workers > 0 OR eval.upstream is set). Used by the
-// render dispatcher to default the workload kind to rayjob-eval when the
-// CLI didn't pass --workload-kind explicitly.
 func (m *Manifest) IsEval() bool {
 	return m.Eval.CPUWorkers > 0 || m.Eval.Upstream != ""
 }
 
-// IsMultiNode reports whether the manifest requests multi-node training
-// (i.e. compute.workers > 1). Callers use this to switch the workload kind
-// (multi-node requires rayjob) and to decide whether the tau-py SDK
-// wrapper is required (embedded trainer is single-node only).
 func (m *Manifest) IsMultiNode() bool {
 	return m.Compute.Workers > 1
 }
 
-// Claim returns the DRA ResourceClaimTemplate name for the given GPU count.
-// 0 GPUs → no claim; 1 GPU → "full-gpu" (the existing claim for single-GPU
-// jobs); ≥2 GPUs → "ds-Ngpus" (intra-node multi-GPU claims pre-created in the
-// ray namespace).
 func Claim(gpus int) string {
 	if gpus <= 0 {
 		return ""

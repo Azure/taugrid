@@ -15,17 +15,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/datasetingest"
 )
 
-// newDatasetIngestWorkerCmd returns the hidden ingest-worker subcommand. It is
-// invoked by the batch/v1 Job rendered by `tau data dataset ingest` (workspace
-// mode). Its interface is stable: flags must not change without bumping the
-// worker image.
-//
-// The command:
-//  1. Reads the registry (file:// for local-mode E2E; az:// for in-cluster).
-//  2. Reads the source-root and destination.
-//  3. Runs RunWorker.
-//  4. Writes a stable JSON result to stdout and exits 0 on success, non-zero
-//     on failure.
 func newDatasetIngestWorkerCmd() *cobra.Command {
 	var rf registryFlags
 	var sourceRoot, destination string
@@ -81,7 +70,6 @@ func newDatasetIngestWorkerCmd() *cobra.Command {
 				AttemptID: fmt.Sprintf("worker-%d", time.Now().UnixNano()),
 			})
 			if err != nil {
-				// Write a failure status JSON to stdout for the orchestrator.
 				failStatus := dataset.IngestStatus{
 					SchemaVersion: dataset.IngestStatusSchemaVersion,
 					Name:          ref.name,
@@ -108,15 +96,11 @@ func newDatasetIngestWorkerCmd() *cobra.Command {
 	return cmd
 }
 
-// simpleRef holds the parsed name and version from a dataset arg.
 type simpleRef struct {
 	name    string
 	version string
 }
 
-// parseDatasetRef parses "NAME@VERSION" without importing the dataset package.
-// The full dataset.ParseRef is used in other commands; we duplicate the split
-// here to keep the worker command free of unnecessary dependencies.
 func parseDatasetRef(arg string) (simpleRef, error) {
 	parts := strings.SplitN(arg, "@", 2)
 	name := parts[0]
@@ -130,13 +114,10 @@ func parseDatasetRef(arg string) (simpleRef, error) {
 	return simpleRef{name: name, version: version}, nil
 }
 
-// buildWorkerComponents selects the correct ByteSource, StagedSink, and
-// VersionLocker based on the source-root and destination URIs.
 func buildWorkerComponents(
 	ctx context.Context,
 	sourceRoot, destination string,
 ) (datasetingest.ByteSource, datasetingest.StagedSink, datasetingest.VersionLocker, error) {
-	// Validate schemes.
 	srcIsFile := strings.HasPrefix(sourceRoot, "file://") || (!strings.Contains(sourceRoot, "://"))
 	dstIsFile := strings.HasPrefix(destination, "file://") || (!strings.Contains(destination, "://"))
 
@@ -158,7 +139,6 @@ func buildWorkerComponents(
 			nil
 	}
 
-	// Azure mode: AzureSource + AzureSink + AzureLocker.
 	if strings.HasPrefix(sourceRoot, "az://") && strings.HasPrefix(destination, "az://") {
 		srcAcct, srcCtr, srcPrefix, err := parseAzURL(sourceRoot)
 		if err != nil {

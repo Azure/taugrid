@@ -129,9 +129,6 @@ func TestScriptTailsDriverLogsWithoutDuplicatingSessionLatest(t *testing.T) {
 			return
 		}
 		waitOnce.Do(func() {
-			// Kubernetes signals container PID 1, not its whole process group.
-			// Signal only bash so the test catches TERM traps that return to the
-			// polling loop and consume the full pod termination grace period.
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 			waitCh := make(chan struct{})
 			go func() {

@@ -149,7 +149,6 @@ else:
     sys.exit(127)
 """
 
-
 class ScriptTestCase(unittest.TestCase):
     def setUp(self):
         self._temporary_directory = tempfile.TemporaryDirectory()

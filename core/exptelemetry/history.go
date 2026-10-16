@@ -26,7 +26,6 @@ var protectedJSONLTagKeys = map[string]struct{}{
 	"tau.metric.standard": {},
 }
 
-// JSONLHistoryOptions identifies and annotates scalar metrics projected from one history row.
 type JSONLHistoryOptions struct {
 	WorkspaceID    string
 	Cluster        string
@@ -48,7 +47,6 @@ type JSONLHistoryOptions struct {
 	MetricFilePath string
 }
 
-// ProjectJSONLHistoryRow applies the portal JSONL importer projection to one decoded object.
 func ProjectJSONLHistoryRow(row map[string]any, opts JSONLHistoryOptions) ([]MetricEvent, error) {
 	if opts.StepField == "" {
 		opts.StepField = "_step"

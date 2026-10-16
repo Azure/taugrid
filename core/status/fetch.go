@@ -16,12 +16,6 @@ type rawRunner interface {
 	Raw(ctx context.Context, extraArgs []string, stdin []byte) (string, error)
 }
 
-// FetchRunLogs populates the minimal Snapshot surface `tau run logs` needs to
-// decide between local Job/RayJob logs and manager-side MultiKueue ADX logs.
-// Unlike Fetch, it never queries Pods, Events, ResourceClaims, or
-// AdmissionChecks. Real kubectl/query failures are returned alongside any
-// successfully hydrated partial snapshot so the CLI can surface authoritative
-// manager-side placement errors without widening RBAC.
 func FetchRunLogs(ctx context.Context, r *kube.Runner, namespace, name string) (Snapshot, error) {
 	return fetchRunLogs(ctx, r, namespace, name)
 }
@@ -60,27 +54,19 @@ func fetchRunLogs(ctx context.Context, r rawRunner, namespace, name string) (Sna
 	return s, firstErr
 }
 
-// Fetch populates a Snapshot for one job by name+namespace using the
-// supplied kube.Runner. Soft-fails (returns partial Snapshot) when
-// individual sub-queries fail — `tau run status` should always show what
-// it can rather than abort on a missing CRD.
 func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapshot, error) {
 	s := Snapshot{Name: name, Namespace: namespace}
 
-	// Job: -o json so we get conditions + status counts.
 	jobJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "job", name, "-o", "json"}, nil)
 	if err == nil {
 		s.JobFound = true
 		hydrateJob(&s, []byte(jobJSON))
 	}
-	// Whether Job exists or not, still try RayJob + Workloads + Pods.
 	rayJobJSON, err := r.Raw(ctx, []string{"-n", namespace, "get", "rayjob", name, "-o", "json"}, nil)
 	if err == nil {
 		hydrateRayJob(&s, []byte(rayJobJSON))
 	}
 
-	// Prefer the primary workload's immutable UID. The name label can match a
-	// stale Job and RayJob simultaneously when both kinds reuse a run name.
 	rj := snapshotRayJob(s)
 	workloadSelectors := runStatusWorkloadSelectors(s, rj, name)
 	for _, selector := range workloadSelectors {
@@ -95,8 +81,6 @@ func Fetch(ctx context.Context, r *kube.Runner, namespace, name string) (Snapsho
 	}
 	hydrateAdmissionCheckControllers(ctx, r, s.Workloads)
 
-	// A batch Job's standard selector is authoritative. Name-based Tau labels
-	// and RayCluster selectors are used only when RayJob is the primary kind.
 	selectors := []string{"job-name=" + name}
 	if !s.JobFound {
 		selectors = []string{workloadmeta.LabelJob + "=" + name}
@@ -126,20 +110,12 @@ func runStatusWorkloadSelectors(s Snapshot, rj RayJob, name string) []string {
 	} else if rj.Found && rj.UID != "" {
 		selectors = append(selectors, "kueue.x-k8s.io/job-uid="+rj.UID)
 	}
-	// The durable run-name label survives same-kind object recreation. It is
-	// safe only when the run name resolves to one workload kind; otherwise it
-	// can mix a stale Job and RayJob.
 	if !s.JobFound || !rj.Found {
 		selectors = append(selectors, workloadmeta.LabelJob+"="+name)
 	}
 	return selectors
 }
 
-// FetchManagerCleanup populates the subset of Snapshot needed by manager-side
-// cleanup logic before delete. Unlike Fetch, every manager-cluster query is
-// authoritative: exact object NotFound and missing RayJob CRDs are tolerated,
-// but real kubectl/query failures are surfaced while still preserving any
-// successfully hydrated partial snapshot.
 func FetchManagerCleanup(ctx context.Context, r rawRunner, namespace, name string) (Snapshot, error) {
 	s := Snapshot{Name: name, Namespace: namespace}
 	var firstErr error

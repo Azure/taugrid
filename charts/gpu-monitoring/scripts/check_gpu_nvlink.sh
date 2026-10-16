@@ -2,8 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks if is the GPU NVlink is working correctly.
-
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2
@@ -21,15 +19,12 @@ else
   readonly _NUM_GPU=$_NUM_GPU_ENV
 fi
 
-# H100 NVL: links 4,5,10,11,16,17 are inter-socket and normally inactive
-# when only 2 GPUs are present on a single socket.
 readonly GPU_TYPE_VAL="${GPU_TYPE:-}"
 expected_inactive_pattern=""
 if [ "$GPU_TYPE_VAL" = "h100-nvl" ]; then
   expected_inactive_pattern="^[[:space:]]*Link (4|5|10|11|16|17):"
 fi
 
-# Check if nvlink is enabled
 num_gpus=$_NUM_GPU
 
 if nvlink_status=$(nvidia-smi nvlink --status 2>&1); then
@@ -49,7 +44,6 @@ if [ -z "$nvlink_status" ]; then
 fi
 for ((i=0; i<num_gpus; i++)); do
     gpu_id=$i
-    # Run nvlink command
     if nvlink_output=$(nvidia-smi nvlink -s -i "$gpu_id" 2>&1); then
       :
     else
@@ -61,9 +55,7 @@ for ((i=0; i<num_gpus; i++)); do
       echo "NVLINK is not enabled for GPU $gpu_id. FaultCode: NHC2016"
       exit $NONOK
     fi
-    # Check for inactive links
     if [[ $nvlink_output == *"inactive"* ]]; then
-      # Filter out expected-inactive links for specific GPU types
       if [ -n "$expected_inactive_pattern" ]; then
         unexpected_inactive=$(echo "$nvlink_output" | grep "<inactive>" | grep -Ev "$expected_inactive_pattern")
       else

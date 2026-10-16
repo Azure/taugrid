@@ -9,7 +9,6 @@ from pathlib import PurePosixPath
 
 DEFAULT_CHECKPOINT_ARTIFACT = "last.safetensors"
 
-
 def validate_checkpoint_artifact(
     path: object,
     *,

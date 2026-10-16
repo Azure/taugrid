@@ -17,7 +17,6 @@ import (
 	"time"
 )
 
-// Metric represents a single scraped metric sample.
 type Metric struct {
 	Name      string
 	Labels    map[string]string
@@ -25,37 +24,20 @@ type Metric struct {
 	Timestamp time.Time
 }
 
-// ScrapeTarget defines an endpoint to scrape.
-//
-// A target may declare itself required, meaning its loss is a node-level health
-// signal rather than a log line. Required targets must name the Node condition
-// that reports their availability so a remediation system can distinguish "no
-// errors reported" from "no metrics collected".
 type ScrapeTarget struct {
-	Name string `yaml:"name"`
-	URL  string `yaml:"url"`
-	// Required marks the target as mandatory for this node's health signal.
-	Required bool `yaml:"required,omitempty"`
-	// AvailabilityCondition is the Node condition type set while a required
-	// target is unreachable. It reports endpoint reachability only and must not
-	// reuse a condition type owned by a rule or by another target.
-	AvailabilityCondition string `yaml:"availabilityCondition,omitempty"`
-	// UnavailableFor is how long scrapes must fail continuously before the
-	// condition is set. Zero uses DefaultUnavailableFor.
-	UnavailableFor time.Duration `yaml:"unavailableFor,omitempty"`
-	// AvailableFor is how long scrapes must succeed continuously before a set
-	// condition is cleared. Zero uses DefaultAvailableFor.
-	AvailableFor time.Duration `yaml:"availableFor,omitempty"`
+	Name                  string        `yaml:"name"`
+	URL                   string        `yaml:"url"`
+	Required              bool          `yaml:"required,omitempty"`
+	AvailabilityCondition string        `yaml:"availabilityCondition,omitempty"`
+	UnavailableFor        time.Duration `yaml:"unavailableFor,omitempty"`
+	AvailableFor          time.Duration `yaml:"availableFor,omitempty"`
 }
 
-// Default debounce windows for required-target availability. They are long
-// enough that a single missed scrape cannot flap a Node condition.
 const (
 	DefaultUnavailableFor = 2 * time.Minute
 	DefaultAvailableFor   = 1 * time.Minute
 )
 
-// UnavailableWindow returns the configured failure debounce, or the default.
 func (t ScrapeTarget) UnavailableWindow() time.Duration {
 	if t.UnavailableFor > 0 {
 		return t.UnavailableFor
@@ -63,7 +45,6 @@ func (t ScrapeTarget) UnavailableWindow() time.Duration {
 	return DefaultUnavailableFor
 }
 
-// AvailableWindow returns the configured recovery debounce, or the default.
 func (t ScrapeTarget) AvailableWindow() time.Duration {
 	if t.AvailableFor > 0 {
 		return t.AvailableFor
@@ -71,8 +52,6 @@ func (t ScrapeTarget) AvailableWindow() time.Duration {
 	return DefaultAvailableFor
 }
 
-// TargetStatus is the redacted outcome of scraping one target. Err is safe to
-// publish: it never carries credentials or query parameters from the URL.
 type TargetStatus struct {
 	Target  ScrapeTarget
 	OK      bool
@@ -80,19 +59,16 @@ type TargetStatus struct {
 	Err     string
 }
 
-// ScrapeResult carries the merged metric set plus per-target outcomes.
 type ScrapeResult struct {
 	Metrics  []Metric
 	Statuses []TargetStatus
 }
 
-// Scraper collects metrics from Prometheus exposition endpoints.
 type Scraper struct {
 	targets []ScrapeTarget
 	client  *http.Client
 }
 
-// New creates a Scraper for the given targets.
 func New(targets []ScrapeTarget) *Scraper {
 	return &Scraper{
 		targets: targets,
@@ -107,10 +83,6 @@ func New(targets []ScrapeTarget) *Scraper {
 	}
 }
 
-// Scrape fetches metrics from all targets concurrently, returning a unified
-// metric set plus the per-target outcome. Targets that are unreachable are
-// logged and skipped; their loss is reported through ScrapeResult.Statuses so
-// a required target's absence cannot be mistaken for a healthy node.
 func (s *Scraper) Scrape(ctx context.Context) (ScrapeResult, error) {
 	type result struct {
 		metrics []Metric
@@ -146,9 +118,6 @@ func (s *Scraper) Scrape(ctx context.Context) (ScrapeResult, error) {
 	return out, nil
 }
 
-// SafeURL renders a target URL without credentials, query, or fragment so it
-// can be published in a Node condition message. Unparseable URLs collapse to a
-// placeholder rather than leaking their raw contents.
 func SafeURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -158,9 +127,6 @@ func SafeURL(raw string) string {
 	return safe.String()
 }
 
-// redactError renders a scrape error without the raw target URL. net/http wraps
-// failures in *url.Error, whose message embeds the full URL including any
-// userinfo and query string.
 func redactError(err error, rawURL, safeURL string) string {
 	msg := err.Error()
 	var urlErr *url.Error
@@ -181,7 +147,6 @@ func redactError(err error, rawURL, safeURL string) string {
 	return truncate(msg, maxErrorLength)
 }
 
-// maxErrorLength bounds the error text copied into a Node condition message.
 const maxErrorLength = 200
 
 func truncate(s string, max int) string {
@@ -210,7 +175,6 @@ func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) ([]Metr
 	return parseExposition(resp.Body)
 }
 
-// parseExposition parses the Prometheus text exposition format.
 func parseExposition(r io.Reader) ([]Metric, error) {
 	var metrics []Metric
 	scanner := bufio.NewScanner(r)
@@ -223,7 +187,7 @@ func parseExposition(r io.Reader) ([]Metric, error) {
 
 		m, err := parseLine(line)
 		if err != nil {
-			continue // Skip unparseable lines.
+			continue
 		}
 		metrics = append(metrics, m)
 	}
@@ -231,12 +195,9 @@ func parseExposition(r io.Reader) ([]Metric, error) {
 	return metrics, scanner.Err()
 }
 
-// parseLine parses a single Prometheus exposition line.
-// Format: metric_name{label="value",...} value [timestamp]
 func parseLine(line string) (Metric, error) {
 	var m Metric
 
-	// Split name{labels} from value.
 	labelStart := strings.IndexByte(line, '{')
 	labelEnd := strings.IndexByte(line, '}')
 
@@ -245,7 +206,6 @@ func parseLine(line string) (Metric, error) {
 		m.Labels = parseLabels(line[labelStart+1 : labelEnd])
 		line = strings.TrimSpace(line[labelEnd+1:])
 	} else {
-		// No labels — split on first space.
 		parts := strings.Fields(line)
 		if len(parts) < 2 {
 			return m, fmt.Errorf("invalid line")
@@ -254,7 +214,6 @@ func parseLine(line string) (Metric, error) {
 		line = strings.Join(parts[1:], " ")
 	}
 
-	// Parse value (ignore optional timestamp).
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return m, fmt.Errorf("missing value")
@@ -276,9 +235,6 @@ func parseLine(line string) (Metric, error) {
 	return m, nil
 }
 
-// parseLabels parses label="value",... into a map.
-// Label values follow the Prometheus text format: quoted strings with
-// escape sequences \", \\, and \n.
 func parseLabels(s string) map[string]string {
 	labels := make(map[string]string)
 	for _, pair := range strings.Split(s, ",") {
@@ -294,7 +250,6 @@ func parseLabels(s string) map[string]string {
 	return labels
 }
 
-// unquoteLabel strips surrounding quotes and expands Prometheus escape sequences.
 func unquoteLabel(s string) string {
 	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
 		s = s[1 : len(s)-1]

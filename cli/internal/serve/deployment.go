@@ -1,27 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Deployment-kind serving renderer — plain k8s Deployment that goes
-// through Kueue via the Pod integration (not the RayService integration).
-//
-// Why this exists:
-//   - Not every serving workload is a Ray app. Some inference services
-//     (e.g. legacy TTS/LLM/STT stacks) run as plain Deployments + Kueue
-//     pod integration:
-//     annotation kueue.x-k8s.io/pod-suspending-parent: deployment
-//     label      kueue.x-k8s.io/managed: "true" (on pod template)
-//     label      kueue.x-k8s.io/queue-name: <localqueue> (Deployment + pod template)
-//     The RayService renderer can't express this shape.
-//
-// V0 scope:
-//   - Single main container. Optional sidecar via Options.Sidecars.
-//   - Optional init containers via Options.InitContainers.
-//   - Profile-driven CPU/memory and device-plugin GPU resources.
-//   - Kueue pod-integration annotations + queue label wired correctly.
-//
-// V0 non-goals:
-//   - PDB generation. Callers bring their own.
-//   - Rolling-update strategy tuning. Uses Deployment defaults.
 package serve
 
 import (
@@ -37,9 +16,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// Container is a minimal container spec that callers can pass for
-// sidecar / init slots. The main container is assembled from the
-// profile + top-level DeploymentOptions.
 type Container struct {
 	Name         string            `yaml:"name"`
 	Image        string            `yaml:"image"`
@@ -50,7 +26,6 @@ type Container struct {
 	VolumeMounts []VolumeMount     `yaml:"volumeMounts,omitempty"`
 }
 
-// VolumeMount mirrors k8s VolumeMount (subset).
 type VolumeMount struct {
 	Name      string `yaml:"name"`
 	MountPath string `yaml:"mountPath"`
@@ -58,8 +33,6 @@ type VolumeMount struct {
 	SubPath   string `yaml:"subPath,omitempty"`
 }
 
-// Volume is a minimal volume: either emptyDir, configMap by name, secret
-// by name, or PVC by claimName. Callers pick one.
 type Volume struct {
 	Name      string
 	EmptyDir  bool
@@ -68,15 +41,11 @@ type Volume struct {
 	PVC       string
 }
 
-// AutoscalingOptions configures horizontal pod autoscaling. When attached
-// to DeploymentOptions the renderer emits an autoscaling/v2 HPA alongside
-// the Deployment. When attached to Options (RayService) it injects
-// autoscaling_config into the Ray Serve deployment.
 type AutoscalingOptions struct {
-	MinReplicas    int32 // >= 0; default 1
-	MaxReplicas    int32 // > 0; required
-	TargetQPS      int   // per-replica target QPS; 0 = CPU-only scaling
-	ScaleDownDelay int   // scale-down stabilization window in seconds; default 300
+	MinReplicas    int32
+	MaxReplicas    int32
+	TargetQPS      int
+	ScaleDownDelay int
 }
 
 func (a AutoscalingOptions) Validate() error {
@@ -109,22 +78,17 @@ func (a AutoscalingOptions) WithDefaults() AutoscalingOptions {
 	return out
 }
 
-// HTTPProbe is a minimal HTTP GET probe for the main serve container.
 type HTTPProbe struct {
 	Path             string
 	Port             int
 	FailureThreshold int
 }
 
-// DeploymentOptions is the renderer input for the Deployment kind.
-// Keeps the main-container options at the top level (name, image, args,
-// ports) so simple cases stay one-liners, while init+sidecar live in
-// the arrays for the multi-container shapes (fish-speech-tts etc.).
 type DeploymentOptions struct {
-	Name         string // required
-	Namespace    string // required
-	Image        string // overrides Profile.Runtime.Image
-	Replicas     int32  // default 1
+	Name         string
+	Namespace    string
+	Image        string
+	Replicas     int32
 	Command      []string
 	Args         []string
 	Env          map[string]string
@@ -146,19 +110,11 @@ type DeploymentOptions struct {
 	ServicePort       int
 	ServiceTargetPort int
 
-	// KueueManaged toggles the Kueue pod-integration annotations +
-	// "managed" label on the pod template. Default true (the whole
-	// point of this renderer is Kueue-admitted serving).
 	KueueManaged *bool
 
-	// Autoscaling, when non-nil, renders an autoscaling/v2 HPA
-	// alongside the Deployment and omits spec.replicas so the HPA
-	// owns the replica count.
 	Autoscaling *AutoscalingOptions
 }
 
-// RenderDeployment turns a resolved Profile + DeploymentOptions into a
-// single-doc YAML Deployment manifest ready for `kubectl apply -f -`.
 func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	if err := o.validateDeployment(); err != nil {
 		return nil, err
@@ -187,13 +143,6 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	gpuLabels := gpu.Labels()
 	gpuAnnotations := gpu.Annotations()
 
-	// Kueue's Deployment webhook writes the suspending-parent annotation, the
-	// managed label, and queue-name as one set, and only when it has a queue
-	// name. This renderer writes them itself, so it has to keep them together:
-	// the annotation alone makes Kueue's Pod webhook gate the pod before it
-	// ever consults queue-name, and without a queue there is no LocalQueue to
-	// admit it out of that gate. Emitting a partial set produces pods that are
-	// SchedulingGated forever with no Workload object to diagnose.
 	queueName := profileLocalQueue(p)
 	if kueueManaged && queueName == "" {
 		return nil, errors.New("render Kueue-managed Deployment: Kueue LocalQueue is required")
@@ -224,7 +173,6 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		podAnnotations["kueue.x-k8s.io/pod-suspending-parent"] = "deployment"
 	}
 
-	// Main container.
 	mainContainer := map[string]any{
 		"name":  "main",
 		"image": mainImage,
@@ -261,7 +209,6 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 	if len(o.VolumeMounts) > 0 {
 		mainContainer["volumeMounts"] = volumeMountsToAny(o.VolumeMounts)
 	}
-	// Resources plus device-plugin GPUs from the profile.
 	podSpec := map[string]any{}
 	resources := map[string]any{}
 	if p.Resources.Requests != nil {
@@ -275,7 +222,6 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		mainContainer["resources"] = resources
 	}
 
-	// Assemble containers (init + main + sidecars).
 	containers := []any{mainContainer}
 	for _, s := range o.Sidecars {
 		containers = append(containers, containerToAny(s))
@@ -339,8 +285,6 @@ func RenderDeployment(p profile.Profile, o DeploymentOptions) ([]byte, error) {
 		"spec": deploySpec,
 	}
 	if len(podAnnotations) == 0 {
-		// Drop empty annotations so the rendered YAML is cleaner when
-		// Kueue is opted out.
 		tmpl := deployment["spec"].(map[string]any)["template"].(map[string]any)
 		meta := tmpl["metadata"].(map[string]any)
 		delete(meta, "annotations")
@@ -619,7 +563,6 @@ func containerToAny(c Container) map[string]any {
 }
 
 func envMapToList(env map[string]string) []any {
-	// Stable order for deterministic output.
 	keys := make([]string, 0, len(env))
 	for k := range env {
 		keys = append(keys, k)
@@ -676,10 +619,7 @@ func volumesToAny(vs []Volume) []any {
 	return out
 }
 
-// Small local sort wrapper so we don't import sort everywhere; kept
-// alongside the renderer to avoid cross-file shuffling.
 func sortStrings(s []string) {
-	// insertion sort is fine for env var counts
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {
 			s[j-1], s[j] = s[j], s[j-1]

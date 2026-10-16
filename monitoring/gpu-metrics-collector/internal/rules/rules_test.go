@@ -55,18 +55,15 @@ func TestEvaluate_RateThreshold(t *testing.T) {
 		{Name: "ecc-sbe-rate", MetricName: "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL", ConditionType: "GPUECCSingleRate", Mode: "rate", Threshold: 10, Window: 10 * time.Minute},
 	})
 
-	// First scrape: baseline.
 	engine.Evaluate([]scraper.Metric{
 		{Name: "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL", Labels: map[string]string{"gpu": "0"}, Value: 100},
 	})
 
-	// Simulate time passing and value increasing.
 	engine.mu.Lock()
 	key := metricKey("DCGM_FI_DEV_ECC_SBE_VOL_TOTAL", map[string]string{"gpu": "0"})
 	engine.history[key][0].time = time.Now().Add(-5 * time.Minute)
 	engine.mu.Unlock()
 
-	// Second scrape: increase of 15 (> threshold of 10).
 	results := engine.Evaluate([]scraper.Metric{
 		{Name: "DCGM_FI_DEV_ECC_SBE_VOL_TOTAL", Labels: map[string]string{"gpu": "0"}, Value: 115},
 	})
@@ -269,7 +266,6 @@ func TestEvaluate_ForDuration(t *testing.T) {
 		{Name: "nvlink-bw", MetricName: "DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL", ConditionType: "NVLinkBandwidthLow", Mode: "instant", Threshold: -1, For: 5 * time.Minute},
 	})
 
-	// Value 100 > threshold -1, so condition is met but "for" duration not reached.
 	metrics := []scraper.Metric{
 		{Name: "DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL", Labels: map[string]string{"gpu": "0"}, Value: 100},
 	}
@@ -279,7 +275,6 @@ func TestEvaluate_ForDuration(t *testing.T) {
 		t.Error("should not fire yet — 'for' duration not reached")
 	}
 
-	// Simulate pending time exceeding "for" duration.
 	engine.mu.Lock()
 	engine.pending["NVLinkBandwidthLow"] = time.Now().Add(-6 * time.Minute)
 	engine.mu.Unlock()

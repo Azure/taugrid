@@ -27,7 +27,6 @@ function resolvePackage(name: string, parentManifest: string): string {
   } catch (error) {
     if (!(error instanceof Error) || !('code' in error) ||
         (error.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED' && error.code !== 'MODULE_NOT_FOUND')) throw error;
-    // Some packages intentionally do not export package.json.
     let directory = dirname(require.resolve(name));
     while (directory !== dirname(directory)) {
       const manifest = join(directory, 'package.json');

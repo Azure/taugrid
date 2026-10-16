@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
 
 from __future__ import annotations
 
@@ -10,7 +8,6 @@ import datetime
 import pathlib
 import re
 import sys
-
 
 MATURITY_PATTERN = re.compile(
     r'\{\{<\s*maturity\s+status="(?P<status>[^"]+)"\s+'
@@ -22,13 +19,11 @@ ALLOWED_STATUSES = {
     "ga",
     "deprecated",
     "planned",
-    # Compatibility aliases for content that has not migrated yet.
     "shipped",
     "experimental",
     "implementing",
     "future",
 }
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Tau documentation metadata")
@@ -69,7 +64,6 @@ def main() -> int:
         return 1
     print(f"Checked maturity metadata for {capability_pages} capability pages")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

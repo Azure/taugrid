@@ -247,9 +247,6 @@ scrapeTargets:
 func TestLoadAcceptsLegacyShapesThatPreviouslyLoaded(t *testing.T) {
 	t.Parallel()
 
-	// Every one of these was accepted before the availability contract existed.
-	// Refusing to start would CrashLoopBackOff the collector on an image bump
-	// and freeze every condition it owns, so they must still load.
 	tests := []struct {
 		name    string
 		targets string
@@ -301,8 +298,6 @@ func TestLoadAcceptsLegacyShapesThatPreviouslyLoaded(t *testing.T) {
 func TestLoadAcceptsDuplicateRuleConditions(t *testing.T) {
 	t.Parallel()
 
-	// Previously accepted with last-writer-wins semantics in the condition
-	// writer; it must not become a fatal startup error.
 	path := writeConfig(t, `
 scrapeTargets:
   - name: dcgm-exporter
@@ -351,8 +346,6 @@ rules:
 func TestValidationErrorsNeverLeakCredentials(t *testing.T) {
 	t.Parallel()
 
-	// An unnamed target whose URL carries userinfo and a query token: the
-	// startup error must identify the field, never echo the raw URL.
 	path := writeConfig(t, `
 scrapeTargets:
   - name: ""

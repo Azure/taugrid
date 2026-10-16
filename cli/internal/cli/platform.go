@@ -7,13 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newPlatformCmd returns the hidden `tau platform` command group.
-//
-// This group is operator/platform-only tooling: it is not part of the
-// researcher-facing surface documented in NewRoot's Long help, and nothing
-// under it is ever invoked automatically by tau run / tau serve. Hidden (not
-// removed) so operators who know it exists can
-// still run `tau platform --help`.
 func newPlatformCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "platform",

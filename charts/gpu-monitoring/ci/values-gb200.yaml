@@ -1,4 +1,3 @@
-# CI test values — GB200 (4-GPU, InfiniBand, NVMe)
 gpuSkus:
   gb200:
     instanceTypes:

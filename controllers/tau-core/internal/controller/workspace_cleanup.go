@@ -32,10 +32,6 @@ func (r *TauWorkspaceReconciler) getAndValidateWorkspaceOwnership(ctx context.Co
 }
 
 func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(ctx context.Context, workspaceName, namespaceName string) error {
-	// The previous namespace comes off status and never passes through
-	// reconcileNamespace, so it needs its own reserved-namespace check: a
-	// workspace that once targeted a reserved namespace must not strip its
-	// labels on the way out.
 	if reservedNamespaceReason(namespaceName, systemNamespace(r.SystemNamespace)) != "" {
 		return nil
 	}
@@ -76,9 +72,6 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	return r.cleanupSystemReaderRBAC(ctx, workspaceName)
 }
 
-// ownerWorkspaceAbsent reports whether the TauWorkspace named on a namespace's
-// ownership label no longer exists. Namespace ownership metadata is retained on
-// deletion, so this check allows a later workspace to reclaim an orphaned target.
 func (r *TauWorkspaceReconciler) ownerWorkspaceAbsent(ctx context.Context, owner string) (bool, error) {
 	var existing tauv1alpha1.TauWorkspace
 	err := r.APIReader.Get(ctx, client.ObjectKey{Name: owner, Namespace: systemNamespace(r.SystemNamespace)}, &existing)

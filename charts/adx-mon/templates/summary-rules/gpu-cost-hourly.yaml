@@ -2,8 +2,6 @@
 apiVersion: adx-mon.azure.com/v1
 kind: SummaryRule
 metadata:
-  # Bump the suffix whenever allocation semantics change. Replacing the CRD
-  # preserves delayed first-run windowing; updating one in place does not.
   name: {{ include "adx-mon.fullname" . }}-gpu-cost-hourly-v4
   namespace: {{ include "adx-mon.namespace" . }}
   labels:

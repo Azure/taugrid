@@ -14,8 +14,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/expstore"
 )
 
-// searchAutoSources keeps discovery fallback and partial failure reporting
-// consistent. A failed source is never represented as a successful empty one.
 func searchAutoSources[T any](ctx context.Context, hasKusto bool, kind string, localSearch, kustoSearch func() (T, error), merge func(T, T) T) (T, []string, error) {
 	local, localErr := localSearch()
 	if err := ctx.Err(); err != nil {

@@ -895,7 +895,6 @@ function savePinnedMetrics() {
   try {
     window.localStorage.setItem(pinnedStorageKey(state.target), JSON.stringify(state.selectedMetrics));
   } catch {
-    // Private browsing or locked-down contexts may reject localStorage.
   }
 }
 
@@ -953,7 +952,6 @@ function saveDashboardSections() {
       subtitles: state.dashboardSections.subtitles,
     }));
   } catch {
-    // Private browsing or locked-down contexts may reject localStorage.
   }
 }
 
@@ -1067,7 +1065,6 @@ function h(tag, attrs = {}, ...children) {
     }
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
-  // A select's value is a DOM property, and only resolves after its options exist.
   if (Object.prototype.hasOwnProperty.call(attrs, "value")) {
     node.value = String(attrs.value ?? "");
   }
@@ -1117,7 +1114,6 @@ function traceMeasure(name, startMark) {
   try {
     performance.measure(name, startMark);
   } catch {
-    // Unsupported or cleared user-timing marks should not break the dashboard.
   }
 }
 
@@ -2320,9 +2316,6 @@ function focusInput(selector) {
 
 let dashboardView = null;
 
-// Slots are component boundaries, not a DOM diff. Unchanged components are never
-// detached (notably report iframes and playing media); changed components restore
-// their small interaction state. The shell and run-selection controls stay live.
 function updateSlot(slot, inputs, build) {
   const signature = JSON.stringify(inputs);
   if (Object.prototype.hasOwnProperty.call(slot, "signature") && slot.signature === signature) return;
@@ -2386,7 +2379,6 @@ function updateRunRail(view, snapshot) {
   for (const [id, row] of view.rows) {
     if (!keep.has(id)) { row.remove(); view.rows.delete(id); }
   }
-  // Initial rows are discarded only when the rail is first mounted.
   if (!runList.dataset.keyed) { runList.replaceChildren(); runList.dataset.keyed = "true"; }
   listed.forEach((run, index) => {
     let row = view.rows.get(run.run_id);
@@ -2955,8 +2947,6 @@ async function restoreRouteFromLocation() {
   startAutoRefresh();
 }
 
-// Discovery and refresh settings are global. Everything defining a comparison
-// is target-scoped and restored from this route, not the experiment we left.
 function restoreTargetPreferences(url, nextTarget) {
   const hasMetricParam = url.searchParams.has("metric");
   const hasPinnedParam = url.searchParams.has("pinned");
@@ -2987,8 +2977,6 @@ function reconcileRunControls(snapshot) {
   const runs = allRuns(snapshot);
   const groups = new Set([...list(snapshot.run_groups).map((group) => group.run_group_id), ...runs.map((run) => run.run_group_id)]);
   if (state.group && !groups.has(state.group)) state.group = "";
-  // A summary can be paged: absence is not proof that an explicitly chosen run
-  // is invalid until the full run catalog is loaded.
   if (runs.length < runPageSize && state.focusedSeriesControls.runID && !runs.some((run) => run.run_id === state.focusedSeriesControls.runID)) {
     state.focusedSeriesControls.runID = "";
   }
@@ -3757,7 +3745,6 @@ function parseConfigPayload(config) {
     try {
       return JSON.parse(raw);
     } catch {
-      // Keep scanning other config representations.
     }
   }
   return null;
@@ -4881,10 +4868,6 @@ function renderFocusedSeriesToolbar(chart) {
   );
 }
 
-// renderChartZoomPill advertises the drag-to-zoom affordance and, when a step
-// window is active, doubles as a one-click reset. It reads the same
-// focusedSeriesControls the brush and the toolbar form write, so it stays in
-// sync with either input path.
 function renderChartZoomPill() {
   const controls = state.focusedSeriesControls;
   const start = text(controls.startStep, "").trim();
@@ -6227,20 +6210,13 @@ function renderMetricChart(chart, options = {}) {
   return wrapper;
 }
 
-// attachChartBrush lets the user drag horizontally across the detail chart to
-// pick a step window, then reuses the existing focused-series range fetch to
-// reload that window at higher resolution. It is a new *input* for the same
-// startStep/endStep controls the toolbar form already drives — no new backend
-// path — so brushing, the form, and the URL stay in lockstep. Double-click
-// clears the window (reset zoom).
 function attachChartBrush(brush) {
   const { svg, hoverCapture, brushRect, plot, width, domain } = brush;
   const plotWidth = plot.right - plot.left;
-  const minDragPx = 6; // ignore accidental micro-drags / plain clicks
+  const minDragPx = 6;
   let dragging = false;
   let anchorX = 0;
 
-  // Convert a client X into a plot-space SVG x, clamped to the plot band.
   const clientToPlotX = (clientX) => {
     const bounds = svg.getBoundingClientRect();
     if (!bounds.width) {
@@ -6249,7 +6225,6 @@ function attachChartBrush(brush) {
     const svgX = ((clientX - bounds.left) / bounds.width) * width;
     return Math.min(plot.right, Math.max(plot.left, svgX));
   };
-  // Invert projectLinear(step → x) back to a step for the current domain.
   const plotXToStep = (x) =>
     domain.xMin + ((x - plot.left) / plotWidth) * (domain.xMax - domain.xMin);
 
@@ -6282,7 +6257,7 @@ function attachChartBrush(brush) {
     const releaseX = clientToPlotX(event.clientX);
     hideBrush();
     if (Math.abs(releaseX - anchorX) < minDragPx) {
-      return; // treat as a click, not a zoom
+      return;
     }
     const lo = Math.round(plotXToStep(Math.min(anchorX, releaseX)));
     const hi = Math.round(plotXToStep(Math.max(anchorX, releaseX)));
@@ -6294,7 +6269,7 @@ function attachChartBrush(brush) {
 
   hoverCapture.addEventListener("mousedown", (event) => {
     if (event.button !== 0) {
-      return; // left button only
+      return;
     }
     event.preventDefault();
     brush.clearHoverWork();
@@ -6329,20 +6304,14 @@ function setFocusedSeriesRange(startStep, endStep) {
   loadFocusedSeriesDetail().catch(renderError);
 }
 
-// applyBrushRange writes a brushed [lo, hi] step window into the focused-series
-// controls and reloads detail at that window. Resolution is reset to auto so
-// the narrower window is re-sampled finely (autoFocusedSeriesStepInterval picks
-// 20 for <=2000-step spans), which is the whole point of zooming in.
 function applyBrushRange(lo, hi) {
   setFocusedSeriesRange(String(lo), String(hi));
 }
 
-// clearBrushRange resets the brushed window (reset zoom) and reloads the full
-// series, mirroring what clearing the toolbar's Start/End fields would do.
 function clearBrushRange() {
   const controls = state.focusedSeriesControls;
   if (!text(controls.startStep, "").trim() && !text(controls.endStep, "").trim()) {
-    return; // already full-range; nothing to reset
+    return;
   }
   setFocusedSeriesRange("", "");
 }
@@ -6376,7 +6345,6 @@ function chartDataset(chart, options = {}) {
 }
 
 function chartSeriesPointValues(series, key) {
-  // Legacy SVG coordinates are presentation pixels, never metric samples.
   const values = list(series?.[key]);
   return values
     .map((point) => ({

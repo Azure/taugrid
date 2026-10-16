@@ -29,10 +29,8 @@ var TauClusterGVR = schema.GroupVersionResource{
 	Group: "tau.azure.com", Version: "v1alpha1", Resource: "clusters",
 }
 
-// ProfileSource identifies the explicitly selected profile source.
 type ProfileSource string
 
-// ProfileSet is a validated ready profile-set revision.
 type ProfileSet struct {
 	Generation     int64
 	ProfileSetHash string
@@ -40,20 +38,14 @@ type ProfileSet struct {
 	Source         ProfileSource
 }
 
-// SelectionRequest identifies one profile and the caller scope it must
-// authorize.
 type SelectionRequest struct {
-	Name      string
-	Namespace string
-	Team      string
-	Lane      string
-	// GPUsPerWorker, when set, narrows implicit selection to profiles with the
-	// same per-worker GPU count. A named profile is never filtered: its
-	// cardinality conflicts remain the caller's error to report.
+	Name          string
+	Namespace     string
+	Team          string
+	Lane          string
 	GPUsPerWorker *int32
 }
 
-// Selection is the common result returned by cluster and snapshot providers.
 type Selection struct {
 	Generation     int64
 	ProfileSetHash string
@@ -61,20 +53,16 @@ type Selection struct {
 	Source         ProfileSource
 }
 
-// Provider reads exactly one explicitly configured source. It never falls back
-// to or auto-detects another source.
 type Provider struct {
 	client   dynamic.Interface
 	snapshot *ProfileSetSnapshot
 	source   ProfileSource
 }
 
-// NewClusterProvider creates a provider for the singleton TauCluster.
 func NewClusterProvider(client dynamic.Interface) *Provider {
 	return &Provider{client: client, source: ProfileSourceCluster}
 }
 
-// NewSnapshotProvider validates an already-decoded local snapshot.
 func NewSnapshotProvider(snapshot ProfileSetSnapshot) (*Provider, error) {
 	set, err := profileSetFromSnapshot(snapshot)
 	if err != nil {
@@ -90,7 +78,6 @@ func NewSnapshotProvider(snapshot ProfileSetSnapshot) (*Provider, error) {
 	return &Provider{snapshot: &validated, source: ProfileSourceSnapshot}, nil
 }
 
-// DecodeSnapshotProvider loads a local snapshot through the canonical decoder.
 func DecodeSnapshotProvider(data []byte) (*Provider, error) {
 	snapshot, err := DecodeProfileSetSnapshot(data)
 	if err != nil {
@@ -99,7 +86,6 @@ func DecodeSnapshotProvider(data []byte) (*Provider, error) {
 	return NewSnapshotProvider(snapshot)
 }
 
-// ProfileSet returns the validated ready set from this provider's sole source.
 func (p *Provider) ProfileSet(ctx context.Context) (ProfileSet, error) {
 	switch p.source {
 	case ProfileSourceCluster:
@@ -121,7 +107,6 @@ func (p *Provider) ProfileSet(ctx context.Context) (ProfileSet, error) {
 	}
 }
 
-// Select returns one ready, applicable profile from the validated set.
 func (p *Provider) Select(ctx context.Context, request SelectionRequest) (Selection, error) {
 	set, err := p.ProfileSet(ctx)
 	if err != nil {
@@ -130,7 +115,6 @@ func (p *Provider) Select(ctx context.Context, request SelectionRequest) (Select
 	return set.Select(request)
 }
 
-// Select returns one ready, applicable profile from an already validated set.
 func (set ProfileSet) Select(request SelectionRequest) (Selection, error) {
 	name := normalizeName(request.Name)
 	if name == "" {
@@ -164,14 +148,10 @@ func (set ProfileSet) Select(request SelectionRequest) (Selection, error) {
 	)
 }
 
-// ValidateReady reports whether a resolved profile is current and Ready for the
-// TauCluster generation that published it.
 func ValidateReady(resolved ResolvedWorkloadProfile, generation int64) error {
 	return requireProfileReady(resolved, generation)
 }
 
-// ValidateApplicability reports whether a resolved profile authorizes the
-// caller's namespace, team, and lane.
 func ValidateApplicability(resolved ResolvedWorkloadProfile, request SelectionRequest) error {
 	return authorizeProfile(resolved, request)
 }

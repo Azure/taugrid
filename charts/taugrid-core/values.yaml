@@ -1,49 +1,20 @@
-# taugrid-core defaults. Override per cluster.
-
-# Cluster-owned query connection, recorded in Helm release values. Only Portal
-# source=kusto inherits it; ingestion/admin components never consume this identity.
 global:
   adx:
     queryConnection:
-      # Set all three together, or leave all empty for the existing degraded mode.
       endpoint: ""
       database: ""
-      # Externally provisioned ADX Viewer identity, federated to Portal's SA.
       clientID: ""
 
-# Historical Ray driver log discovery. These must match the actual adx-mon
-# destination and telemetry source; never copy the Portal Metrics database.
 logging:
   enabled: false
   endpoint: ""
   database: Logs
   cluster: ""
 
-# Optional Kueue ResourceFlavors. Most clusters manage these with their lane
-# manifests/GitOps, so the chart leaves generation off by default. A
-# class-specific GPU flavor must set spec.nodeLabels.tau.azure.com/gpu-class
-# to a canonical policy.gpu_class value, and matching GPU nodes must carry the
-# same label. ResourceFlavor metadata.name is platform-owned and is never parsed
-# as the researcher gpu_class API. TAS-capable flavors declare topologyName;
-# each workload's policy.topology selects its own required topology level.
 resourceFlavors:
   enabled: false
   items: []
 
-# Image prewarm. Pulls Tau's default GPU workload image on every GPU node so
-# the first job on a fresh node skips the cold pull. It only helps when
-# researchers submit without overriding runtime.image; workloads that build
-# their own image want a peer-to-peer mirror instead (see spegel below).
-#
-# Keep the image in sync with DefaultGPUImage in
-# cli/internal/rayjobrender/render.go.
-#
-# The selector is AKS's own GPU node label, matching charts/gpu-monitoring.
-# nvidia.com/gpu.present comes from the NVIDIA GPU Operator, so it is absent
-# whenever GPU Operator is not installed — including this repository's
-# Terraform self_managed default and the AKS Managed GPU Experience preview.
-# Karpenter nodes get neither label from AKS — override nodeSelector to
-# whatever that provisioner stamps.
 prewarm:
   enabled: true
   nodeSelector:
@@ -54,49 +25,26 @@ prewarm:
   images:
     - mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 
-# Spegel handle (just a doc-pointer + namespace existence assertion;
-# install the upstream chart separately for now).
 spegel:
-  enabled: false  # install via `helm install spegel oci://ghcr.io/spegel-org/helm-charts/spegel`
+  enabled: false
   namespace: spegel
 
-# Always-on Tau Stellar service. Generic installs leave this disabled until the
-# cluster has a pinned Tau image and an explicit Kusto query source. Test
-# clusters should enable it with values-test-clusters.yaml and configure Kusto.
 stellar:
   enabled: false
-  # Stellar is a control-plane/operator UI and runs in the Helm release
-  # namespace. Researcher workloads and LocalQueues live in workspace namespaces.
   replicaCount: 1
   serviceName: tau-stellar
   storePath: /var/lib/tau/expstore
-  # The single TauWorkspace this Stellar server serves. Required: Stellar scopes
-  # every read to a workspace and refuses a request it cannot scope, rather than
-  # serving every workspace. Must match the tau_workspace tag that `tau run`
-  # stamps on the runs this server should show. Defaults to the same workspace
-  # `tau workspace create` makes by default, so a stock install is consistent;
-  # override it when the operator chose another workspace name.
   workspace: taugrid-default
   defaultTarget: test-cluster-stellar
-  # kusto = ADX/Kusto-only scalar dashboards and requires kusto.metricsFile or
-  # kusto.queryCommand when enabled. local/auto are manual compatibility modes
-  # for local expstore debugging; only those modes mount an existing expstore PVC.
   source: kusto
   discovery:
-    # Empty means discover all Tau/W&B project labels visible to the Kusto query
-    # identity. Set allowedProjects only for explicitly team-scoped deployments.
     allowedProjects: []
-    # Featured projects are UI hints and do not filter discovery.
     featuredProjects: []
     since: 90d
     maxSince: 365d
-    # Temporary bridge for legacy installs that intentionally used
-    # stellar.kusto.project as a hard scope. Leave false for shared dashboards.
     legacyProjectScope: false
   kusto:
     metricsFile: ""
-    # Deprecated: project is a Tau/W&B label, not Kusto connection config. Use
-    # stellar.discovery.allowedProjects for hard scoping or request project=.
     project: ""
     endpoint: ""
     database: ""
@@ -112,8 +60,6 @@ stellar:
     group: system
     idempotencyKey: tau-stellar-expstore-init
   image:
-    # Stellar and the portal ship in the taugrid-portal binary, not the tau CLI.
-    # Release image tags follow this chart's version.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
     tag: "0.4.4"
     pullPolicy: IfNotPresent
@@ -124,18 +70,12 @@ stellar:
     create: false
     name: ""
     annotations: {}
-  # Main Stellar container extension points for Kusto adapters and identity
-  # wiring. Use these to mount a query adapter binary or projected credentials
-  # without enabling the local expstore/importer path.
   extraEnv: []
   extraEnvFrom: []
   extraVolumeMounts: []
   extraVolumes: []
   extraInitContainers: []
   service:
-    # Standalone Stellar is a compatibility/debug path with no application-level
-    # login. Keep it cluster-internal; use Portal's authenticated proxy contract
-    # for a supported researcher-facing browser endpoint.
     type: ClusterIP
     annotations: {}
     loadBalancerIP: ""
@@ -160,13 +100,8 @@ stellar:
     requests: { cpu: "250m", memory: 512Mi }
     limits: { cpu: "1", memory: 2Gi }
   expstore:
-    # Used only when stellar.source is local or auto. The platform must
-    # pre-provision this claim; Kusto-only Stellar does not mount it.
     pvcName: ""
   importer:
-    # Manual-only compatibility bridge for offline/debug recovery from jobs that
-    # append metrics-history.jsonl to a shared volume. Requires stellar.source to
-    # be local or auto; source=kusto intentionally rejects workload PVC scanning.
     enabled: false
     history: []
     run: ""
@@ -182,30 +117,11 @@ stellar:
     extraVolumeMounts: []
     extraVolumes: []
 
-# Metadata-only lifecycle recorder. Disabled until a cluster operator provides a
-# pinned Tau image, a namespace to observe, and ADX ingestion identity/network
-# access. It never mounts workload storage or reads workload logs/secrets.
 lifecycleRecorder:
   enabled: false
-  # The system Deployment and ServiceAccount run in the Helm release namespace.
-  # Names the Deployment and sets the `app` label on every recorder object. The
-  # ServiceAccount, Role, and RoleBinding take their names from
-  # serviceAccount.name, which is required separately. Changing this on a live
-  # install replaces the Deployment, because spec.selector is immutable.
   resourceName: tau-lifecycle-recorder
-  # Namespace whose Jobs, RayJobs, and Kueue Workloads the recorder observes.
-  # Explicitly required when enabled; it is passed as `--namespace`.
-  #
-  # The recorder's Role and RoleBinding render here, but this chart never
-  # creates this namespace: it is the workload namespace, owned by
-  # tau-core-controller (from TauWorkspace) or by platform-managed queue policy.
-  # Installing against a namespace that does not exist fails with a message
-  # naming this value rather than an apply-time `namespaces "<name>" not found`.
   targetNamespace: ""
-  # Explicit cluster label written with each lifecycle row.
   cluster: ""
-  # Optional namespace-level scope defaults for legacy workloads. Object
-  # annotations take precedence.
   workspaceId: ""
   resultScope: ""
   interval: 30s
@@ -214,44 +130,24 @@ lifecycleRecorder:
     endpoint: ""
     database: Metrics
     table: TauExpRunLifecycle
-  # adx-mon owns database-management operations. Opt in only after a compatible
-  # adx-mon ManagementCommand CRD is installed. When enabled, this chart creates
-  # a ManagementCommand in adx-mon's namespace which idempotently creates the
-  # canonical Metrics/TauExpRunLifecycle table, ingestion mapping, and dashboard
-  # function. adx-mon performs that operation asynchronously and does not
-  # expose a completion condition. The recorder starts immediately, remains
-  # NotReady while ingestion fails, and retries on every interval until the
-  # schema becomes available. Short-lived workloads that are created and
-  # deleted before the schema is ready can be missed. The adx-mon identity
-  # therefore needs database-management permission; the recorder itself only
-  # needs Ingestor permission. Restore a schema readiness gate when adx-mon
-  # publishes a reliable ManagementCommand success or failure condition.
   schemaManagement:
     enabled: false
     namespace: adx-mon
     resourceName: taugrid-lifecycle-schema
   image:
-    # Release image tags follow this chart's version. Set tag to "" when
-    # overriding digest with an immutable sha256 reference.
     repository: mcr.microsoft.com/aks/ai-runtime/tau
     tag: "0.4.4"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   podLabels: {}
-  # Workload Identity is mandatory when the recorder is enabled. The chart
-  # requires the standard ServiceAccount client-id annotation and stamps the
-  # required pod label.
   workloadIdentity:
     enabled: false
   serviceAccount:
-    # A dedicated ServiceAccount is required when the recorder is enabled.
     create: false
     name: ""
     annotations: {}
   rbac:
-    # Creates a namespace-scoped Role/RoleBinding for only Jobs, RayJobs, and
-    # Kueue Workloads in targetNamespace. Required when the recorder is enabled.
     create: false
   extraEnv: []
   extraEnvFrom: []
@@ -273,85 +169,31 @@ lifecycleRecorder:
     requests: { cpu: "100m", memory: 128Mi }
     limits: { cpu: "500m", memory: 512Mi }
 
-# Unified observability portal. Serves `taugrid-portal portal serve`: a single read-only
-# web entry point that aggregates and cross-links the runtime's dashboards
-# (Experiments, Jobs/Queue, Cluster Health, Cluster Nodes, Ray, Cost). Stellar is
-# embedded as the Experiments board. Disabled by default in this standalone
-# chart; the TauGrid distribution enables it with a dedicated ServiceAccount
-# and read-only RBAC. Kusto-backed boards still require a query source.
 portal:
   enabled: false
-  # Control-plane/operator UI; runs with the rest of the TauGrid control plane
-  # in the Helm release namespace. Researcher workloads, RayJobs, and Kueue
-  # LocalQueues live in workspace namespaces, which the portal reads across via
-  # its ClusterRole.
   resourceName: tau-portal
   replicaCount: 1
   serviceName: tau-portal
-  # kusto backs the Experiments (Stellar), Cluster Health, and Cost boards via
-  # the shared --kusto-query-command shell-out. local/auto are debug modes for a
-  # local expstore-backed Experiments board and do not light up the Kusto boards.
   source: kusto
-  # Experiment store root for the mounted Stellar experience. Required only for
-  # source=local/auto; leave empty for source=kusto. Mounting a real expstore
-  # (via extraVolumes/extraVolumeMounts) is a future enhancement.
   store: ""
-  # Default cluster name for the Kusto-backed Cluster Health and Cost boards. In
-  # a shared Metrics database (multiple clusters remote-write DCGM/GPU metrics to
-  # the same ADX), set this to this cluster's `Cluster` label so the boards
-  # report only this cluster's GPUs; leave empty to aggregate every cluster. A
-  # per-request ?cluster= query param always overrides.
   cluster: ""
-  # TauWorkspace identity used by the native experiment workspace. This is a fixed
-  # deployment scope, not a browser-selectable workspace. Multi-workspace
-  # routing remains disabled unless workspaceDirectory is explicitly enabled.
-  # "default" was a placeholder that matched no real runs; this tracks the
-  # workspace `tau workspace create` makes by default.
   workspace: taugrid-default
-  # Optional metadata-only TauWorkspace directory. When enabled, every Portal
-  # request is resolved from ?workspace=<id> after the trusted auth proxy supplies
-  # the configured Entra user/group headers. Browser-provided namespace/cluster
-  # values cannot override a resolved workspace. Remote clusters are redirected
-  # only to registered HTTPS Portal endpoints; no remote kubeconfigs are loaded.
   workspaceDirectory:
     enabled: false
     localCluster: ""
     endpoints: []
-    # Workspace records may opt into experimentsBackend: {url, bearerTokenFile}
-    # for a trusted same-origin API connection to separately deployed Stellar.
-    # Mount any service-token file with extraVolumes/extraVolumeMounts; never
-    # put credential values in this metadata.
     workspaces: []
     auth:
       userHeader: X-MS-CLIENT-PRINCIPAL-NAME
       groupsHeader: X-MS-CLIENT-PRINCIPAL-GROUPS
-  # Always ClusterIP-only. Declare the reviewed HTTPS endpoint for an external
-  # authentication proxy, or opt into the chart-managed entraAuth proxy below.
-  # Workspace-directory authorization requires an external proxy with a
-  # verified, spoof-resistant mapping to the configured identity headers.
   access:
-    # cluster-internal: no supported researcher browser endpoint.
-    # authenticated-proxy: platform-owned HTTPS endpoint with authentication.
     mode: cluster-internal
     externalURL: ""
-  # Opt-in shared Portal viewer login, NOT per-user/workspace authorization.
-  # Requires Gateway API v1 + a compatible controller, cert-manager with Gateway
-  # support, an operator-owned issuer, AKS Workload Identity, Entra app/federation,
-  # enterprise-app assignment, DNS, and an existing cookie Secret. Installs no
-  # controller, issuer, Azure resource, mesh policy, or direct Ray route.
   entraAuth:
     enabled: false
-    # Single-tenant WEB app registration, also the proxy's workload identity.
-    # This is separate from portal.serviceAccount's backend ADX query identity.
     tenantID: ""
     clientID: ""
-    # Set access.mode=authenticated-proxy and access.externalURL=https://portal.example.com.
-    # Only an origin (optional trailing /) is supported; callback is /oauth2/callback.
-    # Federate system:serviceaccount:<release-namespace>:<resourceName>-oauth2-proxy
-    # to the app with this cluster's OIDC issuer and api://AzureADTokenExchange.
     cookieSecret:
-      # Existing Secret in the release namespace holding a URL-safe base64-encoded
-      # random 32-byte cookie key. Never put the secret value in Helm values.
       name: ""
       key: cookie-secret
     gatewayClassName: istio
@@ -360,8 +202,6 @@ portal:
       kind: ClusterIssuer
       group: cert-manager.io
     image:
-      # Required when enabled: use an approved image containing the callback-log
-      # privacy fix documented in the Portal setup guide, pinned by digest.
       repository: ""
       tag: ""
       digest: ""
@@ -375,94 +215,51 @@ portal:
     tolerations: []
     affinity: {}
   kusto:
-    # Nonempty endpoint/database override global.adx.queryConnection per field.
     endpoint: ""
     database: ""
     costDatabase: CostTracking
     ingestion: remote-write
-    # Executable that runs generated KQL and emits Kusto REST JSON. Reused by the
-    # Experiments, Cluster Health, and Cost boards. Empty leaves the Cluster
-    # Health and Cost boards degraded to 503; the shell, Jobs, and Ray boards
-    # still serve.
     queryCommand: ""
     queryArgs: []
-  # Enable only together with lifecycleRecorder after its MCR image, Workload
-  # Identity, ADX permissions, and namespace scope are active.
   runHistory:
     enabled: false
     table: TauExpRunLifecycle
     limit: 200
-  # Legacy namespace for the Ray and Runs boards only. The computed Jobs board
-  # never derives authorization or team ownership from this value.
   workloadNamespace: ""
-  # Computed GPU quota/team view. KueueViz remains the raw cluster-wide live
-  # operator board. Binaries default to disabled when scopeMode is omitted, so
-  # the board stays off until set to workspace or operator.
   jobs:
-    # Deprecated compatibility fallback for workloadNamespace. Existing
-    # releases used this key for the Ray and Runs namespace.
     namespace: ""
     scopeMode: ""
-    # Trusted operator mode reads only these exact team/namespace/LocalQueue
-    # scopes. LocalQueue name reuse never correlates teams or namespaces.
     operatorScopes: []
-  # Kueue (Live) board: when enabled, the portal reverse-proxies the upstream
-  # KueueViz backend/frontend ClusterIP Services (enabled by the per-cluster
-  # kueue overlay) same-origin under /api/portal/kueueviz/*. The portal rewrites
-  # the Origin on backend-bound requests to a fixed constant, so the kueue
-  # overlay must set KUEUEVIZ_ALLOWED_ORIGINS to http://portal.kueueviz.local.
-  # Disabled by default; enable only on clusters where the kueue overlay has
-  # turned KueueViz on.
   kueueviz:
     enabled: false
     namespace: kueue-system
     backendService: kueue-kueueviz-backend
     frontendService: kueue-kueueviz-frontend
   rbac:
-    # Create the ClusterRole + ClusterRoleBinding granting the portal's
-    # ServiceAccount read access to core Services (Ray board discovery), Pods,
-    # Events, and RayClusters (Job detail), core Nodes (Cluster Nodes board), and
-    # Kueue LocalQueues/ClusterQueues/Workloads (Jobs board), plus get-only
-    # access to the singleton TauCluster workload profile status. Requires
-    # serviceAccount.create=true. Without it, the Jobs, Ray, Cluster Nodes, and
-    # profile readiness views degrade while the portal still serves the shell,
-    # Experiments, Cluster Health, and Cost.
     create: false
   image:
-    # The portal ships in the taugrid-portal binary, not the tau CLI.
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    # Release image tags follow this chart's version.
     tag: "0.4.4"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   podLabels: {}
   serviceAccount:
-    # Enable together with rbac.create for the Jobs/Ray/Nodes boards. Required to
-    # inherit global.adx.queryConnection.clientID (enabled by the umbrella).
-    # An explicit azure.workload.identity/client-id annotation takes precedence;
-    # the chart derives the Workload Identity pod label automatically.
     create: false
     name: ""
     annotations: {}
-  # Container extension points for mounting a Kusto query adapter binary or
-  # projected credentials without baking them into the image.
   extraEnv: []
   extraEnvFrom: []
   extraVolumeMounts: []
   extraVolumes: []
   extraInitContainers: []
   service:
-    # Deliberately fixed to ClusterIP. Portal has no application-level login, so
-    # a LoadBalancer would bypass the required authenticated proxy.
     type: ClusterIP
     annotations: {}
     loadBalancerIP: ""
     loadBalancerSourceRanges: []
     port: 80
     targetPort: 8080
-  # Keep the default portable. Platforms may pin Portal to dedicated system
-  # nodes in their canonical values file.
   nodeSelector: {}
   tolerations: []
   podSecurityContext:

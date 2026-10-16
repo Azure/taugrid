@@ -1,14 +1,3 @@
-# Namespace and minimal RayCluster for e2e testing.
-#
-# 1 head pod (CPU-only) + 1 worker pod (CPU-only). This fixture exercises the
-# KubeRay operator and basic head/worker scheduling — it intentionally does NOT
-# request a GPU so the kuberay package runs on any cluster (CPU or GPU).
-# GPU end-to-end coverage lives in tests/e2e/stack via inference-rayjob-gpu.yaml.
-#
-# Uses the custom Ray image built from images/ray/.
-# {{RAY_IMAGE}} is resolved at test time from the RAY_E2E_IMAGE env var, which
-# CI sets to the image just pushed to the PR-scoped ACR (aksairuntime).
-# {{RAY_VERSION}} follows RAY_E2E_VERSION, the image tag, or the Makefile fallback.
 ---
 apiVersion: v1
 kind: Namespace

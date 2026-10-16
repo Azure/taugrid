@@ -1,6 +1,3 @@
-{{/*
-Common labels for all taugrid-core resources.
-*/}}
 {{- define "taugrid-core.labels" -}}
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
@@ -9,10 +6,6 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 tau.azure.com/component: taugrid-core
 {{- end }}
 
-{{/*
-Resolve the intentionally supplied cluster query connection, not adx-mon credentials.
-An absent connection preserves the store-less/degraded Portal install.
-*/}}
 {{- define "taugrid-core.adxQueryConnection" -}}
 {{- $adx := default dict (default dict .Values.global).adx -}}
 {{- $connection := default dict $adx.queryConnection -}}
@@ -36,24 +29,12 @@ An absent connection preserves the store-less/degraded Portal install.
 {{- end -}}
 {{- end }}
 
-{{/*
-Whether `lookup` can see the cluster at all.
-
-`lookup` returns empty both for an absent object and for every render that has
-no API connection — `helm template`, `--dry-run=client`, ArgoCD manifest
-generation. Probing an object that always exists separates the two, so a guard
-can refuse a missing namespace at install time without failing every render.
-*/}}
 {{- define "taugrid-core.apiReachable" -}}
 {{- if lookup "v1" "Namespace" "" "kube-system" -}}
 reachable
 {{- end -}}
 {{- end }}
 
-{{/*
-Render a first-party image from exactly one release tag or immutable digest.
-Call with: include "taugrid-core.image" (dict "component" "portal" "image" .Values.portal.image)
-*/}}
 {{- define "taugrid-core.image" -}}
 {{- $component := .component -}}
 {{- $image := .image -}}

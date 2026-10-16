@@ -11,20 +11,12 @@ import (
 	"github.com/Azure/taugrid/cli/internal/queueresolve"
 )
 
-// serveTarget is where a serve workload lands: the namespace it is created in
-// and the LocalQueue Kueue admits it out of.
-//
-// The two travel together because a LocalQueue is namespaced. Resolving one
-// without the other produces a queue name that does not exist in the namespace
-// it was paired with, which fails as silently as no queue at all.
 type serveTarget struct {
 	Namespace    string
 	Queue        string
 	ClusterQueue string
 }
 
-// resolveServeTarget resolves the platform-managed default LocalQueue for
-// callers that do not have an active repository workspace placement.
 func resolveServeTarget(
 	ctx context.Context,
 	r queueresolve.RawRunner,
@@ -56,9 +48,6 @@ func resolveServeTarget(
 	}, "", nil
 }
 
-// resolveServeWorkspaceTarget verifies the exact namespace-local queue assigned
-// by the active TauWorkspace. Client and server dry-runs use the same connected
-// path as apply; namespace labels are not trusted as workspace identity.
 func resolveServeWorkspaceTarget(
 	ctx context.Context,
 	r queueresolve.RawRunner,

@@ -14,8 +14,6 @@ import (
 var labelNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 var metricNamePattern = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 
-// RequireMetricCoverage rejects a missing contract during a coverage-enabled rollout.
-// The corresponding CLI flag is deliberately unknown to old images.
 func (c *Config) RequireMetricCoverage() error {
 	for _, rule := range c.Rules {
 		if rule.MinSamples > 0 {

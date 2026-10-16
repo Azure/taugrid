@@ -1,6 +1,3 @@
-# GPU Health Checker configuration for GB200 NVL72 nodes.
-# Installed to /etc/gpu-health-checker/config.yaml
-
 expectedGPUs: 4
 gpuType: GB200
 maxFailedGPUs: 0
@@ -17,7 +14,6 @@ nvlink:
   checkC2C: true
   checkNVSwitch: true
 
-# Check interval matches NPD's invoke_interval (60s).
 checkInterval: 60s
 
 checks:

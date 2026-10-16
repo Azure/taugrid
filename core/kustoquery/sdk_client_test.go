@@ -12,18 +12,12 @@ import (
 )
 
 func TestSDKClientQueryParsesJSON(t *testing.T) {
-	// The SDK client delegates transport to an injectable queryJSON hook and
-	// reuses ParseRows for the response, so we can exercise the full Query path
-	// (endpoint/database defaulting + parse) without a live ADX cluster.
 	var gotDB, gotKQL string
 	c := SDKClient{
 		Endpoint: "https://example.kusto.windows.net",
 		Database: "Metrics",
 		queryJSON: func(_ context.Context, db, query string) (string, error) {
 			gotDB, gotKQL = db, query
-			// Mirror the real azure-kusto-go QueryToJson wire shape: a fragmented
-			// v2 stream where PrimaryResult arrives as TableHeader+TableFragment,
-			// not a single {Columns,Rows} object the SDK never emits.
 			return `[
 				{"FrameType":"DataSetHeader","Version":"v2.0"},
 				{"FrameType":"TableHeader","TableId":1,"TableKind":"PrimaryResult",
@@ -50,8 +44,6 @@ func TestSDKClientQueryParsesJSON(t *testing.T) {
 }
 
 func TestSDKClientQueryDefaultsDatabase(t *testing.T) {
-	// A zero Database falls back to the Metrics ADX default, matching the
-	// shell-out Client's behavior.
 	var gotDB string
 	c := SDKClient{
 		Endpoint: "https://example.kusto.windows.net",
@@ -69,8 +61,6 @@ func TestSDKClientQueryDefaultsDatabase(t *testing.T) {
 }
 
 func TestSDKClientQueryNoEndpoint(t *testing.T) {
-	// An unconfigured SDKClient (no endpoint) reports ErrNoQueryCommand so the
-	// portal can treat the board as disabled, mirroring Client.
 	client := &SDKClient{}
 	_, err := client.Query(context.Background(), "GpuHealth()")
 	if !errors.Is(err, ErrNoQueryCommand) {

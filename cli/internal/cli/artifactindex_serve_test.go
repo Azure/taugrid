@@ -14,16 +14,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/artifactindex"
 )
 
-// TestServeResolvesArtifactIndexWrittenByManagedWorkflow closes the CLI-only
-// train -> serve loop end to end, in the one place where both halves are
-// visible: it runs the shell/python snippet that `tau run` now embeds in the
-// managed-workflow entrypoint, then hands the file it produced to the exact
-// function `tau serve deploy --from-finetune` uses to resolve a checkpoint.
-//
-// Before the artifactindex step existed, the only writer of artifacts.json was
-// the Python SDK wrapper (sdk/python/tau/_cluster.py). Managed workflows run
-// the researcher's script directly, so this resolution failed for every
-// CLI-only run and `--checkpoint <absolute path>` was the only way to serve.
 func TestServeResolvesArtifactIndexWrittenByManagedWorkflow(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test executes a POSIX shell script")
@@ -70,8 +60,6 @@ func TestServeResolvesArtifactIndexWrittenByManagedWorkflow(t *testing.T) {
 		t.Fatalf("read artifacts.json: %v", err)
 	}
 
-	// The consumer half: this is what serve.go calls after fetching the file
-	// off the PVC.
 	got, err := selectManagedWorkflowArtifact(raw, "")
 	if err != nil {
 		t.Fatalf("serve could not resolve the checkpoint it just trained: %v", err)
@@ -90,9 +78,6 @@ func TestServeResolvesArtifactIndexWrittenByManagedWorkflow(t *testing.T) {
 		t.Errorf("SizeBytes = %d, want %d", got.SizeBytes, len("weights"))
 	}
 
-	// Negative control: the resolver must still reject an artifact name that
-	// was never written, otherwise the assertion above would pass for any
-	// input and prove nothing.
 	if _, err := selectManagedWorkflowArtifact(raw, "no-such-artifact"); err == nil {
 		t.Error("expected an error for an unknown artifact name; the resolver is not discriminating")
 	}

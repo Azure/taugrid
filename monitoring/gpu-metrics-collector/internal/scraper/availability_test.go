@@ -81,7 +81,7 @@ func TestScrapeReportsConnectionFailure(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 	url := srv.URL + "/metrics"
-	srv.Close() // Nothing is listening now.
+	srv.Close()
 
 	s := New([]ScrapeTarget{{Name: "dcgm-exporter", URL: url}})
 	res, err := s.Scrape(context.Background())
@@ -154,7 +154,6 @@ func TestScrapeKeepsHealthyTargetsIndependent(t *testing.T) {
 	if !statusFor(t, res, "node-exporter").OK {
 		t.Error("healthy optional target should report OK")
 	}
-	// A successful optional target must not mask the required target's loss.
 	if len(res.Metrics) != 1 {
 		t.Errorf("expected only the healthy target's metrics, got %d", len(res.Metrics))
 	}

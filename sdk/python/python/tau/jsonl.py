@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 def read_jsonl_objects(path: str | Path, max_records: int = 0) -> list[dict[str, Any]]:
     """Read JSONL records, requiring each nonblank line to be a JSON object."""
 
@@ -36,6 +35,5 @@ def read_jsonl_objects(path: str | Path, max_records: int = 0) -> list[dict[str,
     if not records:
         raise ValueError(f"{jsonl_path} contains no records")
     return records
-
 
 __all__ = ["read_jsonl_objects"]

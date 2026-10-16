@@ -17,12 +17,8 @@ import (
 type FieldStatus string
 
 const (
-	statusSupported FieldStatus = "supported"
-	statusReserved  FieldStatus = "reserved"
-	// A config takes one of two paths: managed workflow when workflow.file is
-	// set, direct Job/RayJob otherwise. These two mark fields the other path
-	// rejects outright, so the status column answers "can my config use this?"
-	// without the reader parsing the description.
+	statusSupported    FieldStatus = "supported"
+	statusReserved     FieldStatus = "reserved"
 	statusWorkflowOnly FieldStatus = "workflow-only"
 	statusDirectOnly   FieldStatus = "direct-only"
 )
@@ -191,9 +187,6 @@ func configFieldPaths() []string {
 	return paths
 }
 
-// configStructPaths returns the subset of configFieldPaths whose values are
-// nested Config structs, i.e. the paths whose child keys are schema rather than
-// user data. Free-form maps and slices are deliberately excluded.
 func configStructPaths() []string {
 	var cfg Config
 	paths := structFieldPaths(reflect.TypeOf(cfg), "")

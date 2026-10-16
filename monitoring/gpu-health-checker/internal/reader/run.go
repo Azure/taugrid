@@ -8,24 +8,20 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// ReadParams describes the common structure of a Read method.
 type ReadParams struct {
-	Name     string                                // reader name for the "disabled" message
-	Enabled  bool                                  // whether this check is enabled
-	Checks   func(f *CheckFindings) []func() error // builds per-check closures
-	Critical *FindingResult                        // nil to skip critical branch
-	Warning  *FindingResult                        // nil to skip warning branch
-	OkMsg    string                                // message when no findings
+	Name     string
+	Enabled  bool
+	Checks   func(f *CheckFindings) []func() error
+	Critical *FindingResult
+	Warning  *FindingResult
+	OkMsg    string
 }
 
-// FindingResult describes how to build a Result from a set of failed GPUs.
 type FindingResult struct {
-	Label string // short description after GPU count; "" for raw parts only
-	Base  int    // criticalBase for applyTolerance, or raw exit code when label is ""
+	Label string
+	Base  int
 }
 
-// RunChecks executes the standard Read workflow: enabled gate, staleness
-// check, sub-checks, and result assembly.
 func RunChecks(db *store.DB, cfg *config.Config, p ReadParams) (Result, error) {
 	if !p.Enabled {
 		return Result{ExitCode: 0, Message: p.Name + " check disabled"}, nil

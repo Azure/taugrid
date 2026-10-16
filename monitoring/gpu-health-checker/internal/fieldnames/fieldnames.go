@@ -1,12 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package fieldnames provides centralized field name constants used as the
-// "field" column value in the samples table. These names are shared between
-// the collector (writer) and readers (consumers).
 package fieldnames
 
-// Counter fields — sampled periodically by the collector from DCGM.
 const (
 	XIDErrors            = "XID_ERRORS"
 	ECCDBEVol            = "ECC_DBE_VOL"
@@ -34,7 +30,6 @@ const (
 	NVSwitchTemp         = "NVSWITCH_TEMP"
 )
 
-// Link status fields — stored by the collector from NVLink status API.
 const (
 	NVLinkActiveLinks   = "NVLINK_ACTIVE_LINKS"
 	NVLinkTotalLinks    = "NVLINK_TOTAL_LINKS"
@@ -42,7 +37,6 @@ const (
 	NVSwitchTotalLinks  = "NVSWITCH_TOTAL_LINKS"
 )
 
-// AllFields returns all field names for use in the status subcommand.
 func AllFields() []string {
 	return []string{
 		XIDErrors, ECCDBEVol, ECCDBEAgg, ECCSBEVol, ECCSBEAgg,

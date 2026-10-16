@@ -1,9 +1,3 @@
-# Gang scheduling test — FITS scenario
-#
-# This Job needs 2 pods × 1 CPU = 2 CPU total.
-# The ClusterQueue has 3 CPU quota — this fits!
-# Kueue will admit it and BOTH pods appear together.
-# After admission, 1 CPU remains unused in the queue.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,4 +19,4 @@ spec:
         command: ["sh", "-c", "sleep infinity"]
         resources:
           requests:
-            cpu: "1"  # 1 CPU per pod → 2 × 1 = 2 CPU total ≤ 3 CPU quota
+            cpu: "1"

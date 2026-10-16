@@ -1,21 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package jobrender renders a Tau Profile + typed options into a Kubernetes
-// batch/v1 Job or multi-node Indexed Job manifest.
-//
-// The renderer is a pure function: (Profile, Options) → []byte YAML, no
-// kubectl, no cluster. This keeps unit tests fast and lets the same code
-// power `--dry-run=client` (print to stdout) and the apply path.
-//
-// Design notes:
-//
-//   - The Job is created `suspend: true` and labelled with
-//     `kueue.x-k8s.io/queue-name` so Kueue admits it. This matches the
-//     pattern used by earlier shell-based submission workflows.
-//   - Script handling: a local script path keeps the legacy TAU_SCRIPT_B64
-//     path. A run.source tree is copied from a digest-pinned OCI image into an
-//     emptyDir by an init container and never travels through an env var.
 package jobrender
 
 import (
@@ -48,212 +33,106 @@ import (
 const (
 	c10dPort = 29500
 
-	// HeadlessSuffix is the suffix appended to the Job name to form the
-	// headless Service name for multi-node torchrun.
 	HeadlessSuffix = "-headless"
 )
 
-// Options collects everything the renderer needs that isn't in the Profile.
 type Options struct {
-	// Name is the Job name. Required. Caller is responsible for collisions.
 	Name string
 
-	// Namespace is the target namespace. Required.
 	Namespace string
 
-	// Image overrides the container image. If empty, Profile.Runtime.Image is
-	// used; if that's empty too, the renderer
-	// returns an error (we refuse to ship a "default image" footgun).
 	Image string
 
-	// ServiceAccountName selects the pod identity. Empty uses the namespace
-	// default ServiceAccount.
-	ServiceAccountName string
-	// AzureWorkloadIdentity stamps the opt-in label required by the AKS
-	// workload identity mutating webhook.
+	ServiceAccountName    string
 	AzureWorkloadIdentity bool
 
-	// CPURequest, MemoryRequest, CPULimit, and MemoryLimit override the
-	// corresponding resources on the main Job container.
 	CPURequest    string
 	MemoryRequest string
 	CPULimit      string
 	MemoryLimit   string
 
-	// ScriptPath, if non-empty, is read from disk and base64-encoded into
-	// TAU_SCRIPT_B64. When Source is set, ScriptPath is instead a clean path
-	// relative to the staged source root.
 	ScriptPath string
-	// Source stages an immutable source tree from a digest-pinned OCI image.
-	Source *runconfig.Source
+	Source     *runconfig.Source
 
-	// WorkingDir sets the initial working directory inside the main container.
-	// Empty preserves the image or Tau storage default.
 	WorkingDir string
 
-	// ScriptArgs, if non-empty, are forwarded to ScriptPath as positional
-	// arguments ($1, $2, ... inside the script). Ignored when Command is set
-	// (the caller already controls argv) or when ScriptPath is empty.
 	ScriptArgs []string
 
-	// CheckpointArtifact is storage.checkpoint: the file or directory,
-	// relative to the run checkpoint dir, that this run produces as its
-	// servable model. When set, the rendered command writes an artifact
-	// index after a successful run. Empty means no index step is rendered.
 	CheckpointArtifact string
 
-	// Command, if non-empty, replaces the entrypoint entirely. Overrides
-	// ScriptPath. Useful for tests and "run my image as-is" Jobs.
 	Command []string
 
-	// Launcher selects the process execution model. "python" forces Python
-	// execution, "torchrun" wraps the script with torchrun, and empty detects
-	// Python from a .py suffix or shebang while honoring other shebangs.
 	Launcher string
 
-	// ProcessesPerNode sets --nproc_per_node for torchrun. Validated against
-	// the profile's GPU count when > 0. Ignored when Launcher is "python".
 	ProcessesPerNode int
 
-	// Nodes sets the number of pods for multi-node torchrun. When > 1, the
-	// renderer emits a Kubernetes Indexed Job (completionMode: Indexed,
-	// completions=N, parallelism=N) plus a headless Service for DNS-based
-	// c10d rendezvous. JOB_COMPLETION_INDEX becomes --node_rank. Requires
-	// Launcher == "torchrun".
 	Nodes int
 
-	// ExtraFlags are arbitrary flags appended to the rendered command.
-	// Each key becomes --key=value (or bare --key when value is empty).
-	// Keys are sorted alphabetically for deterministic output. Values
-	// are shell-quoted. Validation is done upstream in runconfig.
 	ExtraFlags map[string]string
 
-	// Retry controls Job backoffLimit.
 	Retry int
 
-	// TerminationGracePeriodSeconds overrides the default pod grace
-	// period. Default is 60s (north-star §5.6: give training jobs time
-	// to flush checkpoints on SIGTERM; k8s default of 30s is too short
-	// for multi-GB checkpoints to blob storage).
 	TerminationGracePeriodSeconds int64
 
-	// ActiveDeadlineSeconds, if > 0, bounds the job's total wall-clock
-	// runtime. The k8s controller terminates the pod when exceeded. Used
-	// by long-running `tau run` Jobs that want a hard cap regardless of
-	// profile policy. Overrides Profile.ActiveDeadlineSeconds.
 	ActiveDeadlineSeconds int64
 
-	// TTLSecondsAfterFinished controls Kubernetes cleanup after completion.
-	// Zero uses the renderer's normal eight-hour retention.
 	TTLSecondsAfterFinished int64
 
-	// PVCMount, if non-empty, mounts the named PVC at /data inside the main
-	// container and adds an ephemeral /mnt hot-work volume. The PVC must
-	// already exist in Namespace.
 	PVCMount string
 
-	// Volumes and VolumeMounts are run-time storage overrides and are
-	// intentionally a small PVC-only subset for researcher data volumes.
 	Volumes      []Volume
 	VolumeMounts []VolumeMount
 	ImageAssets  []runconfig.ImageAsset
 
-	// Labels and Annotations carry workload-specific metadata that other
-	// Tau commands can read back. V0 uses this for eval result paths and
-	// run profiling; scheduling-critical labels are still owned by Render.
 	Labels      map[string]string
 	Annotations map[string]string
 
-	// Env is a CLI-injected env-var map. Tau reserves the TAU_ prefix for
-	// storage and profile-mode contracts; Render rejects user-supplied keys
-	// with that prefix.
-	Env map[string]string
-	// EnvSecrets are secret-backed env vars rendered as valueFrom.secretKeyRef.
-	// RedactSecrets replaces the referenced Secret name/key in client dry-run
-	// output while preserving the dependency shape.
+	Env           map[string]string
 	EnvSecrets    []envspec.Var
 	RedactSecrets bool
-	// SecurityMode applies the typed runtime.security contract.
-	SecurityMode string
+	SecurityMode  string
 
-	// RDMA opts the Job into network-domain topology placement and injects the
-	// IPC_LOCK/SYS_RESOURCE/DAC_OVERRIDE capabilities NCCL NET/IB needs.
 	RDMA RDMAOptions
 
-	// OutputDir, if set, advertises the durable result path on the pod via
-	// the TAU_OUTPUT_DIR env var. Setting this does not otherwise affect
-	// the rendered manifest; the result-path/result-pvc annotations live
-	// in Annotations and are the contract `tau run get` reads.
 	OutputDir string
 
-	// Profile, if set, wraps the rendered entrypoint with a profiling harness.
-	// The wrapper checks the Nsight tool is present at runtime, profiles only
-	// the selected rank, and writes rank-scoped raw artifacts plus
-	// metadata/summary files under OutputDir/profile (or /data/<Name>/profile
-	// for direct Render callers that mounted /data).
 	Profile ProfileOptions
 
-	// MetricsOffload, when enabled by a pinned Image, tails append-only JSONL
-	// histories into durable Stellar state and emits the terminal run marker.
-	MetricsOffload metricsoffload.Runtime
-	// ArtifactPublish optionally wraps the workload so closed artifacts staged
-	// on local /mnt are copied and renamed into durable OutputDir after success.
+	MetricsOffload  metricsoffload.Runtime
 	ArtifactPublish artifactpublish.Runtime
 
-	// NodeSelector is a run-time placement override merged after topology
-	// selectors. ClearNodeSelector drops generated selectors before the
-	// protected topology contract and NodeSelector are applied.
 	NodeSelector      map[string]string
 	ClearNodeSelector bool
 
-	// Topology contract overrides. Profiles can declare Topology, while
-	// CLI callers can override the researcher-facing intent here. Render turns
-	// this into protected Kueue queue/topology metadata and rejects unsafe
-	// combinations (for example elastic jobs without checkpoints, or eval on
-	// scarce H200 capacity).
-	Team            string
-	Lane            string
-	Mode            string
-	Topology        string
-	Shape           string
-	GPUClass        string
-	CheckpointEvery string
-	QueueName       string
-	// GPUResourceName constrains live queue discovery and validation to the
-	// resource used by this workload (for example nvidia.com/gpu or
-	// gpu.nvidia.com). It does not alter rendered pod resources.
+	Team                            string
+	Lane                            string
+	Mode                            string
+	Topology                        string
+	Shape                           string
+	GPUClass                        string
+	CheckpointEvery                 string
+	QueueName                       string
 	GPUResourceName                 string
 	PriorityTier                    string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
 	DisableKueueTopologyAnnotations bool
-	// DisableDefaultPriorities omits Tau-managed default priority classes.
-	DisableDefaultPriorities bool
+	DisableDefaultPriorities        bool
 }
 
-// Volume is a PVC-backed volume attached to a rendered Job.
 type Volume struct {
 	Name string
 	PVC  string
 }
 
-// VolumeMount is a mount for a rendered Job volume.
 type VolumeMount struct {
 	Name      string
 	MountPath string
 	ReadOnly  bool
 }
 
-// RDMAOptions is an alias for the shared RDMA configuration. All new code
-// should use runconfig.NormalizedRDMA directly; this alias exists only so
-// existing callers that reference the jobrender type continue to compile
-// without a flag-day rename.
 type RDMAOptions = runconfig.NormalizedRDMA
 
-// ProfileOptions configures the opt-in profiler wrapper for Job workloads.
-// Mode is "nsys" or "ncu"; empty disables profiling. Rank defaults to "0"
-// (profile one representative rank) and may be set to "all". Warmup and
-// Duration are currently applied to Nsight Systems only.
 type ProfileOptions struct {
 	Mode     string
 	Rank     string
@@ -261,8 +140,6 @@ type ProfileOptions struct {
 	Duration time.Duration
 }
 
-// Render turns a resolved Profile + Options into a single-document YAML
-// manifest ready to feed to `kubectl apply -f -`.
 func Render(p profile.Profile, o Options) ([]byte, error) {
 	o.Launcher = strings.ToLower(strings.TrimSpace(o.Launcher))
 	if err := o.validate(); err != nil {
@@ -357,10 +234,6 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		}
 		env = mergeEnv(env, o.ArtifactPublish.Env())
 	}
-	// Index the declared checkpoint after a successful run so
-	// `tau serve deploy --from-finetune` can resolve this run by name.
-	// Wrapped before the metrics offloader so the index exists by the time
-	// the offloader reports terminal status.
 	if strings.TrimSpace(o.CheckpointArtifact) != "" {
 		if !storagePlan.HasWritableDurableData {
 			return nil, fmt.Errorf("storage.checkpoint requires writable durable PVC storage to write the artifact index")
@@ -521,15 +394,6 @@ func resolveImage(p profile.Profile, o Options) (string, error) {
 	return "", fmt.Errorf("no image: profile %q declares no runtime image and --image was not set", p.Name)
 }
 
-// RequirePythonEntrypoint rejects an entrypoint torchrun cannot execute.
-// torchrun spawns Python interpreters, so the rendered command decodes the
-// entrypoint to a .py file and passes it to `python3 -m torch.distributed.run`.
-// A shell script there reaches CPython and dies with a SyntaxError once the pod
-// is already running. The default launcher has no such constraint: it execs the
-// decoded script, so the shebang picks the interpreter.
-//
-// An empty path is left alone: torchrun with no entrypoint at all is a missing
-// field, which the caller reports by name.
 func RequirePythonEntrypoint(scriptPath string) error {
 	scriptPath = strings.TrimSpace(scriptPath)
 	if scriptPath == "" || strings.HasSuffix(scriptPath, ".py") {
@@ -538,9 +402,6 @@ func RequirePythonEntrypoint(scriptPath string) error {
 	return fmt.Errorf("run.entrypoint %q must be a .py file with execution.launcher: torchrun, which runs it under python3; point it at a Python entrypoint or drop the launcher", scriptPath)
 }
 
-// resolveCommand returns the container command + extra env vars.
-// Precedence: Options.Command > Options.Source+ScriptPath > Options.ScriptPath
-// > nil (image's own ENTRYPOINT/CMD takes over).
 func resolveCommand(o Options) ([]string, map[string]string, error) {
 	if len(o.Command) > 0 {
 		if o.Launcher == "torchrun" {
@@ -619,7 +480,7 @@ func resolveCommand(o Options) ([]string, map[string]string, error) {
 	if o.Launcher == "torchrun" {
 		return nil, nil, fmt.Errorf("--launcher=torchrun requires --script (no script or command was provided)")
 	}
-	return nil, nil, nil // let the image's ENTRYPOINT/CMD run
+	return nil, nil, nil
 }
 
 func resolveSourceCommand(o Options) ([]string, map[string]string, error) {
@@ -731,10 +592,6 @@ func isPythonShebang(shebang string) bool {
 	return command == "python" || command == "python3" || strings.HasPrefix(command, "python3.")
 }
 
-// buildJob constructs the Job manifest as a typed map[string]any tree.
-// We deliberately avoid k8s.io/api/batch/v1 to keep the binary small —
-// shelling out to kubectl with rendered YAML is the contract; we don't
-// need typed objects for V0.
 func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv map[string]string, topologyPlan topology.Plan, storagePlan storagePlan, gpu profile.GPUContract) (map[string]any, error) {
 	if err := topology.ValidateGPUClassNodeSelector(topologyPlan.Labels[workloadmeta.LabelGPUClass], o.NodeSelector); err != nil {
 		return nil, err
@@ -765,15 +622,12 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	labels[topology.QueueLabel] = queueName
 	labels[workloadmeta.LabelManagedBy] = workloadmeta.ManagedByValue
 
-	// Pod spec scaffolding.
 	pod := map[string]any{
 		"restartPolicy": "Never",
 	}
 	if o.ServiceAccountName != "" {
 		pod["serviceAccountName"] = o.ServiceAccountName
 	}
-	// Grace period: default 600s for checkpoint flush on SIGTERM; the CLI
-	// option overrides the default.
 	grace := int64(600)
 	if o.TerminationGracePeriodSeconds > 0 {
 		grace = o.TerminationGracePeriodSeconds
@@ -819,7 +673,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		}
 		pod["nodeSelector"] = selector
 	}
-	// Container spec.
 	container := map[string]any{
 		"name":  "main",
 		"image": image,
@@ -863,7 +716,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		container["env"] = envList
 	}
 
-	// Resources: CPU/memory requests, plus device-plugin GPUs.
 	resources := map[string]any{}
 	if p.Resources.Requests != nil {
 		resources["requests"] = p.Resources.Requests
@@ -879,9 +731,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
-	// Optional persistent storage. Run overrides can mount arbitrary PVCs;
-	// durable /data also gets hot /mnt scratch with a command preflight that
-	// falls back to /data when /mnt is unavailable.
 	if len(storagePlan.Volumes) > 0 {
 		volumes := make([]any, 0, len(storagePlan.Volumes))
 		for _, v := range storagePlan.Volumes {
@@ -917,9 +766,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		container["workingDir"] = storage.DurableRoot
 	}
 
-	// /dev/shm: PyTorch DDP uses shared memory for inter-process IPC. The
-	// default 64MB is too small for multi-GPU training; mount an emptyDir
-	// backed by memory. RDMA workloads get a larger default (32Gi).
 	if o.Launcher == "torchrun" && (o.ProcessesPerNode > 1 || o.Nodes > 1) && !hasVolume(pod, "dshm") {
 		shmSize := "16Gi"
 		if o.RDMA.Enabled {
@@ -970,7 +816,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		return nil, fmt.Errorf("unsupported runtime security mode %q", o.SecurityMode)
 	}
 
-	// Job spec.
 	podLabels := map[string]any{}
 	for k, v := range o.Labels {
 		if k != "" && v != "" {
@@ -1022,11 +867,8 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 
 	jobSpec := map[string]any{
-		// Suspended so Kueue admits it; Kueue flips suspend=false on admission.
-		"suspend":      true,
-		"backoffLimit": int64(o.Retry),
-		// Defense in depth: GC the Job + Pods 8h after finish, matching
-		// the cluster Kueue retention policy.
+		"suspend":                 true,
+		"backoffLimit":            int64(o.Retry),
 		"ttlSecondsAfterFinished": int64(28800),
 		"template": map[string]any{
 			"metadata": podMetadata,
@@ -1044,7 +886,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if p.ActiveDeadlineSeconds > 0 {
 		jobSpec["activeDeadlineSeconds"] = p.ActiveDeadlineSeconds
 	}
-	// Options override wins over profile policy.
 	if o.ActiveDeadlineSeconds > 0 {
 		jobSpec["activeDeadlineSeconds"] = o.ActiveDeadlineSeconds
 	}
@@ -1055,10 +896,6 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		"labels":    labels,
 	}
 	hasExecution := o.Launcher == "torchrun"
-	// Records the declaration so `tau run get` can tell a run that produced
-	// nothing from one whose promised artifact is missing. Written into the
-	// local map below, not o.Annotations: Options is passed by value but its
-	// map header is shared, so stamping there leaks onto the next render.
 	checkpointArtifact := strings.TrimSpace(o.CheckpointArtifact)
 	if len(o.Annotations) > 0 || len(topologyPlan.Annotations) > 0 || len(gpu.Annotations()) > 0 || hasExecution || checkpointArtifact != "" {
 		annotations := map[string]any{}
@@ -1319,12 +1156,6 @@ func buildStoragePlan(o Options) (storagePlan, error) {
 	return plan, nil
 }
 
-// gpuTolerations returns the pod tolerations for the two taints AKS GPU node
-// pools carry: the "sku=gpu" pool taint and the device plugin's
-// "nvidia.com/gpu".
-// Kueue unions a pod set's own tolerations with the admitting ResourceFlavor's
-// before filtering nodes, so injecting these lets a GPU workload schedule onto
-// a tainted pool even when the flavor omits them.
 func gpuTolerations(count int) []any {
 	if count <= 0 {
 		return nil
@@ -1442,9 +1273,6 @@ func wrapCommandWithStoragePreflight(cmd []string) []string {
 	return append([]string{"bash", "-lc", storageprobe.Script() + "\nexec \"$@\"", "tau-entrypoint"}, cmd...)
 }
 
-// validateUserEnv guards the Tau-owned TAU_ namespace. The rule lives in
-// core/runconfig so this gate and the one `tau run --config` applies at load
-// cannot drift apart.
 func validateUserEnv(env map[string]string) error {
 	for k := range env {
 		if runconfig.ReservedTauEnvKey(k) {
@@ -1466,10 +1294,6 @@ func validateUserEnvVars(vars []envspec.Var) error {
 	return nil
 }
 
-// applyProfiler wraps the rendered command with the requested profiler
-// (ncu or nsys), arranging for rank-scoped profile artifacts to land under a
-// durable output directory. The wrapper checks at runtime that the tool is
-// installed in the image and exits 127 with a clear message if it isn't.
 func applyProfiler(o Options, cmd []string, storagePlan storagePlan) (map[string]string, []string, error) {
 	if len(cmd) == 0 {
 		return nil, nil, fmt.Errorf("--profiler requires --script or --command (image-only entrypoints can't be wrapped)")
@@ -1525,11 +1349,6 @@ func profileDurationSeconds(d time.Duration) string {
 	return strconv.FormatInt(sec, 10)
 }
 
-// profileModeWrapperScript returns a shell snippet that rewrites $@ to
-// invoke the requested profiler (if installed) before exec'ing the original
-// entrypoint. It is concatenated with whatever wrapping is already on cmd
-// (storage preflight, script base64 entrypoint, etc) — those already form
-// a single argv that becomes "$@" here.
 func profileModeWrapperScript() string {
 	return `
 tau_profile_rank() {
@@ -1764,14 +1583,10 @@ func hasVolume(pod map[string]any, name string) bool {
 	return false
 }
 
-// shellQuote wraps s so it can be embedded as a single token in a bash
-// command string. POSIX-safe: single-quote everything, and escape embedded
-// single quotes via the standard '"'"' trick.
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	// Fast path: only safe chars → no quoting needed.
 	safe := true
 	for _, r := range s {
 		switch {
@@ -1792,9 +1607,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
-// renderExtraFlags builds a shell fragment from a key-value map. Keys are
-// sorted alphabetically for deterministic output. Each entry becomes
-// " --key=value" (value shell-quoted) or " --key" when value is empty.
 func renderExtraFlags(flags map[string]string) string {
 	if len(flags) == 0 {
 		return ""

@@ -20,16 +20,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// runManagedWorkflowDispatch executes the managed workflow dispatch the way
-// `tau run --config` does: typed options in, rendered output out. There is no
-// intermediate cobra command and no argv.
 func runManagedWorkflowDispatch(t *testing.T, o runDispatchOptions) (string, string, error) {
 	t.Helper()
-	// In production the namespace arrives already resolved from the connected
-	// workspace (applyWorkspaceDefaults / the workspace connection descriptor).
-	// These tests call the executor directly, so stand in for that here rather
-	// than making every case repeat it. Cases that exercise namespace
-	// resolution itself set o.namespace explicitly.
 	if strings.TrimSpace(o.namespace) == "" {
 		o.namespace = "test-workspace"
 	}
@@ -285,8 +277,6 @@ runtime:
 	}
 }
 
-// satisfiesWorkloadIdentityContract checks the labels shared by Tau renderers
-// and lifecycle consumers.
 func satisfiesWorkloadIdentityContract(resourceKind string, labels map[string]string) bool {
 	if labels[workloadmeta.LabelManagedBy] != workloadmeta.ManagedByValue ||
 		labels[workloadmeta.LabelRunID] == "" {
@@ -303,14 +293,6 @@ func satisfiesWorkloadIdentityContract(resourceKind string, labels map[string]st
 	}
 }
 
-// TestLoadExtraScriptsAcceptsWindowsDriveLetterPath verifies that an SRC
-// path containing a Windows drive-letter colon (e.g. `C:\...\foo.py`) is
-// preserved when followed by `:DEST`. The old strings.Cut split on the
-// drive-letter colon and treated the rest of the path as DEST, which broke
-// every tau-py submit on Windows because the SDK passes
-// `str(staged_user) + ":" + user_filename`. On Linux this test still exercises
-// the LastIndex split path: the spec has a single colon, so old and new code
-// behave identically.
 func TestLoadExtraScriptsAcceptsWindowsDriveLetterPath(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "user_module.py")
@@ -333,9 +315,6 @@ func TestLoadExtraScriptsAcceptsWindowsDriveLetterPath(t *testing.T) {
 	}
 }
 
-// TestSplitExtraScriptSpecLastColon directly verifies the helper splits on
-// the LAST ':' AFTER stripping any drive letter so Windows paths survive
-// in both `SRC` and `SRC:DEST` forms.
 func TestSplitExtraScriptSpecLastColon(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -348,10 +327,6 @@ func TestSplitExtraScriptSpecLastColon(t *testing.T) {
 		{"windows-drive-with-dest", `C:\Users\foo\bar.py:bar.py`, `C:\Users\foo\bar.py`, "bar.py"},
 		{"empty-spec", "", "", ""},
 	}
-	// Windows-only cases — drive-letter survival when DEST is absent and
-	// when an extended-length prefix is used. On POSIX, filepath.VolumeName
-	// returns "" and the spec gets parsed as SRC:DEST, which is the wrong
-	// expected value, so gate these.
 	if runtime.GOOS == "windows" {
 		cases = append(cases, struct {
 			name     string
@@ -577,11 +552,6 @@ runtime:
 		"kueue.x-k8s.io/queue-name: research-queue",
 		"kubernetes.azure.com/agentpool: \"a10\"",
 		"persistentVolumeClaim: { claimName: lustre-research }",
-		// The manifest's storage.data_pvc override is no longer visible as
-		// plaintext (the embedded manifest copy is base64-encoded inside
-		// the manifest payload initContainer's env, per #869 PR2). The real
-		// volume claim asserted above is the evidence the override
-		// propagated end-to-end.
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("data PVC dry-run manifest missing %q:\n%s", want, rendered)
@@ -795,9 +765,6 @@ storage:
 }
 
 func TestManagedWorkflowSubmitRejectsEvalPreset(t *testing.T) {
-	// A normal finetune (no eval.cpu_workers set → workload-kind defaults
-	// to job) using the eval-lane preset is misdispatched. Reject with a
-	// clear error pointing at the right shape (rayjob-eval).
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: eval-preset
@@ -818,11 +785,6 @@ runtime:
 	}
 }
 
-// TestManagedWorkflowSubmitRejectsTrainLaneOnEvalWorkload is the symmetric guard to
-// TestManagedWorkflowSubmitRejectsEvalPreset: a train-lane preset (or --lane override)
-// applied to a rayjob-eval workload would silently land the eval on the
-// training Kueue queue with the wrong priority class. The validator must
-// hard-fail before the manifest is rendered.
 func TestManagedWorkflowSubmitRejectsTrainLaneOnEvalWorkload(t *testing.T) {
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
@@ -1017,11 +979,6 @@ runtime:
 	}
 }
 
-// TestManagedWorkflowSubmitInfersPresetFromManifestGPUs verifies the one-line
-// gap-closer: with no --preset flag, --team supplies the team and the
-// preset is derived from the manifest's compute.gpus. The rendered Job
-// must stamp the inferred preset annotation, and stderr must surface the
-// inference message so researchers can see what was picked.
 func TestManagedWorkflowSubmitInfersPresetFromManifestGPUs(t *testing.T) {
 	t.Setenv("TAU_TEAM", "")
 	manifest := writeFinetuneManifest(t, `
@@ -1104,10 +1061,6 @@ runtime:
 	}
 }
 
-// TestManagedWorkflowSubmitInferenceFallsThroughOnNoMatch verifies that if no preset
-// matches the (team, lane, gpus) intent, the submit still proceeds via the
-// no-preset path. We don't want inference to fail-closed when researchers
-// want a custom shape outside the catalog.
 func TestManagedWorkflowSubmitInferenceFallsThroughOnNoMatch(t *testing.T) {
 	t.Setenv("TAU_TEAM", "")
 	manifest := writeFinetuneManifest(t, `
@@ -1133,8 +1086,6 @@ runtime:
 	}
 }
 
-// TestManagedWorkflowSubmitExplicitPresetSkipsInference verifies that --preset
-// disables the inference path entirely (researcher choice wins).
 func TestManagedWorkflowSubmitExplicitPresetSkipsInference(t *testing.T) {
 	t.Setenv("TAU_TEAM", "experimental")
 	manifest := writeFinetuneManifest(t, `
@@ -1242,8 +1193,6 @@ esac
 	}
 }
 
-// writeMainScript drops a stub trainer .py into a temp file and returns
-// its absolute path so tests can supply --main-script (now required).
 func writeMainScript(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "trainer.py")
@@ -1253,11 +1202,7 @@ func writeMainScript(t *testing.T) string {
 	return path
 }
 
-// --- multi-node CLI dispatch tests ---
-
 func TestManagedWorkflowSubmitMultiNodeProfileMatchesManifest(t *testing.T) {
-	// The authoritative profile and manifest agree on worker cardinality.
-	// With workers>1 and --workload-kind omitted, dispatch infers rayjob.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: mn-cli
@@ -1371,9 +1316,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitMultiNodeWithExplicitJobKindFails(t *testing.T) {
-	// Explicit --workload-kind=job + workers>1 must hard-fail with a
-	// clear error pointing at the fix (omit the flag or switch to
-	// rayjob). The Job CRD is single-pod; can't gang-admit.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: mn-bad
@@ -1400,8 +1342,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitMultiNodePresetWorkersMustMatchManifest(t *testing.T) {
-	// A 2-node preset cannot host a manifest claiming workers=4.
-	// The cross-check matches the existing gpus/shape consistency check.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: mn-mismatch
@@ -1432,8 +1372,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitMultiNodeRequiresMainScript(t *testing.T) {
-	// Multi-node without --main-script must fail at render time
-	// (Render owns the message — we just verify the path bubbles up).
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: mn-nosdk
@@ -1458,8 +1396,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitInfersRayJobEvalFromManifest(t *testing.T) {
-	// eval.cpu_workers > 0 in the manifest with --workload-kind omitted
-	// must infer rayjob-eval (not rayjob) and emit a stderr warning.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: eval-smoke
@@ -1501,9 +1437,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitCPUWorkersFlagOverridesManifest(t *testing.T) {
-	// --cpu-workers, like --workers, overrides eval.cpu_workers from the
-	// manifest. With it set and --workload-kind omitted, dispatch infers
-	// rayjob-eval.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: eval-smoke
@@ -1532,9 +1465,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitExplicitJobKindRejectsEvalManifest(t *testing.T) {
-	// eval.cpu_workers set + explicit --workload-kind=job (or rayjob)
-	// must hard-fail. The user is misdispatching — point them at the
-	// right kind.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: misdispatched
@@ -1565,9 +1495,6 @@ runtime:
 }
 
 func TestManagedWorkflowSubmitRayJobEvalRequiresCPUWorkers(t *testing.T) {
-	// Explicit --workload-kind=rayjob-eval without cpu_workers must fail
-	// — the eval template needs at least one CPU worker pod to do useful
-	// fanout work.
 	manifest := writeFinetuneManifest(t, `
 schema_version: 1
 name: empty-eval

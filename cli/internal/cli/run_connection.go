@@ -44,10 +44,6 @@ func (f *runLifecycleConnectionFlags) add(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 }
 
-// lifecycleFlagsContextExplicit is what resolve passes as contextExplicit,
-// named so a guard can assert on it without driving the real connection ensurer
-// that resolve wires in. Keeping it a function rather than inlining the call
-// means the two cannot drift.
 func lifecycleFlagsContextExplicit(cmd *cobra.Command) bool {
 	return runContextExplicit(cmd)
 }
@@ -132,9 +128,6 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 	if useWorkspace {
 		routingNamespaceExplicit = true
 		if strings.TrimSpace(routingNamespace) == "" {
-			// A named workspace is sufficient routing information even outside a
-			// repository. The value is replaced by the workspace's target after
-			// the connection and kubeconfig are resolved.
 			routingNamespace = workspaceName
 		}
 	}
@@ -358,14 +351,6 @@ func checkCatalogWorkspaceConflict(options unresolvedRunOptions, source runConne
 	)
 }
 
-// descriptorFor resolves the workspace connection descriptor that governs this
-// run, for use before the connection is activated.
-//
-// A catalog entry carries its descriptor on the source; a plain repository does
-// not, and the descriptor is only read further down inside Ensure. Both shapes
-// have to be compared against a caller-named context, so the plain case is
-// discovered here. A repository with no descriptor is the ordinary case, not an
-// error, and yields nothing to compare against.
 func descriptorFor(source runConnectionSource) *workspaceconnection.Discovery {
 	if source.Discovery != nil {
 		return source.Discovery
@@ -381,12 +366,6 @@ func descriptorFor(source runConnectionSource) *workspaceconnection.Discovery {
 	return &discovery
 }
 
-// descriptorForStartDir resolves the descriptor governing the current working
-// directory, for callers that have no runConnectionSource to hand.
-//
-// The lifecycle verbs decide before building one, and an unreadable or absent
-// descriptor is the ordinary case rather than an error: it simply leaves
-// nothing to compare a caller-named context against.
 func descriptorForStartDir() *workspaceconnection.Discovery {
 	startDir, err := os.Getwd()
 	if err != nil {
@@ -471,12 +450,6 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	if contextExplicit && kubeContext != "" {
-		// The lifecycle verbs return here without activating a connection, so
-		// this is the only place they can notice that the caller's context
-		// disagrees with the repository's descriptor. Skipping it made a
-		// forgotten TAU_CONTEXT silently read state from a different cluster
-		// than `tau run` would submit to, and refusing the submit while quietly
-		// answering the status query is worse than either alone.
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorForStartDir()); err != nil {
 			return "", "", nil, err
 		}
@@ -533,8 +506,6 @@ func resolveRunLifecycleConnectionFromSource(
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	if contextExplicit && kubeContext != "" {
-		// Same early return as the caller above, reached when the source was
-		// already built; compare against its descriptor for the same reason.
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorFor(source)); err != nil {
 			return "", "", nil, err
 		}
@@ -579,16 +550,6 @@ func resolveRunLifecycleConnectionFromSource(
 	return connection.ContextName, resolvedNamespace, restore, nil
 }
 
-// resolveWorkspaceControlPlaneConnection gives the `tau workspace` read verbs
-// the same descriptor-first cluster resolution the `tau run` lifecycle verbs
-// already have. Without it they silently query whatever kubectl's ambient
-// current-context happens to be, which reports a repository's workspace as
-// missing when the descriptor points somewhere else entirely.
-//
-// Unlike the run and data verbs it deliberately keeps the caller's namespace:
-// TauWorkspace and TauQuotaRequest live in the system namespace, not in the
-// workspace's workload namespace, so only the cluster context is taken from the
-// descriptor.
 func resolveWorkspaceControlPlaneConnection(
 	cmd *cobra.Command,
 	kubeContext, namespace string,
@@ -621,10 +582,6 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 	return resolvedContext, restore, nil
 }
 
-// resolveWorkloadDataConnection gives the registry-reading `tau data` verbs the
-// same workspace-first namespace resolution as the `tau run` lifecycle verbs.
-// They read files off the workload PVC, so they must look in the namespace the
-// workspace actually submits into rather than assume one.
 func resolveWorkloadDataConnection(cmd *cobra.Command, kubeContext, namespace string) (string, string, func(), error) {
 	return resolveRunLifecycleConnection(
 		cmd,

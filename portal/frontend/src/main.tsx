@@ -10,6 +10,5 @@ import './styles.css';
 
 const client = createPortalQueryClient();
 createRoot(document.getElementById('root')!).render(
-  // URL-backed controls must commit before another control edits the same search parameters.
   <StrictMode><QueryClientProvider client={client}><BrowserRouter useTransitions={false}><App/></BrowserRouter></QueryClientProvider></StrictMode>,
 );

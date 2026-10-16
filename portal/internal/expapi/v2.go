@@ -173,8 +173,6 @@ type v2ExperimentCatalogResult struct {
 	ServedSources []string
 }
 
-// stableFunctionCatalogSource sends Kusto discovery through
-// TauExpSeriesCatalogRows()/TauExpRunCatalogRows().
 type stableFunctionCatalogSource struct {
 	server *Server
 }
@@ -906,14 +904,10 @@ func (s *Server) writeV2Error(w http.ResponseWriter, status int, code, message s
 	WriteV2Error(w, status, code, message)
 }
 
-// IsCanonicalV2Read reports whether path is one of the narrow, workspace-safe
-// v2 reads. Portal uses it to retain the typed error contract at its auth
-// boundary before a request reaches this server.
 func IsCanonicalV2Read(path string) bool {
 	return workspaceScopedV2Route(path)
 }
 
-// WriteV2Error writes the canonical v2 typed error envelope.
 func WriteV2Error(w http.ResponseWriter, status int, code, message string) {
 	classification := "client"
 	retryable := false

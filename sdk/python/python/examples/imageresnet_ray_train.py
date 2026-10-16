@@ -26,11 +26,9 @@ from ray.train import torch as ray_train_torch
 from ray.train.torch import TorchTrainer
 from tau import stellar
 
-
 NUM_CLASSES = int(os.environ.get("IMAGERESNET_CLASSES", "10"))
 IMAGE_SIZE = int(os.environ.get("IMAGERESNET_IMAGE_SIZE", "64"))
 ARTIFACT_CLASSES = min(NUM_CLASSES, int(os.environ.get("IMAGERESNET_ARTIFACT_CLASSES", "10")))
-
 
 class BasicBlock(nn.Module):
     def __init__(self, channels: int) -> None:
@@ -46,7 +44,6 @@ class BasicBlock(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.relu(x + self.net(x))
-
 
 class TinyResNet(nn.Module):
     def __init__(self, num_classes: int) -> None:
@@ -66,13 +63,11 @@ class TinyResNet(nn.Module):
         x = self.pool(x).flatten(1)
         return self.head(x)
 
-
 def env_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "")
     if raw == "":
         return default
     return int(raw)
-
 
 def make_batch(step: int, batch_size: int, device: torch.device, rank: int) -> tuple[torch.Tensor, torch.Tensor]:
     generator = torch.Generator(device="cpu").manual_seed(17_000 + rank * 997 + step)
@@ -83,18 +78,15 @@ def make_batch(step: int, batch_size: int, device: torch.device, rank: int) -> t
     images[:, 0:1, :, :] = (images[:, 0:1, :, :] * 0.35) + (class_signal * 0.65)
     return images.to(device), labels.to(device)
 
-
 def write_json(path: Path, value: Any) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return time.time_ns()
 
-
 def write_text(path: Path, value: str) -> int:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value, encoding="utf-8")
     return time.time_ns()
-
 
 def write_png(path: Path, tensor: torch.Tensor, title: str | None = None) -> int:
     import matplotlib
@@ -114,7 +106,6 @@ def write_png(path: Path, tensor: torch.Tensor, title: str | None = None) -> int
     plt.close()
     return time.time_ns()
 
-
 def write_confusion_matrix(path: Path, matrix: torch.Tensor) -> int:
     import matplotlib
 
@@ -132,7 +123,6 @@ def write_confusion_matrix(path: Path, matrix: torch.Tensor) -> int:
     plt.savefig(path)
     plt.close()
     return time.time_ns()
-
 
 def train_loop(config: dict[str, Any]) -> None:
     run_id = config["run_id"]
@@ -273,7 +263,6 @@ def train_loop(config: dict[str, Any]) -> None:
         f"artifact_root={artifact_root} checkpoint={checkpoint_path}"
     )
 
-
 def main() -> None:
     run_id = os.environ.get("IMAGERESNET_RUN_ID", f"imageresnet-{int(time.time())}")
     data_root = Path(os.environ.get("IMAGERESNET_DATA_ROOT", "/data"))
@@ -302,7 +291,6 @@ def main() -> None:
         run_config=RunConfig(name=run_id, storage_path=os.environ.get("RAY_AIR_STORAGE_PATH", str(data_root / "ray-results"))),
     )
     trainer.fit()
-
 
 if __name__ == "__main__":
     main()

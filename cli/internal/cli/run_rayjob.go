@@ -26,16 +26,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// runRayJobRequest is the typed RayJob dispatch for `tau run`.
-//
-// The script stays a normal Ray program: it imports ray.train, configures a
-// TorchTrainer/ScalingConfig, and calls fit(). Tau owns only the cluster
-// contract — RayJob rendering, TauCluster profile selection, storage, status
-// handoff, and kubectl submission.
-// maxProjectArchiveInputBytes bounds what run.working_dir may sweep up before
-// compression. The archive is embedded in the workload spec, so an accidental
-// dataset directory must fail fast with a readable message rather than
-// producing a spec the API server will reject.
 const maxProjectArchiveInputBytes = 8 << 20
 
 type runRayJobRequest struct {
@@ -96,9 +86,6 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 
 	gpuResourceMode := o.gpuResourceMode
 	if o.migProfile != "" && gpuResourceMode != "mig" {
-		// compute.mig_profile implies MIG mode. Force it even when another
-		// mode was requested so the renderer never silently emits
-		// nvidia.com/gpu for a MIG request.
 		gpuResourceMode = "mig"
 	}
 	normalizedGPUResourceMode, err := manifest.NormalizeGPUResourceMode(gpuResourceMode)
@@ -137,10 +124,6 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	allowImplicitAuto := false
 	resolveWarnings, err := resolveAccessibleQueueNamespace(ctx, runner, namespaceExplicit, &namespace, &topologyHolder, o.dryRun, "rayjobs.ray.io", allowImplicitAuto)
 	if err == nil && o.dryRun == "client" && strings.TrimSpace(namespace) == "" {
-		// Namespace resolution needs a live cluster, so an offline client
-		// dry-run cannot have one. Substitute a self-describing placeholder
-		// rather than failing: the render is the whole point of the command,
-		// and the value is visibly not the one the submit path resolves.
 		namespace = clientDryRunNamespacePlaceholder
 		warnings = append(warnings, clientDryRunPlaceholderWarning("namespace"))
 	}
@@ -334,9 +317,6 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	return nil
 }
 
-// rayTrainConfigForRender passes execution.configs straight through. The
-// argv path used to JSON-encode it and re-parse it on the other side; the
-// typed path keeps the map.
 func rayTrainConfigForRender(o resolvedRunRayJobOptions) map[string]any {
 	if o.tuneParamSpace != "" || len(o.configs) == 0 {
 		return nil
@@ -344,11 +324,6 @@ func rayTrainConfigForRender(o resolvedRunRayJobOptions) map[string]any {
 	return o.configs
 }
 
-// buildProjectArchive packages run.working_dir for Ray's runtime_env when the
-// config asks for it, returning the archive bytes and the entrypoint path
-// relative to the project root. With no working_dir configured it returns nil
-// and the plain entrypoint base name, which is the pre-existing single-file
-// behaviour.
 func buildProjectArchive(o unresolvedRunOptions) ([]byte, string, error) {
 	return buildResolvedProjectArchive(resolveRunRayJobOptions(o))
 }
@@ -385,8 +360,6 @@ func buildResolvedProjectArchive(o resolvedRunRayJobOptions) ([]byte, string, er
 		}
 		return nil, "", fmt.Errorf("run.working_dir: %w", err)
 	}
-	// Check the packaged size here rather than letting the renderer reject it,
-	// so the error can name the files actually responsible.
 	if len(archive) > rayjobrender.MaxProjectArchiveBytes {
 		return nil, "", fmt.Errorf(
 			"run.working_dir %s packages to %d bytes, which exceeds the limit of %d bytes (%d KiB).\n"+

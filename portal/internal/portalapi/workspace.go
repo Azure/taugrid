@@ -40,73 +40,54 @@ var (
 	errWorkspaceNotFound     = errors.New("workspace not found")
 )
 
-// Viewer is the authenticated identity projected by a trusted Entra-aware
-// reverse proxy. The Portal never accepts workspace authorization from query
-// parameters or browser-managed state.
 type Viewer struct {
 	ID     string
 	Groups []string
 }
 
-// IdentityOptions names the trusted headers populated by the deployment's
-// Entra-aware authentication proxy.
 type IdentityOptions struct {
 	UserHeader   string
 	GroupsHeader string
 }
 
-// WorkspaceDirectory returns only scopes authorized for the supplied viewer.
-// Implementations own the mapping from authenticated principals to workspaces.
 type WorkspaceDirectory interface {
 	List(ctx context.Context, viewer Viewer) []WorkspaceScope
 	Resolve(ctx context.Context, viewer Viewer, workspaceID string) (WorkspaceScope, error)
 }
 
-// WorkspaceDirectoryConfig is the metadata-only on-disk Portal registry.
 type WorkspaceDirectoryConfig struct {
 	LocalCluster string                    `json:"localCluster"`
 	Endpoints    []WorkspacePortalEndpoint `json:"endpoints,omitempty"`
 	Workspaces   []WorkspaceRecord         `json:"workspaces"`
 }
 
-// WorkspacePortalEndpoint registers the Portal serving one cluster. Remote
-// endpoints must be HTTPS and carry no query or fragment.
 type WorkspacePortalEndpoint struct {
 	Cluster      string `json:"cluster"`
 	Endpoint     string `json:"endpoint,omitempty"`
 	Availability string `json:"availability,omitempty"`
 }
 
-// WorkspaceRecord maps a globally unique Portal workspace ID to one immutable
-// cluster/namespace/queue/result scope and an explicit visibility policy.
 type WorkspaceRecord struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Cluster     string `json:"cluster"`
-	Team        string `json:"team,omitempty"`
-	Namespace   string `json:"namespace"`
-	LocalQueue  string `json:"localQueue,omitempty"`
-	ResultScope string `json:"resultScope,omitempty"`
-	Source      string `json:"source"`
-	// ExperimentsURL selects the mounted /stellar surface or an independently
-	// authenticated HTTPS deployment. It is navigation configuration, not an
-	// authorization grant or a cross-origin iframe/CORS configuration. Remote
-	// deployments must enforce their own viewer and fixed-workspace boundary.
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name,omitempty"`
+	Cluster            string                 `json:"cluster"`
+	Team               string                 `json:"team,omitempty"`
+	Namespace          string                 `json:"namespace"`
+	LocalQueue         string                 `json:"localQueue,omitempty"`
+	ResultScope        string                 `json:"resultScope,omitempty"`
+	Source             string                 `json:"source"`
 	ExperimentsURL     string                 `json:"experimentsUrl,omitempty"`
 	ExperimentsBackend *ExperimentsBackend    `json:"experimentsBackend,omitempty"`
 	Default            bool                   `json:"default,omitempty"`
 	Authorization      WorkspaceAuthorization `json:"authorization"`
 }
 
-// WorkspaceAuthorization is an explicit Portal visibility policy. It mirrors
-// TauWorkspace's authorization mode vocabulary without changing its semantics.
 type WorkspaceAuthorization struct {
 	Mode   string   `json:"mode"`
 	Users  []string `json:"users,omitempty"`
 	Groups []string `json:"groups,omitempty"`
 }
 
-// WorkspaceScope is the server-resolved scope attached to every Portal board.
 type WorkspaceScope struct {
 	WorkspaceID        string `json:"workspace"`
 	Name               string `json:"name"`
@@ -137,7 +118,6 @@ type workspaceDirectoryResponse struct {
 	Managed    bool             `json:"managed"`
 }
 
-// LoadWorkspaceDirectory loads and validates a metadata-only JSON directory.
 func LoadWorkspaceDirectory(path string) (WorkspaceDirectory, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -152,8 +132,6 @@ func LoadWorkspaceDirectory(path string) (WorkspaceDirectory, error) {
 	return NewWorkspaceDirectory(cfg)
 }
 
-// NewWorkspaceDirectory validates cfg and returns an authorization-filtering
-// in-memory directory.
 func NewWorkspaceDirectory(cfg WorkspaceDirectoryConfig) (WorkspaceDirectory, error) {
 	cfg.LocalCluster = strings.TrimSpace(cfg.LocalCluster)
 	if cfg.LocalCluster == "" {
@@ -411,7 +389,6 @@ func validateExperimentsURL(raw string, local bool) error {
 }
 
 func isSafeLocalAbsolutePath(raw string) bool {
-	// Keep both unsafe prefixes explicit so CodeQL recognizes the redirect guard.
 	return strings.HasPrefix(raw, "/") &&
 		!strings.HasPrefix(raw, "//") &&
 		!strings.HasPrefix(raw, `/\`) &&
@@ -755,9 +732,6 @@ func workspaceScopedRequest(r *http.Request, defaults url.Values, workspaceID, s
 func workspaceExperimentRedirectURL(target *url.URL, r *http.Request, workspaceID, source string) string {
 	redirect := *target
 	if r.URL.Path != "/stellar" && r.URL.Path != "/stellar/" {
-		// A deployment may expose Stellar under a reverse-proxy base path.
-		// Keep its sibling API and asset routes under that same prefix, rather
-		// than sending them to an unrelated handler at the destination root.
 		base := strings.TrimRight(target.Path, "/")
 		if strings.HasSuffix(base, "/stellar") {
 			base = strings.TrimSuffix(base, "/stellar")
@@ -781,7 +755,6 @@ func workspaceQuery(defaults, request url.Values, workspaceID, source string) ur
 	for key, values := range request {
 		out[key] = append([]string(nil), values...)
 	}
-	// Native viewers must never opt into backend configuration diagnostics.
 	out.Del("debug")
 	out.Set("workspace", workspaceID)
 	if strings.Contains(strings.ToLower(source), "kusto") {

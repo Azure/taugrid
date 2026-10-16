@@ -3,8 +3,6 @@
 
 package cli
 
-// Keep existing behavioral tests focused on input construction while the
-// production name makes the pre-resolution lifetime explicit.
 type runDispatchOptions = unresolvedRunOptions
 
 func resolvedJobRequestForTest(target resolvedRunTarget) *runJobRequest {

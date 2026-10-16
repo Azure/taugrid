@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package topology turns Tau's researcher-facing workload contract into
-// Kueue-facing queue, priority, and topology metadata.
 package topology
 
 import (
@@ -43,33 +41,25 @@ const (
 	NodeLabelGPUClass           = workloadmeta.NodeLabelGPUClass
 	AKSNodePoolModeLabel        = "kubernetes.azure.com/mode"
 	AKSSystemNodePoolMode       = "system"
-	// GPUClassAny is explicit unconstrained hardware selection: it renders no
-	// class selector and lets Kueue admit against any available GPU flavor.
-	GPUClassAny = "any"
-	// GPU classes are canonical, hardware-only values. They name model and
-	// usable device memory; interconnect and placement belong solely to
-	// Topology.Placement. Each value is also the exact
-	// tau.azure.com/gpu-class node-label/ResourceFlavor contract.
-	GPUClassA104GB          = "a10-4gb"
-	GPUClassA108GB          = "a10-8gb"
-	GPUClassA1012GB         = "a10-12gb"
-	GPUClassA1024GB         = "a10-24gb"
-	GPUClassA10040GB        = "a100-40gb"
-	GPUClassA10080GB        = "a100-80gb"
-	GPUClassH10080GB        = "h100-80gb"
-	GPUClassH10095GB        = "h100-95gb"
-	GPUClassH200141GB       = "h200-141gb"
-	GPUClassGB200192GB      = "gb200-192gb"
-	GPUClassGB300288GB      = "gb300-288gb"
-	LabelTeam               = workloadmeta.LabelTeam
-	LabelLane               = workloadmeta.LabelLane
-	LabelGPUClass           = workloadmeta.LabelGPUClass
-	LabelShape              = workloadmeta.LabelShape
-	AnnotationTopologyQueue = workloadmeta.AnnotationTopologyQueue
+	GPUClassAny                 = "any"
+	GPUClassA104GB              = "a10-4gb"
+	GPUClassA108GB              = "a10-8gb"
+	GPUClassA1012GB             = "a10-12gb"
+	GPUClassA1024GB             = "a10-24gb"
+	GPUClassA10040GB            = "a100-40gb"
+	GPUClassA10080GB            = "a100-80gb"
+	GPUClassH10080GB            = "h100-80gb"
+	GPUClassH10095GB            = "h100-95gb"
+	GPUClassH200141GB           = "h200-141gb"
+	GPUClassGB200192GB          = "gb200-192gb"
+	GPUClassGB300288GB          = "gb300-288gb"
+	LabelTeam                   = workloadmeta.LabelTeam
+	LabelLane                   = workloadmeta.LabelLane
+	LabelGPUClass               = workloadmeta.LabelGPUClass
+	LabelShape                  = workloadmeta.LabelShape
+	AnnotationTopologyQueue     = workloadmeta.AnnotationTopologyQueue
 )
 
-// SystemNodeAffinity requires AKS control pods to use the system pool while
-// preserving portability to clusters whose nodes do not carry the AKS label.
 func SystemNodeAffinity() map[string]any {
 	return map[string]any{
 		"nodeAffinity": map[string]any{
@@ -98,8 +88,6 @@ func SystemNodeAffinity() map[string]any {
 	}
 }
 
-// WithoutKueueTopologyAnnotations copies annotations while removing pod-set
-// topology requests that apply to execution workers but not control-plane pods.
 func WithoutKueueTopologyAnnotations(annotations map[string]string) map[string]string {
 	out := make(map[string]string, len(annotations))
 	for key, value := range annotations {
@@ -130,13 +118,10 @@ var supportedGPUClasses = []string{
 	GPUClassGB300288GB,
 }
 
-// SupportedGPUClasses returns the canonical researcher-facing GPU classes.
 func SupportedGPUClasses() []string {
 	return append([]string(nil), supportedGPUClasses...)
 }
 
-// NormalizeGPUClass normalizes researcher-supplied gpu_class spelling before
-// callers validate it against SupportedGPUClasses.
 func NormalizeGPUClass(v string) string {
 	return normalizeLabelValue(v)
 }
@@ -166,8 +151,6 @@ func ValidateGPUClassNodeSelector(gpuClass string, selector map[string]string) e
 	return nil
 }
 
-// ResolveGPUClass returns the effective canonical gpu_class after applying an
-// explicit override to a profile's topology contract.
 func ResolveGPUClass(p profile.Profile, override string) string {
 	gpuClass := p.Topology.GPUClass
 	if override != "" {
@@ -176,38 +159,22 @@ func ResolveGPUClass(p profile.Profile, override string) string {
 	return NormalizeGPUClass(gpuClass)
 }
 
-// Options are caller-provided overrides. They are intentionally strings so the
-// CLI can pass flags through directly; Build normalizes and validates them.
 type Options struct {
-	Team            string
-	Lane            string
-	Mode            string
-	Placement       string
-	Shape           string
-	GPUClass        string
-	CheckpointEvery string
-	QueueName       string
-	// WorkloadPriorityClassName controls Kueue admission ordering.
-	WorkloadPriorityClassName string
-	// PodPriorityClassName controls Kubernetes scheduler priority/preemption.
-	PodPriorityClassName string
-	// PriorityTier is a user-facing shorthand for Tau-managed priority classes.
-	// Supported values are "default" and "priority".
-	PriorityTier string
-	// DisableKueueTopologyAnnotations keeps Tau's topology labels/explainability
-	// while omitting Kueue TAS podset annotations. Use this when the selected
-	// ResourceFlavor does not define spec.topologyName; Kueue rejects podset
-	// topology requests for flavors without a topology.
+	Team                            string
+	Lane                            string
+	Mode                            string
+	Placement                       string
+	Shape                           string
+	GPUClass                        string
+	CheckpointEvery                 string
+	QueueName                       string
+	WorkloadPriorityClassName       string
+	PodPriorityClassName            string
+	PriorityTier                    string
 	DisableKueueTopologyAnnotations bool
-	// DisableDefaultPriorities omits TauGrid default priority classes unless the
-	// caller/preset supplied explicit priority names.
-	DisableDefaultPriorities bool
+	DisableDefaultPriorities        bool
 }
 
-// WithNetworkDomainRequirement makes a network fabric the broadest placement
-// allowed for a workload. Explicit host or accelerator-domain placement is
-// preserved because those domains are narrower than a network domain. The TAS
-// annotation cannot be disabled for a workload that requires a network domain.
 func WithNetworkDomainRequirement(p profile.Profile, o Options) Options {
 	placement := o.Placement
 	if strings.TrimSpace(placement) == "" {
@@ -224,7 +191,6 @@ func WithNetworkDomainRequirement(p profile.Profile, o Options) Options {
 	return o
 }
 
-// Plan is the topology-aware scheduling decoration Render should apply.
 type Plan struct {
 	Labels               map[string]string
 	Annotations          map[string]string
@@ -233,9 +199,6 @@ type Plan struct {
 	PodPriorityClassName string
 }
 
-// Build returns the Tau/Kueue metadata implied by a profile's Topology
-// and any caller overrides. Profiles without topology intent and calls without
-// topology flags produce an empty Plan.
 func Build(p profile.Profile, o Options) (Plan, error) {
 	if p.Topology == (profile.Topology{}) && p.Lane == "" && !o.hasValues() {
 		return Plan{}, nil

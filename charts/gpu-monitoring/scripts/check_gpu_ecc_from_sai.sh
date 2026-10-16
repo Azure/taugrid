@@ -2,12 +2,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2
 
-# Thresholds
 THRESH_DRAM_UCE=4
 THRESH_SRAM_PARITY_UCE=4
 THRESH_SRAM_SECDED_UCE=2
@@ -23,7 +21,6 @@ fi
 bad_gpus=0
 bad_gpu_lines=()
 
-# Internal state
 gpu_serial=""
 gpu_uuid=""
 dram_uce=""

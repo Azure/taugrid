@@ -161,8 +161,6 @@ run_publish() {
   )
 }
 
-# Existing versions skip before archive validation, login, package comparison,
-# or any registry write.
 : >"$COMMAND_LOG"
 existing_output=$(run_publish)
 for chart in tau-core-controller gpu-monitoring taugrid-core adx-mon taugrid; do
@@ -175,8 +173,6 @@ assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
 assert_log_excludes "helm pull"
 
-# Only a version absent from the registry is pushed and verified. Other charts
-# do not need package archives because they are skipped first.
 : >"$COMMAND_LOG"
 touch "${PACKAGE_DIR}/taugrid-0.3.0.tgz"
 export FAKE_UNPUBLISHED_CHART=taugrid
@@ -193,8 +189,6 @@ assert_log_contains \
 assert_log_contains \
   "helm pull oci://testacr.azurecr.io/public/aks/ai-runtime/helm/taugrid --version 0.3.0"
 
-# Registry lookup failures remain fatal instead of being mistaken for a
-# missing version and triggering a write.
 : >"$COMMAND_LOG"
 export FAKE_ERROR_CHART=tau-core-controller
 if lookup_error_output=$(run_publish 2>&1); then
@@ -205,7 +199,6 @@ assert_output_contains "$lookup_error_output" "authorization failed"
 assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
 
-# A genuinely unpublished version still requires the matching package.
 : >"$COMMAND_LOG"
 rm -f "${PACKAGE_DIR}/taugrid-0.3.0.tgz"
 export FAKE_UNPUBLISHED_CHART=taugrid

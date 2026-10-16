@@ -16,14 +16,6 @@
 {{- if not $recorder.targetNamespace -}}
 {{- fail "lifecycleRecorder.targetNamespace is required when lifecycleRecorder.enabled=true" -}}
 {{- end -}}
-{{- /*
-This chart does not create targetNamespace, even though the recorder's Role and
-RoleBinding render into it: it is the observed workload namespace, owned by
-tau-core-controller (from TauWorkspace) or by platform-managed queue policy. Creating
-it here would make this chart a second claimant on a namespace it does not own.
-Refusing early names the value and the owner, instead of surfacing later as
-`namespaces "<name>" not found` on the Role.
-*/ -}}
 {{- if and (include "taugrid-core.apiReachable" .) (not (lookup "v1" "Namespace" "" $recorder.targetNamespace)) -}}
 {{- fail (printf "lifecycleRecorder.targetNamespace %q does not exist. This chart does not create it: it is the workload namespace owned by tau-core-controller (via TauWorkspace) or platform-managed queue policy. Create it before installing, or point lifecycleRecorder.targetNamespace at an existing workload namespace." $recorder.targetNamespace) -}}
 {{- end -}}
@@ -79,10 +71,6 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]
-  # Pods carry the only record of why a batch Job failed. The Job's own
-  # condition says just "BackoffLimitExceeded", and the pods are deleted with
-  # the Job on ttlSecondsAfterFinished expiry, so the recorder must read them
-  # to persist a usable failure summary before that happens.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "watch"]

@@ -13,9 +13,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-
 _RESERVED_MODULE_NAMES = frozenset({"tau", "config", "workloads"})
-
 
 def load_staged_module(script_path: str | Path, *, module_name: str | None = None) -> ModuleType:
     """Import a Python script by path while temporarily enabling sibling imports.
@@ -52,7 +50,6 @@ def load_staged_module(script_path: str | Path, *, module_name: str | None = Non
         sys.path[:] = original_sys_path
     return module
 
-
 def load_staged_function(
     script_path: str | Path,
     function_name: str,
@@ -72,7 +69,6 @@ def load_staged_function(
         raise TypeError(f"tau staged module {Path(script_path)} attribute {function_name!r} is not callable")
     return fn
 
-
 def call_staged_function(
     script_path: str | Path,
     function_name: str,
@@ -85,7 +81,6 @@ def call_staged_function(
     fn = load_staged_function(script_path, function_name, module_name=module_name)
     return fn(*args, **kwargs)
 
-
 def _module_name_for_path(path: Path) -> str:
     stem = path.stem
     if not stem.isidentifier():
@@ -93,12 +88,10 @@ def _module_name_for_path(path: Path) -> str:
     digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:12]
     return f"_tau_staged_{stem}_{digest}"
 
-
 def _validate_module_name(name: str, path: Path) -> None:
     if not name.isidentifier():
         raise ValueError(f"staged module name must be a Python identifier for {path}: {name!r}")
     if name in _RESERVED_MODULE_NAMES:
         raise ValueError(f"staged module name {name!r} is reserved by Tau")
-
 
 __all__ = ["call_staged_function", "load_staged_function", "load_staged_module"]

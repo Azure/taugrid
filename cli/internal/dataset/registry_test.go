@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// memBackend is an in-memory Backend for unit tests.
 type memBackend struct {
 	files map[string][]byte
 }
@@ -73,7 +72,6 @@ func (m *memBackend) Delete(_ context.Context, path string) error {
 	return nil
 }
 
-// testPaths mirrors the storage.DatasetRegistry* layout without importing it.
 func testPaths() Paths {
 	root := "/data/dataset-registry/datasets"
 	return Paths{
@@ -193,12 +191,10 @@ func TestRegistryCompatibilityFixturesParse(t *testing.T) {
 func TestDigestDeterministicOrderIndependent(t *testing.T) {
 	a := validPretrain()
 	b := validPretrain()
-	// Reverse file order in b; digest must be identical.
 	b.Files[0], b.Files[1] = b.Files[1], b.Files[0]
 	if a.ComputeDigest() != b.ComputeDigest() {
 		t.Fatalf("digest is order-dependent: %s != %s", a.ComputeDigest(), b.ComputeDigest())
 	}
-	// Changing a file hash must change the digest.
 	c := validPretrain()
 	c.Files[0].SHA256 = shaB
 	if c.ComputeDigest() == a.ComputeDigest() {
@@ -208,13 +204,13 @@ func TestDigestDeterministicOrderIndependent(t *testing.T) {
 
 func TestValidatePurposeExclusivity(t *testing.T) {
 	rec := validPretrain()
-	rec.Eval = &Eval{Task: "x"} // two purpose sections now present
+	rec.Eval = &Eval{Task: "x"}
 	if err := rec.Validate(); err == nil {
 		t.Fatal("expected validation to reject two purpose sections")
 	}
 
 	rec = validPretrain()
-	rec.Purpose = PurposeRL // section is pretrain, mismatch
+	rec.Purpose = PurposeRL
 	if err := rec.Validate(); err == nil {
 		t.Fatal("expected validation to reject purpose/section mismatch")
 	}
@@ -222,14 +218,13 @@ func TestValidatePurposeExclusivity(t *testing.T) {
 
 func TestValidateTokenAccounting(t *testing.T) {
 	rec := validPretrain()
-	rec.Files[0].TokenCount = 99 // not bytes/2
+	rec.Files[0].TokenCount = 99
 	rec.Digest = rec.ComputeDigest()
 	rec.Pretrain.TotalTokens = 0
 	if err := rec.Validate(); err == nil {
 		t.Fatal("expected verified uint16 token_count!=bytes/2 to fail")
 	}
 
-	// manifest-supplied relaxes the bytes/2 requirement.
 	rec = validPretrain()
 	rec.Assurance = AssuranceManifestSupplied
 	rec.Files[0].TokenCount = 99
@@ -338,15 +333,12 @@ func TestAliasCompareAndSwap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// First set requires absence.
 	if _, err := reg.SetAlias(ctx, "fineweb-sample-10bt", "latest", "v1", SetAliasOptions{ExpectAbsent: true}); err != nil {
 		t.Fatalf("initial alias set: %v", err)
 	}
-	// Wrong expectation aborts.
 	if _, err := reg.SetAlias(ctx, "fineweb-sample-10bt", "latest", "v2", SetAliasOptions{Expect: "v2"}); err == nil {
 		t.Fatal("expected CAS abort when current!=expect")
 	}
-	// Correct expectation succeeds.
 	if _, err := reg.SetAlias(ctx, "fineweb-sample-10bt", "latest", "v2", SetAliasOptions{Expect: "v1"}); err != nil {
 		t.Fatalf("CAS move v1->v2: %v", err)
 	}
@@ -378,7 +370,6 @@ func TestResolveAliasToVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Bare name -> default alias.
 	if _, err := reg.SetAlias(ctx, "fineweb-sample-10bt", DefaultAlias, "v1", SetAliasOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +401,6 @@ func TestRemoveBlockedByAlias(t *testing.T) {
 	if err := reg.Remove(ctx, "fineweb-sample-10bt", "v1"); err == nil {
 		t.Fatal("expected remove to be blocked by alias")
 	}
-	// Move the alias to a different version, then removal should proceed.
 	v2 := validPretrain()
 	v2.Version = "v2"
 	if _, err := reg.Register(ctx, v2); err != nil {

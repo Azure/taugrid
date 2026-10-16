@@ -42,7 +42,6 @@ EXPLICIT_TOPICS = 2
 
 STELLAR_DIR = "/tmp/tau_stellar_demo"
 
-
 class DifferentiableClusteringModule(nn.Module):
     """Tiny DCM: learn interest queries that softly cluster a user's history."""
 
@@ -57,7 +56,6 @@ class DifferentiableClusteringModule(nn.Module):
         weights = logits.softmax(dim=-1)
         interests = torch.einsum("bkl,bld->bkd", weights, history_embeddings)
         return F.normalize(interests, dim=-1), weights
-
 
 class MultiInterestRetrievalModel(nn.Module):
     def __init__(self, dim: int = 256, num_implicit_interests: int = 4):
@@ -93,11 +91,9 @@ class MultiInterestRetrievalModel(nn.Module):
     def forward(self, history_items, followed_topics, target_items, target_topics, item_topics):
         return self.score(history_items, followed_topics, target_items, target_topics, item_topics)
 
-
 def items_for_topics(topic_ids: torch.Tensor, generator: torch.Generator):
     slots = torch.randint(0, ITEMS_PER_TOPIC, topic_ids.shape, generator=generator)
     return topic_ids + NUM_TOPICS * slots
-
 
 def sample_batch(batch_size: int, rank: int, step: int):
     generator = torch.Generator().manual_seed(10_000 + rank * 1_000 + step)
@@ -120,7 +116,6 @@ def sample_batch(batch_size: int, rank: int, step: int):
     negative_items = items_for_topics(negative_topics, generator)
     return history_items, followed, positive_items, positive_topics, negative_items, negative_topics, item_topics
 
-
 def train_loop_per_worker(config):
     ctx = train.get_context()
     rank = ctx.get_world_rank()
@@ -135,38 +130,17 @@ def train_loop_per_worker(config):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     steps = int(config.get("steps", 48))
-    # Optional wall-clock bound. A CPU step here costs well under a second, so a
-    # step-count-only run finishes long before an operator can open the Ray or
-    # Kueue dashboards and see it live. Setting max_seconds > 0 keeps real
-    # training running for a predictable duration regardless of node speed, which
-    # is what makes the live-dashboard walkthrough reproducible. 0 disables it and
-    # restores pure step-count behaviour.
     max_seconds = float(config.get("max_seconds", 0) or 0)
-    # How often to print a progress line. The default only prints at 4 steps,
-    # which is fine for a 48-step run but leaves a long run looking hung when you
-    # are watching `tau run logs -f`.
     log_every = int(config.get("log_every", 0) or 0)
-    # `question` is what Stellar surfaces as an *experiment* in the dashboard,
-    # so a sweep that varies it produces several selectable experiments rather
-    # than several runs inside one. `variant` just labels the run.
     experiment = str(config.get("experiment") or "") or None
     variant = str(config.get("variant") or "") or "baseline"
 
-    # Real Stellar SDK run: local-only (sync=False, the default). Written to
-    # /tmp/tau_stellar_demo inside this pod's ephemeral filesystem; retrieved
-    # after the run via `kubectl cp` per README.md. rank==0 is the only rank
-    # here (num_workers=1), so there is no cross-rank coordination to do.
     run = None
     if rank == 0:
         run = stellar.init(
             project="taugrid-cpu-quickstart",
             name=f"{variant}-{int(time.time())}",
             group="stellar-demo",
-            # Stellar's dashboard hierarchy is project -> experiment -> run (the
-            # older "question" axis was folded into experiment by the expstore
-            # v1->v2 migration). Each distinct DEMO_EXPERIMENT value becomes its
-            # own selectable experiment in the dashboard; experiment_id is
-            # derived from this name.
             experiment=experiment,
             dir=STELLAR_DIR,
             config={
@@ -277,29 +251,17 @@ def train_loop_per_worker(config):
         }
     )
 
-
 def _env_float(key: str, default: float) -> float:
     raw = os.environ.get(key)
     return default if raw is None or raw == "" else float(raw)
-
 
 def _env_int(key: str, default: int) -> int:
     raw = os.environ.get(key)
     return default if raw is None or raw == "" else int(raw)
 
-
 def main():
-    # This demo runs under the direct `tau run --config` schema (engine: ray),
-    # which invokes the entrypoint as `python3 -m train` with no CLI args and
-    # no embedded manifest file -- unlike the managed-workflow schema used by
-    # the sibling ../tau.yaml demo. tau.yaml's compute.workers: 2 (1 head + 1
-    # worker pod) is mirrored here directly: a single Ray Train worker process
-    # keeps this demo's `kubectl cp` retrieval step unambiguous (see
-    # README.md) -- there is exactly one worker pod to find.
     num_workers = 1
     steps = _env_int("DEMO_STEPS", 48)
-    # Wall-clock bound and log cadence for the live-dashboard walkthrough. Both
-    # default to off, so existing sweep configs behave exactly as before.
     max_seconds = _env_float("DEMO_MAX_SECONDS", 0.0)
     log_every = _env_int("DEMO_LOG_EVERY", 0)
 
@@ -318,9 +280,6 @@ def main():
             "steps": steps,
             "max_seconds": max_seconds,
             "log_every": log_every,
-            # Hyperparameters are read from the environment so a sweep can be
-            # driven entirely from `runtime.env` in tau.yaml -- no code edit
-            # and no rebuild per variant. See README.md > Running a sweep.
             "lr": _env_float("DEMO_LR", 2e-3),
             "weight_decay": _env_float("DEMO_WEIGHT_DECAY", 1e-3),
             "experiment": os.environ.get("DEMO_EXPERIMENT", ""),
@@ -330,7 +289,6 @@ def main():
     )
     result = trainer.fit()
     print("final_metrics", result.metrics, flush=True)
-
 
 if __name__ == "__main__":
     main()

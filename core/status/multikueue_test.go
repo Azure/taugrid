@@ -10,15 +10,7 @@ import (
 	runtopology "github.com/Azure/taugrid/core/topology"
 )
 
-// The JSON fixtures below mirror real `kubectl get workloads.kueue.x-k8s.io
-// -o json` / `kubectl get job|rayjob -o json` shapes for Kueue v0.18.2 (see
-// charts/kueue/templates/crd/kueue.x-k8s.io_workloads.yaml and
-// charts/kuberay-operator/crds/ray.io_rayjobs.yaml), trimmed to the fields
-// hydrate*() reads.
-
 func TestHydrateWorkloads_SingleCluster_Unchanged(t *testing.T) {
-	// An ordinary, non-MultiKueue Workload: admitted, no clusterName,
-	// nominatedClusterNames, or admissionChecks at all.
 	data := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -36,13 +28,6 @@ func TestHydrateWorkloads_SingleCluster_Unchanged(t *testing.T) {
 		t.Fatalf("expected 1 workload, got %d", len(got))
 	}
 	w := got[0]
-	// Note: hydrateWorkloads sets Phase from whichever condition type it
-	// sees first that isn't already superseded; with QuotaReserved listed
-	// before Admitted (the real transition order Kueue reports), Phase
-	// stays "QuotaReserved" even though Admitted is true. That ordering
-	// quirk predates this change and is out of scope here — we only
-	// assert the (unaffected) Admitted flag and the new MultiKueue
-	// fields.
 	if w.Name != "train-001" || w.Queue != "sample-h100" || !w.Admitted {
 		t.Fatalf("unexpected base workload fields: %+v", w)
 	}
@@ -72,10 +57,6 @@ func TestHydrateWorkloads_SingleCluster_Unchanged(t *testing.T) {
 }
 
 func TestHydrateWorkloads_MultiKueue_PendingBeforeNomination(t *testing.T) {
-	// MultiKueue admission check reported before Kueue has nominated any
-	// worker clusters — clusterName and nominatedClusterNames are both
-	// absent, so the manager's Job/RayJob managedBy marker is what proves
-	// this is a MultiKueue workload.
 	data := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -116,9 +97,6 @@ func TestHydrateWorkloads_MultiKueue_PendingBeforeNomination(t *testing.T) {
 }
 
 func TestHydrateWorkloads_MultiKueue_Nominated(t *testing.T) {
-	// Kueue has nominated candidate worker clusters but not yet selected
-	// one. nominatedClusterNames is intentionally unsorted (with a
-	// duplicate) in the fixture to verify hydration sorting/dedup.
 	data := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -159,9 +137,6 @@ func TestHydrateWorkloads_MultiKueue_Nominated(t *testing.T) {
 }
 
 func TestHydrateWorkloads_MultiKueue_Selected(t *testing.T) {
-	// Kueue has picked a worker cluster: clusterName is set, and
-	// nominatedClusterNames is reset (Kueue resets it once clusterName is
-	// set — see the workloads CRD validation rule).
 	data := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -204,10 +179,6 @@ func TestHydrateWorkloads_MultiKueue_Selected(t *testing.T) {
 }
 
 func TestHydrateWorkloads_MultiKueue_RetryAndRejected(t *testing.T) {
-	// Multiple admission checks in non-alphabetical order; verify
-	// deterministic sort-by-name and that Retry/Rejected states survive
-	// hydration untouched (Tau must not editorialize Kueue's state
-	// machine).
 	data := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -237,8 +208,6 @@ func TestHydrateWorkloads_MultiKueue_RetryAndRejected(t *testing.T) {
 }
 
 func TestHydrateWorkloads_MalformedAndMissingFields(t *testing.T) {
-	// Malformed JSON must not panic; hydrateWorkloads soft-fails to nil,
-	// matching Fetch's "show what we can" contract.
 	if got := hydrateWorkloads([]byte(`not json`)); got != nil {
 		t.Errorf("expected nil for malformed JSON, got %+v", got)
 	}
@@ -246,9 +215,6 @@ func TestHydrateWorkloads_MalformedAndMissingFields(t *testing.T) {
 		t.Errorf("expected nil for empty input, got %+v", got)
 	}
 
-	// Missing/null MultiKueue fields (older Kueue API objects, or a
-	// Workload that predates the MultiKueue admission check being wired
-	// up) must hydrate to zero values without panicking.
 	data := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -270,9 +236,6 @@ func TestHydrateWorkloads_MalformedAndMissingFields(t *testing.T) {
 		t.Errorf("expected zero-value MultiKueue fields for absent data, got %+v", w)
 	}
 
-	// An admissionChecks entry with an empty name (shouldn't happen per
-	// the CRD's `required: [name]`, but hydration must not crash or
-	// synthesize a phantom check for it).
 	dataEmptyName := []byte(`{
 		"items": [{
 			"metadata": {"name": "train-001"},
@@ -547,8 +510,6 @@ func TestHydrateRayJob_ManagedBy_DefaultKuberayOperator(t *testing.T) {
 }
 
 func TestSnapshot_NominatedWorkerClusters_DedupesAcrossMultipleWorkloads(t *testing.T) {
-	// Fetch tolerates multiple Workloads for one job; verify the
-	// aggregate accessor merges and dedupes across all of them.
 	snap := Snapshot{
 		Name:      "train-001",
 		Namespace: "ray",

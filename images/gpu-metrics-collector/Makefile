@@ -9,7 +9,6 @@ IMG ?= $(if $(ACR_REGISTRY),$(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(T
 PUSH_IMG ?= $(IMG)
 PLATFORMS ?= linux/amd64,linux/arm64
 
-# Source lives in the module directory; this directory only packages it.
 SRC := ../../monitoring/gpu-metrics-collector
 CONTEXT := ../..
 

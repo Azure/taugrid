@@ -1,20 +1,15 @@
 ---
-# Namespace for the stack integration test.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: e2e-stack
 ---
-# ResourceFlavor — represents CPU hardware for the stack test.
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
   name: e2e-stack-flavor
 spec: {}
 ---
-# ClusterQueue — sized to admit both the CPU-only inference job (head 2 + 2 workers × 1 CPU + submitter)
-# and the GPU variant (head 1 + 1 worker × 2 CPU + 1 GPU + submitter). GPU quota is only exercised
-# on GPU-capable clusters; on CPU clusters workloads that don't request GPU are unaffected.
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ClusterQueue
 metadata:
@@ -34,8 +29,6 @@ spec:
       - name: nvidia.com/gpu
         nominalQuota: 2
 ---
-# LocalQueue — RayJobs must carry label kueue.x-k8s.io/queue-name: e2e-stack-queue
-# to be managed by Kueue.
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: LocalQueue
 metadata:
@@ -44,9 +37,6 @@ metadata:
 spec:
   clusterQueue: e2e-stack-cluster-queue
 ---
-# Separate 16-GPU queue for the manual large Ray Train conformance path.
-# The regular stack queue stays small so the PR/hourly smoke tests keep their
-# existing quota contract; this queue is only used by nanogpt-rayjob-large-gpu.yaml.
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: Topology
 metadata:
@@ -81,10 +71,6 @@ spec:
       - name: cpu
         nominalQuota: 96
       - name: memory
-        # 16 workers × 48Gi + head 8Gi, with headroom. The 1.7B FSDP job needs
-        # far more per-worker memory than nanoGPT (rank0 FULL_STATE_DICT CPU gather
-        # + a 16Gi /dev/shm tmpfs that counts against the pod). nanoGPT requests
-        # only 16Gi/worker so the larger ceiling does not affect its admission.
         nominalQuota: 832Gi
       - name: nvidia.com/gpu
         nominalQuota: 16

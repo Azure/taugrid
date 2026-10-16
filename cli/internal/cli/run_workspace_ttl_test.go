@@ -9,12 +9,6 @@ import (
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 )
 
-// TauWorkspace.spec.defaults.ttlSecondsAfterFinished lets an operator set the
-// retention for finished batch Jobs cluster-wide without editing every run
-// config. It is an override, not a floor: a run that names its own TTL keeps
-// it, and a workspace that names none leaves tau's built-in retention exactly
-// as it was.
-
 func workspaceWithTTL(ttl *int64) tauworkspace.Workspace {
 	w := readyWorkspace()
 	w.Spec.Defaults.TTLSecondsAfterFinished = ttl
@@ -36,8 +30,6 @@ func TestWorkspaceTTLDefaultAppliesWhenRunIsSilent(t *testing.T) {
 	}
 }
 
-// An explicit run.ttl_seconds_after_finished has already been applied by
-// configToDispatch before workspace defaults are merged, and must survive.
 func TestExplicitRunTTLBeatsWorkspaceDefault(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	o.ttlSecondsAfterFinished = 900
@@ -51,8 +43,6 @@ func TestExplicitRunTTLBeatsWorkspaceDefault(t *testing.T) {
 	}
 }
 
-// The whole point of the pointer in the CRD: absence must not be read as zero,
-// which Kubernetes would treat as "delete immediately".
 func TestUnsetWorkspaceTTLLeavesBuiltInRetention(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	o.ttlSecondsAfterFinished = 0
@@ -66,14 +56,6 @@ func TestUnsetWorkspaceTTLLeavesBuiltInRetention(t *testing.T) {
 	}
 }
 
-// Retention races the lifecycle recorder: it observes on an interval and then
-// ingests, so a Job finishing just after a poll with a very short TTL is
-// collected along with its pods before the next pass. The terminal row and the
-// failure evidence are then lost permanently rather than merely early.
-//
-// The CRD rejects such values on write, but a workspace created against an
-// older schema still carries one, so the reader re-checks rather than trusting
-// the stored object.
 func TestWorkspaceTTLBelowTheDurabilityFloorIsIgnored(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	o.ttlSecondsAfterFinished = 0

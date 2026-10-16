@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
 
 from __future__ import annotations
 
@@ -13,14 +11,12 @@ import sys
 import tomllib
 import urllib.parse
 
-
 ALLOWED_MATURITY = {
     "alpha",
     "beta",
     "ga",
     "deprecated",
     "planned",
-    # Compatibility aliases for separately maintained pages during migration.
     "shipped",
     "experimental",
     "implementing",
@@ -34,7 +30,6 @@ WIKI_PREFIX = (
     "https://github.com/Azure/taugrid/wiki/"
 )
 
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check site/wiki ownership metadata")
     parser.add_argument(
@@ -43,6 +38,7 @@ def main() -> int:
         default=pathlib.Path("data/wiki-parity.toml"),
     )
     parser.add_argument("--max-age-days", type=int, default=90)
+    parser.add_argument("--skip-review-age", action="store_true")
     args = parser.parse_args()
 
     site_root = args.manifest.resolve().parent.parent
@@ -108,7 +104,7 @@ def main() -> int:
         age = (today - reviewed).days
         if reviewed > today:
             errors.append(f"{identifier}: review date {reviewed} is in the future")
-        elif age > args.max_age_days:
+        elif not args.skip_review_age and age > args.max_age_days:
             errors.append(
                 f"{identifier}: site/wiki review is {age} days old "
                 f"(limit {args.max_age_days})"
@@ -145,7 +141,7 @@ def main() -> int:
         age = (today - reviewed).days
         if reviewed > today:
             errors.append(f"{identifier}: review date {reviewed} is in the future")
-        elif age > args.max_age_days:
+        elif not args.skip_review_age and age > args.max_age_days:
             errors.append(
                 f"{identifier}: site-only rationale is {age} days old "
                 f"(limit {args.max_age_days})"
@@ -162,7 +158,6 @@ def main() -> int:
         f"and {len(site_only)} reviewed site-only groups"
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

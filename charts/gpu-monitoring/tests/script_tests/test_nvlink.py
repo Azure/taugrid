@@ -5,7 +5,6 @@ import unittest
 
 from helpers import ScriptTestCase
 
-
 class NvlinkTests(ScriptTestCase):
     def test_blackwell_checks_pass(self):
         self.run_script(
@@ -46,7 +45,6 @@ class NvlinkTests(ScriptTestCase):
             env={"GPU_TYPE": "H100", "EXPECTED_NUM_GPU": "1"},
         )
         self.assertIn("Not a Blackwell node", output)
-
 
 if __name__ == "__main__":
     unittest.main()

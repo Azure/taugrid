@@ -17,13 +17,8 @@ import (
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 )
 
-// defaultCatalogNamespace is the namespace the checked-in default catalog
-// authorizes, and the workspace name `tau workspace create` defaults to.
 const defaultCatalogNamespace = "taugrid-default"
 
-// TestGeneratedScaffoldSelectsDefaultCatalogProfiles keeps the init-repo run
-// targets and the default TauCluster catalog compatible: an unedited scaffold
-// must resolve a profile without the researcher naming one.
 func TestGeneratedScaffoldSelectsDefaultCatalogProfiles(t *testing.T) {
 	provider := defaultCatalogProvider(t)
 	dir := t.TempDir()
@@ -49,8 +44,6 @@ func TestGeneratedScaffoldSelectsDefaultCatalogProfiles(t *testing.T) {
 		})
 	}
 
-	// The GPU target has no team or lane, so no default GPU profile applies to
-	// it; selection must say so rather than fall back to the CPU profile.
 	t.Run("train-gpu", func(t *testing.T) {
 		options := scaffoldTargetOptions(t, dir, "train-gpu")
 		_, err := selectRunWorkloadProfile(context.Background(), options, provider)
@@ -68,14 +61,10 @@ func scaffoldTargetOptions(t *testing.T, dir, target string) unresolvedRunOption
 	if err != nil {
 		t.Fatalf("load %s config: %v", target, err)
 	}
-	// Workspace resolution supplies the namespace before profile selection.
 	options.namespace = defaultCatalogNamespace
 	return options
 }
 
-// defaultCatalogProvider resolves the checked-in default catalog as a ready
-// profile set. The Kustomize copy has the namespace rendered, and
-// sync-taucluster-catalog.sh keeps it identical to the Helm values.
 func defaultCatalogProvider(t *testing.T) *profile.Provider {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "charts", "tau-core-controller", "kustomize", "taucluster.yaml"))

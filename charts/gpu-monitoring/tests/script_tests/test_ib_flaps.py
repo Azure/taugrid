@@ -5,7 +5,6 @@ import unittest
 
 from helpers import ScriptTestCase
 
-
 class InfinibandFlapTests(ScriptTestCase):
     def test_unknown_samples_do_not_count_as_flaps(self):
         state = self.test_root / "unknown-state.txt"
@@ -58,7 +57,6 @@ class InfinibandFlapTests(ScriptTestCase):
 
         second = self.run_script("check_ib_flaps.sh", expected=1, env=env)
         self.assertIn("2 ibstat state flaps", second)
-
 
 if __name__ == "__main__":
     unittest.main()

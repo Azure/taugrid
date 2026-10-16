@@ -40,10 +40,8 @@ import torch.nn as nn
 from ray.train import ScalingConfig
 from ray.train.torch import TorchTrainer, prepare_model
 
-# A100 is compute capability 8.0. Kept as a tuple so the failure message can
-# report what was actually found instead of just "wrong GPU".
 EXPECTED_CAPABILITY = (8, 0)
-EXPECTED_VRAM_GIB = 70.0  # A100 80GB reports ~79.2 GiB usable; allow margin.
+EXPECTED_VRAM_GIB = 70.0
 MATMUL_DIM = 8192
 MATMUL_ITERS = 30
 MIN_TFLOPS = 20.0
@@ -53,7 +51,6 @@ BATCH = 512
 FEATURES = 1024
 HIDDEN = 2048
 CLASSES = 64
-
 
 def _under_torchrun() -> bool:
     """True when tau launched this script with torchrun instead of Ray Train.
@@ -68,15 +65,12 @@ def _under_torchrun() -> bool:
     """
     return all(v in os.environ for v in ("RANK", "LOCAL_RANK", "WORLD_SIZE"))
 
-
 def _local_rank() -> int:
     return int(os.environ.get("LOCAL_RANK", "0"))
-
 
 def _is_primary() -> bool:
     """Only one process should emit the evidence block."""
     return int(os.environ.get("RANK", "0")) == 0
-
 
 def _durable_dir() -> Path:
     """Prefer the durable checkpoints mount, fall back to /tmp.
@@ -91,7 +85,6 @@ def _durable_dir() -> Path:
             return Path(value) / "aks-gpu-quickstart"
     return Path("/tmp/aks-gpu-quickstart")
 
-
 class Net(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -105,7 +98,6 @@ class Net(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.body(x)
-
 
 def train_loop(config: dict) -> None:
     """Runs inside the Ray Train worker -- this is where the GPU claim is made.
@@ -159,7 +151,6 @@ def train_loop(config: dict) -> None:
             "node": platform.node(),
         }
 
-
     def measure_tflops(device: torch.device) -> dict:
         """Gate 2: sustained TF32 matmul throughput, which a CPU cannot fake."""
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -168,8 +159,6 @@ def train_loop(config: dict) -> None:
         a = torch.randn(MATMUL_DIM, MATMUL_DIM, device=device, dtype=torch.float32)
         b = torch.randn(MATMUL_DIM, MATMUL_DIM, device=device, dtype=torch.float32)
 
-        # Warm up so we time steady-state compute rather than lazy CUDA module load
-        # and autotuning, which would otherwise dominate a short measurement.
         for _ in range(5):
             _ = a @ b
         torch.cuda.synchronize()
@@ -197,8 +186,6 @@ def train_loop(config: dict) -> None:
             "tflops": round(tflops, 1),
             "floor_tflops": MIN_TFLOPS,
         }
-    # Under torchrun each process owns exactly one GPU, selected by LOCAL_RANK;
-    # without set_device every rank would default to cuda:0.
     if _under_torchrun():
         torch.cuda.set_device(_local_rank())
         device = torch.device(f"cuda:{_local_rank()}")
@@ -212,8 +199,6 @@ def train_loop(config: dict) -> None:
 
     torch.manual_seed(0)
     if _under_torchrun():
-        # Ray Train's prepare_model is a no-op outside a Ray Train worker, so
-        # do the equivalent by hand: move to this rank's device and wrap in DDP.
         if not torch.distributed.is_initialized():
             torch.distributed.init_process_group(
                 backend=os.environ.get("TAU_DIST_BACKEND", "nccl")
@@ -224,7 +209,6 @@ def train_loop(config: dict) -> None:
     else:
         model = prepare_model(Net())
 
-    # Gate 3a: prepare_model must have actually moved the weights onto CUDA.
     for name, param in model.named_parameters():
         if param.device.type != "cuda":
             raise SystemExit(
@@ -232,8 +216,6 @@ def train_loop(config: dict) -> None:
                 "cuda. The model was never moved onto the GPU."
             )
 
-    # A fixed random teacher gives a learnable signal, so a falling loss is
-    # evidence of real optimisation rather than of collapsing to a constant.
     teacher = torch.randn(FEATURES, CLASSES, device=device)
     opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
     loss_fn = nn.CrossEntropyLoss()
@@ -247,7 +229,6 @@ def train_loop(config: dict) -> None:
         x = torch.randn(BATCH, FEATURES, device=device)
         y = (x @ teacher).argmax(dim=1)
 
-        # Gate 3b: assert the data path stayed on-device too.
         if x.device.type != "cuda" or y.device.type != "cuda":
             raise SystemExit(
                 f"GATE 3 FAILED: batch tensors on {x.device}/{y.device}, not cuda."
@@ -274,7 +255,6 @@ def train_loop(config: dict) -> None:
     torch.cuda.synchronize()
     duration = time.perf_counter() - started
 
-    # Gate 3c: the run has to have actually learned something.
     if last_loss is None or first_loss is None or last_loss >= first_loss:
         raise SystemExit(
             f"GATE 3 FAILED: loss did not decrease ({first_loss} -> {last_loss}). "
@@ -306,8 +286,6 @@ def train_loop(config: dict) -> None:
     }
 
     payload = json.dumps(evidence, indent=2)
-    # stdout is the durable copy: `/data` is an emptyDir in this quickstart, so
-    # anything written to disk dies with the pod.
     if not _is_primary():
         print(f"[rank {os.environ['RANK']}] gates passed", flush=True)
         return
@@ -322,20 +300,16 @@ def train_loop(config: dict) -> None:
         target = out_dir / "gpu-evidence.json"
         target.write_text(payload)
         print(f"[artifact] wrote {target}", flush=True)
-    except OSError as err:  # best-effort only; stdout already carries the proof
+    except OSError as err:
         print(f"[artifact] could not persist evidence file: {err}", flush=True)
 
-
 def main() -> int:
-    # tau's rendered entrypoint always passes these; accept and ignore them so
-    # the script stays compatible with the managed workflow contract.
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", default=None)
     parser.add_argument("--smoke-pairs", type=int, default=0)
     parser.parse_args()
 
     if _under_torchrun():
-        # torchrun already forked one process per GPU; Ray plays no part here.
         world = os.environ["WORLD_SIZE"]
         print(
             f"[torchrun] rank {os.environ['RANK']}/{world} "
@@ -368,7 +342,6 @@ def main() -> int:
     trainer.fit()
     print("[done] all three gates passed", flush=True)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

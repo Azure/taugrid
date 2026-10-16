@@ -103,14 +103,6 @@ func runTauGridInstallationValidation(
 	return err
 }
 
-// disabledTauGridComponents reads the release's coalesced Helm values so
-// validation can skip components the operator turned off. A component switch
-// can come from a values file or an earlier upgrade, so the live release is the
-// only source that sees all of them.
-//
-// An unreadable release degrades to validating every component rather than
-// aborting: the command still works without Helm on PATH, and a bad read can
-// only produce a false failure, never a false pass.
 func disabledTauGridComponents(cmd *cobra.Command, kubeContext, release, namespace string) []installationcheck.Component {
 	var disabled []installationcheck.Component
 	values, err := tauGridReleaseValues(cmd, kubeContext, release, namespace)

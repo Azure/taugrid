@@ -74,7 +74,6 @@ func run() error {
 	tracker := availability.New(cfg.ScrapeTargets, cfg.RuleConditionTypes())
 	writer := conditions.NewWriter(clientset, *nodeName)
 
-	// Restore state from previous run if available.
 	if snap, err := state.Load(*stateDir, 30*time.Minute); err != nil {
 		slog.Warn("failed to load state", "error", err)
 	} else if snap != nil {
@@ -86,7 +85,6 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// Jitter startup so collectors across the fleet don't all start in lockstep.
 	jitter := time.Duration(rand.Int64N(int64(*scrapeInterval)))
 	slog.Info("starting gpu-metrics-collector",
 		"node", *nodeName,
@@ -104,7 +102,6 @@ func run() error {
 	ticker := time.NewTicker(*scrapeInterval)
 	defer ticker.Stop()
 
-	// Run immediately on start, then on interval.
 	if err := collect(ctx, sc, engine, tracker, writer); err != nil {
 		slog.Error("collection failed", "error", err)
 	}

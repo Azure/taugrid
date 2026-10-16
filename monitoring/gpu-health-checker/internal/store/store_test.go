@@ -25,7 +25,6 @@ func tempDB(t *testing.T) *DB {
 func TestOpenAndSchema(t *testing.T) {
 	db := tempDB(t)
 
-	// Verify tables exist by inserting and querying.
 	err := db.InsertSamples([]Sample{
 		{Timestamp: 1000, GPU: 0, Field: "TEST", Value: 42},
 	})
@@ -45,7 +44,6 @@ func TestOpenReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	// Create and populate.
 	db, err := Open(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -53,7 +51,6 @@ func TestOpenReadOnly(t *testing.T) {
 	_ = db.InsertSamples([]Sample{{Timestamp: 1000, GPU: 0, Field: "X", Value: 1}})
 	_ = db.Close()
 
-	// Open read-only.
 	ro, err := OpenReadOnly(path)
 	if err != nil {
 		t.Fatalf("open ro: %v", err)
@@ -72,12 +69,10 @@ func TestOpenReadOnly(t *testing.T) {
 func TestOpenReadOnly_Missing(t *testing.T) {
 	ro, err := OpenReadOnly("/nonexistent/path/test.db")
 	if err != nil {
-		// Driver rejected the path at open time.
 		return
 	}
 	defer func() { _ = ro.Close() }()
 
-	// sql.Open succeeds lazily; the error surfaces on first query.
 	_, err = ro.QuerySamples(context.Background(), "X", -1, time.Time{})
 	if err == nil {
 		t.Error("expected error querying a non-existent database")
@@ -99,31 +94,26 @@ func TestInsertAndQuerySamples(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	// All field A.
 	got, _ := db.QuerySamples(ctx, "A", -1, time.Time{})
 	if len(got) != 4 {
 		t.Errorf("field A all: got %d, want 4", len(got))
 	}
 
-	// Field A, GPU 0 only.
 	got, _ = db.QuerySamples(ctx, "A", 0, time.Time{})
 	if len(got) != 2 {
 		t.Errorf("field A gpu 0: got %d, want 2", len(got))
 	}
 
-	// Field A, since ts=200.
 	got, _ = db.QuerySamples(ctx, "A", -1, time.Unix(200, 0))
 	if len(got) != 2 {
 		t.Errorf("field A since 200: got %d, want 2", len(got))
 	}
 
-	// Field A, GPU 0, since ts=200.
 	got, _ = db.QuerySamples(ctx, "A", 0, time.Unix(200, 0))
 	if len(got) != 1 {
 		t.Errorf("field A gpu 0 since 200: got %d, want 1", len(got))
 	}
 
-	// Field B.
 	got, _ = db.QuerySamples(ctx, "B", -1, time.Time{})
 	if len(got) != 1 {
 		t.Errorf("field B: got %d, want 1", len(got))
@@ -197,7 +187,6 @@ func TestUpsertGPUInfo(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	// Update.
 	info.VBIOS = "2.0"
 	info.Updated = 200
 	if err := db.UpsertGPUInfo(info); err != nil {
@@ -218,7 +207,7 @@ func TestPrune(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().Unix()
-	old := now - 3600 // 1 hour ago
+	old := now - 3600
 
 	_ = db.InsertSamples([]Sample{
 		{Timestamp: old, GPU: 0, Field: "X", Value: 1},
@@ -247,7 +236,6 @@ func TestPrune(t *testing.T) {
 func TestLatestTimestamp(t *testing.T) {
 	db := tempDB(t)
 
-	// Empty DB.
 	ts, err := db.LatestTimestamp()
 	if err != nil || ts != 0 {
 		t.Errorf("empty db: ts=%d err=%v, want 0/nil", ts, err)
@@ -272,7 +260,6 @@ func TestInsertOrReplace(t *testing.T) {
 	_ = db.InsertSamples([]Sample{
 		{Timestamp: 100, GPU: 0, Field: "X", Value: 1},
 	})
-	// Same PK, different value — should replace.
 	_ = db.InsertSamples([]Sample{
 		{Timestamp: 100, GPU: 0, Field: "X", Value: 99},
 	})
@@ -291,13 +278,10 @@ func TestQuerySamplesContext_Cancelled(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately.
+	cancel()
 
 	_, err := db.QuerySamples(ctx, "X", -1, time.Time{})
 	if err == nil {
-		// SQLite may or may not respect context cancellation for fast queries.
-		// This test verifies the context is wired through — the behavior
-		// depends on the driver. We accept both outcomes.
 		t.Log("query succeeded with cancelled context (acceptable for fast queries)")
 	}
 }
@@ -305,7 +289,6 @@ func TestQuerySamplesContext_Cancelled(t *testing.T) {
 func TestIndexesExist(t *testing.T) {
 	db := tempDB(t)
 
-	// Query sqlite_master for our indexes.
 	rows, err := db.db.Query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")
 	if err != nil {
 		t.Fatalf("query indexes: %v", err)
@@ -348,7 +331,6 @@ func TestConcurrentReadWrite(t *testing.T) {
 	}
 	defer func() { _ = reader.Close() }()
 
-	// Write while reading.
 	_ = writer.InsertSamples([]Sample{
 		{Timestamp: 100, GPU: 0, Field: "X", Value: 1},
 	})
@@ -361,7 +343,6 @@ func TestConcurrentReadWrite(t *testing.T) {
 		t.Errorf("expected 1, got %d", len(got))
 	}
 
-	// Write more, read again.
 	_ = writer.InsertSamples([]Sample{
 		{Timestamp: 200, GPU: 0, Field: "X", Value: 2},
 	})
@@ -378,7 +359,6 @@ func TestConcurrentReadWrite(t *testing.T) {
 func TestDBNotExist(t *testing.T) {
 	path := filepath.Join(os.TempDir(), "nonexistent_dir_"+t.Name(), "test.db")
 	_, err := Open(path)
-	// Some SQLite drivers create parent dirs, others don't. Just verify no panic.
 	if err != nil {
 		t.Logf("expected-ish error for missing parent dir: %v", err)
 	}

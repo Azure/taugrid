@@ -22,8 +22,6 @@ func warningsFor(t *testing.T, raw string) []string {
 	return warnings
 }
 
-// Nested typos are the same class of bug as top-level ones and must be caught
-// one level down, where a camelCase slip is easy to make and impossible to see.
 func TestManagedConfigWarnsOnNestedTypo(t *testing.T) {
 	for input, want := range map[string]string{
 		"nodeSelector":  "policy.node_selector",
@@ -49,18 +47,7 @@ policy:
 	}
 }
 
-// Every opaque pass-through root weakens the check, so the list is bounded.
 func TestToleratedNonSchemaKeysStayPinned(t *testing.T) {
-	// managedPassthroughPaths is allowed to exist, but only for keys the
-	// manifest schema really owns. The reflection guard in cli/internal/manifest
-	// proves each entry is real; this bounds how many there can be.
-	//
-	// Count opaque roots, not entries. Only an opaque root weakens the check --
-	// it drops a whole subtree. Descend markers and the children they enumerate
-	// make the checker stricter, so counting them would let the bound be spent
-	// on entries that improve it, and a genuinely new opaque root could then
-	// slip in under the headroom. This keeps the bound measuring what it was
-	// written to measure.
 	opaqueRoots := 0
 	for path, descend := range managedPassthroughPaths {
 		if descend {
@@ -68,7 +55,6 @@ func TestToleratedNonSchemaKeysStayPinned(t *testing.T) {
 		}
 		if idx := strings.LastIndex(path, "."); idx >= 0 {
 			if parentDescends, ok := managedPassthroughPaths[path[:idx]]; ok && parentDescends {
-				// A child of a structured subtree: it narrows the check.
 				continue
 			}
 		}
@@ -79,7 +65,6 @@ func TestToleratedNonSchemaKeysStayPinned(t *testing.T) {
 	}
 }
 
-// A valid config produces no warning.
 func TestManagedConfigWithOnlyKnownKeysWarnsNothing(t *testing.T) {
 	warnings := warningsFor(t, `schema_version: 1
 name: known-keys
@@ -103,9 +88,6 @@ storage:
 	}
 }
 
-// The regression this whole file exists for: policy.node_selector misspelled as
-// scheduling.node_selector used to be dropped in silence, so the workload
-// scheduled anywhere instead of onto the intended GPU flavor.
 func TestManagedConfigWarnsOnMisspelledSchedulingDirective(t *testing.T) {
 	warnings := warningsFor(t, `schema_version: 1
 name: typo-config
@@ -134,8 +116,6 @@ func TestUnrelatedKeyGetsNoMisleadingSuggestion(t *testing.T) {
 	}
 }
 
-// Free-form map values carry user data, not schema. Validating their keys as
-// field names would warn on every legitimate node label and env var.
 func TestFreeFormMapKeysAreNotValidated(t *testing.T) {
 	warnings := warningsFor(t, `schema_version: 1
 name: free-form
@@ -154,11 +134,6 @@ runtime:
 	}
 }
 
-// looksLikeTauConfig selects run configs by a top-level marker key rather than
-// by filename. Kubernetes manifests under the examples directory are top-level mappings
-// too, so presence of a marker -- not parseability -- is the discriminator;
-// "parses as a config" would be circular, since the thing under test is whether
-// the config parses without warnings.
 func looksLikeTauConfig(raw []byte) bool {
 	var top map[string]any
 	if err := yaml.Unmarshal(raw, &top); err != nil {
@@ -172,10 +147,6 @@ func looksLikeTauConfig(raw []byte) bool {
 	return false
 }
 
-// The probe must accept configs regardless of filename and reject Kubernetes
-// manifests regardless of extension. Without this, a probe that returned true
-// unconditionally would still make TestShippedExampleConfigsWarnNothing pass
-// its checked>0 guard while asserting on files that are not configs.
 func TestLooksLikeTauConfigPartitions(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -198,26 +169,6 @@ func TestLooksLikeTauConfigPartitions(t *testing.T) {
 	}
 }
 
-// Every shipped example must warn nothing. Manifest-owned keys (resource_naming,
-// compute.cpus, compute.worker_memory) are legitimate and must stay silent.
-//
-// This walks the tree rather than globbing examples/*/tau.yaml: examples nest
-// (aks-cpu-quickstart/stellar-demo/tau.yaml), and a one-level glob silently
-// checks fewer files than it appears to -- an unguarded config that looks
-// guarded, which is the failure mode this whole change exists to prevent.
-//
-// Selection is by content, not by filename. A name filter is the same class of
-// error as the one-level glob on a different axis: kind-smoke/tau-ray.yaml is a
-// real shipped config and tau.yaml matches everything except it. Widening to
-// *.yaml is wrong too -- kind-cluster.yaml and kind-kueue-lanes.yaml are
-// Kubernetes manifests that are not configs and must not be asserted on. So the
-// discriminator is a top-level marker key, which partitions the tree exactly.
-//
-// A missing root is fatal, not skipped, for the same reason. cli and core are
-// one repo joined by a replace directive and core is never published, so the
-// examples directory is always present relative to here; if it ever is not,
-// the directory was renamed and this guard silently stopped guarding. A skip
-// reports as a pass, which is the identical failure one layer out.
 func TestShippedExampleConfigsWarnNothing(t *testing.T) {
 	root := filepath.Join("..", "..", "examples")
 	if _, err := os.Stat(root); err != nil {
@@ -261,7 +212,6 @@ func TestShippedExampleConfigsWarnNothing(t *testing.T) {
 	}
 }
 
-// Direct configs stay strict. The warning path must not soften them.
 func TestDirectConfigStillHardErrorsOnUnknownKey(t *testing.T) {
 	_, _, err := parseWithDiagnostics([]byte(`schema_version: 1
 name: direct-typo
@@ -280,9 +230,6 @@ scheduling:
 	}
 }
 
-// TestNestedPassthroughTypoWarns covers the fail-open one level down: these
-// subtrees are manifest-owned, but they are structured, and a dropped key in
-// either one silently changes scheduling or mount semantics.
 func TestNestedPassthroughTypoWarns(t *testing.T) {
 	cases := []struct {
 		name string
@@ -325,8 +272,6 @@ func TestNestedPassthroughTypoWarns(t *testing.T) {
 	}
 }
 
-// TestValidNestedPassthroughIsSilent is the other half: descending must not
-// turn correct manifests into warning spam.
 func TestValidNestedPassthroughIsSilent(t *testing.T) {
 	raw := "schema_version: 1\nname: x\nworkflow:\n  script: t.py\n" +
 		"runtime:\n  rdma:\n    enabled: true\n" +
@@ -342,7 +287,6 @@ func TestValidNestedPassthroughIsSilent(t *testing.T) {
 	}
 }
 
-// TestRepeatedListTypoReportsOnce keeps one mistake from becoming N warnings.
 func TestRepeatedListTypoReportsOnce(t *testing.T) {
 	raw := "schema_version: 1\nname: x\nworkflow:\n  script: t.py\n" +
 		"storage:\n  mounts:\n" +

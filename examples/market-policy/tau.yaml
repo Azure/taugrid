@@ -8,8 +8,6 @@ experiment:
   group: browser-inference
 
 runtime:
-  # Immutable public TauGrid Ray + CUDA image from MCR. PyTorch and NumPy are
-  # pinned because the base image intentionally does not bundle frameworks.
   image: mcr.microsoft.com/aks/ai-runtime/ray@sha256:5a5648f3e1b27eaa6e18b345aaf8ad06b6289543ee019a01ab9fa3a2d98749e3
   pip:
     - torch==2.11.0
@@ -29,12 +27,9 @@ compute:
   gpus_per_worker: 1
 
 storage:
-  # Writable PVC bound to the checked-in default workspace example.
   data_pvc: workspace-data
   output: /data/market-policy
 
-# Publish immutable scalar-history chunks for the Stellar metrics offloader.
-# Paths are relative to storage.output.
 metrics:
   history:
     - metrics-history-attempt-0/*.jsonl
@@ -45,7 +40,5 @@ metrics:
 policy:
   workspace: default
   gpu_class: h200-141gb
-  # Use same-accelerator-domain for multi-host NVL72/GB200/GB300 workloads
-  # only when the provider publishes a shared accelerator-domain identity.
   topology: same-host
   disable_default_priorities: true

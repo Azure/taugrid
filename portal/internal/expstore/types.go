@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package expstore implements Tau's local experiment-tracking store.
 package expstore
 
 import "errors"
@@ -27,16 +26,13 @@ type Manifest struct {
 	SchemaVersion string `json:"schema_version"`
 	Kind          string `json:"kind"`
 	Project       string `json:"project,omitempty"`
-	// ExperimentID is the store's default experiment -- the name passed to
-	// `experiment init --name`. Runs tracked into this store join it unless they
-	// name a different experiment.
-	ExperimentID string `json:"experiment_id,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	Index        string `json:"index"`
-	AppendLogDir string `json:"append_log_dir"`
-	MetricsDir   string `json:"metrics_dir"`
-	ArtifactsDir string `json:"artifacts_dir"`
+	ExperimentID  string `json:"experiment_id,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+	Index         string `json:"index"`
+	AppendLogDir  string `json:"append_log_dir"`
+	MetricsDir    string `json:"metrics_dir"`
+	ArtifactsDir  string `json:"artifacts_dir"`
 }
 
 type InitOptions struct {
@@ -59,12 +55,9 @@ type InitResult struct {
 type RunGroup struct {
 	RunGroupID string `json:"run_group_id"`
 	Project    string `json:"project"`
-	// A run group is an arm inside an experiment (baseline vs ablation), not a
-	// level of its own. It deliberately carries no experiment_id: the same arm
-	// label is reusable across experiments, so ownership lives on the run.
-	Name      string `json:"name"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	Name       string `json:"name"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 type ExperimentRecord struct {
