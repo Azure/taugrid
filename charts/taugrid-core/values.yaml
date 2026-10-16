@@ -455,6 +455,9 @@ portal:
   service:
     # Deliberately fixed to ClusterIP. Portal has no application-level login, so
     # a LoadBalancer would bypass the required authenticated proxy.
+    # Disable only for a pre-existing, externally managed Service. Disabling
+    # this on an existing release can delete its Helm-owned Service.
+    create: true
     type: ClusterIP
     annotations: {}
     loadBalancerIP: ""

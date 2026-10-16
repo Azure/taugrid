@@ -64,16 +64,20 @@ KubeRay can still use this command as a gate.`,
 			if pollInterval <= 0 {
 				return fmt.Errorf("invalid --poll-interval: must be greater than zero")
 			}
-			disabled := disabledTauGridComponents(cmd, kubeContext, release, namespace)
+			settings, err := tauGridReadinessSettings(cmd, kubeContext, release, namespace)
+			if err != nil {
+				return err
+			}
 			return runTauGridInstallationValidation(
 				cmd.Context(),
 				newInstallationCheckRunner(kubeContext),
 				installationcheck.Options{
-					Release:            release,
-					SystemNamespace:    namespace,
-					Timeout:            timeout,
-					PollInterval:       pollInterval,
-					DisabledComponents: disabled,
+					Release:             release,
+					SystemNamespace:     namespace,
+					ControllerNamespace: settings.ControllerNamespace,
+					Timeout:             timeout,
+					PollInterval:        pollInterval,
+					DisabledComponents:  settings.DisabledComponents,
 				},
 				cmd.OutOrStdout(),
 			)
@@ -83,7 +87,7 @@ KubeRay can still use this command as a gate.`,
 	flags := cmd.Flags()
 	flags.StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	flags.StringVar(&release, "release", release, "Helm release name")
-	flags.StringVar(&namespace, "namespace", namespace, "namespace containing all TauGrid system components")
+	flags.StringVar(&namespace, "namespace", namespace, "Helm release namespace; the controller namespace is read from release values")
 	flags.StringVar(&timeoutText, "timeout", timeoutText, "maximum readiness wait")
 	flags.StringVar(&pollText, "poll-interval", pollText, "readiness poll interval")
 	return cmd
@@ -103,23 +107,21 @@ func runTauGridInstallationValidation(
 	return err
 }
 
-// disabledTauGridComponents reads the release's coalesced Helm values so
-// validation can skip components the operator turned off. A component switch
+// tauGridReadinessSettings reads the release's coalesced Helm values so
+// validation can find the controller and skip disabled components. A setting
 // can come from a values file or an earlier upgrade, so the live release is the
 // only source that sees all of them.
 //
-// An unreadable release degrades to validating every component rather than
-// aborting: the command still works without Helm on PATH, and a bad read can
-// only produce a false failure, never a false pass.
-func disabledTauGridComponents(cmd *cobra.Command, kubeContext, release, namespace string) []installationcheck.Component {
-	var disabled []installationcheck.Component
+// Do not infer a namespace when these values are unreadable: another ready
+// controller in the release namespace is not proof that this one is ready.
+func tauGridReadinessSettings(cmd *cobra.Command, kubeContext, release, namespace string) (installationcheck.ReleaseSettings, error) {
+	var settings installationcheck.ReleaseSettings
 	values, err := tauGridReleaseValues(cmd, kubeContext, release, namespace)
 	if err == nil {
-		disabled, err = installationcheck.DisabledComponents(values)
+		settings, err = installationcheck.SettingsFromValues(values)
 	}
 	if err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "Cannot read Helm release %s values (%v); validating every component.\n", release, err)
-		return nil
+		return installationcheck.ReleaseSettings{}, fmt.Errorf("cannot determine readiness settings for Helm release %s: %w", release, err)
 	}
-	return disabled
+	return settings, nil
 }

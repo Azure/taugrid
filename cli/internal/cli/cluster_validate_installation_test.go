@@ -84,7 +84,7 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	}
 }
 
-func TestClusterValidateInstallationValidatesEverythingWhenReleaseValuesAreUnreadable(t *testing.T) {
+func TestClusterValidateInstallationRejectsUnreadableReleaseSettings(t *testing.T) {
 	original := runHelmCommand
 	runHelmCommand = func(context.Context, io.Reader, io.Writer, io.Writer, []string) error {
 		return errors.New("release: not found")
@@ -92,21 +92,14 @@ func TestClusterValidateInstallationValidatesEverythingWhenReleaseValuesAreUnrea
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	var got installationcheck.Options
-	waitForTauGridInstallation = func(_ context.Context, _ installationcheck.Runner, opts installationcheck.Options) (installationcheck.Report, error) {
-		got = opts
-		return readyInstallationReport(), nil
+	waitForTauGridInstallation = func(context.Context, installationcheck.Runner, installationcheck.Options) (installationcheck.Report, error) {
+		t.Fatal("validation must not guess a controller namespace from unreadable release settings")
+		return installationcheck.Report{}, nil
 	}
 
 	out, err := runCluster(t, "validate", "installation")
-	if err != nil {
-		t.Fatalf("unreadable release values aborted validation: %v\n%s", err, out)
-	}
-	if got.DisabledComponents != nil {
-		t.Fatalf("disabled components = %v, want every component validated", got.DisabledComponents)
-	}
-	if !strings.Contains(out, "validating every component") || !strings.Contains(out, "release: not found") {
-		t.Fatalf("output did not explain the degraded read:\n%s", out)
+	if err == nil || !strings.Contains(err.Error(), "cannot determine readiness settings") || !strings.Contains(err.Error(), "release: not found") {
+		t.Fatalf("unreadable release settings error = %v\n%s", err, out)
 	}
 }
 
@@ -114,6 +107,28 @@ func TestClusterValidateInstallationRejectsInvalidTimeout(t *testing.T) {
 	out, err := runCluster(t, "validate", "installation", "--timeout", "later")
 	if err == nil || !strings.Contains(err.Error(), "invalid --timeout") {
 		t.Fatalf("invalid timeout error = %v\n%s", err, out)
+	}
+}
+
+func TestClusterValidateInstallationReadsExternalControllerNamespace(t *testing.T) {
+	original := runHelmCommand
+	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
+		if len(args) < 2 || args[0] != "get" || args[1] != "values" {
+			t.Fatalf("unexpected Helm call: %v", args)
+		}
+		_, _ = io.WriteString(out, `{"tau-core-controller":{"namespaceOverride":"existing-platform"}}`)
+		return nil
+	}
+	t.Cleanup(func() { runHelmCommand = original })
+	installFakeInstallationValidation(t)
+	waitForTauGridInstallation = func(_ context.Context, _ installationcheck.Runner, opts installationcheck.Options) (installationcheck.Report, error) {
+		if opts.SystemNamespace != "observability" || opts.ControllerNamespace != "existing-platform" {
+			t.Fatalf("wrong readiness namespaces: %+v", opts)
+		}
+		return readyInstallationReport(), nil
+	}
+	if out, err := runCluster(t, "validate", "installation", "--namespace", "observability"); err != nil {
+		t.Fatalf("validation errored: %v\n%s", err, out)
 	}
 }
 

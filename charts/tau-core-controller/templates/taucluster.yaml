@@ -1,3 +1,4 @@
+{{- if .Values.tauCluster.create }}
 {{- $rules := concat (.Values.tauCluster.nodeLabelRules | default list) (.Values.tauCluster.extraNodeLabelRules | default list) -}}
 apiVersion: tau.azure.com/v1alpha1
 kind: TauCluster
@@ -19,3 +20,4 @@ spec:
 {{- toYaml .Values.tauCluster.queues | nindent 4 }}
   workloadProfiles:
 {{- tpl (toYaml .Values.tauCluster.workloadProfiles) . | nindent 4 }}
+{{- end }}

@@ -1,10 +1,10 @@
 {{/*
 System namespace that owns the controller, its RBAC, and every TauWorkspace.
-The Helm release namespace is passed to the binary so every TauGrid system
-component follows the chart installation namespace.
+Defaults to the Helm release namespace; an override preserves an existing
+controller namespace independently of other components in the release.
 */}}
 {{- define "tau-core-controller.namespace" -}}
-{{- .Release.Namespace -}}
+{{- default .Release.Namespace .Values.namespaceOverride -}}
 {{- end -}}
 
 {{/*

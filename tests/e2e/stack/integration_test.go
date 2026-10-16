@@ -18,6 +18,7 @@ package stack
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -635,6 +636,34 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 
 	requireInfiniBandEngaged(t, logs)
 	requireFirstCheckpointPersisted(t, logs)
+	require.NoError(t, tc.Bundle().WriteFile("fineweb-submit.log", []byte(logs)),
+		"persist FineWeb submitter logs")
+	metrics, err := parseFineWebMetrics(logs)
+	require.NoError(t, err, "parse FineWeb InfiniBand and performance metrics")
+	require.Equal(t, 2, metrics.InfiniBand.Hosts,
+		"InfiniBand counters should be sampled from both H200 worker nodes")
+	require.Positive(t, metrics.InfiniBand.TransmitBytes,
+		"InfiniBand transmit-byte delta should be positive")
+	require.Positive(t, metrics.InfiniBand.ReceiveBytes,
+		"InfiniBand receive-byte delta should be positive")
+	require.Positive(t, metrics.InfiniBand.TransmitPackets,
+		"InfiniBand transmit-packet delta should be positive")
+	require.Positive(t, metrics.InfiniBand.ReceivePackets,
+		"InfiniBand receive-packet delta should be positive")
+	require.Zero(t, metrics.InfiniBand.ErrorEvents,
+		"InfiniBand link/error counters must not increase during the workload")
+	require.Positive(t, metrics.Performance.TokensPerSecond,
+		"FineWeb distributed throughput should be positive")
+	metricsJSON, err := json.MarshalIndent(metrics, "", "  ")
+	require.NoError(t, err, "marshal FineWeb metrics")
+	require.NoError(t, tc.Bundle().WriteFile("fineweb-metrics.json", append(metricsJSON, '\n')),
+		"persist FineWeb metrics")
+	t.Logf("FineWeb IB metrics: throughput=%.2f tokens/s tx=%dB rx=%dB tx_packets=%d rx_packets=%d",
+		metrics.Performance.TokensPerSecond,
+		metrics.InfiniBand.TransmitBytes,
+		metrics.InfiniBand.ReceiveBytes,
+		metrics.InfiniBand.TransmitPackets,
+		metrics.InfiniBand.ReceivePackets)
 
 	requirePodsOnSelectedNodes(t, tc, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameFineWeb), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
 		"FineWeb submitter should stay on the selected CPU node pool")
@@ -652,6 +681,97 @@ var ncclIBUsingRE = regexp.MustCompile(`NET/IB\s*:\s*Using`)
 // ncclSocketUsingRE matches the NCCL socket-transport fallback selection line. Its
 // presence means NCCL did NOT use InfiniBand for the data plane.
 var ncclSocketUsingRE = regexp.MustCompile(`NET/Socket\s*:\s*Using`)
+var fineWebPerfMetricsRE = regexp.MustCompile(`FINEWEB_PERF_METRICS_JSON (\{[^\n]*\})`)
+var fineWebIBMetricsRE = regexp.MustCompile(`FINEWEB_IB_METRICS_JSON (\{[^\n]*\})`)
+
+type fineWebPerformanceMetrics struct {
+	DurationSeconds  float64 `json:"duration_seconds"`
+	GlobalTokens     int64   `json:"global_tokens"`
+	TokensPerSecond  float64 `json:"tokens_per_second"`
+	Steps            int     `json:"steps"`
+	WorldSize        int     `json:"world_size"`
+	BatchSizePerRank int     `json:"batch_size_per_rank"`
+	BlockSize        int     `json:"block_size"`
+}
+
+type fineWebIBRankMetrics struct {
+	Rank      int              `json:"rank"`
+	LocalRank int              `json:"local_rank"`
+	Hostname  string           `json:"hostname"`
+	Sampled   bool             `json:"sampled"`
+	Counters  map[string]int64 `json:"counters"`
+}
+
+type fineWebIBMetrics struct {
+	Ranks []fineWebIBRankMetrics `json:"ranks"`
+}
+
+type fineWebIBSummary struct {
+	Hosts           int   `json:"hosts"`
+	TransmitBytes   int64 `json:"transmit_bytes"`
+	ReceiveBytes    int64 `json:"receive_bytes"`
+	TransmitPackets int64 `json:"transmit_packets"`
+	ReceivePackets  int64 `json:"receive_packets"`
+	ErrorEvents     int64 `json:"error_events"`
+}
+
+type fineWebMetricsArtifact struct {
+	Performance fineWebPerformanceMetrics `json:"performance"`
+	InfiniBand  fineWebIBSummary          `json:"infiniband"`
+	Ranks       []fineWebIBRankMetrics    `json:"ranks"`
+}
+
+func parseFineWebMetrics(logs string) (fineWebMetricsArtifact, error) {
+	var artifact fineWebMetricsArtifact
+	perfMatch := fineWebPerfMetricsRE.FindStringSubmatch(logs)
+	if perfMatch == nil {
+		return artifact, fmt.Errorf("FINEWEB_PERF_METRICS_JSON sentinel is missing")
+	}
+	if err := json.Unmarshal([]byte(perfMatch[1]), &artifact.Performance); err != nil {
+		return artifact, fmt.Errorf("decode FineWeb performance metrics: %w", err)
+	}
+
+	ibMatch := fineWebIBMetricsRE.FindStringSubmatch(logs)
+	if ibMatch == nil {
+		return artifact, fmt.Errorf("FINEWEB_IB_METRICS_JSON sentinel is missing")
+	}
+	var ib fineWebIBMetrics
+	if err := json.Unmarshal([]byte(ibMatch[1]), &ib); err != nil {
+		return artifact, fmt.Errorf("decode FineWeb InfiniBand metrics: %w", err)
+	}
+	artifact.Ranks = ib.Ranks
+
+	sampledHosts := make(map[string]struct{})
+	for _, rank := range ib.Ranks {
+		if !rank.Sampled {
+			continue
+		}
+		if _, exists := sampledHosts[rank.Hostname]; exists {
+			continue
+		}
+		sampledHosts[rank.Hostname] = struct{}{}
+		for name, value := range rank.Counters {
+			switch {
+			case strings.HasSuffix(name, "/port_xmit_data_bytes"):
+				artifact.InfiniBand.TransmitBytes += value
+			case strings.HasSuffix(name, "/port_rcv_data_bytes"):
+				artifact.InfiniBand.ReceiveBytes += value
+			case strings.HasSuffix(name, "/port_xmit_packets"):
+				artifact.InfiniBand.TransmitPackets += value
+			case strings.HasSuffix(name, "/port_rcv_packets"):
+				artifact.InfiniBand.ReceivePackets += value
+			case strings.HasSuffix(name, "/symbol_error"),
+				strings.HasSuffix(name, "/link_error_recovery"),
+				strings.HasSuffix(name, "/link_downed"),
+				strings.HasSuffix(name, "/port_rcv_errors"),
+				strings.HasSuffix(name, "/port_xmit_discards"):
+				artifact.InfiniBand.ErrorEvents += value
+			}
+		}
+	}
+	artifact.InfiniBand.Hosts = len(sampledHosts)
+	return artifact, nil
+}
 
 // requireInfiniBandEngaged asserts the worker NCCL logs prove IB was used: a
 // positive "NET/IB : Using" line and no "NET/Socket : Using" fallback line.

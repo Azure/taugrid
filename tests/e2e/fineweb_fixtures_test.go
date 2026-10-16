@@ -122,6 +122,30 @@ func TestFineWebFixtureUsesInfiniBandNCCLEnv(t *testing.T) {
 	}
 }
 
+func TestFineWebWorkloadEmitsPerformanceAndInfiniBandMetrics(t *testing.T) {
+	path, err := findRepoFile("tests/e2e/stack/fixtures/fineweb_ray_train.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fineweb_ray_train.py: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"/sys/class/infiniband",
+		"port_xmit_data",
+		"port_rcv_data",
+		"FINEWEB_PERF_METRICS_JSON",
+		"FINEWEB_IB_METRICS_JSON",
+		"tokens_per_second",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected FineWeb workload metric contract %q", want)
+		}
+	}
+}
+
 // TestFineWebFixturePinsSubmitterAndHeadToCPUPool asserts the submitter and head
 // stay on the CPU node pool and that the GPU workers carry a GPU request.
 func TestFineWebFixturePinsSubmitterAndHeadToCPUPool(t *testing.T) {

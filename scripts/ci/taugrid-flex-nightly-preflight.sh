@@ -29,6 +29,14 @@ readonly A100_MIN_NODES="${FLEX_NIGHTLY_A100_MIN_NODES:-2}"
 readonly A100_GPUS_PER_NODE="${FLEX_NIGHTLY_A100_GPUS_PER_NODE:-8}"
 readonly A100_ARCHITECTURE="${FLEX_NIGHTLY_A100_ARCHITECTURE:-amd64}"
 
+readonly H100_SELECTOR="${FLEX_NIGHTLY_H100_SELECTOR:-kueue.azure.com/gpu-series=nc-h100-v5}"
+readonly H100_SITE="${FLEX_NIGHTLY_H100_SITE:-}"
+readonly H100_FLAVOR="${FLEX_NIGHTLY_H100_FLAVOR:-tau-gpu-h100-95gb-v2}"
+readonly H100_CLUSTER_QUEUE="${FLEX_NIGHTLY_H100_CLUSTER_QUEUE:-tau-gpu-cq}"
+readonly H100_MIN_NODES="${FLEX_NIGHTLY_H100_MIN_NODES:-2}"
+readonly H100_GPUS_PER_NODE="${FLEX_NIGHTLY_H100_GPUS_PER_NODE:-1,2}"
+readonly H100_ARCHITECTURE="${FLEX_NIGHTLY_H100_ARCHITECTURE:-amd64}"
+
 readonly H200_SELECTOR="${FLEX_NIGHTLY_H200_SELECTOR:-kueue.azure.com/gpu-series=nd-h200-v5}"
 readonly H200_SITE="${FLEX_NIGHTLY_H200_SITE:-}"
 readonly H200_FLAVOR="${FLEX_NIGHTLY_H200_FLAVOR:-tau-gpu-h200-141gb-v2}"
@@ -54,6 +62,13 @@ require_non_negative_int() {
   local name="$1"
   local value="$2"
   [[ "$value" =~ ^[0-9]+$ ]] || fail "${name} must be a non-negative integer (got '${value}')"
+}
+
+require_positive_int_list() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] ||
+    fail "${name} must be a comma-separated list of positive integers (got '${value}')"
 }
 
 validate_selector() {
@@ -83,9 +98,12 @@ validate_config() {
   command -v "$KUBECTL_BIN" >/dev/null 2>&1 || fail "${KUBECTL_BIN} is required"
 
   validate_simple_selector_value "A100 selector" "$A100_SELECTOR"
+  validate_simple_selector_value "H100 selector" "$H100_SELECTOR"
   validate_simple_selector_value "H200 selector" "$H200_SELECTOR"
   [ -n "$A100_SITE" ] && [[ "$A100_SITE" != '$('* ]] ||
     fail "FLEX_NIGHTLY_A100_SITE is required"
+  [ -n "$H100_SITE" ] && [[ "$H100_SITE" != '$('* ]] ||
+    fail "FLEX_NIGHTLY_H100_SITE is required"
   [ -n "$H200_SITE" ] && [[ "$H200_SITE" != '$('* ]] ||
     fail "FLEX_NIGHTLY_H200_SITE is required"
   require_non_negative_int FLEX_NIGHTLY_MIN_RDMA_NODES "$MIN_RDMA_NODES"
@@ -93,9 +111,11 @@ validate_config() {
   require_non_negative_int FLEX_NIGHTLY_DGX_MIN_NODES "$DGX_MIN_NODES"
   require_non_negative_int FLEX_NIGHTLY_DGX_GPUS_PER_NODE "$DGX_GPUS_PER_NODE"
   require_non_negative_int FLEX_NIGHTLY_A100_MIN_NODES "$A100_MIN_NODES"
-  require_non_negative_int FLEX_NIGHTLY_A100_GPUS_PER_NODE "$A100_GPUS_PER_NODE"
+  require_positive_int_list FLEX_NIGHTLY_A100_GPUS_PER_NODE "$A100_GPUS_PER_NODE"
+  require_non_negative_int FLEX_NIGHTLY_H100_MIN_NODES "$H100_MIN_NODES"
+  require_positive_int_list FLEX_NIGHTLY_H100_GPUS_PER_NODE "$H100_GPUS_PER_NODE"
   require_non_negative_int FLEX_NIGHTLY_H200_MIN_NODES "$H200_MIN_NODES"
-  require_non_negative_int FLEX_NIGHTLY_H200_GPUS_PER_NODE "$H200_GPUS_PER_NODE"
+  require_positive_int_list FLEX_NIGHTLY_H200_GPUS_PER_NODE "$H200_GPUS_PER_NODE"
   [[ "$INCLUDE_DGX" == "true" || "$INCLUDE_DGX" == "false" ||
     "$INCLUDE_DGX" == "True" || "$INCLUDE_DGX" == "False" ]] ||
     fail "FLEX_NIGHTLY_INCLUDE_DGX must be true or false"
@@ -185,7 +205,7 @@ target_summary() {
     --arg rdmaResource "$RDMA_RESOURCE" \
     --arg expectedArchitecture "$expected_architecture" \
     --argjson expectedMinNodes "$expected_min_nodes" \
-    --argjson expectedGPUsPerNode "$expected_gpus_per_node" \
+    --arg expectedGPUsPerNode "$expected_gpus_per_node" \
     --argjson requireGPUTaint "$require_gpu_taint" \
     --argjson maxLeaseAgeSeconds "$MAX_LEASE_AGE_SECONDS" \
     --slurpfile nodes "${temp_dir}/nodes.json" \
@@ -220,6 +240,7 @@ target_summary() {
         | {
             name: $node.metadata.name,
             site: ($node.metadata.labels["tau.azure.com/site"] // ""),
+            gpu_class: ($node.metadata.labels["tau.azure.com/gpu-class"] // ""),
             architecture: ($node.status.nodeInfo.architecture // ""),
             operating_system: ($node.status.nodeInfo.operatingSystem // ""),
             container_runtime: ($node.status.nodeInfo.containerRuntimeVersion // ""),
@@ -256,12 +277,15 @@ target_summary() {
           }
       ] as $readyNodes
       | ($flavorObjects[0].spec.topologyName // "") as $flavorTopology
+      | ($flavorObjects[0].spec.nodeLabels["tau.azure.com/gpu-class"] // "") as $flavorGPUClass
+      | ($name != "dgx-spark") as $requireGPUClass
       | ([ $queueObjects[0].spec.resourceGroups[]?.flavors[]?.name ] | index($flavor) != null) as $queueHasFlavor
       | (any($queueObjects[0].status.conditions[]?; .type == "Active" and .status == "True")) as $queueActive
       | ($readyNodes | map(.site) | unique | sort) as $sites
       | {
           minimum_nodes: $expectedMinNodes,
-          gpus_per_node: $expectedGPUsPerNode,
+          gpus_per_node: ($expectedGPUsPerNode | split(",") | map(tonumber) | max),
+          allowed_gpus_per_node: ($expectedGPUsPerNode | split(",") | map(tonumber)),
           architecture: $expectedArchitecture,
           operating_system: "linux",
           container_runtime_prefix: "containerd://",
@@ -277,8 +301,10 @@ target_summary() {
             elif ($node.schedulable | not) then "\($node.name): unschedulable"
             elif ($node.ready | not) then "\($node.name): Ready is not True"
             elif ($node.pressure_free | not) then "\($node.name): node pressure condition is active"
-            elif ($node.gpu_allocatable != $expectedGPUsPerNode) then "\($node.name): gpu_allocatable=\($node.gpu_allocatable)"
+            elif (($expectedGPUsPerNode | split(",") | map(tonumber) | index($node.gpu_allocatable)) == null) then "\($node.name): gpu_allocatable=\($node.gpu_allocatable)"
             elif ($node.site != $expectedSite) then "\($node.name): site=\($node.site)"
+            elif ($requireGPUClass and $flavorGPUClass == "") then "ResourceFlavor \($flavor) is missing tau.azure.com/gpu-class"
+            elif ($requireGPUClass and $node.gpu_class != $flavorGPUClass) then "\($node.name): gpu_class=\($node.gpu_class)"
             elif ($node.network_domain == "") then "\($node.name): missing network-domain"
             elif ($node.accelerator_domain == "") then "\($node.name): missing accelerator-domain"
             elif ($requireGPUTaint and ($node.gpu_taint | not)) then "\($node.name): missing nvidia.com/gpu NoSchedule taint"
@@ -290,12 +316,18 @@ target_summary() {
         + if ($readyNodes | length) < $expectedMinNodes
           then ["ready node count \($readyNodes | length) is below \($expectedMinNodes)"]
           else []
-          end) as $capabilityViolations
+          end
+        + [
+            ($expectedGPUsPerNode | split(",") | map(tonumber))[] as $expectedGPUCount
+            | select(any($readyNodes[]; .gpu_allocatable == $expectedGPUCount) | not)
+            | "no node advertises expected gpu_allocatable=\($expectedGPUCount)"
+          ]) as $capabilityViolations
       | {
           name: $name,
           selector: $selector,
           expected_site: $expectedSite,
           flavor: $flavor,
+          gpu_class: $flavorGPUClass,
           cluster_queue: $clusterQueue,
           topology: $topology,
           topology_ready: ($flavorTopology == $topology),
@@ -335,7 +367,7 @@ target_summary() {
 }
 
 run_cluster_preflight() {
-  local dgx a100 h200 rdma rdma_nodes
+  local dgx a100 h100 h200 rdma rdma_nodes
   local kueue_namespace kueue_deployment kuberay_namespace kuberay_deployment
 
   validate_config
@@ -369,9 +401,10 @@ run_cluster_preflight() {
       }')"
   fi
   a100="$(target_summary a100 "$A100_SELECTOR" "$A100_SITE" "$A100_FLAVOR" "$A100_CLUSTER_QUEUE" "$A100_MIN_NODES" "$A100_GPUS_PER_NODE" "$A100_ARCHITECTURE" true)"
+  h100="$(target_summary h100 "$H100_SELECTOR" "$H100_SITE" "$H100_FLAVOR" "$H100_CLUSTER_QUEUE" "$H100_MIN_NODES" "$H100_GPUS_PER_NODE" "$H100_ARCHITECTURE" true)"
   h200="$(target_summary h200 "$H200_SELECTOR" "$H200_SITE" "$H200_FLAVOR" "$H200_CLUSTER_QUEUE" "$H200_MIN_NODES" "$H200_GPUS_PER_NODE" "$H200_ARCHITECTURE" true)"
 
-  for target in "$dgx" "$a100" "$h200"; do
+  for target in "$dgx" "$a100" "$h100" "$h200"; do
     [ "$(jq -r '.status' <<<"$target")" != "misconfigured" ] ||
       fail "hardware target $(jq -r '.name' <<<"$target") is misconfigured: $(jq -c '{sites,expected_site,capability_ready,capability_violations,topology_ready,queue_active,queue_has_flavor}' <<<"$target")"
   done
@@ -394,6 +427,7 @@ run_cluster_preflight() {
     cluster_queue_ready "$DGX_CLUSTER_QUEUE"
   fi
   cluster_queue_ready "$A100_CLUSTER_QUEUE"
+  cluster_queue_ready "$H100_CLUSTER_QUEUE"
   cluster_queue_ready "$H200_CLUSTER_QUEUE"
 
   jq -n \
@@ -404,6 +438,7 @@ run_cluster_preflight() {
     --arg rdmaResource "$RDMA_RESOURCE" \
     --argjson dgx "$dgx" \
     --argjson a100 "$a100" \
+    --argjson h100 "$h100" \
     --argjson h200 "$h200" \
     --argjson rdma "$rdma" \
     '{
@@ -414,11 +449,11 @@ run_cluster_preflight() {
         gpu: $gpuResource,
         rdma: $rdmaResource
       },
-      targets: [$dgx, $a100, $h200],
+      targets: [$dgx, $a100, $h100, $h200],
       rdma_target: $rdma
     }' >"$CONTRACT_FILE"
 
-  echo "Flex nightly preflight passed for DGX Spark, A100, and H200 targets"
+  echo "Flex nightly preflight passed for DGX Spark, A100, H100, and H200 targets"
   echo "Contract written to ${CONTRACT_FILE}"
 }
 
@@ -445,6 +480,7 @@ compare_capability_contracts() {
                 | {
                     name,
                     site,
+                    gpu_class,
                     architecture,
                     operating_system,
                     container_runtime,

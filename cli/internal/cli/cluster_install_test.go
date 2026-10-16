@@ -205,6 +205,7 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 			_, _ = io.WriteString(out, "{}")
 			return nil
 		case len(args) > 0 && args[0] == "template":
+			_, _ = io.WriteString(out, "kind: Deployment\nmetadata:\n  name: tau-core-controller\n  namespace: tau-system\n")
 			return nil
 		}
 		upgrades++
@@ -567,15 +568,27 @@ func TestClusterLifecycleRejectsPositionalArguments(t *testing.T) {
 func installFakeHelm(t *testing.T, fake helmCommandRunner) {
 	t.Helper()
 	original := runHelmCommand
+	liveInstall := false
 	runHelmCommand = func(ctx context.Context, in io.Reader, out, errOut io.Writer, args []string) error {
 		switch {
 		case len(args) > 0 && args[0] == "list":
+			liveInstall = true
 			_, _ = io.WriteString(out, "[]")
 			return nil
 		case len(args) > 1 && args[0] == "get" && args[1] == "values":
 			_, _ = io.WriteString(out, "{}")
 			return nil
+		case liveInstall && len(args) > 0 && args[0] == "template":
+			namespace := defaultTauGridNamespace
+			for i, arg := range args {
+				if arg == "--namespace" && i+1 < len(args) {
+					namespace = args[i+1]
+				}
+			}
+			_, _ = fmt.Fprintf(out, "kind: Deployment\nmetadata:\n  name: tau-core-controller\n  namespace: %s\n", namespace)
+			return nil
 		}
+
 		return fake(ctx, in, out, errOut, args)
 	}
 	installFakeInstallationValidation(t)
@@ -584,6 +597,147 @@ func installFakeHelm(t *testing.T, fake helmCommandRunner) {
 	})
 }
 
+func TestClusterInstallSkipCRDsMatchesPreviewAndBothInstallPasses(t *testing.T) {
+	spec := clusterInstallSpec{SkipCRDs: true}
+	if slices.Contains(clusterInstallRenderArgs(spec), "--include-crds") {
+		t.Fatal("preview included externally managed CRD directories")
+	}
+	for _, args := range [][]string{clusterInstallBootstrapArgs(spec), clusterInstallArgs(spec)} {
+		if !slices.Contains(args, "--skip-crds") {
+			t.Fatalf("Helm pass did not skip externally managed CRDs: %v", args)
+		}
+	}
+	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+		if !slices.Contains(args, "--skip-crds") {
+			t.Fatalf("--skip-crds was not wired into install: %v", args)
+		}
+		return nil
+	})
+	if _, err := runCluster(t, "install", "--skip-crds"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClusterInstallReplaysStdinValuesForEveryHelmPass(t *testing.T) {
+	stubForceConflicts(t, false)
+	original := runHelmCommand
+	t.Cleanup(func() { runHelmCommand = original })
+	installFakeInstallationValidation(t)
+	const input = "examplePrivateConfiguration: not-a-real-identity\n"
+	var reads int
+	runHelmCommand = func(_ context.Context, in io.Reader, out, _ io.Writer, args []string) error {
+		switch args[0] {
+		case "list":
+			_, _ = io.WriteString(out, "[]")
+		case "get":
+			_, _ = io.WriteString(out, "{}")
+		case "template", "upgrade":
+			values, err := io.ReadAll(in)
+			if err != nil || string(values) != input {
+				t.Fatalf("Helm %s received %q, error %v", args[0], values, err)
+			}
+			reads++
+			if args[0] == "template" {
+				_, _ = io.WriteString(out, "kind: Deployment\nmetadata: {name: tau-core-controller, namespace: tau-system}")
+			}
+		default:
+			t.Fatalf("unexpected Helm command: %v", args)
+		}
+		return nil
+	}
+	cmd := newClusterInstallCmd()
+	cmd.SetArgs([]string{"--values", "-"})
+	cmd.SetIn(strings.NewReader(input))
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 3 {
+		t.Fatalf("stdin values replayed %d times, want preview and both installation passes", reads)
+	}
+}
+
+func TestClusterInstallRejectsRepeatedStdinValues(t *testing.T) {
+	_, err := runCluster(t, "install", "--values", "-", "--values", "-")
+	if err == nil || !strings.Contains(err.Error(), "may only be specified once") {
+		t.Fatalf("repeated stdin values error = %v", err)
+	}
+}
+
+func TestRenderedControllerNamespace(t *testing.T) {
+	for _, tt := range []struct {
+		name, manifest, namespace string
+		wantErr                   bool
+	}{
+		{"external namespace", "kind: Deployment\nmetadata: {name: tau-core-controller, namespace: existing-platform}", "existing-platform", false},
+		{"disabled", "kind: Service\nmetadata: {name: portal}", "", false},
+		{"progress banner", "Saving 5 charts\n---\nkind: Deployment\nmetadata: {name: tau-core-controller, namespace: existing-platform}", "existing-platform", false},
+		{"missing namespace", "kind: Deployment\nmetadata: {name: tau-core-controller}", "", true},
+		{"invalid namespace type", "kind: Deployment\nmetadata: {name: tau-core-controller, namespace: [wrong]}", "", true},
+		{"malformed", "kind: [", "", true},
+		{"duplicate", "kind: Deployment\nmetadata: {name: tau-core-controller, namespace: one}\n---\nkind: Deployment\nmetadata: {name: tau-core-controller, namespace: two}", "", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := renderedControllerNamespace([]byte(tt.manifest))
+			if (err != nil) != tt.wantErr || got != tt.namespace {
+				t.Fatalf("namespace = %q, error = %v; want %q, error %t", got, err, tt.namespace, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestClusterInstallChecksRenderedControllerNamespaceBeforeAnyWrite(t *testing.T) {
+	for _, existingRelease := range []bool{false, true} {
+		for _, namespace := range []string{"existing-platform", "wrong-platform"} {
+			t.Run(fmt.Sprintf("existing=%t/namespace=%s", existingRelease, namespace), func(t *testing.T) {
+				original := runHelmCommand
+				var upgrades int
+				runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
+					switch args[0] {
+					case "list":
+						if existingRelease {
+							_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"observability"}]`)
+						} else {
+							_, _ = io.WriteString(out, "[]")
+						}
+					case "template":
+						_, _ = fmt.Fprintf(out, "kind: Deployment\nmetadata: {name: tau-core-controller, namespace: %s}", namespace)
+					case "upgrade":
+						upgrades++
+					case "get":
+						_, _ = io.WriteString(out, "{}")
+					default:
+						t.Fatalf("unexpected Helm call: %v", args)
+					}
+					return nil
+				}
+				t.Cleanup(func() { runHelmCommand = original })
+				installFakeInstallationValidation(t)
+				newInstallationCheckRunner = func(string) installationcheck.Runner {
+					return namespaceMigrationRunner{
+						"get workspaces.tau.azure.com --all-namespaces --output=json":    {output: `{"items":[{"metadata":{"name":"demo","namespace":"existing-platform"}}]}`},
+						"get quotarequests.tau.azure.com --all-namespaces --output=json": {output: `{"items":[]}`},
+					}
+				}
+				waitForTauGridInstallation = func(_ context.Context, _ installationcheck.Runner, opts installationcheck.Options) (installationcheck.Report, error) {
+					if opts.SystemNamespace != "observability" || opts.ControllerNamespace != namespace {
+						t.Fatalf("wrong readiness namespaces: %+v", opts)
+					}
+					return readyInstallationReport(), nil
+				}
+				out, err := runCluster(t, "install", "--namespace", "observability")
+				if namespace == "wrong-platform" {
+					if err == nil || upgrades != 0 || !strings.Contains(err.Error(), "existing-platform/demo") {
+						t.Fatalf("unsafe namespace change: upgrades=%d, error=%v", upgrades, err)
+					}
+				} else if err != nil || upgrades == 0 || !strings.Contains(out, "--system-namespace existing-platform") {
+					t.Fatalf("preserved namespace install: upgrades=%d, error=%v, output=%s", upgrades, err, out)
+				}
+			})
+		}
+	}
+}
 func installFakeInstallationValidation(t *testing.T) {
 	t.Helper()
 	originalWait := waitForTauGridInstallation

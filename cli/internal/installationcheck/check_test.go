@@ -146,6 +146,21 @@ func TestCheckSkipsDisabledPortalWithoutReadingItsDeployment(t *testing.T) {
 	}
 }
 
+func TestCheckSkipsExternallyManagedBaselineQueue(t *testing.T) {
+	runner := readyRunner()
+	delete(runner, "get clusterqueues --selector app.kubernetes.io/instance=taugrid,app.kubernetes.io/part-of=taugrid --output=json")
+	opts := testOptions()
+	opts.DisabledComponents = []Component{ComponentBaselineQueue}
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("external baseline queue blocked readiness:\n%s", report.Summary())
+	}
+	if !strings.Contains(report.Summary(), "SKIP  Baseline queue") {
+		t.Fatalf("summary missing baseline queue skip:\n%s", report.Summary())
+	}
+}
+
 func TestCheckFindsPortalByStableComponentLabel(t *testing.T) {
 	runner := readyRunner()
 	key := "get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"
@@ -166,6 +181,7 @@ func TestCheckUsesConfiguredSystemNamespaceForPortalAndController(t *testing.T) 
 	for key, response := range readyRunner() {
 		runner[strings.ReplaceAll(key, "tau-system", "custom-system")] = response
 	}
+
 	opts := testOptions()
 	opts.SystemNamespace = "custom-system"
 
@@ -175,6 +191,28 @@ func TestCheckUsesConfiguredSystemNamespaceForPortalAndController(t *testing.T) 
 	}
 }
 
+func TestCheckKeepsPortalInReleaseAndControllerInExternalNamespace(t *testing.T) {
+	runner := readyRunner()
+	oldKey := "get deployment tau-core-controller --namespace tau-system --output=json"
+	runner["get deployment tau-core-controller --namespace existing-platform --output=json"] = runner[oldKey]
+	delete(runner, oldKey)
+	opts := testOptions()
+	opts.ControllerNamespace = "existing-platform"
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("split namespace readiness failed:\n%s", report.Summary())
+	}
+}
+
+func TestSettingsFromValuesRetainsControllerNamespaceAndComponentSwitches(t *testing.T) {
+	settings, err := SettingsFromValues([]byte(`{"tau-core-controller":{"namespaceOverride":"existing-platform"},"components":{"kueue":{"enabled":false}}}`))
+	if err != nil || settings.ControllerNamespace != "existing-platform" || !slices.Equal(settings.DisabledComponents, []Component{ComponentKueue}) {
+		t.Fatalf("settings=%+v, error=%v", settings, err)
+	}
+	if _, err := SettingsFromValues([]byte(`{"tau-core-controller":{"namespaceOverride":123}}`)); err == nil {
+		t.Fatal("non-string controller namespace was accepted")
+	}
+}
 func TestCheckStillValidatesEnabledComponentsWhenAnotherIsDisabled(t *testing.T) {
 	runner := readyRunner()
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
@@ -275,6 +313,11 @@ func TestDisabledComponentsReadsChartSwitches(t *testing.T) {
 			name:   "only portal disabled",
 			values: `{"taugrid-core":{"portal":{"enabled":false}}}`,
 			want:   []Component{ComponentPortal},
+		},
+		{
+			name:   "external baseline queue",
+			values: `{"baselineQueue":{"enabled":false}}`,
+			want:   []Component{ComponentBaselineQueue},
 		},
 		{
 			name:   "shorthand bool leaves the subchart installed",

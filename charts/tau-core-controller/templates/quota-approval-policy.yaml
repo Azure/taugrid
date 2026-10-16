@@ -1,3 +1,4 @@
+{{- if .Values.quotaApprovalPolicy.create }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -71,3 +72,4 @@ metadata:
 spec:
   policyName: tau-quota-approval-guard
   validationActions: ["Deny"]
+{{- end }}

@@ -1,0 +1,80 @@
+suite: Externally managed controller resources
+templates:
+  - serviceaccount.yaml
+  - rbac.yaml
+  - quota-approval-policy.yaml
+  - taucluster.yaml
+tests:
+  - it: leaves an externally managed ServiceAccount out of the release
+    template: serviceaccount.yaml
+    set:
+      serviceAccount.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves all externally managed RBAC out of the release
+    template: rbac.yaml
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves both externally managed quota guards out of the release
+    template: quota-approval-policy.yaml
+    set:
+      quotaApprovalPolicy.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: omits the entire externally managed TauCluster and profile catalog
+    template: taucluster.yaml
+    set:
+      tauCluster.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: still creates all controller RBAC by default
+    template: rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 8
+
+  - it: uses the override for the created ServiceAccount
+    template: serviceaccount.yaml
+    release:
+      namespace: observability
+    set:
+      namespaceOverride: existing-platform
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: existing-platform
+
+  - it: uses the override for the cluster role binding subject
+    template: rbac.yaml
+    set:
+      namespaceOverride: existing-platform
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: subjects[0].namespace
+          value: existing-platform
+
+  - it: uses the override for namespaced RBAC and its subject
+    template: rbac.yaml
+    set:
+      namespaceOverride: existing-platform
+    documentSelector:
+      path: metadata.name
+      value: tau-workspace-leader-election
+      matchMany: true
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: existing-platform

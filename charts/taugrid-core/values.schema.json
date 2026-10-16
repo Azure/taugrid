@@ -8,6 +8,12 @@
       "additionalProperties": true,
       "properties": {
         "enabled": { "type": "boolean" },
+        "service": {
+          "type": "object",
+          "properties": {
+            "create": { "type": "boolean" }
+          }
+        },
         "access": {
           "type": "object",
           "additionalProperties": true,

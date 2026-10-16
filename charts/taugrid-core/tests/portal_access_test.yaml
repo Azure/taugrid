@@ -46,6 +46,35 @@ tests:
           path: spec.type
           value: ClusterIP
 
+  - it: renders only the Deployment when Service and access resources are external
+    release:
+      name: existing-portal
+      namespace: observability
+    set:
+      portal.enabled: true
+      portal.resourceName: existing-portal
+      portal.serviceName: existing-portal
+      portal.service.create: false
+      portal.serviceAccount.create: false
+      portal.serviceAccount.name: existing-portal
+      portal.rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.namespace
+          value: observability
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: existing-portal
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app: existing-portal
+            app.kubernetes.io/instance: existing-portal
+
   - it: accepts a declared platform-owned authenticated HTTPS proxy
     set:
       portal.enabled: true

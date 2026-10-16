@@ -51,3 +51,19 @@ tests:
           path: spec.selector.matchLabels
           value:
             app.kubernetes.io/name: tau-core-controller
+
+  - it: preserves a controller namespace distinct from the release namespace
+    release:
+      namespace: observability
+    set:
+      namespaceOverride: existing-platform
+    asserts:
+      - equal:
+            path: metadata.namespace
+            value: existing-platform
+      - contains:
+            path: spec.template.spec.containers[0].args
+            content: --platform-namespace=existing-platform
+      - equal:
+            path: spec.template.spec.serviceAccountName
+            value: tau-core-controller

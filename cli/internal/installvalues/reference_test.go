@@ -18,9 +18,15 @@ func TestReferenceMarkdownContainsCriticalFields(t *testing.T) {
 		"components.kueue.enabled",
 		"components.gpuMonitoring.enabled",
 		"tau-core-controller.tauCluster.nodeLabelRules",
+		"tau-core-controller.namespaceOverride",
+		"tau-core-controller.serviceAccount.create",
+		"tau-core-controller.rbac.create",
+		"tau-core-controller.quotaApprovalPolicy.create",
+		"tau-core-controller.tauCluster.create",
 		"taugrid-core.stellar.enabled",
 		"taugrid-core.portal.enabled",
 		"taugrid-core.portal.serviceAccount.create",
+		"taugrid-core.portal.service.create",
 		"taugrid-core.portal.rbac.create",
 	}
 	for _, field := range required {

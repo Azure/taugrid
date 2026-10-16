@@ -1,0 +1,30 @@
+components:
+  kueue:
+    enabled: false
+  kuberayOperator:
+    enabled: false
+  gpuMonitoring:
+    enabled: false
+baselineQueue:
+  enabled: false
+tau-core-controller:
+  namespaceOverride: existing-platform
+  serviceAccount:
+    create: false
+  rbac:
+    create: false
+  quotaApprovalPolicy:
+    create: false
+  tauCluster:
+    create: false
+taugrid-core:
+  portal:
+    resourceName: existing-portal
+    serviceName: existing-portal
+    service:
+      create: false
+    serviceAccount:
+      create: false
+      name: existing-portal
+    rbac:
+      create: false

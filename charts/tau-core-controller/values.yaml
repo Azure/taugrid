@@ -3,6 +3,19 @@
 # kustomize/ should keep the same value.
 partOf: taugrid
 
+# Leave empty for the Helm release namespace. An existing controller and its
+# TauWorkspace objects may live in a separately managed system namespace.
+namespaceOverride: ""
+
+# Disable creation only when these resources are managed outside this release.
+# Changing these flags on an existing Helm release can delete owned resources.
+serviceAccount:
+  create: true
+rbac:
+  create: true
+quotaApprovalPolicy:
+  create: true
+
 # The controller image is publicly available from MCR. Override the repository,
 # tag, or digest only to run a mirrored or pre-release build.
 image:
@@ -22,6 +35,9 @@ resources:
     memory: 256Mi
 
 tauCluster:
+  # Preserve an externally managed TauCluster, including its profile catalog,
+  # by omitting it entirely rather than rendering an empty replacement.
+  create: true
   managementMode: Reconcile
   deletionPolicy: Retain
   # Tau owns these derived labels. AKS supplies node.kubernetes.io/instance-type;
