@@ -1135,6 +1135,37 @@ func TestWorkspaceRevokesObsoletePreviousNamespaceSubjectBeforeTargetReady(t *te
 	}
 }
 
+func TestWorkspaceRevokesObsoletePreviousNamespaceIdentityBeforeTargetReady(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Target.Namespace = "new-aurora"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.WorkloadIdentity.ServiceAccountName = "tau-workload-v2"
+	workspace.Status.Target.ResolvedNamespace = "old-aurora"
+	current := testServiceAccount("old-aurora", "tau-workload-v2", workspace.Name)
+	current.Annotations[annotationOwnerUID] = string(workspace.UID)
+	obsolete := testServiceAccount("old-aurora", "tau-workload", workspace.Name)
+	obsolete.Annotations[annotationOwnerUID] = string(workspace.UID)
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, current, obsolete).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("syncWorkspace() error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(obsolete), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("obsolete previous namespace ServiceAccount survived: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(current), &corev1.ServiceAccount{}); err != nil {
+		t.Fatalf("current previous namespace ServiceAccount was removed: %v", err)
+	}
+}
+
 func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -2350,8 +2381,8 @@ func TestTeamWorkspaceStagesManagedQueueWithoutMutatingExistingQueue(t *testing.
 	reconciler := newTestWorkspaceReconciler(c)
 
 	status, ready, message, err := reconciler.reconcileQueue(ctx, workspace, "aurora")
-	if err != nil || ready || !strings.Contains(message, "compatible LocalQueue") {
-		t.Fatalf("reconcileQueue() status=%#v ready=%v message=%q err=%v, want compatibility conflict", status, ready, message, err)
+	if err != nil || !ready {
+		t.Fatalf("reconcileQueue() status=%#v ready=%v message=%q err=%v, want existing compatible queue preserved", status, ready, message, err)
 	}
 	if status.LocalQueue != workspaceClusterQueueName(workspace.Name) ||
 		status.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
@@ -2484,8 +2515,8 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), compatibleQueue); err != nil {
 		t.Fatalf("compatible LocalQueue disappeared during cutover: %v", err)
 	}
-	if target, _, _ := unstructured.NestedString(compatibleQueue.Object, "spec", "clusterQueue"); target != workspaceClusterQueueName(workspace.Name) {
-		t.Fatalf("compatible LocalQueue target = %q, want %q", target, workspaceClusterQueueName(workspace.Name))
+	if target, _, _ := unstructured.NestedString(compatibleQueue.Object, "spec", "clusterQueue"); target != workspace.Spec.Queue {
+		t.Fatalf("compatible LocalQueue target = %q, want preserved target %q", target, workspace.Spec.Queue)
 	}
 	var waiting tauv1alpha1.TauWorkspace
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
@@ -2527,7 +2558,7 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	}
 }
 
-func TestLegacyTeamWorkspaceMigratesStaleQueueUIDBeforeDrain(t *testing.T) {
+func TestLegacyTeamWorkspacePreservesExistingQueueContract(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
 	workspace := testWorkspace("aurora")
@@ -2566,8 +2597,11 @@ func TestLegacyTeamWorkspaceMigratesStaleQueueUIDBeforeDrain(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(legacyQueue), gotLegacyQueue); err != nil {
 		t.Fatalf("legacy LocalQueue was not retained as a compatibility alias: %v", err)
 	}
-	if target, _, _ := unstructured.NestedString(gotLegacyQueue.Object, "spec", "clusterQueue"); target != workspaceClusterQueueName(workspace.Name) {
-		t.Fatalf("legacy compatibility LocalQueue target = %q, want %q", target, workspaceClusterQueueName(workspace.Name))
+	if target, _, _ := unstructured.NestedString(gotLegacyQueue.Object, "spec", "clusterQueue"); target != workspace.Spec.Queue {
+		t.Fatalf("legacy compatibility LocalQueue target = %q, want preserved target %q", target, workspace.Spec.Queue)
+	}
+	if gotLegacyQueue.GetAnnotations()[annotationOwnerUID] != "" {
+		t.Fatalf("legacy compatibility LocalQueue was adopted: %#v", gotLegacyQueue.GetAnnotations())
 	}
 	var gotNamespace corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {

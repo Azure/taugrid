@@ -91,6 +91,12 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 		}
 	}
+	previousNamespace := workspace.Status.Target.ResolvedNamespace
+	if previousNamespace != "" && previousNamespace != targetNamespace {
+		if err := r.cleanupStaleWorkloadIdentityServiceAccounts(ctx, workspace, previousNamespace, keepServiceAccount); err != nil {
+			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+		}
+	}
 	previousAccessReady := true
 	if err := r.reconcilePreviousNamespaceResearcherAccess(ctx, workspace, targetNamespace); err != nil {
 		previousAccessReady = false
@@ -156,7 +162,6 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			cleanupReady = false
 			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 		}
-		previousNamespace := workspace.Status.Target.ResolvedNamespace
 		if previousNamespace != "" && previousNamespace != targetNamespace {
 			if err := r.cleanupStaleNamespaceMetadata(ctx, workspace, previousNamespace); err != nil {
 				cleanupReady = false
