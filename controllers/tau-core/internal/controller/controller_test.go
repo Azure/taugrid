@@ -1643,6 +1643,61 @@ func TestLegacyMigrationPreservesHelpersUntilNamespaceOwnershipIsVisible(t *test
 	}
 }
 
+func TestLegacyMigrationPreservesHelpersWhenWorkspaceCacheLeadsNamespaceCache(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{
+		annotationV0Primary: "true",
+		annotationOwnerUID:  string(workspace.UID),
+	}
+	cachedNamespace := testNamespace("aurora")
+	cachedNamespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	cachedNamespace.Annotations = nil
+	authoritativeNamespace := cachedNamespace.DeepCopy()
+	setOwnerUIDAnnotation(authoritativeNamespace, workspace.UID)
+	binding := testRoleBinding("aurora", defaultRoleName, "aurora")
+	binding.Annotations = nil
+	account := testServiceAccount("aurora", "tau-workload", "aurora")
+	account.Annotations = map[string]string{annotationAzureWIClientID: workspace.Spec.WorkloadIdentity.ClientID}
+	localQueue := testLocalQueue("aurora", "aurora", "aurora")
+	localQueue.SetLabels(workspaceLabels("aurora"))
+	localQueue.SetAnnotations(nil)
+	cache := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, cachedNamespace, binding, account, localQueue).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	api := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace.DeepCopy(), authoritativeNamespace).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	recordingClient := &resourceMutationRecordingClient{Client: cache}
+	reconciler := newTestWorkspaceReconciler(recordingClient)
+	reconciler.APIReader = api
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	result, err := reconciler.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("Reconcile cache-skewed legacy migration: %v", err)
+	}
+	if !result.Requeue {
+		t.Fatalf("cache-skewed migration result = %#v, want immediate requeue", result)
+	}
+	for _, obj := range []client.Object{binding, account, localQueue} {
+		if err := cache.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			t.Fatalf("cache-skewed migration deleted helper %T %s: %v", obj, client.ObjectKeyFromObject(obj), err)
+		}
+	}
+	for _, mutation := range recordingClient.mutations {
+		if strings.HasPrefix(mutation, "delete ") {
+			t.Fatalf("cache-skewed migration deleted helper before Namespace ownership was cached: %v", recordingClient.mutations)
+		}
+	}
+}
+
 func TestLegacyAdoptedWorkspaceWithoutQueueUsesClusterDefaultForMigration(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
