@@ -1411,6 +1411,18 @@ func TestContractChangesTreatsEmptyServiceAccountAsDefault(t *testing.T) {
 	}
 }
 
+func TestContractChangesAllowsVerifiedCompatibleQueueMigration(t *testing.T) {
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{
+		Namespace:        "sample",
+		Queue:            "tau-ws-sample",
+		CompatibleQueues: []string{"jobqueue"},
+	}
+	if changes := state.contractChanges(verification); len(changes) != 0 {
+		t.Fatalf("compatible LocalQueue migration required interactive review: %v", changes)
+	}
+}
+
 func TestManagerRejectsUnsupportedConnectionState(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()

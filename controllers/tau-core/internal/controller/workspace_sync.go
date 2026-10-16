@@ -91,8 +91,13 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 		}
 	}
+	previousAccessReady := true
+	if err := r.reconcilePreviousNamespaceResearcherAccess(ctx, workspace, targetNamespace); err != nil {
+		previousAccessReady = false
+		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+	}
 
-	currentTargetReady := namespaceReady && rbacReady && rbacErr == nil && queueReady
+	currentTargetReady := namespaceReady && rbacReady && rbacErr == nil && queueReady && previousAccessReady
 	if workspace.Spec.WorkloadIdentity != nil {
 		currentTargetReady = currentTargetReady && workloadIdentityReady && workloadIdentityErr == nil
 	}

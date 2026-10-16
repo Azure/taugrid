@@ -9,7 +9,9 @@ import (
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
@@ -57,6 +59,37 @@ func authorizationMode(workspace *tauv1alpha1.TauWorkspace) string {
 		return tauv1alpha1.AuthorizationModeWorkspaceRBAC
 	}
 	return workspace.Spec.Authorization.Mode
+}
+
+func (r *TauWorkspaceReconciler) reconcilePreviousNamespaceResearcherAccess(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace string,
+) error {
+	previousNamespace := workspace.Status.Target.ResolvedNamespace
+	if previousNamespace == "" || previousNamespace == targetNamespace {
+		return nil
+	}
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: previousNamespace}}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(binding), binding); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if err := r.ensureWorkspaceObjectUID(ctx, binding, workspace); err != nil {
+		return err
+	}
+	if authorizationMode(workspace) == tauv1alpha1.AuthorizationModeClusterWide ||
+		workspace.Spec.KubernetesSubject == nil {
+		return r.deleteWithPreconditions(ctx, binding)
+	}
+	desiredSubjects := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, previousNamespace)}
+	desiredRoleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}
+	if apiequality.Semantic.DeepEqual(binding.Subjects, desiredSubjects) &&
+		apiequality.Semantic.DeepEqual(binding.RoleRef, desiredRoleRef) {
+		return nil
+	}
+	binding.Subjects = desiredSubjects
+	binding.RoleRef = desiredRoleRef
+	return r.Update(ctx, binding)
 }
 
 func (r *TauWorkspaceReconciler) cleanupResearcherRBAC(

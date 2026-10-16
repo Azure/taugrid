@@ -1099,6 +1099,42 @@ func TestWorkspaceReconcileCleansStaleTargetRBAC(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRevokesObsoletePreviousNamespaceSubjectBeforeTargetReady(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Spec.Target.Namespace = "new-aurora"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.KubernetesSubject = &tauv1alpha1.KubernetesSubject{Kind: "Group", Name: "current-researchers"}
+	workspace.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:  tauv1alpha1.WorkspacePhaseReady,
+		Target: tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: "old-aurora"},
+	}
+	oldBinding := testRoleBinding("old-aurora", defaultRoleName, workspace.Name)
+	oldBinding.Subjects = []rbacv1.Subject{
+		{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "obsolete-researchers"},
+		{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "current-researchers"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, oldBinding).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("syncWorkspace() error = %v", err)
+	}
+	var got rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldBinding), &got); err != nil {
+		t.Fatalf("Get previous namespace RoleBinding: %v", err)
+	}
+	want := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, oldBinding.Namespace)}
+	if !reflect.DeepEqual(got.Subjects, want) {
+		t.Fatalf("previous namespace subjects = %#v, want %#v", got.Subjects, want)
+	}
+}
+
 func TestWorkspaceReconcileCleansRenamedAndRemovedWorkloadIdentity(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
@@ -2314,8 +2350,8 @@ func TestTeamWorkspaceStagesManagedQueueWithoutMutatingExistingQueue(t *testing.
 	reconciler := newTestWorkspaceReconciler(c)
 
 	status, ready, message, err := reconciler.reconcileQueue(ctx, workspace, "aurora")
-	if err != nil || !ready {
-		t.Fatalf("reconcileQueue() status=%#v ready=%v message=%q err=%v", status, ready, message, err)
+	if err != nil || ready || !strings.Contains(message, "compatible LocalQueue") {
+		t.Fatalf("reconcileQueue() status=%#v ready=%v message=%q err=%v, want compatibility conflict", status, ready, message, err)
 	}
 	if status.LocalQueue != workspaceClusterQueueName(workspace.Name) ||
 		status.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
@@ -2415,6 +2451,11 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	workload.SetName("running")
 	workload.SetNamespace(workspace.Name)
 	workload.Object["spec"] = map[string]any{"queueName": workspace.Spec.Queue}
+	suspendedJob := newQueueObject(schema.GroupVersionKind{Group: "batch", Version: "v1", Kind: "Job"})
+	suspendedJob.SetName("accepted-suspended")
+	suspendedJob.SetNamespace(workspace.Name)
+	suspendedJob.SetLabels(map[string]string{"kueue.x-k8s.io/queue-name": workspace.Spec.Queue})
+	suspendedJob.Object["spec"] = map[string]any{"suspend": true}
 	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 		Name:        workspace.Name,
 		Labels:      workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue),
@@ -2423,7 +2464,7 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, team, flavor, namespace, previousQueue, workload, testClusterQueue(workspace.Spec.Queue)).
+		WithObjects(workspace, team, flavor, namespace, previousQueue, workload, suspendedJob, testClusterQueue(workspace.Spec.Queue)).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -2436,26 +2477,26 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
 		t.Fatalf("Get namespace: %v", err)
 	}
-	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspace.Spec.Queue {
-		t.Fatalf("namespace default queue advanced before old workloads drained: %q", got)
+	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspaceLocalQueueName(workspace) {
+		t.Fatalf("namespace default queue = %q, want managed route %q", got, workspaceLocalQueueName(workspace))
 	}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), newQueueObject(localQueueGVK)); err != nil {
-		t.Fatalf("old LocalQueue disappeared before workload drain: %v", err)
+	compatibleQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), compatibleQueue); err != nil {
+		t.Fatalf("compatible LocalQueue disappeared during cutover: %v", err)
+	}
+	if target, _, _ := unstructured.NestedString(compatibleQueue.Object, "spec", "clusterQueue"); target != workspaceClusterQueueName(workspace.Name) {
+		t.Fatalf("compatible LocalQueue target = %q, want %q", target, workspaceClusterQueueName(workspace.Name))
 	}
 	var waiting tauv1alpha1.TauWorkspace
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
 		t.Fatalf("Get waiting workspace: %v", err)
 	}
-	queueCondition := findCondition(waiting.Status.Conditions, tauv1alpha1.ConditionQueueReady)
-	if queueCondition == nil || queueCondition.Status != metav1.ConditionTrue ||
-		!strings.Contains(queueCondition.Message, "waiting for Workload") {
-		t.Fatalf("QueueReady = %#v, want ready managed queue with workload drain wait", queueCondition)
-	}
+	assertCondition(t, waiting.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
 	if waiting.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
-		t.Fatalf("phase = %q, want Ready during staged drain", waiting.Status.Phase)
+		t.Fatalf("phase = %q, want Ready after compatible cutover", waiting.Status.Phase)
 	}
-	if result.RequeueAfter != notReadyRequeue {
-		t.Fatalf("RequeueAfter = %v, want %v during staged drain", result.RequeueAfter, notReadyRequeue)
+	if result.RequeueAfter != readyRequeue {
+		t.Fatalf("RequeueAfter = %v, want %v after compatible cutover", result.RequeueAfter, readyRequeue)
 	}
 
 	workload.Object["status"] = map[string]any{"conditions": []any{
@@ -2473,12 +2514,16 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspaceLocalQueueName(workspace) {
 		t.Fatalf("namespace default queue = %q, want %q", got, workspaceLocalQueueName(workspace))
 	}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), newQueueObject(localQueueGVK)); !apierrors.IsNotFound(err) {
-		t.Fatalf("old LocalQueue remains after drained cutover: %v", err)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(previousQueue), compatibleQueue); err != nil {
+		t.Fatalf("compatible LocalQueue disappeared after workload drain: %v", err)
 	}
 	gotWorkload := newQueueObject(workload.GroupVersionKind())
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workload), gotWorkload); err != nil {
 		t.Fatalf("active workload using previous queue disappeared: %v", err)
+	}
+	gotJob := newQueueObject(suspendedJob.GroupVersionKind())
+	if err := c.Get(ctx, client.ObjectKeyFromObject(suspendedJob), gotJob); err != nil {
+		t.Fatalf("accepted suspended Job disappeared during compatible cutover: %v", err)
 	}
 }
 
@@ -2517,8 +2562,12 @@ func TestLegacyTeamWorkspaceMigratesStaleQueueUIDBeforeDrain(t *testing.T) {
 			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
 		}
 	}
-	if err := c.Get(ctx, client.ObjectKeyFromObject(legacyQueue), newQueueObject(localQueueGVK)); !apierrors.IsNotFound(err) {
-		t.Fatalf("legacy LocalQueue remains after UID migration and cutover: %v", err)
+	gotLegacyQueue := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(legacyQueue), gotLegacyQueue); err != nil {
+		t.Fatalf("legacy LocalQueue was not retained as a compatibility alias: %v", err)
+	}
+	if target, _, _ := unstructured.NestedString(gotLegacyQueue.Object, "spec", "clusterQueue"); target != workspaceClusterQueueName(workspace.Name) {
+		t.Fatalf("legacy compatibility LocalQueue target = %q, want %q", target, workspaceClusterQueueName(workspace.Name))
 	}
 	var gotNamespace corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
