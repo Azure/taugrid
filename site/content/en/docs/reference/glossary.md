@@ -82,10 +82,18 @@ pools, Kueue/KubeRay installation, and cloud RBAC outside TauWorkspace. See
 
 The non-secret `tau/workspace.connection.yaml` file a platform operator hands to a repository once its TauWorkspace is [Ready](#status-condition). It names the Kubernetes context, access method, TauGrid system namespace, and workspace contract a project resolves against and must never contain a credential or kubeconfig. This file is client-side project configuration only: the TauWorkspace object it describes is reconciled independently by the controller and is unaffected by edits to this file. `cluster.systemNamespace` defaults to `tau-system`.
 
-Checking in the descriptor is explicit repository/platform preconfiguration.
-`tau run` discovers it automatically; `tau workspace connection` verifies and
-pins the configured access before the first run, while `--offline` validates
-only the repository configuration. On first cluster-backed use, TauGrid isolates the
+Checking in the descriptor is explicit, portable repository/platform
+preconfiguration. A project without one can use
+`tau workspace connection assign [workspace]` to store the same non-secret
+contract under the user's Tau config directory, scoped to that exact
+worktree/project. Local assignments never override checked-in descriptors and
+never become a global default for other repositories. Use
+`tau workspace connection inspect` to see the effective source and
+`tau workspace connection clear` to remove only the local assignment.
+
+`tau run` discovers either source automatically; `tau workspace connection`
+verifies and pins the configured access before the first run. On first
+cluster-backed use, TauGrid isolates the
 named context from the user's kubeconfig or obtains AKS cluster-user credentials,
 verifies the live workspace contract, and records a durable configuration pin
 separately from short-lived readiness evidence.

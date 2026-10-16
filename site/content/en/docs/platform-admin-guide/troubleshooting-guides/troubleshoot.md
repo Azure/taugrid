@@ -21,7 +21,8 @@ phases top to bottom and stop at the first one that is not `done`. Then work
 through the layers below, in order, until you reach that phase:
 
 1. Repository/connection resolution and cluster access --
-   `tau workspace connection` (`--offline` for local configuration only).
+   `tau workspace connection inspect` for local routing, then
+   `tau workspace connection` for live access.
 2. [TauWorkspace](../../reference/glossary/#tauworkspace) readiness and
    handoff validity -- `tau workspace status <name>`.
 3. Client-side config validation and rendering --

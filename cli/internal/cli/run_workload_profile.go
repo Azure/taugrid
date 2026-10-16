@@ -74,10 +74,11 @@ func selectRunWorkloadProfile(
 		profileName = ""
 	}
 	selection, err := provider.Select(ctx, profile.SelectionRequest{
-		Name:      profileName,
-		Namespace: o.namespace,
-		Team:      o.team,
-		Lane:      o.lane,
+		Name:          profileName,
+		Namespace:     o.namespace,
+		Team:          o.team,
+		Lane:          o.lane,
+		GPUsPerWorker: requestedProfileGPUs(o),
 	})
 	if err != nil {
 		return o, err
@@ -238,6 +239,45 @@ func policyFieldWasExplicit(o unresolvedRunOptions, field string, fallback bool)
 		return o.explicitPolicyFields[field]
 	}
 	return o.selectedWorkloadProfile == nil && fallback
+}
+
+// requestedProfileGPUs returns the explicit per-worker GPU count that
+// applySelectedWorkloadProfile would compare against the selected profile, so
+// implicit selection can skip profiles that would only be rejected afterwards.
+// It returns nil when the run leaves the GPU count to the profile.
+func requestedProfileGPUs(o unresolvedRunOptions) *int32 {
+	jobGPUs := func() *int32 {
+		if jobGPUsWereExplicit(o) && o.jobGPUs != nil {
+			gpus := int32(*o.jobGPUs)
+			return &gpus
+		}
+		return nil
+	}
+	gpusPerWorker := func() *int32 {
+		if o.gpusPerWorkerExplicit {
+			gpus := int32(o.gpusPerWorker)
+			return &gpus
+		}
+		return nil
+	}
+	if o.file != "" {
+		if gpus := jobGPUs(); gpus != nil {
+			return gpus
+		}
+		return gpusPerWorker()
+	}
+	engine, err := resolveDirectRunEngine(o)
+	if err != nil {
+		// applySelectedWorkloadProfile reports the engine error.
+		return nil
+	}
+	switch engine {
+	case directRunEngineJob:
+		return jobGPUs()
+	case directRunEngineRayJob:
+		return gpusPerWorker()
+	}
+	return nil
 }
 
 func jobGPUsWereExplicit(o unresolvedRunOptions) bool {

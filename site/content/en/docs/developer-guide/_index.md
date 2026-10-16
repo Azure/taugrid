@@ -27,8 +27,9 @@ settings, not values researchers should copy from `kubectl` output or edit
 during onboarding.
 
 From the repository, run `tau workspace connection` to verify the complete
-read-only connection before submitting work. Use `--offline` when only local
-repository validation is appropriate.
+read-only connection before submitting work. Use
+`tau workspace connection inspect` when only local repository routing
+validation is appropriate.
 
 The examples in the TauGrid source repository, including
 `examples/aks-cpu-quickstart`, `examples/kind-smoke`, and

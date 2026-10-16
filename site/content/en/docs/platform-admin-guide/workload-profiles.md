@@ -54,7 +54,10 @@ Accelerator-domain placement selects one provider-declared NVLink/NVL72 island;
 network-domain placement selects one scale-out InfiniBand or RoCE fabric and
 may span accelerator domains. Matching GPU models never imply a shared island.
 Neither placement guarantees distinct hosts, and an unavailable shared domain
-remains pending instead of falling back.
+remains pending instead of falling back. Multi-node direct Job torchrun adds a
+separate one-per-GPU-Node host-slot request: its ranks use distinct hosts while
+the selected placement keeps them in one fabric domain. That slot is exclusive
+across all multi-node torchrun ranks, including ranks from different runs.
 
 Delete old policy ConfigMaps, volume mounts, environment variables, and files
 only after every submitter uses a ready TauCluster profile. There is no
@@ -71,6 +74,14 @@ TauGrid accepts a profile set only when all of the following are true:
    resolved profiles;
 4. the selected profile's `Ready` condition is `True` for that generation; and
 5. namespace, team, and lane applicability authorize the caller.
+
+When a run doesn't name `policy.profile`, TauGrid selects the unique profile that
+passes these checks. If the run sets an explicit GPU count (Job `compute.gpus`
+or RayJob `gpus_per_worker`), implicit selection also skips profiles with a
+different `gpusPerWorker`. That way a CPU-only run and a GPU run can't resolve
+to each other's profile. The default catalog includes `azure.workspace.cpu`,
+which has no team or lane restriction, so the CPU-only `smoke` and `train`
+targets from `tau workspace init-repo` resolve it without naming a profile.
 
 Missing, stale, drifted, forbidden, ambiguous, or unready data stops rendering.
 TauGrid stamps successful output with

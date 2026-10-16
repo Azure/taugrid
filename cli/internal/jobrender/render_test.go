@@ -2729,7 +2729,12 @@ func parseMultiDocYAML(t *testing.T, b []byte) []map[string]any {
 
 func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	script := torchrunScript(t)
-	out, err := Render(multiGPUProfile(8), Options{
+	p := multiGPUProfile(8)
+	p.Topology = profile.Topology{
+		Mode:      "fixed",
+		Placement: profile.PlacementSameNetworkDomain,
+	}
+	out, err := Render(p, Options{
 		Name:             "ddp-multi",
 		Namespace:        "tau",
 		ScriptPath:       script,
@@ -2793,11 +2798,39 @@ func TestRender_MultiNode_IndexedJob(t *testing.T) {
 	if fmt.Sprint(jobSpec["parallelism"]) != "2" {
 		t.Errorf("parallelism=%v, want 2", jobSpec["parallelism"])
 	}
+	if jobSpec["suspend"] != true {
+		t.Errorf("suspend=%v, want true for Kueue admission", jobSpec["suspend"])
+	}
+
+	template := jobSpec["template"].(map[string]any)
+	templateAnnotations := template["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := templateAnnotations[runtopology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Errorf("required topology=%v, want tau.azure.com/network-domain", got)
+	}
 
 	// Verify pod subdomain.
-	pod := jobSpec["template"].(map[string]any)["spec"].(map[string]any)
+	pod := template["spec"].(map[string]any)
 	if pod["subdomain"] != "ddp-multi-headless" {
 		t.Errorf("subdomain=%v, want ddp-multi-headless", pod["subdomain"])
+	}
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	for _, key := range []string{"requests", "limits"} {
+		if got := resources[key].(map[string]any)[workloadmeta.ResourceTorchrunHostSlot]; fmt.Sprint(got) != "1" {
+			t.Errorf("%s host slot=%v, want 1", key, got)
+		}
+	}
+	affinity := pod["affinity"].(map[string]any)
+	required := affinity["podAntiAffinity"].(map[string]any)["requiredDuringSchedulingIgnoredDuringExecution"].([]any)
+	if len(required) != 1 {
+		t.Fatalf("required pod anti-affinity terms = %d, want 1", len(required))
+	}
+	term := required[0].(map[string]any)
+	if got := term["topologyKey"]; got != "kubernetes.io/hostname" {
+		t.Errorf("anti-affinity topologyKey=%v, want kubernetes.io/hostname", got)
+	}
+	matchLabels := term["labelSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if got := matchLabels["batch.kubernetes.io/job-name"]; got != "ddp-multi" {
+		t.Errorf("anti-affinity job selector=%v, want ddp-multi", got)
 	}
 
 	// Verify torchrun command args.
@@ -2923,6 +2956,38 @@ func TestRender_MultiNode_SingleNode_NoIndexedJob(t *testing.T) {
 	s := string(out)
 	if !strings.Contains(s, "--standalone") {
 		t.Errorf("Nodes=1 should use --standalone:\n%s", s)
+	}
+	pod := jobSpec["template"].(map[string]any)["spec"].(map[string]any)
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	for _, key := range []string{"requests", "limits"} {
+		if _, ok := resources[key].(map[string]any)[workloadmeta.ResourceTorchrunHostSlot]; ok {
+			t.Errorf("Nodes=1 should not set %s host slot", key)
+		}
+	}
+	if _, ok := pod["affinity"]; ok {
+		t.Error("Nodes=1 should not set pod affinity")
+	}
+}
+
+func TestRender_PythonJob_NoTorchrunHostSlot(t *testing.T) {
+	out, err := Render(multiGPUProfile(1), Options{
+		Name:      "python-job",
+		Namespace: "tau",
+		Command:   []string{"python", "train.py"},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	job := parseMultiDocYAML(t, out)[0]
+	pod := job["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	resources := pod["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	for _, key := range []string{"requests", "limits"} {
+		if _, ok := resources[key].(map[string]any)[workloadmeta.ResourceTorchrunHostSlot]; ok {
+			t.Errorf("ordinary Python Job should not set %s host slot", key)
+		}
+	}
+	if _, ok := pod["affinity"]; ok {
+		t.Error("ordinary Python Job should not set pod affinity")
 	}
 }
 
