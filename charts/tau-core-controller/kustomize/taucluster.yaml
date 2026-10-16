@@ -104,6 +104,7 @@ spec:
           tau.azure.com/gpu-class: gb300-288gb
   queues:
     ownership: External
+  # BEGIN GENERATED WORKLOAD PROFILES
   # Generated from charts/tau-core-controller/values.yaml; do not edit.
   workloadProfiles:
     - applicability:
@@ -389,3 +390,4 @@ spec:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
       workerCount: 2
+  # END GENERATED WORKLOAD PROFILES

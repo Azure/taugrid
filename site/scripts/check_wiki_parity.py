@@ -38,6 +38,7 @@ def main() -> int:
         default=pathlib.Path("data/wiki-parity.toml"),
     )
     parser.add_argument("--max-age-days", type=int, default=90)
+    parser.add_argument("--skip-review-age", action="store_true")
     args = parser.parse_args()
 
     site_root = args.manifest.resolve().parent.parent
@@ -103,7 +104,7 @@ def main() -> int:
         age = (today - reviewed).days
         if reviewed > today:
             errors.append(f"{identifier}: review date {reviewed} is in the future")
-        elif age > args.max_age_days:
+        elif not args.skip_review_age and age > args.max_age_days:
             errors.append(
                 f"{identifier}: site/wiki review is {age} days old "
                 f"(limit {args.max_age_days})"
@@ -140,7 +141,7 @@ def main() -> int:
         age = (today - reviewed).days
         if reviewed > today:
             errors.append(f"{identifier}: review date {reviewed} is in the future")
-        elif age > args.max_age_days:
+        elif not args.skip_review_age and age > args.max_age_days:
             errors.append(
                 f"{identifier}: site-only rationale is {age} days old "
                 f"(limit {args.max_age_days})"
