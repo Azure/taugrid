@@ -67,6 +67,7 @@ spec:
         - https://pypi.org/simple
       pip_check: false
     env_vars:
+      FINEWEB_DATA_MODE: "{{FINEWEB_DATA_MODE}}"
       FINEWEB_DATASET_URIS: "{{FINEWEB_DATASET_URIS}}"
       FINEWEB_DATASET_SHA256S: "{{FINEWEB_DATASET_SHA256S}}"
       FINEWEB_DATASET_TOKEN_COUNTS: "{{FINEWEB_DATASET_TOKEN_COUNTS}}"
@@ -327,8 +328,7 @@ spec:
             # placement assertion both key on this so they never match unrelated
             # Ray worker pods.
             e2e-test: fineweb-16xh200-ib
-          annotations:
-            kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain
+          {{FINEWEB_TAS_ANNOTATIONS}}
         spec:
           initContainers:
           # The published Ray image is Azure Linux 3.0 and does NOT ship the RDMA

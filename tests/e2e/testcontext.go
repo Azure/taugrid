@@ -265,6 +265,26 @@ func readFixture(name string) ([]byte, error) {
 		}
 		data = bytes.ReplaceAll(data, []byte("{{NANOGPT_TAS_ANNOTATION}}"), []byte(annotation))
 	}
+	if bytes.Contains(data, []byte("{{FINEWEB_TAS_ANNOTATIONS}}")) {
+		mode := strings.ToLower(strings.TrimSpace(os.Getenv("FINEWEB_TAS_MODE")))
+		if mode == "" {
+			mode = "required"
+		}
+		var annotation string
+		switch mode {
+		case "required":
+			annotation = "annotations:\n            kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain"
+		case "site":
+			annotation = "annotations:\n            kueue.x-k8s.io/podset-required-topology: tau.azure.com/site"
+		case "hostname":
+			annotation = "annotations:\n            kueue.x-k8s.io/podset-required-topology: kubernetes.io/hostname"
+		case "disabled":
+			annotation = "# TAS omitted: hostname spread enforces the 8+8 worker placement"
+		default:
+			return nil, fmt.Errorf("FINEWEB_TAS_MODE must be required, site, hostname, or disabled, got %q", mode)
+		}
+		data = bytes.ReplaceAll(data, []byte("{{FINEWEB_TAS_ANNOTATIONS}}"), []byte(annotation))
+	}
 	for _, scriptSub := range []struct {
 		b64Placeholder, digestPlaceholder, scriptFile string
 	}{
@@ -314,6 +334,7 @@ func readFixture(name string) ([]byte, error) {
 		{"{{FINEWEB_DATASET_URIS}}", "FINEWEB_DATASET_URIS", ""},
 		{"{{FINEWEB_DATASET_SHA256S}}", "FINEWEB_DATASET_SHA256S", ""},
 		{"{{FINEWEB_DATASET_TOKEN_COUNTS}}", "FINEWEB_DATASET_TOKEN_COUNTS", ""},
+		{"{{FINEWEB_DATA_MODE}}", "FINEWEB_DATA_MODE", "dataset"},
 		{"{{FINEWEB_MIN_TOTAL_TOKENS}}", "FINEWEB_MIN_TOTAL_TOKENS", "10000000"},
 		{"{{FINEWEB_TRAIN_WORKERS}}", "FINEWEB_TRAIN_WORKERS", "16"},
 		{"{{FINEWEB_TRAIN_STEPS}}", "FINEWEB_TRAIN_STEPS", "60"},
@@ -336,6 +357,11 @@ func readFixture(name string) ([]byte, error) {
 			v := os.Getenv(sub.envVar)
 			if v == "" {
 				if sub.defaultValue == "" {
+					if strings.HasPrefix(sub.placeholder, "{{FINEWEB_DATASET_") &&
+						strings.EqualFold(strings.TrimSpace(os.Getenv("FINEWEB_DATA_MODE")), "synthetic") {
+						data = bytes.ReplaceAll(data, []byte(sub.placeholder), nil)
+						continue
+					}
 					return nil, fmt.Errorf("fixture %s uses %s but %s env var is not set", name, sub.placeholder, sub.envVar)
 				}
 				v = sub.defaultValue

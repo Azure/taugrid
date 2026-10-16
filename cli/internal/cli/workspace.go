@@ -34,6 +34,7 @@ mutate workspace policy from the repo scaffold.`,
 		Example: `  tau workspace create --principal-name research-team --apply
   tau workspace list
   tau workspace status research-team
+  tau workspace connection assign research-team
   tau workspace init-repo my-project --image myregistry.azurecr.io/my-project:latest`,
 		Args: cobra.NoArgs,
 		RunE: showGroupHelp,

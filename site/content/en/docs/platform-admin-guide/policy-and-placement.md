@@ -88,6 +88,14 @@ pending rather than falling back to a network domain or site.
 per host. Full-node GPU requests naturally separate workers when a Node cannot
 fit two of them; smaller workers may co-locate.
 
+Multi-node direct Job torchrun is the exception to that generic placement
+contract. Each rank requests one `tau.azure.com/torchrun-host-slot`; the
+controller advertises exactly one slot per GPU Node. Kueue therefore admits
+each rank to a distinct hostname while the profile's topology request still
+keeps every rank in one network domain. The slot is globally exclusive among
+multi-node torchrun ranks, so two such workloads cannot share one GPU Node even
+when GPU capacity remains.
+
 Tau emits a warning when this placement is selected. The request does not
 independently require `tau.azure.com/infiniband=true`: Nodes without
 authoritative shared-fabric metadata receive singleton network domains. A
@@ -105,13 +113,15 @@ with the levels `tau.azure.com/site`, `tau.azure.com/network-domain`,
 The baseline queue contains the non-TAS CPU flavor `taugrid-default-cpu` with
 zero GPU quota. `tau-core-controller` discovers GPU Nodes and creates one
 topology-aware ResourceFlavor per distinct `tau.azure.com/gpu-class`. Initial
-GPU quota is the summed allocatable `nvidia.com/gpu` capacity for that class;
-the controller increases quota when more capacity appears and does not
-automatically decrease or prune discovered flavors. Each discovered flavor
-declares `sku=gpu:NoSchedule` as an admission taint, keeping CPU-only workloads
-out of GPU quota. Node creation and later allocatable GPU updates both trigger
+GPU quota is the summed allocatable `nvidia.com/gpu` capacity for that class.
+The controller also advertises one `tau.azure.com/torchrun-host-slot` per GPU
+Node and publishes the ready slot count on the same flavor. GPU quota increases
+when more capacity appears and is not automatically decreased or pruned; slot
+quota tracks ready slot capacity. Each discovered flavor declares
+`sku=gpu:NoSchedule` as an admission taint, keeping CPU-only workloads out of
+GPU quota. Node creation and later allocatable GPU or host-slot updates trigger
 reconciliation, so newly joining pools receive quota as soon as kubelet reports
-their devices.
+their devices and the slot.
 
 Add custom hardware through `extraNodeLabelRules`:
 
@@ -141,18 +151,20 @@ For a one-GPU A100 cluster the queue shape is:
 ```yaml
 spec:
   resourceGroups:
-    - coveredResources: [cpu, memory, nvidia.com/gpu]
+    - coveredResources: [cpu, memory, nvidia.com/gpu, tau.azure.com/torchrun-host-slot]
       flavors:
         - name: taugrid-default-cpu
           resources:
             - {name: cpu, nominalQuota: "100000"}
             - {name: memory, nominalQuota: 100Ti}
             - {name: nvidia.com/gpu, nominalQuota: "0"}
+            - {name: tau.azure.com/torchrun-host-slot, nominalQuota: "0"}
         - name: taugrid-a100-80gb
           resources:
             - {name: cpu, nominalQuota: "100000"}
             - {name: memory, nominalQuota: 100Ti}
             - {name: nvidia.com/gpu, nominalQuota: "1"}
+            - {name: tau.azure.com/torchrun-host-slot, nominalQuota: "1"}
 ```
 
 A successful preflight confirms eligibility alone; actual capacity is

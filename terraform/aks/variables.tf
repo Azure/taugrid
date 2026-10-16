@@ -182,7 +182,7 @@ variable "generated_directory" {
   nullable    = true
 
   validation {
-    condition     = var.generated_directory == null || trimspace(var.generated_directory) != ""
+    condition     = var.generated_directory == null ? true : trimspace(var.generated_directory) != ""
     error_message = "generated_directory must not be empty when set."
   }
 }

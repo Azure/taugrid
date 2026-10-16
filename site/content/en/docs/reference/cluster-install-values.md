@@ -56,16 +56,19 @@ A portable Kueue queue bootstrapped on first install. These quotas bound concurr
 | `baselineQueue.flavor.*` | object | `taugrid-default-cpu`, Linux, no tolerations | CPU/memory flavor; keep GPU labels and tolerations out |
 | `baselineQueue.resources` | list | cpu: 100000, memory: 100Ti | CPU/memory admission quota |
 | `baselineQueue.gpu.enabled` | bool | `true` | Cover GPU resources and enable controller discovery |
-| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu` | GPU resources covered by the node-resource group |
+| `baselineQueue.gpu.coveredResources` | list | `nvidia.com/gpu`, `tau.azure.com/torchrun-host-slot` | GPU and one-per-node torchrun slot resources covered by the node-resource group |
 | `baselineQueue.gpu.flavors` | list | `[]` | Optional externally configured GPU flavors |
 
-CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all requested resources. `taugrid-default-cpu` has zero GPU quota. When GPU admission, topology, and `tau-core-controller` are enabled, the controller discovers Nodes with both `tau.azure.com/gpu-class` and allocatable `nvidia.com/gpu`, creates one topology-aware ResourceFlavor per observed GPU class, and appends its summed allocatable capacity to the ClusterQueue. Each discovered flavor declares `sku=gpu:NoSchedule` as an admission taint so CPU-only workloads cannot consume its quota. Node creation, GPU-class label changes, and allocatable GPU capacity changes trigger reconciliation; a new pool may initially contribute zero capacity and receive quota once kubelet reports its GPUs. Capacity grows monotonically: scaling a pool to zero does not remove the flavor or reduce its last known quota. Explicitly configured flavors remain supported and are not pruned by controller discovery. Only GPU flavors carry `topologyName`; each workload's `policy.topology` selects `unconstrained`, `same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`. Raw Kubernetes manifests remain expert-controlled.
+CPU, memory, and GPU share one Kueue resource group so each GPU pod set receives one node flavor across all requested resources. `taugrid-default-cpu` has zero GPU quota. When GPU admission, topology, and `tau-core-controller` are enabled, the controller discovers Nodes with both `tau.azure.com/gpu-class` and allocatable `nvidia.com/gpu`, creates one topology-aware ResourceFlavor per observed GPU class, and appends its summed allocatable GPU capacity plus one ready `tau.azure.com/torchrun-host-slot` per GPU Node to the ClusterQueue. Each discovered flavor declares `sku=gpu:NoSchedule` as an admission taint so CPU-only workloads cannot consume its quota. Node creation, GPU-class label changes, and allocatable GPU or host-slot capacity changes trigger reconciliation; a new pool may initially contribute zero capacity and receive quota once kubelet reports its GPUs and the slot. GPU capacity grows monotonically: scaling a pool to zero does not remove the flavor or reduce its last known GPU quota, while slot quota tracks ready slot capacity. Explicitly configured flavors remain supported and are not pruned by controller discovery. Only GPU flavors carry `topologyName`; each workload's `policy.topology` selects `unconstrained`, `same-host`, `same-accelerator-domain`, `same-network-domain`, or `same-site`. Raw Kubernetes manifests remain expert-controlled.
 
 The baseline ClusterQueue opts into discovery with
 `tau.azure.com/discover-gpu-flavors=true` only while GPU admission, topology,
 and the controller are enabled. Custom ClusterQueues can use the same label;
 queues without it are never mutated by discovery and labeled queues must cover
-`nvidia.com/gpu`.
+`nvidia.com/gpu`. Explicit chart-configured GPU flavors should set
+`tau.azure.com/torchrun-host-slot` quota to their GPU Node count. Omitting it is
+accepted for upgrade compatibility and renders zero slot quota, leaving
+multi-node torchrun pending until the quota is configured.
 
 `tau-core-controller` assigns every Node a conservative topology identity and
 reconciles `taugrid-gpu-topology` with the hierarchy `tau.azure.com/site` →
@@ -140,6 +143,8 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "1"
+          - name: tau.azure.com/torchrun-host-slot
+            nominalQuota: "1"
 ```
 
 ## Sub-Chart Pass-Through
@@ -185,6 +190,8 @@ baselineQueue:
         resources:
           - name: nvidia.com/gpu
             nominalQuota: "8"
+          - name: tau.azure.com/torchrun-host-slot
+            nominalQuota: "1"
 ```
 
 ## See Also

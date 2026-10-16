@@ -103,6 +103,19 @@ spec:
   # Generated from charts/tau-core-controller/values.yaml; do not edit.
   workloadProfiles:
     - applicability:
+        namespaces:
+        - 'taugrid-default'
+      defaultLocalQueue: jobqueue
+      description: CPU-only workspace jobs without GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 0
+      mode: fixed
+      name: azure.workspace.cpu
+      placement: unconstrained
+      priorities:
+        disableDefaultPriorities: true
+      workerCount: 1
+    - applicability:
         lanes:
         - training
         namespaces:

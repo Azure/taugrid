@@ -39,3 +39,13 @@ tests:
             resources: ["clusterqueues"]
             verbs: ["get", "list", "watch", "update"]
         documentIndex: 2
+
+  - it: grants the controller Node status patch access for torchrun host slots
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes/status"]
+            verbs: ["get", "patch"]
+        documentIndex: 2
