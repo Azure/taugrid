@@ -542,9 +542,10 @@ func TestRunSelectionAllowsRetainedWorkspaceQueueWithOriginalClusterQueue(t *tes
 			workspace.Status.Queue.LocalQueue = "tau-ws-training"
 			workspace.Status.Queue.ClusterQueue = "tau-ws-training"
 			connection := workspaceconnection.ActiveConnection{
-				Workspace: "training",
-				Namespace: "team-alpha",
-				Queue:     "jobqueue",
+				Workspace:     "training",
+				Namespace:     "team-alpha",
+				Queue:         "jobqueue",
+				QueueVerified: true,
 			}
 
 			options := defaultRunDispatchOptions()
