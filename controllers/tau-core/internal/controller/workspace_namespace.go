@@ -13,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -37,7 +38,16 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 			return false, fmt.Errorf("TauWorkspace %q owner UID is %q, want %q", workspace.Name, ownerUID, workspace.UID)
 		}
 		if workspace.Annotations[annotationV0Primary] == "true" {
-			visible, err := r.cachedLegacyNamespaceOwnershipVisible(ctx, workspace)
+			targetNamespace := resolvedNamespace(workspace)
+			var namespace corev1.Namespace
+			err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace)
+			if apierrors.IsNotFound(err) || err == nil && namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				return false, nil
+			}
+			if err != nil {
+				return false, fmt.Errorf("verify legacy Namespace ownership: %w", err)
+			}
+			visible, err := r.cachedNamespaceOwnershipVisible(ctx, targetNamespace, workspace.UID)
 			if err != nil {
 				return false, err
 			}
@@ -75,29 +85,27 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 		}
 		return true, nil
 	}
+	visible, err := r.cachedNamespaceOwnershipVisible(ctx, targetNamespace, workspace.UID)
+	if err != nil {
+		return false, err
+	}
+	if !visible {
+		return true, nil
+	}
 
 	return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
 }
 
-func (r *TauWorkspaceReconciler) cachedLegacyNamespaceOwnershipVisible(
+func (r *TauWorkspaceReconciler) cachedNamespaceOwnershipVisible(
 	ctx context.Context,
-	workspace *tauv1alpha1.TauWorkspace,
+	namespaceName string,
+	workspaceUID types.UID,
 ) (bool, error) {
-	targetNamespace := resolvedNamespace(workspace)
 	var namespace corev1.Namespace
-	if err := r.Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("verify cached Namespace ownership: %w", err)
-		}
-		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
-			if apierrors.IsNotFound(err) {
-				return true, nil
-			}
-			return false, fmt.Errorf("verify authoritative Namespace existence: %w", err)
-		}
-		return false, nil
+	if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, &namespace); err != nil {
+		return false, client.IgnoreNotFound(err)
 	}
-	return namespace.Annotations[annotationOwnerUID] == string(workspace.UID), nil
+	return namespace.Annotations[annotationOwnerUID] == string(workspaceUID), nil
 }
 
 func legacyNamespaceMatchesWorkspace(

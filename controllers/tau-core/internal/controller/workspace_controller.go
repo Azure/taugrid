@@ -53,19 +53,21 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	storedQueue := workspace.Spec.Queue
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&workspace, workspaceFinalizer) {
-			if strings.TrimSpace(workspace.Spec.Queue) == "" {
-				resolved, err := r.getDefaultWorkspaceQueue(ctx)
+			if workspace.UID == "" || workspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				if strings.TrimSpace(workspace.Spec.Queue) == "" {
+					resolved, err := r.getDefaultWorkspaceQueue(ctx)
+					if err != nil {
+						return ctrl.Result{}, err
+					}
+					workspace.Spec.Queue = resolved
+				}
+				migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
 				if err != nil {
 					return ctrl.Result{}, err
 				}
-				workspace.Spec.Queue = resolved
-			}
-			migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if migrated {
-				return ctrl.Result{Requeue: true}, nil
+				if migrated {
+					return ctrl.Result{Requeue: true}, nil
+				}
 			}
 			if err := r.cleanupWorkspaceAccess(ctx, &workspace); err != nil {
 				return ctrl.Result{}, err
