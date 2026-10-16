@@ -78,9 +78,9 @@ func workspaceConnectionQueueCompatible(
 	placement workspacePlacement,
 ) bool {
 	return w.Spec.TeamRef != nil &&
+		connection.QueueVerified &&
 		strings.TrimSpace(connection.Namespace) == placement.Namespace &&
-		strings.TrimSpace(connection.Queue) != "" &&
-		strings.TrimSpace(connection.Queue) == strings.TrimSpace(w.Spec.Queue)
+		strings.TrimSpace(connection.Queue) != ""
 }
 
 func applyWorkspaceDefaults(o unresolvedRunOptions, w tauworkspace.Workspace, runName string) (unresolvedRunOptions, error) {

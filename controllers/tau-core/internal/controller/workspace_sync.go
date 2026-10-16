@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -178,7 +179,7 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 		Phase:              workspacePhase(conditions),
 		ObservedGeneration: workspace.Generation,
 		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: resolvedTarget},
-		Queue:              queueStatus,
+		Queue:              workspaceClientQueueStatus(workspace, queueStatus),
 		Conditions:         mergeConditions(workspace.Status.Conditions, conditions),
 	}
 	if !equalWorkspaceStatus(workspace.Status, desired) {
@@ -191,4 +192,19 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 		return ctrl.Result{RequeueAfter: readyRequeue}, nil
 	}
 	return ctrl.Result{RequeueAfter: notReadyRequeue}, nil
+}
+
+func workspaceClientQueueStatus(
+	workspace *tauv1alpha1.TauWorkspace,
+	queueStatus tauv1alpha1.WorkspaceQueueStatus,
+) tauv1alpha1.WorkspaceQueueStatus {
+	if workspace.Spec.TeamRef == nil || workspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		return queueStatus
+	}
+	canonical := workspaceLocalQueueName(workspace)
+	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
+	if previous != "" && previous != canonical {
+		queueStatus.LocalQueue = previous
+	}
+	return queueStatus
 }

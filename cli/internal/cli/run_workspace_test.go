@@ -101,9 +101,10 @@ func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *test
 		ClusterQueue: "tau-ws-sample",
 	}
 	connection := workspaceconnection.ActiveConnection{
-		Workspace: workspace.Metadata.Name,
-		Namespace: workspace.Status.Target.ResolvedNamespace,
-		Queue:     "jobqueue",
+		Workspace:     workspace.Metadata.Name,
+		Namespace:     workspace.Status.Target.ResolvedNamespace,
+		Queue:         "jobqueue",
+		QueueVerified: true,
 	}
 
 	placement, err := resolveWorkspacePlacement(workspace, connection)
@@ -112,6 +113,47 @@ func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *test
 	}
 	if placement.LocalQueue != "jobqueue" {
 		t.Fatalf("LocalQueue = %q, want compatible persisted queue", placement.LocalQueue)
+	}
+}
+
+func TestResolveWorkspacePlacementPreservesVerifiedTeamQueueWhenSpecQueueIsEmpty(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = ""
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "tau-ws-sample",
+		ClusterQueue: "tau-ws-sample",
+	}
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:     workspace.Metadata.Name,
+		Namespace:     workspace.Status.Target.ResolvedNamespace,
+		Queue:         "inherited-default",
+		QueueVerified: true,
+	}
+
+	placement, err := resolveWorkspacePlacement(workspace, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.LocalQueue != "inherited-default" {
+		t.Fatalf("LocalQueue = %q, want verified inherited default", placement.LocalQueue)
+	}
+}
+
+func TestResolveWorkspacePlacementRejectsUnverifiedTeamQueueAlias(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = ""
+	workspace.Status.Queue.LocalQueue = "tau-ws-sample"
+	connection := workspaceconnection.ActiveConnection{
+		Workspace: workspace.Metadata.Name,
+		Namespace: workspace.Status.Target.ResolvedNamespace,
+		Queue:     "unverified",
+	}
+
+	_, err := resolveWorkspacePlacement(workspace, connection)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("expected unverified queue conflict, got %v", err)
 	}
 }
 
