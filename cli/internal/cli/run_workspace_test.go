@@ -92,6 +92,29 @@ func TestResolveWorkspacePlacementUsesLiveStatusAndValidatesConnection(t *testin
 	}
 }
 
+func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "tau-ws-sample",
+		ClusterQueue: "tau-ws-sample",
+	}
+	connection := workspaceconnection.ActiveConnection{
+		Workspace: workspace.Metadata.Name,
+		Namespace: workspace.Status.Target.ResolvedNamespace,
+		Queue:     "jobqueue",
+	}
+
+	placement, err := resolveWorkspacePlacement(workspace, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.LocalQueue != "jobqueue" {
+		t.Fatalf("LocalQueue = %q, want compatible persisted queue", placement.LocalQueue)
+	}
+}
+
 func TestResolveWorkspacePlacementRejectsStaleConnectionIdentity(t *testing.T) {
 	workspace := readyWorkspace()
 	workspace.Metadata.UID = "current-uid"

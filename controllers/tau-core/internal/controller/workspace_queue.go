@@ -94,6 +94,9 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false,
 				fmt.Sprintf("failed to reconcile workspace LocalQueue: %v", err), nil
 		}
+		if ready, message, err := r.reconcileWorkspaceCompatibilityLocalQueues(ctx, workspace, targetNamespace, desiredClusterQueue); !ready {
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false, message, err
+		}
 		return tauv1alpha1.WorkspaceQueueStatus{
 				LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue, ClusterQueueUID: string(clusterQueue.GetUID()),
 			}, true,
@@ -122,6 +125,9 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			}
 			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
 				fmt.Sprintf("replacing workspace LocalQueue immutable ClusterQueue target %q with %q", clusterQueueName, desiredClusterQueue), nil
+		}
+		if ready, message, err := r.reconcileWorkspaceCompatibilityLocalQueues(ctx, workspace, targetNamespace, desiredClusterQueue); !ready {
+			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: desiredClusterQueue}, false, message, err
 		}
 		return tauv1alpha1.WorkspaceQueueStatus{
 				LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
@@ -152,6 +158,67 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
 		}, true,
 		"workspace queue and backing ClusterQueue are readable", nil
+}
+
+func (r *TauWorkspaceReconciler) reconcileWorkspaceCompatibilityLocalQueues(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace, clusterQueue string,
+) (bool, string, error) {
+	if workspace.Spec.TeamRef == nil {
+		return true, "", nil
+	}
+	for _, name := range workspaceCompatibilityLocalQueueNames(workspace) {
+		queue := newQueueObject(localQueueGVK)
+		key := client.ObjectKey{Name: name, Namespace: namespace}
+		if err := r.Get(ctx, key, queue); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return false, err.Error(), err
+			}
+			queue = newWorkspaceLocalQueue(workspace, namespace, name, clusterQueue, true)
+			if err := r.Create(ctx, queue); err != nil {
+				return false, fmt.Sprintf("failed to reconcile compatible LocalQueue %q: %v", name, err), nil
+			}
+			continue
+		}
+		if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
+			return false, fmt.Sprintf("compatible LocalQueue %q is not owned by TauWorkspace %q", name, workspace.Name), nil
+		}
+		if err := r.ensureWorkspaceObjectUID(ctx, queue, workspace); err != nil {
+			return false, fmt.Sprintf("compatible LocalQueue %q ownership is not authoritative: %v", name, err), nil
+		}
+		currentClusterQueue, _, _ := unstructured.NestedString(queue.Object, "spec", "clusterQueue")
+		if currentClusterQueue != clusterQueue {
+			if err := r.deleteWithPreconditions(ctx, queue); err != nil {
+				return false, fmt.Sprintf("failed to replace compatible LocalQueue %q: %v", name, err), nil
+			}
+			replacement := newWorkspaceLocalQueue(workspace, namespace, name, clusterQueue, true)
+			if err := r.Create(ctx, replacement); err != nil {
+				if apierrors.IsAlreadyExists(err) {
+					return false, fmt.Sprintf("waiting to replace compatible LocalQueue %q target %q with %q", name, currentClusterQueue, clusterQueue), nil
+				}
+				return false, fmt.Sprintf("failed to recreate compatible LocalQueue %q: %v", name, err), nil
+			}
+		}
+	}
+	return true, "compatible LocalQueues are reconciled", nil
+}
+
+func workspaceCompatibilityLocalQueueNames(workspace *tauv1alpha1.TauWorkspace) []string {
+	if workspace.Spec.TeamRef == nil {
+		return nil
+	}
+	canonical := workspaceLocalQueueName(workspace)
+	seen := map[string]bool{canonical: true}
+	var names []string
+	for _, name := range []string{workspace.Spec.Queue, workspace.Status.Queue.LocalQueue} {
+		name = strings.TrimSpace(name)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func workspaceLocalQueueName(workspace *tauv1alpha1.TauWorkspace) string {

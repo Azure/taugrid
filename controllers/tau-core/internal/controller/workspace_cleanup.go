@@ -249,7 +249,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 	}
 	for i := range queues.Items {
 		localQueue := &queues.Items[i]
-		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
+		if preserveWorkspaceLocalQueue(workspace, localQueue, keepNamespace, keepName) {
 			continue
 		}
 		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
@@ -279,7 +279,7 @@ func (r *TauWorkspaceReconciler) staleWorkspaceLocalQueuesDrained(
 	}
 	for i := range queues.Items {
 		localQueue := &queues.Items[i]
-		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
+		if preserveWorkspaceLocalQueue(workspace, localQueue, keepNamespace, keepName) {
 			continue
 		}
 		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
@@ -309,6 +309,25 @@ func (r *TauWorkspaceReconciler) staleWorkspaceLocalQueuesDrained(
 		}
 	}
 	return true, "", nil
+}
+
+func preserveWorkspaceLocalQueue(
+	workspace *tauv1alpha1.TauWorkspace,
+	localQueue *unstructured.Unstructured,
+	keepNamespace, keepName string,
+) bool {
+	if localQueue.GetNamespace() != keepNamespace {
+		return false
+	}
+	if localQueue.GetName() == keepName {
+		return true
+	}
+	for _, name := range workspaceCompatibilityLocalQueueNames(workspace) {
+		if localQueue.GetName() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func workloadFinished(workload *unstructured.Unstructured) bool {

@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -47,12 +48,13 @@ type Verifier interface {
 }
 
 type Verification struct {
-	ContextName    string
-	Namespace      string
-	Queue          string
-	ServiceAccount string
-	WorkspaceUID   string
-	WorkspacePhase string
+	ContextName      string
+	Namespace        string
+	Queue            string
+	ServiceAccount   string
+	WorkspaceUID     string
+	WorkspacePhase   string
+	CompatibleQueues []string
 }
 
 type ActiveConnection struct {
@@ -907,7 +909,7 @@ func (s connectionState) contractChanges(verification Verification) []string {
 	if s.Namespace != verification.Namespace {
 		changes = append(changes, fmt.Sprintf("namespace %q -> %q", s.Namespace, verification.Namespace))
 	}
-	if s.Queue != verification.Queue {
+	if s.Queue != verification.Queue && !slices.Contains(verification.CompatibleQueues, s.Queue) {
 		changes = append(changes, fmt.Sprintf("LocalQueue %q -> %q", s.Queue, verification.Queue))
 	}
 	storedServiceAccount := effectiveServiceAccount(s.ServiceAccount)

@@ -56,6 +56,39 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 	}
 }
 
+func TestKubectlVerifierReportsCompatibleTeamQueue(t *testing.T) {
+	descriptor, err := Parse([]byte(validDescriptorYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &verifierFakeRunner{responses: map[string]string{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
+		  "apiVersion": "tau.azure.com/v1alpha1",
+		  "kind": "TauWorkspace",
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 7},
+		  "spec": {"authorization": {"mode": "cluster-wide"}, "queue": "jobqueue", "teamRef": {"name": "vision"}},
+		  "status": {
+		    "phase": "Ready",
+		    "observedGeneration": 7,
+		    "target": {"resolvedNamespace": "sample"},
+		    "queue": {"localQueue": "tau-ws-sample"}
+		  }
+		}`,
+		"-n sample get localqueue.kueue.x-k8s.io tau-ws-sample -o name": "localqueue.kueue.x-k8s.io/tau-ws-sample\n",
+		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name":      "localqueue.kueue.x-k8s.io/jobqueue\n",
+		"auth can-i * * --all-namespaces":                               "yes\n",
+	}}
+	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+
+	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(got.CompatibleQueues) != 1 || got.CompatibleQueues[0] != "jobqueue" {
+		t.Fatalf("compatible queues = %#v, want jobqueue", got.CompatibleQueues)
+	}
+}
+
 func TestKubectlVerifierUsesConfiguredSystemNamespace(t *testing.T) {
 	descriptor, err := Parse([]byte(validDescriptorYAML))
 	if err != nil {
