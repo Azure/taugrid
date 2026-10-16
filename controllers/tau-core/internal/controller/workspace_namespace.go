@@ -46,13 +46,14 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 	var namespace corev1.Namespace
 	if err := r.Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			if workspace.DeletionTimestamp.IsZero() {
+				return nil
+			}
+			return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
 		}
 		return fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
 	}
-	if namespace.Labels[labelManagedBy] != labelManagedByValue ||
-		namespace.Labels[labelWorkspace] != workspace.Name ||
-		!workspace.Spec.Target.CreateNamespace {
+	if !legacyNamespaceMatchesWorkspace(&namespace, workspace) {
 		return nil
 	}
 	if ownerUID := namespace.Annotations[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
@@ -65,6 +66,29 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 		}
 	}
 
+	return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
+}
+
+func legacyNamespaceMatchesWorkspace(
+	namespace *corev1.Namespace,
+	workspace *tauv1alpha1.TauWorkspace,
+) bool {
+	if namespace.Labels[labelWorkspace] != workspace.Name {
+		return false
+	}
+	if workspace.Spec.Target.CreateNamespace {
+		return namespace.Labels[labelManagedBy] == labelManagedByValue
+	}
+	queue := strings.TrimSpace(workspace.Spec.Queue)
+	return queue != "" &&
+		namespace.Labels[labelWorkspaceLocalQueue] == queue &&
+		namespace.Labels[labelKueueDefaultLocalQueue] == queue
+}
+
+func (r *TauWorkspaceReconciler) persistLegacyWorkspaceOwnerUID(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
 	before := workspace.DeepCopy()
 	setOwnerUIDAnnotation(workspace, workspace.UID)
 	if err := r.Patch(ctx, workspace, client.MergeFrom(before)); err != nil {
