@@ -8,7 +8,6 @@ templates:
 
 tests:
 
-  # ── StatefulSet ──────────────────────────────────────────
   - it: renders ingestor StatefulSet by default
     template: ingestor/statefulset.yaml
     asserts:
@@ -65,7 +64,6 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-kusto-endpoints=CostTracking=https://mycluster.westus2.kusto.windows.net
-
 
   - it: includes CostTracking metrics endpoint when clusterUrl is set
     template: ingestor/statefulset.yaml
@@ -150,7 +148,6 @@ tests:
               path: /mnt/ingestor
               type: DirectoryOrCreate
 
-  # ── Service ─────────────────────────────────────────────
   - it: renders ingestor Service
     template: ingestor/service.yaml
     asserts:
@@ -171,7 +168,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── ServiceAccount ──────────────────────────────────────
   - it: renders ingestor ServiceAccount
     template: ingestor/serviceaccount.yaml
     asserts:
@@ -181,7 +177,6 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-adx-mon-ingestor
 
-  # ── ClusterRole ─────────────────────────────────────────
   - it: renders ingestor ClusterRole with CRD permissions
     template: ingestor/clusterrole.yaml
     asserts:
@@ -194,7 +189,6 @@ tests:
             resources: [functions, managementcommands, summaryrules]
             verbs: [get, list, update, patch]
 
-  # ── ClusterRoleBinding ──────────────────────────────────
   - it: renders ingestor ClusterRoleBinding
     template: ingestor/clusterrolebinding.yaml
     asserts:

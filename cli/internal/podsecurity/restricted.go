@@ -1,15 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package podsecurity applies Tau's typed Restricted Pod Security contract.
 package podsecurity
 
 import "fmt"
 
 const defaultRestrictedID int64 = 65532
 
-// ApplyRestricted adds Restricted Pod Security fields to every generated
-// container. fsGroup is optional; Ray uses it for its shared emptyDir.
 func ApplyRestricted(pod map[string]any, fsGroup *int64) error {
 	podContext, err := securityContext(pod, "pod")
 	if err != nil {

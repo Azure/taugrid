@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package clusteraccess obtains isolated user kubeconfigs through credential adapters.
 package clusteraccess
 
 import (

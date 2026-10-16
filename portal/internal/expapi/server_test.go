@@ -984,9 +984,6 @@ func TestWorkspaceRoutePolicyAllowsOnlyConcreteV2NarrowReads(t *testing.T) {
 	}
 }
 
-// TestWorkspaceScopeFlowsFromServerConfig pins where scope comes from. The
-// server's configured workspace is authoritative; ?workspace= may echo it but
-// cannot widen or change it, because nothing authenticates the caller.
 func TestWorkspaceScopeIsParsedForExperimentAndRunSearch(t *testing.T) {
 	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1), Workspace: "sample"})
 	if err != nil {
@@ -1009,7 +1006,6 @@ func TestWorkspaceScopeIsParsedForExperimentAndRunSearch(t *testing.T) {
 		t.Fatalf("experiment workspace = %q, want sample", experimentOpts.Workspace)
 	}
 
-	// Omitting ?workspace= still yields the server's scope rather than "all".
 	bare := httptest.NewRequest(http.MethodGet, "/api/stellar/runs", nil)
 	if workspace, err = server.resolveWorkspace(bare); err != nil || workspace != "sample" {
 		t.Fatalf("bare request workspace = %q, err = %v; want sample", workspace, err)
@@ -1032,9 +1028,6 @@ func TestWorkspaceScopeIsParsedForExperimentAndRunSearch(t *testing.T) {
 	}
 }
 
-// TestStellarIsNeverUnscoped pins the fail-closed behaviour. An empty workspace
-// used to mean "every workspace"; a server with none configured now serves the
-// default workspace instead, and reads still succeed.
 func TestStellarIsNeverUnscoped(t *testing.T) {
 	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1)})
 	if err != nil {
@@ -1047,8 +1040,6 @@ func TestStellarIsNeverUnscoped(t *testing.T) {
 	if workspace != DefaultWorkspace {
 		t.Fatalf("workspace = %q, want %q", workspace, DefaultWorkspace)
 	}
-	// A request naming a different workspace is refused rather than silently
-	// served from this one.
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stellar/runs?workspace=other", nil))
 	if rec.Code != http.StatusBadRequest {
@@ -1056,8 +1047,6 @@ func TestStellarIsNeverUnscoped(t *testing.T) {
 	}
 }
 
-// TestDeprecatedKustoWorkspaceStillScopes covers the old flag name, which used
-// to be the only way to pin a workspace and is still set by existing installs.
 func TestDeprecatedKustoWorkspaceStillScopes(t *testing.T) {
 	server, err := NewServer(Options{StorePath: seedExpAPIStore(t, 1), KustoWorkspace: "legacy"})
 	if err != nil {
@@ -1072,9 +1061,6 @@ func TestDeprecatedKustoWorkspaceStillScopes(t *testing.T) {
 	}
 }
 
-// TestStellarPageCarriesWorkspaceScope pins that the rendered shell tells the
-// frontend which workspace it is looking at. Workspace no longer implies
-// source=kusto: the local store is workspace-scoped too.
 func TestStellarPageCarriesWorkspaceScope(t *testing.T) {
 	root := seedExpAPIStore(t, 1)
 	server, err := NewServer(Options{StorePath: root, Workspace: "sample"})
@@ -1091,7 +1077,6 @@ func TestStellarPageCarriesWorkspaceScope(t *testing.T) {
 		t.Fatalf("Stellar page dropped workspace scope:\n%s", rec.Body.String())
 	}
 
-	// A local-source read is now legitimate while workspace-scoped.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?source=local", nil)
 	server.Handler().ServeHTTP(rec, req)
@@ -1099,7 +1084,6 @@ func TestStellarPageCarriesWorkspaceScope(t *testing.T) {
 		t.Fatalf("workspace-scoped local source status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	// Naming a different workspace is refused rather than served.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/stellar/experiments?workspace=other", nil)
 	server.Handler().ServeHTTP(rec, req)
@@ -2845,10 +2829,6 @@ func TestHealthEndpointReportsMissingStore(t *testing.T) {
 	}
 }
 
-// TestKustoNativeQueryServesSnapshotWithoutQueryCommand pins the transport
-// contract that removed the shell adapter: a bare native transport must be
-// enough for source=kusto to be considered configured, so deployments no longer
-// need to stage a shell plus an IMDS-token script into the distroless image.
 func TestKustoNativeQueryServesSnapshotWithoutQueryCommand(t *testing.T) {
 	server, err := NewServer(Options{
 		Source:            "kusto",
@@ -2893,11 +2873,6 @@ func responseJSON(t *testing.T, handler http.Handler, path string) (int, any) {
 	return rec.Code, body
 }
 
-// normalizeVolatileFields zeroes wall-clock-derived fields so the v1/legacy
-// route-parity comparison only asserts on payload shape and content. Both
-// generated_at and freshness_seconds are recomputed per request, so two
-// sequential requests that straddle a second boundary would otherwise fail
-// the comparison spuriously.
 func normalizeVolatileFields(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:

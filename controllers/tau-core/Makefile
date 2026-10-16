@@ -13,9 +13,6 @@ build:
 test:
 	go test -race -count=1 ./...
 
-# kind-e2e.sh builds and loads its own controller image through Docker or
-# Podman (so the in-cluster Deployment runs real, current code); it no longer
-# needs the local `build` binary target.
 test-kind-e2e:
 	./scripts/kind-e2e.sh
 

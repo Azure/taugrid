@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package multisite validates independent workload execution across distinct
-// authoritative TauGrid sites.
 package multisite
 
 import (
@@ -381,5 +379,4 @@ func TestRequireHardwareSiteTargets(t *testing.T) {
 func Example_gpuJob() {
 	job := gpuJob("nightly", "queue", "site-a", "ray:latest", "tau.azure.com/site", "site-a")
 	fmt.Println(job.Spec.Template.Spec.NodeSelector["tau.azure.com/site"])
-	// Output: site-a
 }

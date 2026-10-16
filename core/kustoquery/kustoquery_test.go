@@ -10,8 +10,6 @@ import (
 )
 
 func TestParseRowsV1Tables(t *testing.T) {
-	// Kusto v1 REST shape: {"Tables":[{TableName, Columns, Rows}]}. Rows are
-	// positional arrays mapped to column names.
 	raw := []byte(`{"Tables":[
 		{"TableName":"Table_0",
 		 "Columns":[{"ColumnName":"instance"},{"ColumnName":"gpu"},{"ColumnName":"Value"}],
@@ -30,15 +28,12 @@ func TestParseRowsV1Tables(t *testing.T) {
 	if v, ok := rows[0].Num("Value"); !ok || v != 42.5 {
 		t.Fatalf("row0 Value = %v (ok=%v), want 42.5", v, ok)
 	}
-	// Numeric-string column parses via Num (Kusto tostring()).
 	if v, ok := rows[1].Num("Value"); !ok || v != 7 {
 		t.Fatalf("row1 Value = %v (ok=%v), want 7", v, ok)
 	}
 }
 
 func TestParseRowsV1TablesPrimaryResultSelected(t *testing.T) {
-	// When multiple tables exist, the PrimaryResult table wins over others
-	// (e.g. QueryProperties / QueryStatus tables in real v1 responses).
 	raw := []byte(`{"Tables":[
 		{"TableName":"PrimaryResult","Columns":[{"ColumnName":"gpu"}],"Rows":[["0"],["1"]]},
 		{"TableName":"QueryStatus","Columns":[{"ColumnName":"x"}],"Rows":[["ignored"]]}
@@ -53,8 +48,6 @@ func TestParseRowsV1TablesPrimaryResultSelected(t *testing.T) {
 }
 
 func TestParseRowsV2FrameArray(t *testing.T) {
-	// Kusto v2 REST shape: a frame array; only the PrimaryResult DataTable frame
-	// carries results.
 	raw := []byte(`[
 		{"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
 		{"FrameType":"DataTable","TableKind":"PrimaryResult",
@@ -80,11 +73,6 @@ func TestParseRowsV2FrameArray(t *testing.T) {
 }
 
 func TestParseRowsV2FragmentedFrameArray(t *testing.T) {
-	// Real azure-kusto-go QueryToJson shape (IsFragmented=true): the
-	// PrimaryResult table is split across a TableHeader (Columns + TableId) and
-	// TableFragment frames (Rows for the matching TableId). Only the
-	// QueryProperties/QueryCompletionInformation tables arrive as DataTable
-	// frames, so the DataTable-only path would silently return 0 rows.
 	raw := []byte(`[
 		{"FrameType":"DataSetHeader","IsProgressive":false,"Version":"v2.0"},
 		{"FrameType":"DataTable","TableId":0,"TableKind":"QueryProperties",
@@ -116,7 +104,6 @@ func TestParseRowsV2FragmentedFrameArray(t *testing.T) {
 }
 
 func TestParseRowsColumnsRowsObject(t *testing.T) {
-	// {"Columns":[...],"Rows":[...]} shape with string column names.
 	raw := []byte(`{"Columns":["team","gpuHours"],"Rows":[["research",12.0],["infra",3.5]]}`)
 	rows, err := ParseRows(raw)
 	if err != nil {
@@ -172,7 +159,6 @@ func TestParseRowsEmpty(t *testing.T) {
 }
 
 func TestParseRowsSingleObject(t *testing.T) {
-	// A bare object with no Tables/Columns/Rows keys is treated as one row.
 	raw := []byte(`{"instance":"node-a","Value":5}`)
 	rows, err := ParseRows(raw)
 	if err != nil {
@@ -227,8 +213,6 @@ func TestQuoteString(t *testing.T) {
 		"o'brien": "@'o''brien'",
 		"":        "@''",
 		"a'b'c":   "@'a''b''c'",
-		// Verbatim form: a trailing backslash stays literal and cannot escape the
-		// closing quote (the regular-literal break-out this guards against).
 		`node\`:   "@'node\\'",
 		`a\' | x`: "@'a\\'' | x'",
 	}
@@ -240,8 +224,6 @@ func TestQuoteString(t *testing.T) {
 }
 
 func TestClientQueryNoCommand(t *testing.T) {
-	// An unconfigured Client reports ErrNoQueryCommand so the portal can treat
-	// the board as disabled.
 	_, err := Client{}.Query(context.Background(), "GpuHealth()")
 	if !errors.Is(err, ErrNoQueryCommand) {
 		t.Fatalf("err = %v, want ErrNoQueryCommand", err)
@@ -249,9 +231,6 @@ func TestClientQueryNoCommand(t *testing.T) {
 }
 
 func TestClientQueryExpandsArgsAndParses(t *testing.T) {
-	// Use a real shell-out to /bin/echo-like behavior via `cat`-of-arg is awkward;
-	// instead use a tiny sh script that echoes canned JSON, exercising the full
-	// Query path (arg expansion + stdout parse).
 	c := Client{
 		Command: "sh",
 		Args:    []string{"-c", `printf '{"Columns":["gpu"],"Rows":[["0"],["1"]]}'`},

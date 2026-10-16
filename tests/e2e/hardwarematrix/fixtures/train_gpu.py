@@ -11,9 +11,7 @@ from ray import train
 from ray.train import ScalingConfig
 from ray.train.torch import TorchTrainer
 
-
 WORKERS = int(os.environ["MATRIX_WORKERS"])
-
 
 def train_loop():
     import torch
@@ -89,7 +87,6 @@ def train_loop():
             "checkpoint_bytes": checkpoint_bytes,
         },
     )
-
 
 ray.init()
 trainer = TorchTrainer(

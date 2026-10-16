@@ -37,8 +37,6 @@ func (s *Server) buildArtifactSnapshot(ctx context.Context, r *http.Request, tar
 	if handled {
 		return snapshot, nil
 	}
-	// Cockpit snapshots deliberately include experiment-wide comparison runs.
-	// Media authorization must additionally bind those scoped runs to the target.
 	allowed := make(map[string]bool)
 	runs := snapshot.Runs[:0]
 	for _, run := range snapshot.Runs {
@@ -93,8 +91,6 @@ func (s *Server) localArtifactRunSnapshot(ctx context.Context, r *http.Request, 
 	if candidate == "" {
 		candidate = target
 	}
-	// SearchRuns applies exact target and fixed-workspace predicates before its
-	// limit. Comparison snapshots instead expand targets and truncate first.
 	result, err := store.SearchRuns(ctx, expstore.RunSearchOptions{
 		Target: candidate, Workspace: workspace, Project: strings.TrimSpace(r.URL.Query().Get("project")), Limit: 1,
 	})
@@ -119,8 +115,6 @@ func (s *Server) localArtifactRunSnapshot(ctx context.Context, r *http.Request, 
 			return expcockpit.Snapshot{}, true, expstore.ErrNotFound
 		}
 	}
-	// A direct artifact lookup is safe only after exact run ownership and any
-	// enclosing experiment/group membership have both been established.
 	records, err := store.ArtifactsForRun(ctx, run.RunID)
 	if err != nil {
 		return expcockpit.Snapshot{}, true, err

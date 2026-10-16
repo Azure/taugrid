@@ -27,8 +27,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portalbin"
 )
 
-// SchemaVersion is intentionally stable for existing machine consumers even
-// though the researcher-facing surface is now branded Stellar.
 const SchemaVersion = "tau.exp.cockpit.v0"
 
 const (
@@ -659,9 +657,6 @@ func buildMergedSnapshot(ctx context.Context, store *expstore.Store, kusto Kusto
 		return kusto.BuildSnapshot(ctx, opts)
 	}
 	localRunIDs := runIDSet(runs)
-	// scopeSnapshotStatus rewrites status.Runs to the scoped count, so the
-	// denominator has to be read before it runs or the warning degenerates to
-	// "N of N".
 	totalRuns := status.Runs
 	groups = scopeSnapshotStatus(&status, groups, runs, opts.Workspace)
 	warnings := []string{}
@@ -865,9 +860,6 @@ func buildLocalSnapshot(ctx context.Context, store *expstore.Store, opts Options
 	if strings.TrimSpace(opts.Workspace) != "" && len(runs) == 0 {
 		return Snapshot{}, expstore.ErrNotFound
 	}
-	// scopeSnapshotStatus rewrites status.Runs to the scoped count, so the
-	// denominator has to be read before it runs or the warning degenerates to
-	// "N of N".
 	totalRuns := status.Runs
 	groups = scopeSnapshotStatus(&status, groups, runs, opts.Workspace)
 	warnings := []string{}
@@ -1054,10 +1046,6 @@ func RenderSnapshotHTML(snapshot Snapshot) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// loadExperiment resolves the active experiment. Under the
-// workspace -> project -> experiment -> run model, run groups are arms inside
-// an experiment rather than experiments themselves, so a run or group target
-// resolves upward through the run_experiments join.
 func loadExperiment(ctx context.Context, store *expstore.Store, status expstore.Status) (*expstore.ExperimentRecord, error) {
 	if status.Experiment != nil {
 		return experimentFromRecord(*status.Experiment), nil
@@ -1095,9 +1083,6 @@ LIMIT 1`)
 
 func loadRunGroups(ctx context.Context, store *expstore.Store, status expstore.Status, experiment *expstore.ExperimentRecord) ([]RunGroupView, error) {
 	query := "SELECT run_group_id, project, name, created_at, updated_at FROM run_groups"
-	// An experiment's arms are the groups its runs sit in. run_groups carries no
-	// experiment_id of its own: the same arm label may be reused by more than
-	// one experiment, so ownership lives on the run.
 	if status.Experiment != nil {
 		id := sqlQuote(status.Experiment.ExperimentID)
 		query += " WHERE run_group_id IN (SELECT DISTINCT r.run_group_id FROM runs r WHERE r.experiment_id = " + id + ")"
@@ -1154,9 +1139,6 @@ FROM runs`
 		if strings.Contains(query, " WHERE ") {
 			joiner = " AND "
 		}
-		// Untagged runs belong to the workspace this server serves; Stellar is
-		// single-workspace, so excluding them would hide data rather than deny
-		// access. Placeholder order: tag key, workspace, tag key.
 		query += joiner + `(EXISTS (
   SELECT 1 FROM tags workspace_tag
   WHERE workspace_tag.scope_type = 'run'
@@ -1194,14 +1176,13 @@ FROM runs`
 	out := make([]RunView, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, RunView{
-			RunID:      stringValue(row, "run_id"),
-			Source:     "local",
-			Project:    stringValue(row, "project"),
-			RunGroupID: stringValue(row, "run_group_id"),
-			State:      stringValue(row, "state"),
-			Owner:      stringValue(row, "owner"),
-			CreatedAt:  stringValue(row, "created_at"),
-			// Metric summaries are loaded later; use created_at until run search metadata can enrich this.
+			RunID:       stringValue(row, "run_id"),
+			Source:      "local",
+			Project:     stringValue(row, "project"),
+			RunGroupID:  stringValue(row, "run_group_id"),
+			State:       stringValue(row, "state"),
+			Owner:       stringValue(row, "owner"),
+			CreatedAt:   stringValue(row, "created_at"),
 			UpdatedAt:   stringValue(row, "created_at"),
 			StartedAt:   stringValue(row, "started_at"),
 			CompletedAt: stringValue(row, "completed_at"),
@@ -1240,24 +1221,10 @@ func scopeSnapshotStatus(status *expstore.Status, groups []RunGroupView, runs []
 	return scopedGroups
 }
 
-// workspaceTruncationWarning reports how many runs a snapshot dropped.
-//
-// This used to report a vaguer "workspace runs truncated to N" whenever a
-// workspace was set, because a workspace filter meant the total was computed
-// over a wider set than was shown. Stellar now always has a workspace, so that
-// branch would fire on every request and permanently hide the denominator.
 func workspaceTruncationWarning(workspace string, returned, total int) string {
 	return fmt.Sprintf("runs truncated to %d of %d matching runs", returned, total)
 }
 
-// workspaceObservationScope returns the experiment and groups whose
-// observations a snapshot may show.
-//
-// This used to drop both whenever a workspace was set, because experiment- and
-// group-scoped observations carry no workspace tag of their own. That guard is
-// now counterproductive: a workspace is always set, so it would silently hide
-// every observation. The experiment and groups passed in are already
-// workspace-scoped by scopeSnapshotStatus, so their observations are in scope.
 func workspaceObservationScope(workspace string, experiment *expstore.ExperimentRecord, groups []RunGroupView) (*expstore.ExperimentRecord, []RunGroupView) {
 	return experiment, groups
 }

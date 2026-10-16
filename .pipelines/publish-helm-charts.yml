@@ -1,5 +1,3 @@
-# Publishes TauGrid-owned Helm charts to the backing ACR that synchronizes to MCR.
-
 trigger:
   batch: true
   branches:

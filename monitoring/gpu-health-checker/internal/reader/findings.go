@@ -10,7 +10,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/config"
 )
 
-// CheckFindings accumulates partial results from sub-checks within a reader.
 type CheckFindings struct {
 	Critical []int
 	Warning  []int

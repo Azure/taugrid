@@ -16,8 +16,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 )
 
-// fileRegistry builds a Registry backed by a fresh fileBackend rooted at a temp
-// dir, mirroring how registryClient() wires file://<dir>.
 func fileRegistry(t *testing.T) (*dataset.Registry, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -34,8 +32,6 @@ func TestFileBackendRoundTrip(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// The absolute registry path must be mapped under root, stripping the
-	// DatasetRegistryDir prefix.
 	lp, err := b.localPath(p)
 	if err != nil {
 		t.Fatalf("localPath: %v", err)
@@ -66,8 +62,6 @@ func TestFileBackendImmutability(t *testing.T) {
 		t.Fatalf("first WriteFile: %v", err)
 	}
 
-	// overwrite=false must refuse with ErrExist (O_EXCL), proving immutability
-	// does not rely on a racy read-then-write.
 	if err := b.WriteFile(ctx, p, []byte("second"), false); !dataset.IsExist(err) {
 		t.Fatalf("overwrite=false: want IsExist, got %v", err)
 	}
@@ -75,7 +69,6 @@ func TestFileBackendImmutability(t *testing.T) {
 	if string(got) != "first" {
 		t.Fatalf("record mutated: %q", got)
 	}
-	// overwrite=true is allowed (aliases use it for CAS).
 	if err := b.WriteFile(ctx, p, []byte("third"), true); err != nil {
 		t.Fatalf("overwrite=true: %v", err)
 	}
@@ -171,9 +164,6 @@ func TestFileBackendRejectsOutsidePaths(t *testing.T) {
 	}
 }
 
-// TestRegisterManifestDefaultsAssurance verifies the CLI defaults --manifest
-// registrations to manifest-supplied (not verified) when --assurance is unset,
-// since no bytes are hashed on the manifest path.
 func TestRegisterManifestDefaultsAssurance(t *testing.T) {
 	root := t.TempDir()
 	regURL := testFileURI(t, root)
@@ -249,19 +239,16 @@ func TestLoadDatasetManifest(t *testing.T) {
 		t.Fatalf("loaded mismatch: %+v", loaded)
 	}
 
-	// Empty file list is rejected.
 	empty := filepath.Join(dir, "empty.json")
 	os.WriteFile(empty, []byte(`{"source":{"kind":"huggingface"},"files":[]}`), 0o644)
 	if _, err := loadDatasetManifest(empty); err == nil {
 		t.Fatal("empty manifest: want error")
 	}
 
-	// Missing file is an error.
 	if _, err := loadDatasetManifest(filepath.Join(dir, "nope.json")); err == nil {
 		t.Fatal("missing manifest: want error")
 	}
 
-	// Invalid JSON is an error.
 	bad := filepath.Join(dir, "bad.json")
 	os.WriteFile(bad, []byte(`{not json`), 0o644)
 	if _, err := loadDatasetManifest(bad); err == nil {
@@ -269,8 +256,6 @@ func TestLoadDatasetManifest(t *testing.T) {
 	}
 }
 
-// TestFileBackendRegistryEndToEnd exercises register -> get -> list -> alias ->
-// resolve over the file backend, the same path the seed script drives.
 func TestFileBackendRegistryEndToEnd(t *testing.T) {
 	reg, _ := fileRegistry(t)
 	ctx := context.Background()
@@ -294,7 +279,6 @@ func TestFileBackendRegistryEndToEnd(t *testing.T) {
 		t.Fatalf("Register filled record wrong: digest=%q total=%d", written.Digest, written.TotalBytes)
 	}
 
-	// Re-register must refuse (immutability) end to end.
 	if _, err := reg.Register(ctx, rec); err == nil || !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("re-register: want already-registered error, got %v", err)
 	}
@@ -307,7 +291,6 @@ func TestFileBackendRegistryEndToEnd(t *testing.T) {
 		t.Fatalf("Get digest mismatch: %q vs %q", got.Digest, written.Digest)
 	}
 
-	// Alias CAS: set latest -> v1, then resolve.
 	if _, err := reg.SetAlias(ctx, "demo-ds", "latest", "v1", dataset.SetAliasOptions{}); err != nil {
 		t.Fatalf("SetAlias: %v", err)
 	}

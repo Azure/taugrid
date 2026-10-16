@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -11,7 +10,6 @@ import sys
 import math
 from html.parser import HTMLParser
 from pathlib import Path
-
 
 class DocumentAudit(HTMLParser):
     def __init__(self, path: Path) -> None:
@@ -33,10 +31,6 @@ class DocumentAudit(HTMLParser):
         elif tag == "main":
             self.main_count += 1
         elif tag == "meta" and (values.get("http-equiv") or "").lower() == "refresh":
-            # Hugo's built-in alias template emits a bare <head>-only
-            # redirect stub (no body, no landmarks) so old public URLs keep
-            # working. It is never rendered as a page a reader lands on, so
-            # the content-structure checks below do not apply to it.
             self.is_redirect_stub = True
         elif tag == "img" and "alt" not in values:
             self.failures.append("image is missing an alt attribute")
@@ -64,7 +58,6 @@ class DocumentAudit(HTMLParser):
                     f"heading outline jumps from h{previous} to h{current}"
                 )
         return self.failures
-
 
 def relative_luminance(color: str) -> float:
     if color.startswith("#"):
@@ -109,14 +102,12 @@ def relative_luminance(color: str) -> float:
         linear = [min(1, max(0, channel)) for channel in linear]
     return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
-
 def contrast_ratio(foreground: str, background: str) -> float:
     lighter, darker = sorted(
         (relative_luminance(foreground), relative_luminance(background)),
         reverse=True,
     )
     return (lighter + 0.05) / (darker + 0.05)
-
 
 def parse_theme_tokens(source: str, selector: str) -> dict[str, str]:
     match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\n\}}", source, re.S)
@@ -129,7 +120,6 @@ def parse_theme_tokens(source: str, selector: str) -> dict[str, str]:
             match.group("body"),
         )
     )
-
 
 def check_theme(source_path: Path) -> list[str]:
     source = source_path.read_text(encoding="utf-8")
@@ -176,7 +166,6 @@ def check_theme(source_path: Path) -> list[str]:
             )
     return failures
 
-
 def main() -> int:
     public_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "public")
     source_path = Path(
@@ -199,7 +188,6 @@ def main() -> int:
 
     print(f"Checked accessibility structure for {len(documents)} HTML documents")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

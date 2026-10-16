@@ -97,7 +97,6 @@ server-immutability write; file://dir for a local seed catalog).`,
 				if assurance == "" {
 					assurance = dataset.AssuranceManifestSupplied
 				}
-				// Manifest provenance fills any unset --source-* flag.
 				if source.Kind == "" {
 					source.Kind = man.Source.Kind
 				}
@@ -126,8 +125,6 @@ server-immutability write; file://dir for a local seed catalog).`,
 				if assurance == "" {
 					assurance = dataset.AssuranceVerified
 				}
-				// If --from is an az URL and explicit pointer flags are unset,
-				// default the record's byte-location pointer to it.
 				if strings.HasPrefix(from, "az://") {
 					a, c, p, perr := parseAzURL(from)
 					if perr != nil {
@@ -219,12 +216,6 @@ server-immutability write; file://dir for a local seed catalog).`,
 				}
 			}
 
-			// Workspace mode: register the immutable record from inside the
-			// cluster under the workspace's workload identity. The record is
-			// built and validated locally, transported via a size-bounded
-			// ConfigMap, and written by the hidden register worker using the
-			// SDK-backed registry (idempotent for an identical digest; drift
-			// fails). Local behavior below is unchanged when --workspace is unset.
 			if workspace != "" {
 				return runRegisterWorkspace(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(),
 					rec, rf, workspace, workerImage, wait, dryRun, output)
@@ -278,11 +269,6 @@ server-immutability write; file://dir for a local seed catalog).`,
 	return cmd
 }
 
-// runRegisterWorkspace transports the immutable record via a size-bounded
-// ConfigMap and runs the hidden register worker Job under the workspace
-// workload identity. The transient ConfigMap is always removed after a waited
-// run. For safety, non-wait workspace registration is refused: without waiting
-// we cannot guarantee cleanup of the ConfigMap that carries the record.
 func runRegisterWorkspace(
 	ctx context.Context, out, errOut io.Writer,
 	rec dataset.Record, rf registryFlags,
@@ -304,8 +290,6 @@ func runRegisterWorkspace(
 			"workspace register requires --wait so the transient record ConfigMap can be cleaned up deterministically")
 	}
 
-	// Canonicalize the record (schema/total/digest) so the transported bytes
-	// match exactly what the worker will register, and size-check the payload.
 	if rec.SchemaVersion == 0 {
 		rec.SchemaVersion = dataset.SchemaVersion
 	}
@@ -375,7 +359,6 @@ func runRegisterWorkspace(
 	}
 
 	runner := newDatasetKubeRunner(rf.kubeContext)
-	// Always attempt to clean up the transient ConfigMap on the way out.
 	defer func() {
 		_ = deleteConfigMap(ctx, runner, ident.Namespace, cmName)
 	}()
@@ -419,8 +402,6 @@ func runRegisterWorkspace(
 	return nil
 }
 
-// dataSourceForRegister selects the bytes source for register. A local dir is
-// hashed in-process; an az URL is hashed via the Azure CLI with caller RBAC.
 func dataSourceForRegister(from, account, container, prefix string) (dataSource, error) {
 	if strings.HasPrefix(from, "az://") {
 		a, c, p, err := parseAzURL(from)
@@ -435,11 +416,6 @@ func dataSourceForRegister(from, account, container, prefix string) (dataSource,
 	return localDataSource{root: from}, nil
 }
 
-// datasetManifest is the --manifest input: a caller-supplied file list whose
-// per-file sha256 is already known (for example a Hugging Face dataset's LFS
-// object ids), so a large external dataset can be cataloged without downloading
-// its bytes. The recorded assurance is "manifest-supplied": the registry did
-// not recompute the hashes itself.
 type datasetManifest struct {
 	Source     dataset.Source      `json:"source"`
 	Components []dataset.Component `json:"components,omitempty"`

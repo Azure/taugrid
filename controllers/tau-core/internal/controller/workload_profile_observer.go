@@ -659,8 +659,6 @@ func clusterQueueFlavorNames(clusterQueue *unstructured.Unstructured) ([]string,
 	return sortedSet(names), nil
 }
 
-// clusterQueueAdmissionCheckNames accepts the legacy v1beta1 string list and
-// the v1beta2 admissionChecksStrategy rule list.
 func clusterQueueAdmissionCheckNames(clusterQueue *unstructured.Unstructured) ([]string, error) {
 	legacyChecks, legacyFound, err := unstructured.NestedSlice(clusterQueue.Object, "spec", "admissionChecks")
 	if err != nil {

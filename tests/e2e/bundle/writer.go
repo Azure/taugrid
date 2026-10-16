@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package bundle writes diagnostic artifacts captured by e2e tests.
 package bundle
 
 import (
@@ -15,14 +14,12 @@ import (
 
 const defaultBundleRoot = "e2e-bundle"
 
-// Writer creates files in a directory dedicated to one test.
 type Writer struct {
 	dir      string
 	t        testing.TB
 	fileOnly bool
 }
 
-// Root returns the configured diagnostic bundle directory.
 func Root() string {
 	if root := os.Getenv("E2E_BUNDLE_DIR"); root != "" {
 		return root
@@ -30,7 +27,6 @@ func Root() string {
 	return defaultBundleRoot
 }
 
-// New returns a Writer scoped to the current test.
 func New(t testing.TB) *Writer {
 	t.Helper()
 	name := strings.ReplaceAll(t.Name(), "/", "_")
@@ -41,12 +37,10 @@ func New(t testing.TB) *Writer {
 	}
 }
 
-// Dir returns the test's diagnostic directory.
 func (w *Writer) Dir() string {
 	return w.dir
 }
 
-// WriteFile writes data to a file in the test's diagnostic directory.
 func (w *Writer) WriteFile(name string, data []byte) error {
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		return fmt.Errorf("bundle: create dir %s: %w", w.dir, err)
@@ -58,8 +52,6 @@ func (w *Writer) WriteFile(name string, data []byte) error {
 	return nil
 }
 
-// WriterFor returns a writer for one diagnostic file. Local runs also copy
-// output to the test log; CI runs keep it only in the artifact file.
 func (w *Writer) WriterFor(name string) io.Writer {
 	return &teeWriter{bundleWriter: w, name: name, t: w.t, fileOnly: w.fileOnly}
 }

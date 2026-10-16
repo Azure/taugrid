@@ -23,7 +23,6 @@ from ray.train.torch import TorchConfig, TorchTrainer
 
 SENTINEL_PATH = Path("/tmp/checkpoint_failure_sentinel")
 
-
 def train_loop(config: dict) -> None:
     rank = train.get_context().get_world_rank()
     start_step = 0
@@ -55,7 +54,6 @@ def train_loop(config: dict) -> None:
                 )
         else:
             train.report({"loss": loss, "step": step})
-
 
 def main() -> None:
     ray.init(address="auto")
@@ -105,7 +103,6 @@ def main() -> None:
             "Training likely restarted from step 0 instead of resuming."
         )
     print("SUCCESS: checkpoint-aware failure recovery verified", flush=True)
-
 
 if __name__ == "__main__":
     main()

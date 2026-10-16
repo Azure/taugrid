@@ -18,8 +18,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// fakeReader drives Detail() without a live API. Each read returns its byte
-// payload and error independently, so tests can exercise per-source degradation.
 type fakeReader struct {
 	job, rayJob, rayCluster, pods, events, workloads, services   []byte
 	jobErr, rayErr, rayClusterErr, podErr, evtErr, wlErr, svcErr error
@@ -47,7 +45,6 @@ func (f fakeReader) ListServices(context.Context, string) ([]byte, error) {
 	return f.services, f.svcErr
 }
 
-// fakeQuerier returns fixed rows (or an error) for the indexed tracking query.
 type fakeQuerier struct {
 	rows []kustoquery.Row
 	err  error
@@ -98,9 +95,6 @@ func TestDetailNotFound(t *testing.T) {
 	}
 }
 
-// TestDetailReadErrorPropagates ensures a non-NotFound read failure (e.g. RBAC
-// forbidden or a transient API error) is surfaced to the caller rather than
-// masquerading as ErrNotFound — so the handler returns 502, not a misleading 404.
 func TestDetailReadErrorPropagates(t *testing.T) {
 	forbidden := apierrors.NewForbidden(schema.GroupResource{Group: "ray.io", Resource: "rayjobs"}, "train-a", errors.New("access denied"))
 	r := fakeReader{
@@ -119,9 +113,6 @@ func TestDetailReadErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestDetailJobK8sOnly covers a plain Job: status, run-id, Stellar link, pods
-// filtered by the job label, and workloads scoped to the job. No Querier → no
-// lifecycle tier.
 func TestDetailJobK8sOnly(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -174,10 +165,6 @@ func TestDetailJobK8sOnly(t *testing.T) {
 	}
 }
 
-// TestDetailJobPodsUseCurrentMetadataContract covers Jobs rendered by the
-// current Tau producer: run-id is the Tau identity, while Kubernetes owns the
-// pod association labels and tau.azure.com/job is not required. A pod matching
-// every compatible label must still appear only once.
 func TestDetailJobPodsUseCurrentMetadataContract(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -280,10 +267,6 @@ func TestDetailRayJobTraversesRayClusterUIDForPods(t *testing.T) {
 	}
 }
 
-// TestDetailWorkloadJoinByOwnerReference covers the Gap #1 fallback: a Kueue
-// Workload admitted for a RayJob that carries no tau.azure.com/{job,run-id}
-// labels (Kueue only copies labels tau stamped) is still scoped to the run by
-// matching its ownerReference name against the RayJob object name.
 func TestDetailWorkloadJoinByOwnerReference(t *testing.T) {
 	r := fakeReader{
 		rayJob: []byte(`{"metadata":{"name":"portal-e2e","namespace":"ray","labels":{"` + workloadmeta.LabelRunID + `":"portal-e2e"}},
@@ -305,8 +288,6 @@ func TestDetailWorkloadJoinByOwnerReference(t *testing.T) {
 	}
 }
 
-// TestDetailRayJobPrefersRayJob confirms a RayJob is resolved first, its native
-// status fields are surfaced, and pods are selected by ray.io/cluster.
 func TestDetailRayJobPrefersRayJob(t *testing.T) {
 	r := fakeReader{
 		rayJob: []byte(`{"metadata":{"name":"ray-train","namespace":"ray","creationTimestamp":"2026-07-02T10:00:00Z",
@@ -329,7 +310,6 @@ func TestDetailRayJobPrefersRayJob(t *testing.T) {
 	if len(snap.Pods) != 1 || snap.Pods[0].Name != "head" {
 		t.Fatalf("Pods = %+v, want one head pod", snap.Pods)
 	}
-	// A RayJob with a named RayCluster gets a per-job Ray dashboard deep-link.
 	if snap.Links.RayDashboardPath != "/api/portal/ray/proxy/ray/ray-train-raycluster/" {
 		t.Fatalf("RayDashboardPath = %q, want the head-svc proxy path", snap.Links.RayDashboardPath)
 	}
@@ -524,8 +504,6 @@ func TestDetailRayJobDoesNotClaimComputeReusableWithoutRayClusterIdentity(t *tes
 	}
 }
 
-// TestDetailNoRunIDOmitsStellar confirms a job without a run-id omits the
-// Stellar link (no dead link) and skips the Kusto tier even with a Querier.
 func TestDetailNoRunIDOmitsStellar(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -544,8 +522,6 @@ func TestDetailNoRunIDOmitsStellar(t *testing.T) {
 	}
 }
 
-// TestDetailKustoLifecycle confirms tier 3 populates from the Querier when a
-// run-id is present.
 func TestDetailKustoLifecycle(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -579,12 +555,6 @@ func TestDetailKustoLifecycle(t *testing.T) {
 	}
 }
 
-// TestDetailRayJobWithLifecyclePreservesBothLinks is the regression for peni's
-// review: a running RayJob that also has a durable Kusto lifecycle row must emit
-// BOTH the Ray dashboard deep-link and the Stellar deep-link (they are
-// independent tiers), and — because its head Service is discoverable by the same
-// head-Service scan the proxy uses — RayDashboardReachable must be true so the
-// frontend renders the dashboard link enabled.
 func TestDetailRayJobWithLifecyclePreservesBothLinks(t *testing.T) {
 	r := fakeReader{
 		rayJob: []byte(`{"metadata":{"name":"ray-train","namespace":"ray","creationTimestamp":"2026-07-02T10:00:00Z",
@@ -643,8 +613,6 @@ func TestDetailRayDashboardIsUnavailableWithoutReadyHeadPod(t *testing.T) {
 	}
 }
 
-// TestDetailKustoErrorDropsTier3 confirms a Kusto error (including
-// ErrNoQueryCommand) omits tier 3 without failing the page.
 func TestDetailKustoErrorDropsTier3(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -663,10 +631,6 @@ func TestDetailKustoErrorDropsTier3(t *testing.T) {
 	}
 }
 
-// TestDetailEventTimeFallbacks covers Fix #1: a modern core/v1 Event that leaves
-// the legacy lastTimestamp empty still resolves Last from eventTime or
-// series.lastObservedTime, and an event with no timestamp at all leaves Last nil
-// (omitted) rather than serializing the false 0001-01-01 zero time.
 func TestDetailEventTimeFallbacks(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -699,9 +663,6 @@ func TestDetailEventTimeFallbacks(t *testing.T) {
 	}
 }
 
-// TestDetailAbsentCreatedIsNil covers Fix #1 for ObjectDetail.Created: an
-// unparseable/absent creationTimestamp yields a nil Created (omitted) rather than
-// the false 0001-01-01 zero time.
 func TestDetailAbsentCreatedIsNil(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -716,14 +677,9 @@ func TestDetailAbsentCreatedIsNil(t *testing.T) {
 	}
 }
 
-// TestDetailDecodeErrorNotNotFound covers Fix #2: a Get that returns
-// (malformed payload, nil) alongside a NotFound on the other kind must surface a
-// distinct decode error, not ErrNotFound — a successful-but-garbage response
-// proves the API answered (→ 502), not that the object is absent (→ 404).
 func TestDetailDecodeErrorNotNotFound(t *testing.T) {
-	// Malformed RayJob success + NotFound Job.
 	r := fakeReader{
-		rayJob: []byte(`{"metadata":{"name":`), // truncated JSON
+		rayJob: []byte(`{"metadata":{"name":`),
 		jobErr: apierrors.NewNotFound(schema.GroupResource{Group: "batch", Resource: "jobs"}, "train-a"),
 	}
 	_, err := Detail(context.Background(), r, nil, Options{Namespace: "ray", Name: "train-a"})
@@ -734,7 +690,6 @@ func TestDetailDecodeErrorNotNotFound(t *testing.T) {
 		t.Fatalf("Detail() error = %v, want decode error, not ErrNotFound", err)
 	}
 
-	// Inverse: valid-JSON but missing metadata.name Job success + NotFound RayJob.
 	r2 := fakeReader{
 		rayErr: apierrors.NewNotFound(schema.GroupResource{Group: "ray.io", Resource: "rayjobs"}, "train-a"),
 		job:    []byte(`{"metadata":{"namespace":"ray"},"status":{"active":1}}`),
@@ -748,8 +703,6 @@ func TestDetailDecodeErrorNotNotFound(t *testing.T) {
 	}
 }
 
-// TestDetailToleratesBadListJSON confirms a per-source read that returns
-// non-JSON (e.g. a CRD-not-found message) drops just that section.
 func TestDetailToleratesBadListJSON(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -794,11 +747,6 @@ func TestDetailRejectsMalformedListEnvelopes(t *testing.T) {
 	}
 }
 
-// TestDetailSurfacesStampedStellarIdentity checks that the Stellar identity
-// `tau run` stamps is surfaced on the snapshot, and — deliberately — that it
-// does NOT leak into the deep-link scope. The row's project and the annotation's
-// project are different knobs (offload sidecar --project vs the run config's
-// experiment.project), so a row with no project must not borrow the annotation.
 func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -811,7 +759,6 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
             "` + workloadmeta.AnnotationStellarGroup + `":"safe-stack-h200"}},
         "status":{"conditions":[{"type":"Complete","status":"True"}]}}`),
 	}
-	// A marker without project_id cannot prove a renderable scoped identity.
 	q := fakeQuerier{rows: []kustoquery.Row{{
 		"metric_name": "tau/run_status",
 		"value":       1.0,
@@ -835,8 +782,6 @@ func TestDetailSurfacesStampedStellarIdentity(t *testing.T) {
 	}
 }
 
-// TestDetailKustoProjectIsTheOnlyLinkScope keeps the rule explicit: the link is
-// scoped by what Stellar indexed (the row), never by the object annotation.
 func TestDetailKustoProjectIsTheOnlyLinkScope(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),
@@ -860,9 +805,6 @@ func TestDetailKustoProjectIsTheOnlyLinkScope(t *testing.T) {
 	}
 }
 
-// TestDetailNoStellarIdentityOmitsExperiment guards the unstamped case: no
-// annotations means no Experiment block, and the Kusto gate still governs the
-// link.
 func TestDetailNoStellarIdentityOmitsExperiment(t *testing.T) {
 	r := fakeReader{
 		rayErr: errors.New("no rayjob"),

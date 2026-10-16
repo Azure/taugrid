@@ -2,9 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
-# This plugin checks if the NVIDIA GPU driver is loaded and healthy.
-
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2

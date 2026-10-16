@@ -31,16 +31,13 @@ func isRayWebsocket(r *http.Request) bool {
 
 func raySameOrigin(r *http.Request) bool {
 	if r.Header.Get("Origin") == "" {
-		return true // Non-browser clients need not send Origin.
+		return true
 	}
 	origin, err := url.Parse(r.Header.Get("Origin"))
 	return err == nil && origin.User == nil && (origin.Scheme == "http" || origin.Scheme == "https") &&
 		strings.EqualFold(origin.Host, r.Host) && origin.Path == "" && origin.RawQuery == "" && origin.Fragment == ""
 }
 
-// These passive routes match the Ray 2.54/2.56 dashboard service clients.
-// A GET is not necessarily a read: profiling, traceback, JVM diagnostics and
-// dataset stats-actor creation are deliberately excluded.
 func rayReadRouteAllowed(method, upstreamPath string, websocket bool) bool {
 	if path.Clean(upstreamPath) != strings.TrimSuffix(upstreamPath, "/") && upstreamPath != "/" {
 		return false
@@ -75,8 +72,6 @@ func rayReadRouteAllowed(method, upstreamPath string, websocket bool) bool {
 		len(parts) == 3 && parts[0] == "api" && parts[1] == "jobs" && parts[2] != ""
 }
 
-// Ray 2.56's only native root-absolute fetch is this capability probe. Returning
-// Portal's invariant policy (not a cluster's state) is safe without a target.
 func handleRayProfilingDisabled(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -159,8 +154,6 @@ func rewriteRayResponse(resp *http.Response, target *url.URL, prefix, method str
 	return nil
 }
 
-// Rewrite only structural HTML URL attributes, never JavaScript source. Ray's
-// webpack chunks/CSS/API calls already use relative URLs in supported builds.
 func rewriteRayDocument(node *html.Node, prefix string) {
 	if node.Type == html.ElementNode {
 		if node.Data == "head" {

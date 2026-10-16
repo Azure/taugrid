@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package store manages the SQLite database used for communication between
-// the collector daemon and reader processes.
 package store
 
 import (
@@ -46,13 +44,10 @@ CREATE INDEX IF NOT EXISTS idx_samples_field_gpu_ts ON samples(field, gpu, ts);
 CREATE INDEX IF NOT EXISTS idx_health_checks_gpu_system_ts ON health_checks(gpu, system, ts);
 `
 
-// DB wraps a SQLite database connection with typed operations for the
-// gpu-health-checker schema.
 type DB struct {
 	db *sql.DB
 }
 
-// Open opens (or creates) the SQLite database at the given path with WAL mode.
 func Open(path string) (*DB, error) {
 	db, err := sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL")
 	if err != nil {
@@ -65,7 +60,6 @@ func Open(path string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
-// OpenReadOnly opens the SQLite database in read-only mode for reader processes.
 func OpenReadOnly(path string) (*DB, error) {
 	db, err := sql.Open("sqlite3", path+"?mode=ro&_busy_timeout=5000")
 	if err != nil {
@@ -74,12 +68,10 @@ func OpenReadOnly(path string) (*DB, error) {
 	return &DB{db: db}, nil
 }
 
-// Close closes the database connection.
 func (d *DB) Close() error {
 	return d.db.Close()
 }
 
-// Sample represents a single DCGM field sample.
 type Sample struct {
 	Timestamp int64
 	GPU       int
@@ -87,7 +79,6 @@ type Sample struct {
 	Value     float64
 }
 
-// HealthCheck represents a DCGM health diagnostic result.
 type HealthCheck struct {
 	Timestamp int64
 	GPU       int
@@ -96,7 +87,6 @@ type HealthCheck struct {
 	Message   string
 }
 
-// GPUInfoRow represents a row in the gpu_info table.
 type GPUInfoRow struct {
 	GPU     int
 	UUID    string
@@ -107,7 +97,6 @@ type GPUInfoRow struct {
 	Updated int64
 }
 
-// InsertSamples inserts a batch of samples in a single transaction.
 func (d *DB) InsertSamples(samples []Sample) error {
 	tx, err := d.db.Begin()
 	if err != nil {
@@ -129,7 +118,6 @@ func (d *DB) InsertSamples(samples []Sample) error {
 	return tx.Commit()
 }
 
-// InsertHealthChecks inserts a batch of health check results.
 func (d *DB) InsertHealthChecks(checks []HealthCheck) error {
 	tx, err := d.db.Begin()
 	if err != nil {
@@ -151,7 +139,6 @@ func (d *DB) InsertHealthChecks(checks []HealthCheck) error {
 	return tx.Commit()
 }
 
-// UpsertGPUInfo inserts or updates GPU static info.
 func (d *DB) UpsertGPUInfo(info GPUInfoRow) error {
 	_, err := d.db.Exec(`INSERT OR REPLACE INTO gpu_info (gpu, uuid, pci_bus, name, vbios, driver, updated)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -162,7 +149,6 @@ func (d *DB) UpsertGPUInfo(info GPUInfoRow) error {
 	return nil
 }
 
-// Prune deletes samples and health_checks older than the given retention duration.
 func (d *DB) Prune(retention time.Duration) error {
 	cutoff := time.Now().Unix() - int64(retention.Seconds())
 	if _, err := d.db.Exec("DELETE FROM samples WHERE ts < ?", cutoff); err != nil {
@@ -174,9 +160,6 @@ func (d *DB) Prune(retention time.Duration) error {
 	return nil
 }
 
-// QuerySamples returns samples matching the given field name, optionally filtered
-// by GPU index and time window. If gpu < 0, all GPUs are returned. If since is
-// zero, no time filter is applied.
 func (d *DB) QuerySamples(ctx context.Context, field string, gpu int, since time.Time) ([]Sample, error) {
 	var rows *sql.Rows
 	var err error
@@ -215,7 +198,6 @@ func (d *DB) QuerySamples(ctx context.Context, field string, gpu int, since time
 	return result, rows.Err()
 }
 
-// QueryLatestSamples returns the most recent sample for each GPU for the given field.
 func (d *DB) QueryLatestSamples(ctx context.Context, field string) ([]Sample, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT s.ts, s.gpu, s.field, s.value
@@ -240,7 +222,6 @@ func (d *DB) QueryLatestSamples(ctx context.Context, field string) ([]Sample, er
 	return result, rows.Err()
 }
 
-// QueryLatestHealthChecks returns the most recent health check for each GPU and system.
 func (d *DB) QueryLatestHealthChecks(ctx context.Context) ([]HealthCheck, error) {
 	rows, err := d.db.QueryContext(ctx, `
 		SELECT h.ts, h.gpu, h.system, h.status, h.message
@@ -264,7 +245,6 @@ func (d *DB) QueryLatestHealthChecks(ctx context.Context) ([]HealthCheck, error)
 	return result, rows.Err()
 }
 
-// QueryAllGPUInfo returns all rows from the gpu_info table.
 func (d *DB) QueryAllGPUInfo(ctx context.Context) ([]GPUInfoRow, error) {
 	rows, err := d.db.QueryContext(ctx, "SELECT gpu, uuid, pci_bus, name, vbios, driver, updated FROM gpu_info ORDER BY gpu")
 	if err != nil {
@@ -283,8 +263,6 @@ func (d *DB) QueryAllGPUInfo(ctx context.Context) ([]GPUInfoRow, error) {
 	return result, rows.Err()
 }
 
-// LatestTimestamp returns the timestamp of the newest sample in the database.
-// Returns 0 if the database is empty.
 func (d *DB) LatestTimestamp() (int64, error) {
 	var ts sql.NullInt64
 	if err := d.db.QueryRow("SELECT MAX(ts) FROM samples").Scan(&ts); err != nil {

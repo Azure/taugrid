@@ -43,12 +43,8 @@ const (
 	ProfileSnapshotKind       = "TauWorkloadProfileSnapshot"
 )
 
-// ExecutionTarget selects whether a profile executes on the submitting cluster
-// or through MultiKueue.
 type ExecutionTarget string
 
-// WorkloadProfile is stable workload intent. It deliberately excludes observed
-// capacity, quota, flavor selectors, and topology selectors.
 type WorkloadProfile struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
 	Name          string               `json:"name" yaml:"name"`
@@ -71,11 +67,8 @@ type WorkloadProfile struct {
 }
 
 type ProfileApplicability struct {
-	// +listType=set
-	Teams []string `json:"teams,omitempty" yaml:"teams,omitempty"`
-	// +listType=set
-	Lanes []string `json:"lanes,omitempty" yaml:"lanes,omitempty"`
-	// +listType=set
+	Teams      []string `json:"teams,omitempty" yaml:"teams,omitempty"`
+	Lanes      []string `json:"lanes,omitempty" yaml:"lanes,omitempty"`
 	Namespaces []string `json:"namespaces,omitempty" yaml:"namespaces,omitempty"`
 }
 
@@ -86,57 +79,36 @@ type ProfilePriorities struct {
 	WorkloadPriorityClassName string `json:"workloadPriorityClassName,omitempty" yaml:"workloadPriorityClassName,omitempty"`
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	PodPriorityClassName string `json:"podPriorityClassName,omitempty" yaml:"podPriorityClassName,omitempty"`
-	// DisableDefaultPriorities explicitly permits both priority class references
-	// to be absent.
-	DisableDefaultPriorities bool `json:"disableDefaultPriorities,omitempty" yaml:"disableDefaultPriorities,omitempty"`
+	PodPriorityClassName     string `json:"podPriorityClassName,omitempty" yaml:"podPriorityClassName,omitempty"`
+	DisableDefaultPriorities bool   `json:"disableDefaultPriorities,omitempty" yaml:"disableDefaultPriorities,omitempty"`
 }
 
-// ResolvedLocalQueue identifies an observed LocalQueue and its ClusterQueue.
 type ResolvedLocalQueue struct {
 	Namespace    string `json:"namespace" yaml:"namespace"`
 	Name         string `json:"name" yaml:"name"`
 	ClusterQueue string `json:"clusterQueue" yaml:"clusterQueue"`
 }
 
-// ResolvedWorkloadProfile combines normalized stable intent with only the
-// observed resource identities needed by renderers and diagnostics.
 type ResolvedWorkloadProfile struct {
-	WorkloadProfile `json:",inline" yaml:",inline"`
-	// +listType=map
-	// +listMapKey=namespace
-	// +listMapKey=name
-	LocalQueues []ResolvedLocalQueue `json:"localQueues,omitempty" yaml:"localQueues,omitempty"`
-	// +listType=set
-	ClusterQueues []string `json:"clusterQueues,omitempty" yaml:"clusterQueues,omitempty"`
-	// +listType=set
-	ResourceFlavors []string `json:"resourceFlavors,omitempty" yaml:"resourceFlavors,omitempty"`
-	// +listType=set
-	Topologies []string `json:"topologies,omitempty" yaml:"topologies,omitempty"`
-	// +listType=set
-	WorkloadPriorityClasses []string `json:"workloadPriorityClasses,omitempty" yaml:"workloadPriorityClasses,omitempty"`
-	// +listType=set
-	PodPriorityClasses []string `json:"podPriorityClasses,omitempty" yaml:"podPriorityClasses,omitempty"`
-	// +listType=map
-	// +listMapKey=type
-	Conditions []metav1.Condition `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	WorkloadProfile         `json:",inline" yaml:",inline"`
+	LocalQueues             []ResolvedLocalQueue `json:"localQueues,omitempty" yaml:"localQueues,omitempty"`
+	ClusterQueues           []string             `json:"clusterQueues,omitempty" yaml:"clusterQueues,omitempty"`
+	ResourceFlavors         []string             `json:"resourceFlavors,omitempty" yaml:"resourceFlavors,omitempty"`
+	Topologies              []string             `json:"topologies,omitempty" yaml:"topologies,omitempty"`
+	WorkloadPriorityClasses []string             `json:"workloadPriorityClasses,omitempty" yaml:"workloadPriorityClasses,omitempty"`
+	PodPriorityClasses      []string             `json:"podPriorityClasses,omitempty" yaml:"podPriorityClasses,omitempty"`
+	Conditions              []metav1.Condition   `json:"conditions,omitempty" yaml:"conditions,omitempty"`
 }
 
-// ProfileSetStatus is the ready-or-drifted resolved state for a workload
-// profile declaration set.
 type ProfileSetStatus struct {
-	ObservedGeneration int64  `json:"observedGeneration,omitempty" yaml:"observedGeneration,omitempty"`
-	Observed           int32  `json:"observed,omitempty" yaml:"observed,omitempty"`
-	Ready              int32  `json:"ready,omitempty" yaml:"ready,omitempty"`
-	Drifted            int32  `json:"drifted,omitempty" yaml:"drifted,omitempty"`
-	ProfileSetHash     string `json:"profileSetHash,omitempty" yaml:"profileSetHash,omitempty"`
-	// +listType=map
-	// +listMapKey=name
-	Profiles []ResolvedWorkloadProfile `json:"profiles,omitempty" yaml:"profiles,omitempty"`
+	ObservedGeneration int64                     `json:"observedGeneration,omitempty" yaml:"observedGeneration,omitempty"`
+	Observed           int32                     `json:"observed,omitempty" yaml:"observed,omitempty"`
+	Ready              int32                     `json:"ready,omitempty" yaml:"ready,omitempty"`
+	Drifted            int32                     `json:"drifted,omitempty" yaml:"drifted,omitempty"`
+	ProfileSetHash     string                    `json:"profileSetHash,omitempty" yaml:"profileSetHash,omitempty"`
+	Profiles           []ResolvedWorkloadProfile `json:"profiles,omitempty" yaml:"profiles,omitempty"`
 }
 
-// ProfileSetSnapshot is the sole versioned offline envelope for a ready
-// resolved profile set.
 type ProfileSetSnapshot struct {
 	APIVersion           string                    `json:"apiVersion" yaml:"apiVersion"`
 	Kind                 string                    `json:"kind" yaml:"kind"`
@@ -145,8 +117,6 @@ type ProfileSetSnapshot struct {
 	Profiles             []ResolvedWorkloadProfile `json:"profiles" yaml:"profiles"`
 }
 
-// NormalizeWorkloadProfile returns the canonical representation used by
-// validation, hashing, reconciliation, and consumers.
 func NormalizeWorkloadProfile(in WorkloadProfile) WorkloadProfile {
 	out := in
 	out.Name = normalizeName(in.Name)
@@ -170,8 +140,6 @@ func NormalizeWorkloadProfile(in WorkloadProfile) WorkloadProfile {
 	return out
 }
 
-// ValidateWorkloadProfile validates a normalized workload profile. Callers that
-// accept external input should use NormalizeAndValidateWorkloadProfile.
 func ValidateWorkloadProfile(p WorkloadProfile) error {
 	if !reflect.DeepEqual(p, NormalizeWorkloadProfile(p)) {
 		return errors.New("workload profile must be normalized before validation")
@@ -261,8 +229,6 @@ func NormalizeAndValidateWorkloadProfile(in WorkloadProfile) (WorkloadProfile, e
 	return out, nil
 }
 
-// NormalizeResolvedWorkloadProfile canonicalizes intent and all resolved
-// identities. Conditions are copied but intentionally do not affect hashing.
 func NormalizeResolvedWorkloadProfile(in ResolvedWorkloadProfile) (ResolvedWorkloadProfile, error) {
 	intent, err := NormalizeAndValidateWorkloadProfile(in.WorkloadProfile)
 	if err != nil {
@@ -307,8 +273,6 @@ func NormalizeResolvedWorkloadProfile(in ResolvedWorkloadProfile) (ResolvedWorkl
 	return out, nil
 }
 
-// ProfileSetHash returns a SHA-256 digest over sorted normalized intent and
-// resolved identities. Conditions and all live operational data are excluded.
 func ProfileSetHash(profiles []ResolvedWorkloadProfile) (string, error) {
 	canonical := make([]resolvedProfileHashInput, 0, len(profiles))
 	seen := make(map[string]struct{}, len(profiles))
@@ -350,7 +314,6 @@ type resolvedProfileHashInput struct {
 	PodPriorityClasses      []string             `json:"podPriorityClasses,omitempty"`
 }
 
-// NewProfileSetSnapshot creates a validated, canonically ordered snapshot.
 func NewProfileSetSnapshot(generation int64, profiles []ResolvedWorkloadProfile) (ProfileSetSnapshot, error) {
 	if generation < 1 {
 		return ProfileSetSnapshot{}, errors.New("tauClusterGeneration must be positive")
@@ -375,8 +338,6 @@ func NewProfileSetSnapshot(generation int64, profiles []ResolvedWorkloadProfile)
 	}, nil
 }
 
-// DecodeProfileSetSnapshot decodes JSON or YAML and rejects unknown envelope
-// versions, kinds, invalid profiles, and mismatched hashes.
 func DecodeProfileSetSnapshot(data []byte) (ProfileSetSnapshot, error) {
 	var snapshot ProfileSetSnapshot
 	if err := yaml.Unmarshal(data, &snapshot); err != nil {
@@ -409,8 +370,6 @@ func DecodeProfileSetSnapshot(data []byte) (ProfileSetSnapshot, error) {
 	return snapshot, nil
 }
 
-// RenderProfile converts a resolved shared profile to the existing renderer
-// contract for a namespace and selected applicability values.
 func (p ResolvedWorkloadProfile) RenderProfile(namespace, team, lane string) (Profile, error) {
 	normalized, err := NormalizeResolvedWorkloadProfile(p)
 	if err != nil {
@@ -452,8 +411,6 @@ func (p ResolvedWorkloadProfile) RenderProfile(namespace, team, lane string) (Pr
 	}, nil
 }
 
-// ClusterQueueFor returns the observed ClusterQueue binding for the selected
-// namespace and LocalQueue.
 func (p ResolvedWorkloadProfile) ClusterQueueFor(namespace, localQueue string) (string, error) {
 	normalized, err := NormalizeResolvedWorkloadProfile(p)
 	if err != nil {
@@ -605,8 +562,6 @@ func containsOrGlobal(values []string, value string) bool {
 	return index < len(values) && values[index] == value
 }
 
-// DeepCopyInto allows API packages to embed shared types without shallow-copying
-// slices during generated Kubernetes object deep copies.
 func (in *WorkloadProfile) DeepCopyInto(out *WorkloadProfile) {
 	*out = *in
 	out.Applicability.Teams = append([]string(nil), in.Applicability.Teams...)

@@ -27,9 +27,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// newTestServer builds a portal server backed by a Kusto-source Stellar so the
-// test needs no seeded local store. It exercises portal routing and the Stellar
-// mount, not Stellar's data path.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	server, err := NewServer(Options{Stellar: expapi.Options{Source: "kusto"}})
@@ -84,14 +81,12 @@ func TestPortalShellServesIndex(t *testing.T) {
 func TestPortalPathSPAFallbackAndMissingAsset(t *testing.T) {
 	server := newTestServer(t)
 
-	// Extensionless client-route → SPA fallback (200, index document).
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/portal/cluster", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("SPA fallback status = %d, want 200", rec.Code)
 	}
 
-	// Missing asset with an extension → 404, so broken references are visible.
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/portal/does-not-exist.js", nil))
 	if rec.Code != http.StatusNotFound {
@@ -125,9 +120,6 @@ func TestOverviewListsBoards(t *testing.T) {
 	}
 }
 
-// runningJobsReader serves Kueue lists for the overview's running-now resolution.
-// The Workloads list carries one admitted tau workload (run-id + job labels),
-// one pending, and one finished; only the admitted one is "running".
 type runningJobsReader struct{ stubJobsReader }
 
 func (runningJobsReader) ListWorkloads(context.Context, string) ([]byte, error) {
@@ -237,8 +229,6 @@ func TestOverviewResolvesRunningCrossLinks(t *testing.T) {
 }
 
 func TestOverviewRunningUnavailableWithoutReader(t *testing.T) {
-	// newTestServer has no Jobs.Reader → running-now section degrades softly:
-	// 200 with a RunningUnavailable hint and no running rows.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil))
 	if rec.Code != http.StatusOK {
@@ -260,15 +250,11 @@ func TestOverviewRunningUnavailableWithoutReader(t *testing.T) {
 	if len(got.Active) != 0 {
 		t.Fatalf("active = %+v, want empty", got.Active)
 	}
-	// Boards must still be present so the shell renders every tab.
 	if len(got.Boards) == 0 {
 		t.Fatal("overview must still enumerate boards without cluster access")
 	}
 }
 
-// The overview's Queue and Running hints must distinguish an unset scope mode
-// from missing Kubernetes access the same way the Jobs board does, or a
-// correctly-configured operator is sent to re-check a setting already right.
 func TestOverviewJobsHintsNameTheirCause(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -310,9 +296,6 @@ func TestOverviewJobsHintsNameTheirCause(t *testing.T) {
 	}
 }
 
-// TestOverviewCardsAllAvailable wires every board's data source and asserts the
-// overview handler summarizes each into a headline card (reusing the same stubs
-// the per-board handler tests use), with no card marked unavailable.
 func TestOverviewCardsAllAvailable(t *testing.T) {
 	costQuerier := &stubCostQuerier{}
 	server, err := NewServer(Options{
@@ -340,37 +323,29 @@ func TestOverviewCardsAllAvailable(t *testing.T) {
 		c.CostUnavailable != "" || c.RayUnavailable != "" {
 		t.Fatalf("no card should be unavailable: %+v", c)
 	}
-	// Fleet: from stubNodesReader (2 nodes, 1 GPU node, H100 SKU leading).
 	if c.Fleet == nil || c.Fleet.TotalNodes != 2 || c.Fleet.GPUNodes != 1 || c.Fleet.TotalGPUs != 1 {
 		t.Fatalf("fleet card = %+v, want 2 nodes / 1 gpu-node / 1 gpu", c.Fleet)
 	}
 	if c.Fleet.TopSKU != "Standard_NC40ads_H100_v5" {
 		t.Fatalf("fleet topSKU = %q, want the GPU SKU leading the rollup", c.Fleet.TopSKU)
 	}
-	// Health: from stubClusterQuerier (1 GPU row).
 	if c.Health == nil || c.Health.TotalGPUs != 1 {
 		t.Fatalf("health card = %+v, want 1 GPU", c.Health)
 	}
-	// Cost: from stubCostQuerier (48 GPU-hours, 1 idle GPU).
 	if c.Cost == nil || c.Cost.TotalGPUHours != 48 || c.Cost.IdleGPUs != 1 {
 		t.Fatalf("cost card = %+v, want 48 gpu-hours / 1 idle", c.Cost)
 	}
 	if len(costQuerier.kqls) == 0 || !strings.Contains(costQuerier.kqls[0], "database(@'Chargeback').GpuCostHourly") {
 		t.Fatalf("overview cost query did not use configured database: %v", costQuerier.kqls)
 	}
-	// Ray: from stubRayReader (1 discovered dashboard).
 	if c.Ray == nil || c.Ray.Clusters != 1 {
 		t.Fatalf("ray card = %+v, want 1 cluster", c.Ray)
 	}
-	// Queue: empty Kueue lists → a present-but-zero card (not unavailable).
 	if c.Queue == nil {
 		t.Fatalf("queue card should be present (empty queues → zeros), got nil")
 	}
 }
 
-// TestOverviewCardsDegradeWithoutKusto gives only the Kubernetes reader: the
-// Fleet/Queue/Ray cards light up while the Kusto-backed Health/Cost cards report
-// unavailable — each card degrades independently.
 func TestOverviewCardsDegradeWithoutKusto(t *testing.T) {
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
@@ -402,9 +377,6 @@ func TestOverviewCardsDegradeWithoutKusto(t *testing.T) {
 	}
 }
 
-// TestOverviewCardsDegradeWithoutKube is the mirror: only the Kusto querier is
-// wired, so Health/Cost light up while the Kubernetes-backed Fleet/Queue/Ray
-// cards report unavailable.
 func TestOverviewCardsDegradeWithoutKube(t *testing.T) {
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
@@ -441,19 +413,15 @@ func TestOverviewCardsDegradeWithoutKube(t *testing.T) {
 func TestStellarMountedUnderPortal(t *testing.T) {
 	server := newTestServer(t)
 
-	// The Stellar shell route must resolve through the mount (not 404).
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stellar", nil))
 	if rec.Code == http.StatusNotFound {
 		t.Fatalf("/stellar not mounted: status = %d", rec.Code)
 	}
-	// Stellar defaults to X-Frame-Options: DENY; the portal mount relaxes it to
-	// SAMEORIGIN so /portal/experiments can embed Stellar in a same-origin iframe.
 	if got := rec.Header().Get("X-Frame-Options"); got != "SAMEORIGIN" {
 		t.Fatalf("/stellar X-Frame-Options = %q, want SAMEORIGIN (iframe embed would break)", got)
 	}
 
-	// A Stellar API route must also resolve through the mount.
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stellar/capabilities", nil))
 	if rec.Code == http.StatusNotFound {
@@ -464,8 +432,6 @@ func TestStellarMountedUnderPortal(t *testing.T) {
 	}
 }
 
-// stubJobsReader returns canned Kueue list JSON so the jobs handler can be
-// tested without a Kubernetes API.
 type stubJobsReader struct{}
 
 func (stubJobsReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
@@ -595,7 +561,6 @@ func TestJobsRefreshesTauClusterProfilesOnConsecutiveRequests(t *testing.T) {
 }
 
 func TestJobsBoardUnavailableWithoutReader(t *testing.T) {
-	// newTestServer builds a server with no Jobs.Reader → board disabled.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/jobs", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -625,9 +590,6 @@ func TestJobsScopeModeValidation(t *testing.T) {
 	}
 }
 
-// An unset scope mode and a missing Kubernetes reader both yield 503, so the
-// status code alone cannot tell an operator which gate they hit: each reason
-// must name its own cause and not the other's.
 func TestConfiguredJobsModesAllowMissingKubernetesReader(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -721,8 +683,6 @@ func TestDisabledJobsModePerformsNoQueueRead(t *testing.T) {
 	}
 }
 
-// stubClusterQuerier returns one canned pivoted GpuHealth() row so the cluster
-// handler can be tested without a live Kusto. It records the KQL it received.
 type stubClusterQuerier struct{ lastKQL string }
 
 func (s *stubClusterQuerier) Query(_ context.Context, kql string) ([]kustoquery.Row, error) {
@@ -759,7 +719,6 @@ func TestClusterBoardServesSnapshot(t *testing.T) {
 	if got.TotalGPUs != 1 || len(got.GPUs) != 1 || got.GPUs[0].Instance != "node-0" {
 		t.Fatalf("snapshot = %+v, want 1 GPU on node-0", got)
 	}
-	// The ?instance= filter must reach the KQL builder.
 	if !strings.Contains(q.lastKQL, "instance == @'node-0'") {
 		t.Fatalf("instance filter not applied to KQL:\n%s", q.lastKQL)
 	}
@@ -924,7 +883,6 @@ func (s *stubRowsQuerier) Query(context.Context, string) ([]kustoquery.Row, erro
 }
 
 func TestClusterBoardUnavailableWithoutQuerier(t *testing.T) {
-	// newTestServer builds a server with no Cluster.Querier → board disabled.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -932,14 +890,11 @@ func TestClusterBoardUnavailableWithoutQuerier(t *testing.T) {
 	}
 }
 
-// TestClusterBoardDefaultClusterScope verifies the portal's configured default
-// cluster scopes the KQL when no ?cluster= is given, and that a per-request
-// ?cluster= overrides it (including an explicit empty value to go unscoped).
 func TestClusterBoardDefaultClusterScope(t *testing.T) {
 	cases := []struct {
 		name       string
 		path       string
-		wantScoped string // substring that must be present ("" = must be unscoped)
+		wantScoped string
 	}{
 		{"default applied", "/api/portal/cluster", "Cluster == @'taugrid-flex'"},
 		{"override", "/api/portal/cluster?cluster=other", "Cluster == @'other'"},
@@ -971,9 +926,6 @@ func TestClusterBoardDefaultClusterScope(t *testing.T) {
 	}
 }
 
-// stubCostQuerier answers the cost board's two queries in order: the first call
-// (namespace chargeback) returns one namespace row, the second (idle GPUs)
-// returns one idle row. It records the KQLs received.
 type stubCostQuerier struct {
 	calls int
 	kqls  []string
@@ -1026,7 +978,6 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 	if len(got.IdleGPUs) != 1 || got.IdleGPUs[0].Instance != "node-1" {
 		t.Fatalf("idle gpus = %+v, want [node-1]", got.IdleGPUs)
 	}
-	// Two queries must have run and the ?namespace= filter must reach both.
 	if q.calls != 2 {
 		t.Fatalf("querier calls = %d, want 2", q.calls)
 	}
@@ -1038,7 +989,6 @@ func TestCostBoardServesSnapshot(t *testing.T) {
 }
 
 func TestCostBoardUnavailableWithoutQuerier(t *testing.T) {
-	// newTestServer builds a server with no Cost.Querier → board disabled.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/cost", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1046,9 +996,6 @@ func TestCostBoardUnavailableWithoutQuerier(t *testing.T) {
 	}
 }
 
-// TestCostBoardDefaultClusterScope verifies the portal's default cluster scopes
-// both cost queries when no ?cluster= is given, and that ?cluster= overrides it
-// (empty value goes unscoped).
 func TestCostBoardDefaultClusterScope(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -1090,9 +1037,6 @@ func TestCostBoardDefaultClusterScope(t *testing.T) {
 	}
 }
 
-// stubRayReader returns one canned <cluster>-head-svc head Service so the ray
-// handler can be tested without a Kubernetes API. It records the namespace it
-// was asked for.
 type stubRayReader struct{ lastNS string }
 
 func (s *stubRayReader) ListServices(_ context.Context, namespace string) ([]byte, error) {
@@ -1139,7 +1083,6 @@ func TestRayBoardServesSnapshot(t *testing.T) {
 	if got.Clusters[0].ProxyPath != "/api/portal/ray/proxy/ray/alpha/" {
 		t.Fatalf("cluster proxyPath = %q, want /api/portal/ray/proxy/ray/alpha/", got.Clusters[0].ProxyPath)
 	}
-	// The ?namespace= filter must reach the reader.
 	if reader.lastNS != "ray" {
 		t.Fatalf("reader namespace = %q, want ray", reader.lastNS)
 	}
@@ -1179,8 +1122,6 @@ func TestRayBoardServesScopedDurableHistory(t *testing.T) {
 		t.Fatalf("history scope = %+v (calls=%d)", history.scope, history.calls)
 	}
 
-	// Single-workspace live discovery remains configurable per request, while durable
-	// history remains pinned to the namespace configured at startup.
 	rec = httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray?namespace=other-namespace", nil))
 	if rec.Code != http.StatusOK || history.calls != 2 || history.scope.Namespace != "ray" {
@@ -1307,7 +1248,6 @@ func TestRayHistoryReportsInvalidAndUnavailableStates(t *testing.T) {
 }
 
 func TestRayBoardUnavailableWithoutReader(t *testing.T) {
-	// newTestServer builds a server with no Ray.Reader → board disabled.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1315,8 +1255,6 @@ func TestRayBoardUnavailableWithoutReader(t *testing.T) {
 	}
 }
 
-// stubNodesReader serves a canned Nodes list so the board can be tested without
-// a Kubernetes API: one H100 GPU node and one non-GPU system node.
 type stubNodesReader struct{}
 
 func (stubNodesReader) ListNodes(_ context.Context) ([]byte, error) {
@@ -1402,7 +1340,6 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 		got.Nodes[0].MemoryUsedPct == nil || *got.Nodes[0].MemoryUsedPct != 50 {
 		t.Fatalf("current node metrics = %+v, want h100 node at 10%% CPU / 50%% memory", got.Nodes)
 	}
-	// GPU SKU sorts first in the rollup.
 	if len(got.SKUs) != 2 || got.SKUs[0].SKU != "Standard_NC40ads_H100_v5" || got.SKUs[0].GPUs != 1 {
 		t.Fatalf("skus = %+v, want NC40ads_H100 leading with 1 gpu", got.SKUs)
 	}
@@ -1412,7 +1349,6 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 }
 
 func TestNodesBoardUnavailableWithoutReader(t *testing.T) {
-	// newTestServer builds a server with no Nodes.Reader → board disabled.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/nodes", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1420,10 +1356,6 @@ func TestNodesBoardUnavailableWithoutReader(t *testing.T) {
 	}
 }
 
-// stubRunsReader serves canned Jobs and RayJobs lists so the runs board can be
-// tested without a Kubernetes API: one Tau-managed Job, one non-Tau Job (must
-// be filtered), and one Tau-managed RayJob. It records the namespace it was
-// asked for so the ?namespace= plumbing can be asserted.
 type stubRunsReader struct{ lastNS string }
 
 func (s *stubRunsReader) ListJobs(_ context.Context, namespace string) ([]byte, error) {
@@ -2043,7 +1975,6 @@ func TestRunsBoardServesSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode snapshot: %v\n%s", err, rec.Body.String())
 	}
-	// other-job is filtered (no tau label); the RayJob sorts newest-first.
 	if got.Total != 2 {
 		t.Fatalf("total = %d, want 2 (train-rayjob + train-job)", got.Total)
 	}
@@ -2058,7 +1989,6 @@ func TestRunsBoardServesSnapshot(t *testing.T) {
 			t.Fatalf("%s experimentTracking = %q, want available for the configured Stellar surface", run.Name, run.ExperimentTracking)
 		}
 	}
-	// The configured namespace must reach the reader.
 	if reader.lastNS != "ray" {
 		t.Fatalf("reader namespace = %q, want ray", reader.lastNS)
 	}
@@ -2129,7 +2059,6 @@ func TestAnnotateMultiKueueRunsPrefersRunIDOverReusedName(t *testing.T) {
 }
 
 func TestRunsBoardUnavailableWithoutReader(t *testing.T) {
-	// newTestServer builds a server with no Runs.Reader → board disabled.
 	rec := httptest.NewRecorder()
 	newTestServer(t).Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs", nil))
 	if rec.Code != http.StatusServiceUnavailable {
@@ -3266,10 +3195,6 @@ func TestPortalShellLoadsCompiledFrontend(t *testing.T) {
 	}
 }
 
-// TestKustoStellarAvailableForEndpointOnlyPortal covers `portal serve
-// --source=kusto --kusto-endpoint=...`: Stellar reaches ADX through the native
-// azure-kusto-go transport, so the portal must not report experiment tracking
-// as unavailable just because no query command is configured.
 func TestKustoStellarAvailableForEndpointOnlyPortal(t *testing.T) {
 	native := func(ctx context.Context, query string) (string, error) { return "[]", nil }
 	for _, tc := range []struct {

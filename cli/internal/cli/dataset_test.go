@@ -153,7 +153,6 @@ func TestWriteRefEnv_CustomPrefix(t *testing.T) {
 	}
 }
 
-// fakeSource implements dataSource for verify tests.
 type fakeSource struct {
 	files []hashedFile
 }

@@ -95,14 +95,6 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	return true, nil
 }
 
-// reservedNamespaceReason names why a namespace may never be adopted as a
-// workspace target, or "" when the namespace is fair game. Adoption is not
-// read-only: reconcileNamespace stamps ownership labels onto whatever it
-// resolves, and a later retarget hands the previous namespace to
-// cleanupStaleNamespaceMetadata, which strips them again. Pointing a workspace
-// at the platform or a kube-system namespace would therefore overwrite the
-// Helm ownership metadata and drop the Kueue default-queue label of a
-// namespace TauGrid does not own.
 func reservedNamespaceReason(name, systemNamespace string) string {
 	switch {
 	case name == systemNamespace, name == tauv1alpha1.SystemNamespace, name == tauv1alpha1.LegacySystemNamespace:

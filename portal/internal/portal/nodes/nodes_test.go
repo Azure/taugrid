@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// fakeReader returns canned Nodes JSON so the board can be tested without a
-// Kubernetes API.
 type fakeReader struct {
 	json                string
 	err                 error
@@ -65,11 +63,6 @@ func (f *fakeReader) ListNodeMetrics(_ context.Context) ([]byte, error) {
 	return []byte(`{"items":[]}`), nil
 }
 
-// nodesJSON mirrors real AKS Node objects: two H100 GPU nodes (one Ready, one
-// NotReady) in the h100pool, plus a non-GPU system node. CPU is a plain core
-// count, memory a Ki quantity, GPU a whole-device capacity. The GPU nodes carry
-// no nvidia.com/gpu.product label (as on the live poc cluster), so GPUProduct is
-// empty there; SKU still identifies the hardware.
 const nodesJSON = `{"items":[
   {"metadata":{"name":"aks-h100pool-1","labels":{
       "node.kubernetes.io/instance-type":"Standard_NC40ads_H100_v5",
@@ -124,10 +117,9 @@ func TestBoardAggregatesFleet(t *testing.T) {
 	if snap.RDMAAdvertisedGPUNodes != 1 {
 		t.Fatalf("RDMAAdvertisedGPUNodes = %d, want 1", snap.RDMAAdvertisedGPUNodes)
 	}
-	if snap.TotalCPUCores != 88 { // 40 + 40 + 8
+	if snap.TotalCPUCores != 88 {
 		t.Fatalf("TotalCPUCores = %d, want 88", snap.TotalCPUCores)
 	}
-	// 2×329974272Ki + 1×32868176Ki = 692816720Ki ≈ 660.7 GiB.
 	if snap.TotalMemoryGiB < 660 || snap.TotalMemoryGiB > 661 {
 		t.Fatalf("TotalMemoryGiB = %v, want ~660.7", snap.TotalMemoryGiB)
 	}
@@ -138,7 +130,6 @@ func TestBoardParsesNodeFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
-	// Sorted by name: aks-h100pool-1 leads.
 	n := snap.Nodes[0]
 	if n.Name != "aks-h100pool-1" {
 		t.Fatalf("nodes[0] = %q, want aks-h100pool-1 (name-sorted)", n.Name)
@@ -181,7 +172,6 @@ func TestBoardParsesNodeFields(t *testing.T) {
 		n.Conditions[1].LastHeartbeatTime != "2026-09-14T20:03:01Z" {
 		t.Fatalf("operational conditions = %+v", n.Conditions)
 	}
-	// 329974272Ki = 337893654528 bytes ≈ 314.7 GiB.
 	if n.MemoryGiB < 314 || n.MemoryGiB > 315 {
 		t.Fatalf("MemoryGiB = %v, want ~314.7", n.MemoryGiB)
 	}
@@ -233,7 +223,6 @@ func TestBoardSKURollup(t *testing.T) {
 	if len(snap.SKUs) != 2 {
 		t.Fatalf("SKUs = %d, want 2", len(snap.SKUs))
 	}
-	// GPU SKU sorts first (2 GPUs > 0 GPUs).
 	if snap.SKUs[0].SKU != "Standard_NC40ads_H100_v5" || snap.SKUs[0].Nodes != 2 || snap.SKUs[0].GPUs != 2 {
 		t.Fatalf("SKUs[0] = %+v, want NC40ads_H100 ×2 with 2 GPUs", snap.SKUs[0])
 	}
@@ -256,7 +245,6 @@ func TestBoardEmptyIsNotError(t *testing.T) {
 }
 
 func TestBoardUnknownSKU(t *testing.T) {
-	// A node with no instance-type label rolls up under "unknown".
 	const j = `{"items":[{"metadata":{"name":"x","labels":{}},
 	  "status":{"capacity":{"cpu":"4","memory":"8Gi"},"conditions":[{"type":"Ready","status":"True"}]}}]}`
 	snap, err := Board(context.Background(), &fakeReader{json: j}, Options{})

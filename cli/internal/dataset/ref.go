@@ -9,18 +9,14 @@ import (
 	"strings"
 )
 
-// Ref is a parsed dataset reference. A bare name resolves through the default
-// alias; name@token is resolved as a version first, then as an alias.
 type Ref struct {
 	Name    string
 	Version string
 	Alias   string
 }
 
-// DefaultAlias is used when a reference names only a dataset.
 const DefaultAlias = "latest"
 
-// ParseRef parses NAME, NAME@VERSION, or NAME@ALIAS.
 func ParseRef(ref string) (Ref, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {

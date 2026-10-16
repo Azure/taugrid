@@ -16,19 +16,12 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
 )
 
-// rayProxyPrefix is the portal-relative prefix under which the Ray dashboard is
-// reverse-proxied: /api/portal/ray/proxy/{ns}/{cluster}/...
 const rayProxyPrefix = "/api/portal/ray/proxy/"
 
-// Workspace identity must survive relative asset/API requests, which do not
-// inherit a document's query string. The first segment is raw base64url.
 const rayWorkspaceProxyPrefix = "/api/portal/ray/workspaces/"
 
-// rayDashboardPort is the Ray dashboard port every KubeRay head Service exposes.
 const rayDashboardPort = "8265"
 
-// Old origin-root requests contain no reliable target. Keep explicit failures
-// rather than selecting a cluster from a cookie or a Referer.
 var rayUnscopedPrefixes = []string{
 	"/api/",
 	"/static/",
@@ -42,12 +35,10 @@ var rayUnscopedPrefixes = []string{
 	"/logo.png",
 }
 
-// serviceHost returns the in-cluster DNS name for a specific Service.
 func serviceHost(ns, svcName string) string {
 	return svcName + "." + ns + ".svc:" + rayDashboardPort
 }
 
-// rayTransport returns the RoundTripper the proxy dials head Services with.
 func (s *Server) rayTransport() http.RoundTripper {
 	if s.ray.Transport != nil {
 		return s.ray.Transport
@@ -55,23 +46,16 @@ func (s *Server) rayTransport() http.RoundTripper {
 	return http.DefaultTransport
 }
 
-// rayTargetCacheTTL is how long a validated head-svc discovery result is cached.
-// The Ray dashboard SPA issues many parallel asset fetches on page load; without
-// a cache each one would trigger a full ListServices call against the API server.
 const rayTargetCacheTTL = 30 * time.Second
 
-// rayTargetEntry is a cached validation result mapping {ns}/{cluster} to the
-// discovered Service name used for dialing.
 type rayTargetEntry struct {
 	service string
 	expiry  time.Time
 }
 
-// rayTargetCache caches discovered {ns}/{cluster} → service-name mappings.
-// Entries expire after rayTargetCacheTTL.
 type rayTargetCache struct {
 	mu      sync.Mutex
-	entries map[string]rayTargetEntry // key "ns/cluster"
+	entries map[string]rayTargetEntry
 }
 
 func (c *rayTargetCache) get(key string) (string, bool) {
@@ -100,22 +84,10 @@ func (c *rayTargetCache) set(key, service string) {
 	c.entries[key] = rayTargetEntry{service: service, expiry: time.Now().Add(rayTargetCacheTTL)}
 }
 
-// validateRayTarget confirms {ns}/{cluster} names a currently-discovered Ray head
-// Service before the proxy dials it. This is the SSRF guard: without it a client
-// could steer the in-cluster proxy at an arbitrary host by crafting the path.
-// It re-runs head-svc discovery (the same source of truth the board uses)
-// rather than trusting the request.
-//
-// When s.ray.Namespace is configured, only that namespace is allowed — preventing
-// URL-crafted namespace bypass.
-//
-// Returns the discovered Service name (to dial the exact Service, not a derived
-// name) and whether validation passed.
 func (s *Server) validateRayTarget(ctx context.Context, ns, cluster, allowedNamespace string) (string, bool) {
 	if ns == "" || cluster == "" || s.ray.Reader == nil {
 		return "", false
 	}
-	// Enforce configured namespace scope.
 	if allowedNamespace != "" && ns != allowedNamespace {
 		return "", false
 	}
@@ -136,10 +108,6 @@ func (s *Server) validateRayTarget(ctx context.Context, ns, cluster, allowedName
 	return "", false
 }
 
-// proxyToHead reverse-proxies the request to a Ray head Service's :8265,
-// rewriting the outgoing path to upstreamPath. svcName is the exact discovered
-// Service name (not derived). It handles websocket Upgrade natively
-// (httputil.ReverseProxy on Go 1.20+).
 func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName, upstreamPath, prefix string) {
 	target := &url.URL{Scheme: "http", Host: serviceHost(ns, svcName), Path: upstreamPath}
 	query := r.URL.Query()
@@ -154,11 +122,8 @@ func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName
 			req.URL.Path = upstreamPath
 			req.URL.RawPath = ""
 			req.URL.RawQuery = target.RawQuery
-			// Portal credentials must not be sent to a workload-controlled head.
 			token, _ := req.Cookie(rayAuthCookieName(prefix))
 			req.Header.Del("Cookie")
-			// Ray's login dialog explicitly exchanges its user-entered bearer
-			// token here. Never forward a Portal bearer on passive requests.
 			if req.Method != http.MethodPost || upstreamPath != "/api/authenticate" {
 				req.Header.Del("Authorization")
 			}
@@ -190,10 +155,6 @@ func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName
 	proxy.ServeHTTP(w, r)
 }
 
-// handleRayProxy serves the Ray dashboard under
-// /api/portal/ray/proxy/{ns}/{cluster}/... and the workspace-qualified canonical
-// form. Ray 2.54/2.56 use PUBLIC_URL=".", HashRouter and relative API URLs.
-// https://docs.ray.io/en/latest/cluster/configure-manage-dashboard.html#running-behind-a-reverse-proxy
 func (s *Server) handleRayProxy(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, rayProxyPrefix)
 	scopedPath := strings.HasPrefix(r.URL.Path, rayWorkspaceProxyPrefix)
@@ -250,8 +211,6 @@ func (s *Server) handleRayProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !rayReadRouteAllowed(r.Method, upstreamPath, isRayWebsocket(r)) {
-		// Ray treats 401/403 as a token-login challenge. A policy limitation is
-		// not an authentication failure and must not trap the UI in a login loop.
 		http.Error(w, "unsupported Ray route: Portal permits only passive dashboard reads and Ray authentication", http.StatusNotImplemented)
 		return
 	}

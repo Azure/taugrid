@@ -28,8 +28,6 @@ func TestPendingCause_PrefersQuotaReservedMessageRegardlessOfOrder(t *testing.T)
 	}
 }
 
-// Kueue often sets only QuotaReserved while a workload waits for flavor
-// assignment; there is no Admitted condition to fall back on.
 func TestPendingCause_QuotaReservedOnly(t *testing.T) {
 	reason, message := PendingCause([]Condition{
 		{Type: "QuotaReserved", Status: "False", Reason: "Pending", Message: "couldn't assign flavors"},
@@ -57,12 +55,6 @@ func TestPendingCause_IgnoresSatisfiedConditions(t *testing.T) {
 	}
 }
 
-// Reason and message must come from the same condition. Kueue writes both in
-// one operation: UnsetQuotaReservationWithCondition sets QuotaReserved=False
-// with the caller's reason ("Inadmissible" here) and then calls
-// SyncAdmittedCondition, which derives Admitted=False with its own fixed
-// vocabulary. Mixing the two produced a row whose REASON came from Admitted
-// while the detail line came from QuotaReserved.
 func TestPendingCause_ReasonAndMessageComeFromOneCondition(t *testing.T) {
 	reason, message := PendingCause([]Condition{
 		{Type: "Admitted", Status: "False", Reason: "NoReservation", Message: "The workload has no reservation"},
@@ -73,8 +65,6 @@ func TestPendingCause_ReasonAndMessageComeFromOneCondition(t *testing.T) {
 	}
 }
 
-// Falling back to Admitted must take its message too, not pair Admitted's
-// reason with an empty QuotaReserved message.
 func TestPendingCause_FallbackKeepsAdmittedPairIntact(t *testing.T) {
 	reason, message := PendingCause([]Condition{
 		{Type: "Admitted", Status: "False", Reason: "UnsatisfiedChecks", Message: "The workload has not all checks ready"},

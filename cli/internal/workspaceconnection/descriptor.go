@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package workspaceconnection owns Tau's non-secret repository-to-workspace
-// connection contract and local verified connection state.
 package workspaceconnection
 
 import (
@@ -374,7 +372,6 @@ func Digest(descriptor Descriptor) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// LoadFile parses one exact descriptor path without ancestor discovery.
 func LoadFile(path, repositoryRoot string) (Discovery, error) {
 	absolute, realPath, info, err := repository.ExistingPath(path)
 	if err != nil {

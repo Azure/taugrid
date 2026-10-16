@@ -3,7 +3,6 @@ templates:
   - templates/management-commands/ingestion-batching.yaml
   - templates/management-commands/retention-policies.yaml
 tests:
-  # --- Ingestion Batching ---
   - it: renders ingestion batching ManagementCommands when enabled
     template: templates/management-commands/ingestion-batching.yaml
     set:
@@ -48,7 +47,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- Retention Policies ---
   - it: renders retention ManagementCommands for all databases when enabled
     template: templates/management-commands/retention-policies.yaml
     set:

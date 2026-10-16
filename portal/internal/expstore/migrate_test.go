@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-// writeV0Store lays down a store whose manifest claims the pre-migration
-// schema and whose SQLite index still carries the hypothesis axis.
 func writeV0Store(t *testing.T, root string) {
 	t.Helper()
 	ctx := context.Background()
@@ -22,8 +20,6 @@ func writeV0Store(t *testing.T, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ensureStoreFiles stamps the current version; rewrite it to the old one so
-	// Open has to migrate rather than no-op.
 	manifest.SchemaVersion = "expstore.v0"
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -70,9 +66,6 @@ VALUES ('old-run','old','old-question','h1','baseline','succeeded','2026-01-01T0
 	}
 }
 
-// A v0 store must open. Before the migration chain existed, readManifest
-// rejected any non-current schema outright, so a version bump bricked the store
-// instead of upgrading it.
 func TestOpenUpgradesV0StoreToCurrentSchema(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "v0-store")
@@ -88,7 +81,6 @@ func TestOpenUpgradesV0StoreToCurrentSchema(t *testing.T) {
 		t.Fatalf("manifest schema version = %q, want %q", got, SchemaVersion)
 	}
 
-	// The upgrade must be durable, not just in-memory.
 	var onDisk Manifest
 	raw, err := os.ReadFile(filepath.Join(root, ManifestFile))
 	if err != nil {
@@ -130,7 +122,6 @@ func TestV0MigrationRemovesHypothesisAxis(t *testing.T) {
 		t.Error("hypotheses table still present after migration")
 	}
 
-	// Rows unrelated to the dropped axis must survive.
 	var runID string
 	if err := store.db.QueryRowContext(ctx, `SELECT run_id FROM runs`).Scan(&runID); err != nil {
 		t.Fatalf("pre-existing run lost during migration: %v", err)
@@ -140,7 +131,6 @@ func TestV0MigrationRemovesHypothesisAxis(t *testing.T) {
 	}
 }
 
-// Reopening must be a no-op, not a repeated migration.
 func TestSchemaMigrationIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "v0-store")
@@ -187,7 +177,6 @@ func TestUnknownSchemaVersionIsStillRejected(t *testing.T) {
 	}
 }
 
-// The chain must be well-formed: contiguous, and ending at SchemaVersion.
 func TestSchemaMigrationChainIsContiguous(t *testing.T) {
 	if len(schemaMigrations) == 0 {
 		if SchemaVersion == "" {
@@ -206,9 +195,6 @@ func TestSchemaMigrationChainIsContiguous(t *testing.T) {
 	}
 }
 
-// writeV1StoreWithQuestions lays down a store at the schema version that still
-// had a questions table plus runs.question_id, so the v1 -> v2 promotion has
-// something real to migrate.
 func writeV1StoreWithQuestions(t *testing.T, root string) {
 	t.Helper()
 	ctx := context.Background()
@@ -279,10 +265,6 @@ VALUES ('seed-1','project-alpha','experiment-alpha','reference-group','succeeded
 	}
 }
 
-// The question axis was not deleted, it was promoted. A question *was* the
-// named experiment, so after migrating there must be exactly one experiment
-// spanning both arms -- not one experiment per run group, which would make the
-// baseline and the ablation impossible to compare.
 func TestV1MigrationPromotesQuestionsToExperiments(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "v1-store")
@@ -307,10 +289,6 @@ func TestV1MigrationPromotesQuestionsToExperiments(t *testing.T) {
 		t.Fatalf("question text was not folded into the description: %q", description)
 	}
 
-	// runs.question_id carried the run -> named-experiment link. Losing it
-	// would silently drop every run back to its run_group. v3 moved that link
-	// from the run_experiments join table onto runs.experiment_id, so the
-	// end-to-end v1 -> v3 walk must land it there.
 	var linked int
 	if err := store.db.QueryRowContext(ctx,
 		`SELECT count(*) FROM runs WHERE experiment_id = 'experiment-alpha'`).Scan(&linked); err != nil {
@@ -320,9 +298,6 @@ func TestV1MigrationPromotesQuestionsToExperiments(t *testing.T) {
 		t.Fatalf("runs linked to the experiment = %d, want both runs replayed", linked)
 	}
 
-	// Both arms must resolve to the one experiment they belong to, while
-	// remaining distinct groups -- comparing baseline against ablation is the
-	// point of the experiment.
 	rows, err := store.db.QueryContext(ctx,
 		`SELECT run_group_id, experiment_id FROM runs ORDER BY run_group_id`)
 	if err != nil {
@@ -347,8 +322,6 @@ func TestV1MigrationPromotesQuestionsToExperiments(t *testing.T) {
 		}
 	}
 
-	// The join table and the group-level experiment column are the M:N model
-	// v3 narrowed to 1:N; both must be gone from the schema, not merely unread.
 	joinPresent, err := tableExists(ctx, store.db, "run_experiments")
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +337,6 @@ func TestV1MigrationPromotesQuestionsToExperiments(t *testing.T) {
 		t.Fatal("run_groups.experiment_id survived the v2 -> v3 migration")
 	}
 
-	// The dead axis must be gone from the schema, not merely unread.
 	for _, target := range []struct{ table, column string }{
 		{"runs", "question_id"},
 		{"run_groups", "question_id"},
@@ -388,12 +360,6 @@ func TestV1MigrationPromotesQuestionsToExperiments(t *testing.T) {
 	}
 }
 
-// v2 linked runs to experiments through the run_experiments join table, which
-// allowed a run to belong to many experiments. v3 narrows that to 1:N by moving
-// the link onto runs.experiment_id, so the migration has to pick one winner per
-// run. It prefers an explicitly recorded experiment over the run_group fallback
-// the store auto-synthesizes, and breaks a remaining tie on the lowest id so the
-// outcome does not depend on row order.
 func TestV2MigrationCollapsesRunExperimentsIntoRuns(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -423,14 +389,10 @@ func TestV2MigrationCollapsesRunExperimentsIntoRuns(t *testing.T) {
 	}
 
 	want := map[string]string{
-		// Only ever had the auto-synthesized run_group link.
-		"only-group": "reference-group",
-		// An explicit experiment must beat the run_group fallback.
+		"only-group":    "reference-group",
 		"explicit-wins": "experiment-alpha",
-		// Two explicit experiments, no fallback: lowest id wins deterministically.
-		"tie": "aardvark-sweep",
-		// Never linked at all: falls back to the group it ran in.
-		"unlinked": "candidate-group",
+		"tie":           "aardvark-sweep",
+		"unlinked":      "candidate-group",
 	}
 	for run, experiment := range want {
 		if got[run] != experiment {
@@ -516,8 +478,6 @@ INSERT INTO run_experiments(experiment_id, run_id, created_at, updated_at) VALUE
 	}
 }
 
-// TestV3MigrationPreservesRetiredMutableUIState proves the full migration chain
-// stops exposing mutable state without destroying data needed for rollback.
 func TestV3MigrationPreservesRetiredMutableUIState(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

@@ -8,7 +8,6 @@ templates:
 
 tests:
 
-  # ── DaemonSet ──────────────────────────────────────────
   - it: renders collector DaemonSet by default
     template: collector/daemonset.yaml
     asserts:
@@ -142,7 +141,6 @@ tests:
           path: spec.template.spec.initContainers[0].image
           value: myregistry.io/base:1.0
 
-  # ── ConfigMap ──────────────────────────────────────────
   - it: renders collector ConfigMap
     template: collector/configmap.yaml
     asserts:
@@ -226,11 +224,9 @@ tests:
           path: data["config.toml"]
           pattern: "_TRANSPORT=kernel"
 
-  # ── DaemonSet drop-list carve-out (Gap 1 / #953) ───────
   - it: DaemonSet drop-list un-drops the controller-runtime dashboard families
     template: collector/configmap.yaml
     asserts:
-      # the whole low-cardinality families are removed from the DaemonSet drop-list
       - notMatchRegex:
           path: data["config.toml"]
           pattern: '"\^controller_runtime'
@@ -273,7 +269,6 @@ tests:
           path: data["config.toml"]
           pattern: '"\^leader_election\.\*"'
 
-  # ── ray_object_store recovery (Gap 2 / #954) ───────────
   - it: recovers ray_object_store_* but keeps directory/manager dropped
     template: collector/configmap.yaml
     asserts:
@@ -287,7 +282,6 @@ tests:
           path: data["config.toml"]
           pattern: '"\^ray_object_manager_\.\*"'
 
-    # ── ServiceAccount ──────────────────────────────────────
   - it: renders collector ServiceAccount
     template: collector/serviceaccount.yaml
     asserts:
@@ -297,7 +291,6 @@ tests:
           path: metadata.name
           value: RELEASE-NAME-adx-mon-collector
 
-  # ── ClusterRole ─────────────────────────────────────────
   - it: renders collector ClusterRole with node/metrics access
     template: collector/clusterrole.yaml
     asserts:
@@ -315,7 +308,6 @@ tests:
             nonResourceURLs: ["/metrics"]
             verbs: [get]
 
-  # ── ClusterRoleBinding ──────────────────────────────────
   - it: renders collector ClusterRoleBinding
     template: collector/clusterrolebinding.yaml
     asserts:

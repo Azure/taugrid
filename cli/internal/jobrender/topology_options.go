@@ -5,7 +5,6 @@ package jobrender
 
 import "github.com/Azure/taugrid/core/topology"
 
-// ApplyTopologyOptions copies resolved topology options into Job render options.
 func ApplyTopologyOptions(o *Options, top topology.Options) {
 	o.Team = top.Team
 	o.Lane = top.Lane

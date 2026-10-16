@@ -213,8 +213,6 @@ func replayRemoteWrite(ctx context.Context, opts RemoteWriteOptions) (RemoteWrit
 	return result, nil
 }
 
-// ReplayMetricsRemoteWrite streams an offloaded metrics JSONL file to an
-// adx-mon remote-write endpoint, resuming from a checkpoint when present.
 func ReplayMetricsRemoteWrite(ctx context.Context, opts RemoteWriteOptions) (RemoteWriteResult, error) {
 	opts.CheckpointSchemaVersion = metricsRemoteWriteCheckpoint
 	opts.UserAgent = metricsRemoteWriteUserAgent

@@ -1,24 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package ray builds the portal's Ray board.
-//
-// Discovery is head-Service based: KubeRay auto-creates a `<raycluster>-head-svc`
-// (headless ClusterIP) for every RayCluster, carrying labels ray.io/cluster=<name>
-// + ray.io/node-type=head and exposing the dashboard port (8265). This board lists
-// those Services via internal/portal/kubeclient (client-go) and, for each, emits a
-// same-origin proxy path the portal reverse-proxies to the head pod's :8265.
-//
-// The board needs no per-cluster dashboard Service and does not link out to an
-// internal load balancer. It proxies the dashboard over in-cluster DNS
-// (http://<cluster>-head-svc.<ns>.svc:8265), so any RayCluster is reachable
-// while it is running.
-//
-// The live dashboard is only available while the RayCluster exists. Durable
-// RayJob history is served alongside it from the same TauExpRunLifecycle rows
-// the Jobs board reads: the lifecycle recorder watches RayJobs, so a finished
-// RayJob remains visible after KubeRay has garbage-collected its cluster,
-// Service, and head pod.
 package ray
 
 import (
@@ -39,60 +21,33 @@ const (
 	historyStateUnavailable = "history-unavailable"
 )
 
-// clusterLabel is the selector key the head Service carries; its value is the owning
-// RayCluster's name.
 const clusterLabel = "ray.io/cluster"
 
-// nodeTypeLabel/nodeTypeHead identify the head Service among a RayCluster's Services
-// (KubeRay also creates worker/serve Services that carry ray.io/cluster).
 const (
 	nodeTypeLabel = "ray.io/node-type"
 	nodeTypeHead  = "head"
 )
 
-// Reader lists the raw Services and Pods JSON the board needs. kubeclient.Client
-// satisfies this; tests supply a fake so no live API is required.
 type Reader interface {
-	// ListServices returns the core Services list as raw JSON. An empty
-	// namespace lists cluster-wide.
 	ListServices(ctx context.Context, namespace string) ([]byte, error)
-	// ListPods returns the core Pods list as raw JSON. An empty namespace lists
-	// cluster-wide. The board uses it to tell whether each cluster's head pod is
-	// Ready (dashboard reachable) before offering an "open" link.
 	ListPods(ctx context.Context, namespace string) ([]byte, error)
 }
 
-// Options scopes discovery. Namespace, when set, restricts the listing to one
-// namespace; empty lists cluster-wide.
 type Options struct {
 	Namespace    string
 	History      runs.HistoryReader
 	HistoryScope runs.HistoryScope
 }
 
-// Cluster is one discovered Ray head Service: the owning RayCluster's identity and
-// the same-origin path the portal proxies to its dashboard.
 type Cluster struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 	Service   string `json:"service"`
-	// Type is the Service type (usually ClusterIP for the headless head-svc).
-	Type string `json:"type,omitempty"`
-	// ProxyPath is the portal-relative path that reverse-proxies this cluster's
-	// Ray dashboard (:8265). Empty is never emitted for a discovered head Service.
+	Type      string `json:"type,omitempty"`
 	ProxyPath string `json:"proxyPath"`
-	// Available reports whether the cluster's head pod is currently Ready, i.e.
-	// the dashboard is reachable. The head Service can outlive its head pod (the
-	// pod goes NotReady on suspend/terminal/crash before KubeRay GCs the
-	// Service); when Available is false the board offers no live "open" link so
-	// the user does not click into a dead dashboard. Defaults to true when pod
-	// state cannot be determined, so a transient pod-list failure never hides a
-	// healthy cluster's link.
-	Available bool `json:"available"`
+	Available bool   `json:"available"`
 }
 
-// Snapshot is the Ray board payload: live dashboards plus durable RayJob
-// history, which outlives them.
 type Snapshot struct {
 	Namespace         string     `json:"namespace,omitempty"`
 	Total             int        `json:"total"`
@@ -102,8 +57,6 @@ type Snapshot struct {
 	HistoryDiagnostic string     `json:"historyDiagnostic,omitempty"`
 }
 
-// Board lists Services via the Reader, keeps only the `<rc>-head-svc` ones, and
-// builds each cluster's proxy path. Empty results are not an error.
 func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	raw, err := r.ListServices(ctx, opts.Namespace)
 	if err != nil {
@@ -113,11 +66,6 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	// Determine dashboard reachability per cluster from head-pod readiness. A
-	// head Service can outlive its head pod, so a listed cluster is not
-	// necessarily reachable. If the pod list cannot be obtained we leave
-	// Available at its default (true) so a transient failure never hides a
-	// healthy cluster's link.
 	ready := readyHeadClusters(ctx, r, opts.Namespace)
 	for i := range clusters {
 		clusters[i].Available = ready == nil || ready[clusters[i].Namespace+"/"+clusters[i].Name]
@@ -135,17 +83,12 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	}.withHistory(ctx, opts), nil
 }
 
-// withHistory attaches the durable RayJob rows without making the live board
-// unavailable when its Kusto query is temporarily unavailable.
 func (s Snapshot) withHistory(ctx context.Context, opts Options) Snapshot {
 	if opts.History == nil {
 		s.HistoryState = historyStateLiveOnly
 		return s
 	}
 	scope := opts.HistoryScope
-	// The durable-history boundary is resolved by a trusted caller. In
-	// particular, an empty namespace intentionally means cluster-wide history;
-	// do not replace it with the live-board namespace from a request.
 	scope.Kind = historyKind
 	history, err := opts.History.ListHistory(ctx, scope)
 	if err != nil {
@@ -153,8 +96,6 @@ func (s Snapshot) withHistory(ctx context.Context, opts Options) Snapshot {
 		s.HistoryDiagnostic = "durable RayJob history query failed"
 		return s
 	}
-	// The Kusto query is scoped, but keep the boundary enforced here as well so
-	// another HistoryReader implementation cannot widen a Portal response.
 	s.History = filterRayJobs(history, scope)
 	s.HistoryState = historyStateAvailable
 	return s
@@ -177,7 +118,6 @@ func filterRayJobs(rows []runs.Run, scope runs.HistoryScope) []runs.Run {
 	return out
 }
 
-// serviceList is the subset of the core v1 Service list the board reads.
 type serviceList struct {
 	Items []serviceObj `json:"items"`
 }
@@ -193,7 +133,6 @@ type serviceObj struct {
 	} `json:"spec"`
 }
 
-// parseServices decodes the Services list and keeps only Ray head Services.
 func parseServices(data []byte) ([]Cluster, error) {
 	var list serviceList
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -209,10 +148,6 @@ func parseServices(data []byte) ([]Cluster, error) {
 	return out, nil
 }
 
-// isHeadService recognizes a KubeRay head Service by the ray.io/cluster label plus
-// ray.io/node-type=head, and verifies the Service name matches KubeRay's naming
-// convention (<cluster>-head-svc). This prevents a mislabeled Service from being
-// accepted as a valid proxy target.
 func isHeadService(svc serviceObj) bool {
 	cluster, ok := svc.Metadata.Labels[clusterLabel]
 	if !ok {
@@ -221,11 +156,9 @@ func isHeadService(svc serviceObj) bool {
 	if svc.Metadata.Labels[nodeTypeLabel] != nodeTypeHead {
 		return false
 	}
-	// KubeRay always names the head Service "<cluster>-head-svc".
 	return svc.Metadata.Name == cluster+"-head-svc"
 }
 
-// buildCluster maps one head Service to a Cluster with its portal proxy path.
 func buildCluster(svc serviceObj) Cluster {
 	name := svc.Metadata.Labels[clusterLabel]
 	ns := svc.Metadata.Namespace
@@ -238,8 +171,6 @@ func buildCluster(svc serviceObj) Cluster {
 	}
 }
 
-// podList is the subset of the core v1 Pod list the board reads to determine
-// head-pod readiness.
 type podList struct {
 	Items []podObj `json:"items"`
 }
@@ -257,10 +188,6 @@ type podObj struct {
 	} `json:"status"`
 }
 
-// readyHeadClusters lists pods and returns the set of "<namespace>/<cluster>"
-// keys whose Ray head pod is currently Ready. It returns nil when the pod list
-// cannot be obtained or decoded, signaling callers to degrade to "available"
-// rather than hide healthy links on a transient failure.
 func readyHeadClusters(ctx context.Context, r Reader, namespace string) map[string]bool {
 	raw, err := r.ListPods(ctx, namespace)
 	if err != nil {
@@ -287,7 +214,6 @@ func readyHeadClusters(ctx context.Context, r Reader, namespace string) map[stri
 	return ready
 }
 
-// isPodReady reports whether the pod carries a Ready condition set to True.
 func isPodReady(pod podObj) bool {
 	for _, c := range pod.Status.Conditions {
 		if c.Type == "Ready" {

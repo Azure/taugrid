@@ -19,11 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockIngestor records payloads and options sent via FromReader and can return a configured error.
 type mockIngestor struct {
 	mu       sync.Mutex
-	payloads []string   // captured NDJSON payloads
-	options  [][]string // captured option strings per call
+	payloads []string
+	options  [][]string
 	err      error
 	closed   bool
 }
@@ -83,11 +82,9 @@ func TestKustoSink_FlushIngestsViaManaged(t *testing.T) {
 	assert.Contains(t, payload, "TestB")
 	assert.Contains(t, payload, "TestC")
 
-	// Verify NDJSON structure: 3 JSON objects separated by newlines.
 	lines := strings.Split(strings.TrimSpace(payload), "\n")
 	assert.Len(t, lines, 3, "expected 3 NDJSON lines in payload")
 
-	// Verify ingestion options: FileFormat(MultiJSON) + IngestionMappingRef.
 	require.Len(t, mock.options, 1, "expected options from 1 FromReader call")
 	opts := mock.options[0]
 	assert.Contains(t, opts, "FileFormat", "should pass FileFormat option")
@@ -113,7 +110,6 @@ func TestKustoSink_FlushSwallowsError(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, sink.Record(ctx, sampleOutcome("TestFail", 100)))
 
-	// Capture stderr.
 	old := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
@@ -135,7 +131,6 @@ func TestKustoSink_SkipsLocalRuns(t *testing.T) {
 	sink := newKustoSinkForTest(mock)
 
 	ctx := context.Background()
-	// RunID == 0 means local run — should be silently skipped.
 	require.NoError(t, sink.Record(ctx, sampleOutcome("TestLocal", 0)))
 	require.NoError(t, sink.Record(ctx, sampleOutcome("TestCI", 42)))
 
@@ -148,7 +143,6 @@ func TestKustoSink_SkipsLocalRuns(t *testing.T) {
 }
 
 func TestInit_NoKustoWhenEnvUnset(t *testing.T) {
-	// Reset global state for this test.
 	globalOnce = sync.Once{}
 	globalEmitter = nil
 	globalErr = nil
@@ -164,7 +158,6 @@ func TestInit_NoKustoWhenEnvUnset(t *testing.T) {
 	require.True(t, ok, "expected *Multi emitter")
 	assert.Len(t, multi.Emitters, 1, "only JSONL sink when E2E_KUSTO_URI is unset")
 
-	// Cleanup: reset globals.
 	t.Cleanup(func() {
 		globalOnce = sync.Once{}
 		globalEmitter = nil

@@ -27,8 +27,6 @@ import (
 
 const JSONLImporterVersion = "tau.jsonl.import.v1"
 
-// ErrNoJSONLScalarMetrics identifies valid history with nothing to import.
-// Online tailers may checkpoint it and continue waiting for scalar rows.
 var ErrNoJSONLScalarMetrics = errors.New("JSONL history files contain no scalar metrics")
 
 type JSONLImportOptions struct {

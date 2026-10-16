@@ -15,23 +15,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
 
-// TAU_CONTEXT is documented as the way to name the target cluster once instead
-// of passing --context on every invocation, so the two must be interchangeable.
-//
-// They were not. Every --context flag is registered with defaultKubeContext()
-// — that is, $TAU_CONTEXT — as its *default value*, and the connection layer
-// asked cobra's Changed("context"), which reports whether the user typed the
-// flag, not whether a context was resolved. A context supplied by the
-// environment therefore read as "no context given", so the run path took over
-// the connection and pointed KUBECONFIG at a previously-cached cluster.
-//
-// The failure is silent: the command succeeds against the wrong cluster, or
-// fails claiming a workspace does not exist when it exists on the cluster the
-// user actually named.
-
-// TestRunContextFromEnvSuppressesConnectionTakeover is the guard. The seam is
-// runContextExplicit, which every call site uses in place of the raw
-// Changed("context") probe.
 func TestRunContextFromEnvSuppressesConnectionTakeover(t *testing.T) {
 	t.Setenv(tauContextEnv, "named-by-env")
 
@@ -53,9 +36,6 @@ func TestRunContextFromEnvSuppressesConnectionTakeover(t *testing.T) {
 	}
 }
 
-// TestRunContextExplicitFalseWithoutAnyContext keeps the fix from swallowing
-// the case it must not: with neither flag nor environment, the connection layer
-// still owns the target and the workspace-connection flow has to run.
 func TestRunContextExplicitFalseWithoutAnyContext(t *testing.T) {
 	t.Setenv(tauContextEnv, "")
 
@@ -70,8 +50,6 @@ func TestRunContextExplicitFalseWithoutAnyContext(t *testing.T) {
 	}
 }
 
-// TestRunContextExplicitTrueWhenFlagPassed pins the path that already worked,
-// so a regression there is caught too.
 func TestRunContextExplicitTrueWhenFlagPassed(t *testing.T) {
 	t.Setenv(tauContextEnv, "")
 
@@ -86,9 +64,6 @@ func TestRunContextExplicitTrueWhenFlagPassed(t *testing.T) {
 	}
 }
 
-// TestRunContextExplicitFalseWhenCommandHasNoContextFlag covers the callers
-// that probe a command which never registered the flag; they must not panic or
-// report a context that cannot exist.
 func TestRunContextExplicitFalseWhenCommandHasNoContextFlag(t *testing.T) {
 	t.Setenv(tauContextEnv, "named-by-env")
 	if runContextExplicit(&cobra.Command{Use: "no-context-flag"}) {
@@ -96,13 +71,6 @@ func TestRunContextExplicitFalseWhenCommandHasNoContextFlag(t *testing.T) {
 	}
 }
 
-// TestLifecycleConnectionHonoursEnvContext is the end-to-end guard, and the
-// one that fails on the unfixed code: it drives the real resolver the query
-// verbs call rather than the seam in isolation.
-//
-// With $TAU_CONTEXT set and no --context typed, the resolver must treat the
-// cluster as named and leave the connection alone. Consulting the ensurer here
-// is the bug — that is the step that swaps KUBECONFIG for a cached cluster.
 func TestLifecycleConnectionHonoursEnvContext(t *testing.T) {
 	t.Setenv(tauContextEnv, "named-by-env")
 	withWorkloadNamespaceDiscoverer(t, func(*cobra.Command, string) (tauworkspace.Workspace, error) {
@@ -146,16 +114,6 @@ func TestLifecycleConnectionHonoursEnvContext(t *testing.T) {
 	}
 }
 
-// TestLifecycleVerbsReportDescriptorContextConflict closes the gap the review
-// flagged: `run get/status/logs/cancel` took the ambient context and returned
-// early without ever comparing it against the repository's descriptor, so a
-// forgotten TAU_CONTEXT silently pointed them at a different cluster than the
-// one the repository names — while `tau run` reported the same disagreement.
-//
-// Reading state against the wrong cluster is less damaging than submitting to
-// it, but it is the same silent wrong answer, and the inconsistency is its own
-// trap: the submit is refused, then the status call that follows quietly
-// succeeds somewhere else.
 func TestLifecycleVerbsReportDescriptorContextConflict(t *testing.T) {
 	root := t.TempDir()
 	writeRunRoutingFile(t, filepath.Join(root, "tau", "workspace.connection.yaml"), runRoutingDescriptor)
@@ -196,8 +154,6 @@ func TestLifecycleVerbsReportDescriptorContextConflict(t *testing.T) {
 	}
 }
 
-// A typed --context settles the disagreement for the lifecycle verbs too, so
-// the error's own advice works here as it does for `tau run`.
 func TestLifecycleVerbsAcceptTypedContextOverDescriptor(t *testing.T) {
 	root := t.TempDir()
 	writeRunRoutingFile(t, filepath.Join(root, "tau", "workspace.connection.yaml"), runRoutingDescriptor)
@@ -235,17 +191,6 @@ func TestLifecycleVerbsAcceptTypedContextOverDescriptor(t *testing.T) {
 	}
 }
 
-// TestLifecycleFlagsResolveHonoursEnvContext guards the shared entry point that
-// `run get/status/logs/cancel` funnel through.
-//
-// Separate from TestLifecycleConnectionHonoursEnvContext because that one is
-// handed its explicitness by the test. runLifecycleConnectionFlags.resolve
-// computes that value itself, and is the one place a rebase can reinstate the
-// bug for four verbs at once while still compiling and passing everything else.
-//
-// resolve() wires in the real connection ensurer with no seam, so rather than
-// drive it end to end this asserts on the value it computes. That is the whole
-// of what the fix changes there; the rest of the call is main's, unmodified.
 func TestLifecycleFlagsResolveHonoursEnvContext(t *testing.T) {
 	t.Setenv(tauContextEnv, "named-by-env")
 
@@ -267,14 +212,6 @@ func TestLifecycleFlagsResolveHonoursEnvContext(t *testing.T) {
 	}
 }
 
-// TestPlainRepositoryDescriptorConflictIsReported drives the real wiring rather
-// than handing checkDescriptorContextConflict a Discovery directly.
-//
-// The unit tests above passed while the check was effectively dead: they built
-// a Discovery themselves, but production only populates source.Discovery for
-// catalog entries. A plain repository's descriptor is read further down, inside
-// Ensure, so the conflict was never detected on the path most people are on.
-// This test starts from a descriptor on disk, which is what makes it catch that.
 func TestPlainRepositoryDescriptorConflictIsReported(t *testing.T) {
 	root := t.TempDir()
 	writeRunRoutingFile(t, filepath.Join(root, "tau", "workspace.connection.yaml"), runRoutingDescriptor)
@@ -310,12 +247,6 @@ func TestPlainRepositoryDescriptorConflictIsReported(t *testing.T) {
 	}
 }
 
-// A repository's checked-in workspace.connection.yaml is a shared, deliberate
-// statement of which cluster the project targets; an ambient TAU_CONTEXT is
-// per-shell and easy to forget. Neither can be assumed to outrank the other, so
-// a disagreement is reported instead of silently resolved. Picking a winner
-// either lets a stale shell variable redirect a teammate's checkout, or lets a
-// checked-in file quietly ignore the cluster the user just named.
 func TestDescriptorContextConflictIsReported(t *testing.T) {
 	err := checkDescriptorContextConflict("cluster-from-env", false, &workspaceconnection.Discovery{
 		Path: "tau/workspace.connection.yaml",
@@ -333,8 +264,6 @@ func TestDescriptorContextConflictIsReported(t *testing.T) {
 	}
 }
 
-// Agreement is not a conflict: naming the same cluster the descriptor already
-// names is the common case for someone who exports TAU_CONTEXT out of habit.
 func TestDescriptorContextAgreementIsAccepted(t *testing.T) {
 	err := checkDescriptorContextConflict("same-cluster", false, &workspaceconnection.Discovery{
 		Descriptor: workspaceconnection.Descriptor{
@@ -346,8 +275,6 @@ func TestDescriptorContextAgreementIsAccepted(t *testing.T) {
 	}
 }
 
-// The check must stay silent in every case where there is nothing to compare,
-// otherwise it turns ordinary runs into errors.
 func TestDescriptorContextConflictSkipsWhenNothingToCompare(t *testing.T) {
 	descriptor := &workspaceconnection.Discovery{
 		Descriptor: workspaceconnection.Descriptor{
@@ -374,9 +301,6 @@ func TestDescriptorContextConflictSkipsWhenNothingToCompare(t *testing.T) {
 	}
 }
 
-// TestEnvContextReachesDispatchOptions is the end of the wire: the run command
-// must mark the dispatch options explicit, since that field is what
-// applyAutomaticRunConnection reads to decide whether to take over.
 func TestEnvContextReachesDispatchOptions(t *testing.T) {
 	t.Setenv(tauContextEnv, "named-by-env")
 

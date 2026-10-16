@@ -12,14 +12,12 @@ import urllib.request
 import ray
 from ray import serve
 
-
 EXPECTED_REPLICAS = int(os.environ["MATRIX_WORKERS"])
 REQUEST_TIMEOUT_SECONDS = 180
 TORCH_SPEC = os.environ.get("MATRIX_TORCH_SPEC", "torch==2.7.1")
 TORCH_INDEX_URL = os.environ.get(
     "MATRIX_TORCH_INDEX_URL", "https://download.pytorch.org/whl/cu128"
 )
-
 
 @serve.deployment(
     num_replicas=EXPECTED_REPLICAS,
@@ -68,12 +66,10 @@ class GPUInference:
             "checksum": checksum,
         }
 
-
 def invoke():
     request = urllib.request.Request("http://127.0.0.1:8000/", method="GET")
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read())
-
 
 ray.init()
 serve.run(GPUInference.bind(), route_prefix="/")

@@ -23,8 +23,6 @@ func newKueueVizTestServer(rt http.RoundTripper, enabled bool) *Server {
 	}
 }
 
-// TestHandleKueueVizProxyDisabled asserts the board soft-degrades to 503 when
-// the portal was started without --kueueviz, so the rest of the portal serves.
 func TestHandleKueueVizProxyDisabled(t *testing.T) {
 	s := newKueueVizTestServer(nil, false)
 	req := httptest.NewRequest(http.MethodGet, kueueVizProxyPrefix, nil)
@@ -35,8 +33,6 @@ func TestHandleKueueVizProxyDisabled(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizAssetDisabled asserts the root-absolute asset handler also
-// soft-degrades to 503 when the board is disabled.
 func TestHandleKueueVizAssetDisabled(t *testing.T) {
 	s := newKueueVizTestServer(nil, false)
 	req := httptest.NewRequest(http.MethodGet, "/assets/index-abc.js", nil)
@@ -47,9 +43,6 @@ func TestHandleKueueVizAssetDisabled(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizEnvJSBaseOnly asserts the injected env.js points the SPA at
-// the portal's same-origin proxy base (no /ws suffix — the frontend appends the
-// subpath itself, so emitting /ws here would double it to /ws/ws/...).
 func TestHandleKueueVizEnvJSBaseOnly(t *testing.T) {
 	s := newKueueVizTestServer(nil, true)
 	req := httptest.NewRequest(http.MethodGet, kueueVizProxyPrefix+"env.js", nil)
@@ -73,8 +66,6 @@ func TestHandleKueueVizEnvJSBaseOnly(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizEnvJSHTTPS asserts the WS scheme follows X-Forwarded-Proto
-// so the injected URL is wss behind a TLS-terminating LB.
 func TestHandleKueueVizEnvJSHTTPS(t *testing.T) {
 	s := newKueueVizTestServer(nil, true)
 	req := httptest.NewRequest(http.MethodGet, kueueVizProxyPrefix+"env.js", nil)
@@ -88,10 +79,6 @@ func TestHandleKueueVizEnvJSHTTPS(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizProxyRoutesBackend asserts /ws/... and /auth/... route to
-// the backend Service (with the Origin normalized to the fixed sentinel), while
-// everything else routes to the frontend Service (Origin left untouched — the
-// frontend serves only static assets and does no Origin check).
 func TestHandleKueueVizProxyRoutesBackend(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -131,15 +118,12 @@ func TestHandleKueueVizProxyRoutesBackend(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizAssetRequiresCookie asserts the prefix-less asset handler
-// gates on the kueueviz_target cookie (a page must be loaded first).
 func TestHandleKueueVizAssetRequiresCookie(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 	})
 	s := newKueueVizTestServer(rt, true)
 
-	// No cookie → rejected.
 	req := httptest.NewRequest(http.MethodGet, "/assets/index-abc.js", nil)
 	rec := httptest.NewRecorder()
 	s.handleKueueVizAsset(rec, req)
@@ -147,7 +131,6 @@ func TestHandleKueueVizAssetRequiresCookie(t *testing.T) {
 		t.Fatalf("status = %d, want 400 without kueueviz_target cookie", rec.Code)
 	}
 
-	// With cookie → proxied.
 	req = httptest.NewRequest(http.MethodGet, "/assets/index-abc.js", nil)
 	req.AddCookie(&http.Cookie{Name: kueueVizTargetCookie, Value: "1"})
 	rec = httptest.NewRecorder()
@@ -157,8 +140,6 @@ func TestHandleKueueVizAssetRequiresCookie(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizProxySetsCookie asserts a loaded KueueViz page sets the
-// kueueviz_target cookie so prefix-less asset fetches route to the frontend.
 func TestHandleKueueVizProxySetsCookie(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
@@ -179,10 +160,6 @@ func TestHandleKueueVizProxySetsCookie(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizProxyCookieSecureFollowsScheme asserts the kueueviz_target
-// cookie is not marked Secure over plain HTTP (browsers drop Secure cookies on
-// HTTP, breaking kubectl port-forward) but is Secure when the request arrives
-// over https (via X-Forwarded-Proto behind the LB).
 func TestHandleKueueVizProxyCookieSecureFollowsScheme(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
@@ -213,10 +190,6 @@ func TestHandleKueueVizProxyCookieSecureFollowsScheme(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizProxyNoCookieOnWebSocket asserts the cookie is not written
-// on /ws/ upgrades — Hijack() bypasses the ResponseWriter, so a header set
-// before the ws branch would never reach the wire and the cookie only serves
-// HTML/asset disambiguation anyway.
 func TestHandleKueueVizProxyNoCookieOnWebSocket(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
@@ -233,11 +206,6 @@ func TestHandleKueueVizProxyNoCookieOnWebSocket(t *testing.T) {
 	}
 }
 
-// TestHandleKueueVizProxyUnreachableReturns502 asserts that when the KueueViz
-// Services are unreachable (the transport errors), the proxy soft-degrades to a
-// 502 via the ReverseProxy ErrorHandler rather than a 500 or a hang. The
-// frontend probes this status to show a "Services may not be deployed" message
-// instead of embedding a bare error page in the iframe.
 func TestHandleKueueVizProxyUnreachableReturns502(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return nil, errors.New("dial tcp: connection refused")

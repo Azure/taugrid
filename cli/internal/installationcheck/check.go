@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package installationcheck validates the read-only readiness contract for a
-// Helm-installed TauGrid control plane.
 package installationcheck
 
 import (
@@ -27,28 +25,19 @@ const (
 	quotaGuardName    = "tau-quota-approval-guard"
 )
 
-// Runner is the read-only kubectl surface used by installation validation.
 type Runner interface {
 	Raw(ctx context.Context, args []string, stdin []byte) (string, error)
 }
 
-// Options identifies the Helm release and bounds readiness polling.
 type Options struct {
-	Release         string
-	SystemNamespace string
-	Timeout         time.Duration
-	PollInterval    time.Duration
-	// QueryTimeout bounds one kubectl call. Zero uses the default timeout.
-	// This prevents a stalled API request from consuming the full readiness
-	// timeout and lets the next polling interval retry it.
-	QueryTimeout time.Duration
-	// DisabledComponents names chart components the release turned off. They
-	// are reported as skipped instead of failing. The zero value validates
-	// every component.
+	Release            string
+	SystemNamespace    string
+	Timeout            time.Duration
+	PollInterval       time.Duration
+	QueryTimeout       time.Duration
 	DisabledComponents []Component
 }
 
-// Component identifies a chart component covered by installation validation.
 type Component string
 
 const (
@@ -59,10 +48,8 @@ const (
 )
 
 type chartComponent struct {
-	name Component
-	// valuesKey is the components.<valuesKey>.enabled switch in the chart.
-	valuesKey string
-	// chartPrefix is the helm.sh/chart label prefix on the rendered Deployment.
+	name        Component
+	valuesKey   string
 	chartPrefix string
 }
 
@@ -77,8 +64,6 @@ var componentSwitches = []chartComponent{
 	{name: ComponentTauCore, valuesKey: "tauCoreController"},
 }
 
-// DisabledComponents reports which validated components a release turned off,
-// given the release's coalesced Helm values as JSON.
 func DisabledComponents(helmValues []byte) ([]Component, error) {
 	var values struct {
 		Components  map[string]any `json:"components"`
@@ -93,8 +78,6 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 	}
 	var disabled []Component
 	for _, component := range componentSwitches {
-		// Helm leaves a subchart installed unless its condition reads an
-		// explicit boolean false, so any other shape means still enabled.
 		settings, _ := values.Components[component.valuesKey].(map[string]any)
 		if enabled, ok := settings["enabled"].(bool); ok && !enabled {
 			disabled = append(disabled, component.name)
@@ -112,7 +95,6 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 	return disabled, nil
 }
 
-// Status is the outcome of one readiness check.
 type Status string
 
 const (
@@ -121,20 +103,16 @@ const (
 	StatusSkip Status = "SKIP"
 )
 
-// Result is one line in an installation validation report.
 type Result struct {
 	Name   string
 	Status Status
 	Detail string
 }
 
-// Report is a complete point-in-time TauGrid readiness report.
 type Report struct {
 	Results []Result
 }
 
-// Ready reports whether every required installation check passed. Checks
-// skipped because their component is disabled do not block readiness.
 func (r Report) Ready() bool {
 	if len(r.Results) == 0 {
 		return false
@@ -147,7 +125,6 @@ func (r Report) Ready() bool {
 	return true
 }
 
-// Summary renders a concise report suitable for an infrastructure owner.
 func (r Report) Summary() string {
 	var b strings.Builder
 	b.WriteString("TauGrid installation validation\n")
@@ -170,7 +147,6 @@ func (r Report) Summary() string {
 	return b.String()
 }
 
-// Err returns an actionable error when any required check failed.
 func (r Report) Err() error {
 	if r.Ready() {
 		return nil
@@ -187,8 +163,6 @@ func (r Report) Err() error {
 	return fmt.Errorf("TauGrid installation is not ready: %s", strings.Join(failed, "; "))
 }
 
-// Wait polls the read-only readiness contract until it passes or the timeout
-// expires. The last complete report is always returned.
 func Wait(ctx context.Context, runner Runner, opts Options) (Report, error) {
 	if err := validateOptions(opts); err != nil {
 		return Report{}, err
@@ -234,8 +208,6 @@ func validateOptions(opts Options) error {
 	return nil
 }
 
-// Check evaluates every required readiness surface once without mutating the
-// cluster. Components the release disabled are reported as skipped.
 func Check(ctx context.Context, runner Runner, opts Options) Report {
 	runner = boundedRunner{runner: runner, timeout: readinessQueryTimeout(opts)}
 	results := make([]Result, 0, 8)

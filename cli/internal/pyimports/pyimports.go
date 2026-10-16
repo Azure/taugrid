@@ -1,16 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package pyimports detects, at submit time, Python imports in a run's
-// entrypoint that will not be present at runtime.
-//
-// Tau embeds the entrypoint (and any explicitly staged files) directly in the
-// workload spec so the run stays self-contained. Anything else that sits next
-// to the entrypoint on the researcher's machine — a sibling module, a local
-// package directory — is simply not shipped. Without this check, such an import
-// passes config validation, passes Kueue admission, brings up the whole
-// RayCluster, and only then fails with ModuleNotFoundError inside a worker,
-// which reads as an infrastructure failure and burns cluster minutes.
 package pyimports
 
 import (
@@ -23,30 +13,19 @@ import (
 	"strings"
 )
 
-// Kind describes why an import cannot be satisfied at runtime.
 type Kind string
 
 const (
-	// KindModule is a sibling `.py` file next to the entrypoint that is not
-	// being shipped.
-	KindModule Kind = "module"
-	// KindPackage is a local package directory next to the entrypoint.
-	// Directories can never be embedded: payload file names are flat.
-	KindPackage Kind = "package"
-	// KindRelative is an explicit relative import (`from . import x`), which
-	// requires the entrypoint to run as part of a package.
+	KindModule   Kind = "module"
+	KindPackage  Kind = "package"
 	KindRelative Kind = "relative"
 )
 
-// Finding is one unshippable import.
 type Finding struct {
-	// Module is the imported name as written, e.g. "helpers" or ".util".
 	Module string
-	// Path is the local file or directory the import resolves to, if any.
-	Path string
-	// Line is the 1-based line number of the import statement.
-	Line int
-	Kind Kind
+	Path   string
+	Line   int
+	Kind   Kind
 }
 
 var (
@@ -55,19 +34,6 @@ var (
 	identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// Check reads the entrypoint at path and reports imports that resolve to a
-// local file or directory beside it but are not in shipped. shipped holds the
-// payload file names that will actually be embedded (including the entrypoint's
-// own base name).
-//
-// Only imports that resolve to something on disk are reported: an import of a
-// pip-installed or standard-library module looks identical in the source, so
-// reporting those would be noise. This keeps the check precise — it fires
-// exactly when the researcher has a local file the run will not carry.
-// extraRoots lets the caller add search roots beyond the entrypoint's own
-// directory. The project root matters because a common layout puts the
-// entrypoint in a subdirectory and shared modules at the top level, where
-// they resolve at author time via the project root but are still not shipped.
 func Check(path string, shipped []string, extraRoots ...string) ([]Finding, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -103,8 +69,6 @@ func Check(path string, shipped []string, extraRoots ...string) ([]Finding, erro
 		lineNo++
 		line := scanner.Text()
 
-		// Skip over triple-quoted blocks so prose that happens to contain an
-		// "import" line is not mistaken for code.
 		if inDocstring != "" {
 			if strings.Contains(line, inDocstring) {
 				inDocstring = ""
@@ -139,9 +103,6 @@ func Check(path string, shipped []string, extraRoots ...string) ([]Finding, erro
 	return findings, nil
 }
 
-// importedModules extracts the module names a single source line imports. Only
-// the leading dotted component matters: `import pkg.mod` and
-// `from pkg.mod import x` both need `pkg` to exist.
 func importedModules(line string) []string {
 	if m := fromImportRE.FindStringSubmatch(line); m != nil {
 		dots, module := m[1], m[2]
@@ -157,7 +118,6 @@ func importedModules(line string) []string {
 	if m == nil {
 		return nil
 	}
-	// Strip a trailing comment, then split `import a, b as c`.
 	spec := m[1]
 	if idx := strings.Index(spec, "#"); idx >= 0 {
 		spec = spec[:idx]
@@ -183,8 +143,6 @@ func firstComponent(dotted string) string {
 	return name
 }
 
-// docstringOpener returns the triple-quote delimiter a line opens and does not
-// close, or "" when the line leaves no block open.
 func docstringOpener(line string) string {
 	for _, delim := range []string{`"""`, "'''"} {
 		if strings.Count(line, delim) == 1 {
@@ -213,8 +171,6 @@ func classify(roots []string, module string, shipped map[string]bool) (Finding, 
 	return Finding{}, false
 }
 
-// Error renders findings as a single actionable submit-time error explaining
-// the packaging contract and what to do about each unshippable import.
 func Error(entrypoint string, findings []Finding) error {
 	if len(findings) == 0 {
 		return nil

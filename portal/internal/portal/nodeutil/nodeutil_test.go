@@ -13,8 +13,6 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
-// fakeQuerier records the KQL it was asked to run and returns canned rows, so
-// Board is exercised without a live Kusto.
 type fakeQuerier struct {
 	rows    []kustoquery.Row
 	err     error
@@ -62,7 +60,6 @@ func TestBoardAggregatesJoinedRows(t *testing.T) {
 		t.Fatalf("Window = %q, want %q", snap.Window, DefaultWindow.String())
 	}
 
-	// Ordered hottest-CPU-first: node-0 (82.5) before node-1 (12.5).
 	n0 := snap.Nodes[0]
 	if n0.Instance != "node-0" || n0.CPUUtilPct == nil || *n0.CPUUtilPct != 82.5 || n0.CPUCores != 64 {
 		t.Fatalf("node0 = %#v, want node-0 82.5%% / 64 cores", n0)
@@ -88,7 +85,6 @@ func TestBoardEmpty(t *testing.T) {
 	if len(snap.Nodes) != 0 {
 		t.Fatalf("empty snapshot = %#v", snap)
 	}
-	// Nodes must be a non-nil slice so it serializes as [] not null.
 	if snap.Nodes == nil {
 		t.Fatal("Nodes is nil, want empty slice")
 	}
@@ -116,7 +112,7 @@ func TestBuildKQLFiltersAndWindow(t *testing.T) {
 		"tostring(Labels.mode) == 'idle'",
 		"NodeMemoryMemTotalBytes",
 		"NodeMemoryMemAvailableBytes",
-		"ago(900s)", // DefaultWindow = 15m
+		"ago(900s)",
 		"Cluster == @'prod-eastus'",
 		"Host == @'node-7'",
 		"instance = Host",
@@ -172,14 +168,11 @@ func TestBuildKQLNoFilters(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
 	_, _ = Board(context.Background(), q, Options{})
 	kql := q.lastKQL
-	// With no filters, no Cluster/Host equality clauses appear.
 	if strings.Contains(kql, "| where Cluster ==") || strings.Contains(kql, "| where Host ==") {
 		t.Fatalf("unfiltered KQL should have no equality filters:\n%s", kql)
 	}
 }
 
-// TestBuildKQLQuotesInjection verifies a filter value with an embedded quote is
-// escaped, not able to break out of the KQL string literal.
 func TestBuildKQLQuotesInjection(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
 	_, _ = Board(context.Background(), q, Options{Instance: "node' | project"})
@@ -188,10 +181,9 @@ func TestBuildKQLQuotesInjection(t *testing.T) {
 	}
 }
 
-// The window now bounds observations; CPU denominators use observed intervals.
 func TestWindowOverrideChangesDenominator(t *testing.T) {
 	q := &fakeQuerier{rows: nil}
-	snap, err := Board(context.Background(), q, Options{Window: 5 * 60 * 1e9}) // 5m in ns
+	snap, err := Board(context.Background(), q, Options{Window: 5 * 60 * 1e9})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}

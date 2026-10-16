@@ -1,18 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package dataset implements the tau dataset registry: an immutable,
-// subscription-scoped catalog of pre-training and RL datasets.
-//
-// The registry is a control plane. A record (dataset.json) is a small JSON
-// document describing what a dataset is, where its bytes live, and how to
-// verify and consume them. The bytes themselves live in a dedicated dataset
-// storage account (referenced by account/container/prefix); the registry never
-// moves payloads. Records are immutable once registered; only aliases move.
-//
-// The schema is a common envelope plus exactly one purpose-specific section
-// (pretrain | rl | eval) so RL data (prompts / preference pairs / trajectories)
-// is not forced into a pretraining-token-shard shape.
 package dataset
 
 import (
@@ -25,35 +13,22 @@ import (
 	"strings"
 )
 
-// SchemaVersion is the current dataset record schema version.
 const SchemaVersion = 1
 
-// Purposes.
 const (
 	PurposePretrain = "pretrain"
 	PurposeRL       = "rl"
 	PurposeEval     = "eval"
 )
 
-// Assurance levels describe how much the registry trusts a record's hashes and
-// counts. They are explicit so callers never silently trust user-supplied data.
 const (
-	// AssuranceVerified means the registry computed and checked the file
-	// hashes (and, for known formats, the token counts) itself.
-	AssuranceVerified = "verified"
-	// AssuranceManifestSupplied means the caller provided a manifest and the
-	// registry recorded it (optionally sampling); counts are caller-asserted.
+	AssuranceVerified         = "verified"
 	AssuranceManifestSupplied = "manifest-supplied"
-	// AssuranceTrusted means the record was imported with lower assurance.
-	AssuranceTrusted = "trusted"
+	AssuranceTrusted          = "trusted"
 )
 
-// FormatTokenizedBinUint16 is a raw little-endian uint16 token stream (the
-// nanoGPT / FineWeb tokenized .bin format). For this format under
-// AssuranceVerified the registry requires token_count == bytes/2.
 const FormatTokenizedBinUint16 = "tokenized-bin-uint16"
 
-// Source captures dataset provenance.
 type Source struct {
 	Kind     string `json:"kind,omitempty"`
 	Repo     string `json:"repo,omitempty"`
@@ -61,7 +36,6 @@ type Source struct {
 	Config   string `json:"config,omitempty"`
 }
 
-// File is one immutable member of a dataset, addressed relative to prefix.
 type File struct {
 	Path       string `json:"path"`
 	Bytes      int64  `json:"bytes"`
@@ -72,8 +46,6 @@ type File struct {
 	Split      string `json:"split,omitempty"`
 }
 
-// Component records source-level provenance and the held-out split assigned to
-// every file from that source.
 type Component struct {
 	Source     string `json:"source"`
 	Domain     string `json:"domain"`
@@ -82,7 +54,6 @@ type Component struct {
 	Provenance string `json:"provenance"`
 }
 
-// Pretrain is the purpose section for pre-training corpora.
 type Pretrain struct {
 	Tokenizer       string `json:"tokenizer,omitempty"`
 	Format          string `json:"format,omitempty"`
@@ -90,23 +61,19 @@ type Pretrain struct {
 	SequencePacking bool   `json:"sequence_packing,omitempty"`
 }
 
-// RL is the purpose section for reinforcement-learning datasets.
 type RL struct {
-	// Kind is one of: prompts | preferences | trajectories.
 	Kind        string `json:"kind,omitempty"`
 	PolicyRun   string `json:"policy_run,omitempty"`
 	RewardModel string `json:"reward_model,omitempty"`
 	Schema      string `json:"schema,omitempty"`
 }
 
-// Eval is the purpose section for evaluation datasets.
 type Eval struct {
 	Task   string `json:"task,omitempty"`
 	Split  string `json:"split,omitempty"`
 	Metric string `json:"metric,omitempty"`
 }
 
-// Record is a single immutable dataset version record.
 type Record struct {
 	SchemaVersion int               `json:"schema_version"`
 	Name          string            `json:"name"`
@@ -124,13 +91,11 @@ type Record struct {
 	Tags          map[string]string `json:"tags,omitempty"`
 	Components    []Component       `json:"components,omitempty"`
 
-	// Exactly one of the following is set, matching Purpose.
 	Pretrain *Pretrain `json:"pretrain,omitempty"`
 	RL       *RL       `json:"rl,omitempty"`
 	Eval     *Eval     `json:"eval,omitempty"`
 }
 
-// AliasRecord is a movable pointer from an alias to a pinned dataset version.
 type AliasRecord struct {
 	SchemaVersion int    `json:"schema_version"`
 	Name          string `json:"name"`
@@ -141,10 +106,6 @@ type AliasRecord struct {
 	UpdatedAt     string `json:"updated_at"`
 }
 
-// ComputeDigest returns the content-addressed identifier for a record's file
-// list: sha256 over newline-joined "<sha256>  <path>" lines sorted by line. It
-// is independent of file ordering, so the same bytes always yield the same
-// digest.
 func (r *Record) ComputeDigest() string {
 	lines := make([]string, 0, len(r.Files))
 	for _, f := range r.Files {
@@ -155,7 +116,6 @@ func (r *Record) ComputeDigest() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// SumBytes returns the total size across all files.
 func (r *Record) SumBytes() int64 {
 	var total int64
 	for _, f := range r.Files {
@@ -164,8 +124,6 @@ func (r *Record) SumBytes() int64 {
 	return total
 }
 
-// Marshal returns canonical record bytes (stable indentation + trailing
-// newline) for writing a record to the registry.
 func (r *Record) Marshal() ([]byte, error) {
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -174,7 +132,6 @@ func (r *Record) Marshal() ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-// ParseRecord decodes and structurally validates a record's JSON.
 func ParseRecord(raw []byte) (Record, error) {
 	var rec Record
 	if err := json.Unmarshal(raw, &rec); err != nil {
@@ -186,7 +143,6 @@ func ParseRecord(raw []byte) (Record, error) {
 	return rec, nil
 }
 
-// ParseAlias decodes and validates an alias record's JSON.
 func ParseAlias(raw []byte) (AliasRecord, error) {
 	var a AliasRecord
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -198,9 +154,6 @@ func ParseAlias(raw []byte) (AliasRecord, error) {
 	return a, nil
 }
 
-// Validate enforces the record invariants: required envelope fields, a single
-// purpose section matching purpose, canonical file paths, byte/digest
-// consistency, and assurance-gated token accounting.
 func (r *Record) Validate() error {
 	if r.SchemaVersion == 0 {
 		return fmt.Errorf("schema_version is required")
@@ -345,9 +298,6 @@ func (r *Record) validatePurposeSection() error {
 	return nil
 }
 
-// validateTokenAccounting enforces that verified pretraining records have
-// internally consistent token counts for known formats. Caller-asserted counts
-// are only permitted when assurance is not "verified".
 func (r *Record) validateTokenAccounting() error {
 	if r.Purpose != PurposePretrain || r.Pretrain == nil {
 		return nil
@@ -373,12 +323,10 @@ func (r *Record) validateTokenAccounting() error {
 	return nil
 }
 
-// ValidateName checks a dataset name slug.
 func ValidateName(name string) error {
 	return validateSlug("name", name)
 }
 
-// ValidateVersion checks a dataset version slug (allows dots, e.g. v1.2).
 func ValidateVersion(version string) error {
 	if version == "" {
 		return fmt.Errorf("version: required")
@@ -395,7 +343,6 @@ func ValidateVersion(version string) error {
 	return nil
 }
 
-// ValidateAlias checks an alias slug.
 func ValidateAlias(alias string) error {
 	return validateSlug("alias", alias)
 }
@@ -416,9 +363,6 @@ func validateSlug(kind, value string) error {
 	return nil
 }
 
-// validateFilePath enforces that a file path is a clean, relative blob path
-// under the dataset prefix: no leading slash, no "..", no "." segments, no
-// duplicate slashes. This guards both digest stability and node-local staging.
 func validateFilePath(p string) error {
 	if p == "" {
 		return fmt.Errorf("path is required")

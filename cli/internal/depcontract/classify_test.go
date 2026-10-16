@@ -95,10 +95,6 @@ func TestClassifyJob(t *testing.T) {
 		t.Fatalf("unexpected image dependency: %+v", img)
 	}
 
-	// hf-token is referenced by both the init container and the main
-	// container's secretKeyRef -> a single deduped Secret dependency.
-	// team-bulk-secrets is referenced only via envFrom on the main
-	// container -> a second, distinct Secret dependency.
 	secrets := byKind[KindSecret]
 	if len(secrets) != 2 {
 		t.Fatalf("expected 2 distinct Secret dependencies (hf-token, team-bulk-secrets), got %d: %+v", len(secrets), secrets)
@@ -114,16 +110,12 @@ func TestClassifyJob(t *testing.T) {
 		t.Fatalf("expected team-bulk-secrets secret dependency, got %+v", secrets)
 	}
 
-	// LOG_LEVEL is a plain env literal ("debug") — portable, must never
-	// surface as a dependency of any kind, and its value must never leak
-	// into any Dependency field.
 	for _, d := range wd.Dependencies {
 		if strings.Contains(d.Name, "debug") || strings.Contains(d.Detail, "debug") {
 			t.Fatalf("plain env literal value leaked into classified dependency: %+v", d)
 		}
 	}
 
-	// No unsupported dependencies in this fixture.
 	if len(byKind[KindUnsupported]) != 0 {
 		t.Fatalf("expected no Unsupported dependencies, got %+v", byKind[KindUnsupported])
 	}
@@ -202,8 +194,6 @@ func TestClassifyRayJob(t *testing.T) {
 
 	byKind := indexByKind(wd.Dependencies)
 
-	// blob-training PVC is referenced by both head and worker templates
-	// -> one deduped dependency with both roles recorded.
 	pvc := mustOne(t, byKind[KindPersistentVolumeClaim])
 	if pvc.Name != "blob-training" {
 		t.Fatalf("unexpected PVC dependency: %+v", pvc)
@@ -212,7 +202,6 @@ func TestClassifyRayJob(t *testing.T) {
 		t.Fatalf("expected blob-training PVC to be referenced by both head and worker roles, got %+v", pvc.Roles)
 	}
 
-	// acr-secret imagePullSecret is only on the head template.
 	ips := mustOne(t, byKind[KindImagePullSecret])
 	if !ips.HasRole(RoleHead) || ips.HasRole(RoleWorker) {
 		t.Fatalf("expected acr-secret to be head-only, got roles %+v", ips.Roles)
@@ -351,12 +340,6 @@ func TestClassifySecretProviderClassAndUnknownCSI(t *testing.T) {
 }
 
 func TestClassifyNeverExposesRedactedSecretValues(t *testing.T) {
-	// This mirrors what a client dry-run redacted manifest looks like
-	// (internal/envspec.RedactSecretRefs replaces name/key with
-	// "<redacted>"). The classifier must still work mechanically — it only
-	// reads whatever name is present — but the redacted name must be
-	// clearly identifiable so a caller (internal/platform) can refuse to
-	// preflight-check it instead of reporting a false pass/fail.
 	redacted := strings.ReplaceAll(jobFixture, "name: hf-token", "name: <redacted>")
 	redacted = strings.ReplaceAll(redacted, "key: token", "key: <redacted>")
 	workloads, err := Classify([]byte(redacted))
@@ -389,9 +372,6 @@ func TestFlattenMergesAcrossWorkloads(t *testing.T) {
 	flat := Flatten(workloads)
 	byKind := indexByKind(flat)
 
-	// blob-training PVC is referenced by the Job (role=job) and by both
-	// the RayJob's head and worker templates -> merged into a single
-	// dependency with all three roles present.
 	pvc := mustOne(t, byKind[KindPersistentVolumeClaim])
 	for _, role := range []Role{RoleJob, RoleHead, RoleWorker} {
 		if !pvc.HasRole(role) {
@@ -399,7 +379,6 @@ func TestFlattenMergesAcrossWorkloads(t *testing.T) {
 		}
 	}
 
-	// hf-token is referenced by the Job and by both RayJob pod templates.
 	secrets := byKind[KindSecret]
 	var hfCount int
 	for _, s := range secrets {

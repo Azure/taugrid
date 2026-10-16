@@ -1,12 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package profile contains the shared workload-profile contract and the
-// render-time resource contract used by Tau manifest builders. It intentionally
-// does not load legacy profile catalogs.
 package profile
 
-// Profile is the in-memory resource contract consumed by renderers.
 type Profile struct {
 	Name                  string
 	Lane                  string

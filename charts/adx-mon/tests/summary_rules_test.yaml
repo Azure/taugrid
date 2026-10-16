@@ -8,7 +8,6 @@ templates:
 values:
   - ../values.yaml
 tests:
-  # --- gpu-utilization-hourly ---
   - it: renders gpu-utilization-hourly SummaryRule when enabled
     template: summary-rules/gpu-utilization-hourly.yaml
     set:
@@ -58,7 +57,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- gpu-cost-hourly ---
   - it: renders gpu-cost-hourly with fractional allocation cost calculation
     template: summary-rules/gpu-cost-hourly.yaml
     set:
@@ -163,7 +161,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- gpu-cost-daily ---
   - it: renders gpu-cost-daily with total_cost column
     template: summary-rules/gpu-cost-daily.yaml
     set:
@@ -204,7 +201,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- namespace-cost-monthly ---
   - it: renders namespace-cost-monthly with delayed cost aggregation
     template: summary-rules/namespace-cost-monthly.yaml
     set:
@@ -251,7 +247,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- node-resources-hourly ---
   - it: renders node-resources-hourly with CPU counter rate calculation
     template: summary-rules/node-resources-hourly.yaml
     asserts:
@@ -290,7 +285,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- global disable ---
   - it: does not render any summary rules when summaryRules.enabled is false
     set:
       summaryRules.enabled: false
@@ -298,7 +292,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- labels ---
   - it: renders correct labels on summary rules
     template: summary-rules/gpu-utilization-hourly.yaml
     asserts:
@@ -308,7 +301,6 @@ tests:
       - exists:
           path: metadata.labels["app.kubernetes.io/name"]
 
-  # --- criteria ---
   - it: sets criteria when configured
     template: summary-rules/gpu-utilization-hourly.yaml
     set:
@@ -320,7 +312,6 @@ tests:
           path: spec.criteria.region[0]
           value: eastus
 
-  # --- interval override ---
   - it: allows interval override
     template: summary-rules/gpu-utilization-hourly.yaml
     set:

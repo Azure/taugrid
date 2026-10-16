@@ -241,10 +241,6 @@ func policyFieldWasExplicit(o unresolvedRunOptions, field string, fallback bool)
 	return o.selectedWorkloadProfile == nil && fallback
 }
 
-// requestedProfileGPUs returns the explicit per-worker GPU count that
-// applySelectedWorkloadProfile would compare against the selected profile, so
-// implicit selection can skip profiles that would only be rejected afterwards.
-// It returns nil when the run leaves the GPU count to the profile.
 func requestedProfileGPUs(o unresolvedRunOptions) *int32 {
 	jobGPUs := func() *int32 {
 		if jobGPUsWereExplicit(o) && o.jobGPUs != nil {
@@ -268,7 +264,6 @@ func requestedProfileGPUs(o unresolvedRunOptions) *int32 {
 	}
 	engine, err := resolveDirectRunEngine(o)
 	if err != nil {
-		// applySelectedWorkloadProfile reports the engine error.
 		return nil
 	}
 	switch engine {

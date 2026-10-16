@@ -68,7 +68,6 @@ function Invoke-PlanCase {
     }
 }
 
-# These are checker unit tests, not evidence of a real provider migration plan.
 Invoke-PlanCase "unchanged moved grant" {}
 Invoke-PlanCase "unrelated changes still require review" {
     param($p)

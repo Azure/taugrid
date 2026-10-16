@@ -16,10 +16,8 @@ import yaml
 from tau import cli as tau_cli
 from tau.build import BuildArtifactError, BuildOverrides, load_artifact
 
-
 def _write_module(path: Path, source: str) -> None:
     path.write_text(textwrap.dedent(source).strip() + "\n")
-
 
 def _artifact_bytes(root: Path) -> dict[str, bytes]:
     return {
@@ -27,7 +25,6 @@ def _artifact_bytes(root: Path) -> dict[str, bytes]:
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
-
 
 def _build(
     module: Path,
@@ -43,7 +40,6 @@ def _build(
     )
     assert rc == 0
     return output
-
 
 def test_build_is_byte_stable_and_records_final_train_eval_intent(
     tmp_path: Path,
@@ -98,9 +94,6 @@ def test_build_is_byte_stable_and_records_final_train_eval_intent(
         )
         """,
     )
-    # Connected submission resolves placement from the authoritative
-    # TauCluster workload profile, so the cross-language golden must not carry
-    # the legacy policy.gpu_class selector.
     overrides = BuildOverrides(
         namespace="export-ns",
         data_pvc="durable-data",
@@ -180,7 +173,6 @@ def test_build_is_byte_stable_and_records_final_train_eval_intent(
     stderr = capsys.readouterr().err
     assert "tau.serve handles remain separate" in stderr
 
-
 def test_build_preserves_decorator_namespace_without_cli_override(tmp_path: Path) -> None:
     module = tmp_path / "workflow.py"
     _write_module(
@@ -205,7 +197,6 @@ def test_build_preserves_decorator_namespace_without_cli_override(tmp_path: Path
 
     assert record["namespace"] == "team-ns"
     assert config["policy"]["namespace"] == "team-ns"
-
 
 def test_build_cli_exports_source_secret_locators_without_values_and_replays(
     tmp_path: Path,
@@ -320,7 +311,6 @@ def test_build_cli_exports_source_secret_locators_without_values_and_replays(
     ]
     assert Path(replay["config"]["run"]["entrypoint"]).is_absolute()
 
-
 def test_eval_only_build_requires_explicit_checkpoint(tmp_path: Path) -> None:
     module = tmp_path / "eval_only.py"
     _write_module(
@@ -352,7 +342,6 @@ def test_eval_only_build_requires_explicit_checkpoint(tmp_path: Path) -> None:
     assert "after" not in record
     assert record["upstream_checkpoint"] == "/data/models/model.safetensors"
 
-
 def test_build_rejects_mismatched_eval_lineage(tmp_path: Path) -> None:
     module = tmp_path / "mismatch.py"
     _write_module(
@@ -376,7 +365,6 @@ def test_build_rejects_mismatched_eval_lineage(tmp_path: Path) -> None:
 
     with pytest.raises(BuildArtifactError, match="does not match"):
         _build(module, tmp_path / "generated")
-
 
 def test_serve_only_build_is_explicitly_unsupported(tmp_path: Path) -> None:
     module = tmp_path / "serve_only.py"

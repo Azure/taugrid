@@ -97,7 +97,7 @@ gpu-monitoring:
   # local to the GPU node. The exporter profile avoids the AKS host dcgmi path.
   dcgmHealth:
     source: exporter
-    exporterUrl: http://dcgm-exporter.dcgm-exporter.svc:9400/metrics
+    exporterUrl: http:
 %{ endif }
   gpuSkus:
     ${gpu_monitoring_sku_name}:

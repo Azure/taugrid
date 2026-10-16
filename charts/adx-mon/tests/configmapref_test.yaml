@@ -3,7 +3,6 @@ templates:
   - templates/alerter/deployment.yaml
   - templates/ingestor/statefulset.yaml
 tests:
-  # --- Alerter tests ---
   - it: "alerter uses configMapRef when adx.clusterUrl is empty"
     template: templates/alerter/deployment.yaml
     set:
@@ -63,7 +62,6 @@ tests:
           content: "--kusto-endpoint=Metrics="
           any: true
 
-  # --- Ingestor tests ---
   - it: "ingestor uses configMapRef when adx.clusterUrl is empty"
     template: templates/ingestor/statefulset.yaml
     set:

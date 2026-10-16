@@ -23,13 +23,11 @@ var kubernetesCoreConditionTypes = map[string]struct{}{
 	"NetworkUnavailable": {},
 }
 
-// Config is the top-level collector configuration.
 type Config struct {
 	ScrapeTargets []scraper.ScrapeTarget `yaml:"scrapeTargets"`
 	Rules         []rules.Rule           `yaml:"rules"`
 }
 
-// Load reads config from a YAML file.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -51,7 +49,6 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// RuleConditionTypes returns the condition types owned by the rule engine.
 func (c *Config) RuleConditionTypes() []string {
 	out := make([]string, 0, len(c.Rules))
 	for _, r := range c.Rules {
@@ -62,14 +59,6 @@ func (c *Config) RuleConditionTypes() []string {
 	return out
 }
 
-// validate fails closed on any configuration that would leave a required target
-// unmonitored or leave two writers contending for one Node condition.
-//
-// Hard failures are limited to explicit availability and coverage contracts.
-// Legacy shapes that a previous version accepted stay accepted and are
-// only warned about: refusing to start would turn an image bump into a
-// CrashLoopBackOff that freezes every condition this collector owns, which is
-// strictly worse than the degraded-but-running behavior it replaces.
 func (c *Config) validate() error {
 	owners := make(map[string]string, len(c.Rules)+len(c.ScrapeTargets))
 	coverageOwners := make(map[string]bool)
@@ -96,8 +85,6 @@ func (c *Config) validate() error {
 	for i, t := range c.ScrapeTargets {
 		declaresAvailability := t.Required || t.AvailabilityCondition != ""
 
-		// Never interpolate a raw target URL: it may carry userinfo or query
-		// credentials, and this runs before any scrape redaction.
 		if t.Name == "" {
 			if declaresAvailability {
 				return fmt.Errorf("scrapeTarget at index %d declares an availability contract but sets no name", i)
@@ -152,8 +139,6 @@ func validateAvailability(t scraper.ScrapeTarget) error {
 	if !t.Required {
 		return nil
 	}
-	// A required target's URL is published in a Node condition message and must
-	// be a plain HTTP(S) endpoint we can reason about.
 	u, err := url.Parse(t.URL)
 	if err != nil {
 		return fmt.Errorf("scrapeTarget %q has an unparseable url", t.Name)

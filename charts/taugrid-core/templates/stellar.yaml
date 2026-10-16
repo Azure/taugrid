@@ -1,9 +1,3 @@
-{{- /*
-Stellar uses tau-* object names, matching the portal. Its Service stays
-ClusterIP-only, and spec.selector is immutable, so renaming it needs its own
-rollout. Do not parameterize these names to match the sibling templates without
-that plan. See README.md "Upgrading existing releases".
-*/ -}}
 {{- if .Values.stellar.enabled }}
 {{- $stellar := .Values.stellar -}}
 {{- $systemNamespace := .Release.Namespace -}}

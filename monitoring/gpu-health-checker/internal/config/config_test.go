@@ -52,7 +52,6 @@ maxFailedGPUs: 1
 		t.Fatalf("load: %v", err)
 	}
 
-	// Check defaults are applied.
 	if cfg.CheckInterval.Seconds() != 60 {
 		t.Errorf("checkInterval=%v, want 60s", cfg.CheckInterval)
 	}
@@ -125,7 +124,6 @@ maxFailedGPUs: 0
 	_ = os.WriteFile(path, []byte(content), 0644)
 	cfg, _ := Load(path)
 
-	// Default critical codes include 48.
 	if !cfg.IsCriticalXID(48) {
 		t.Error("XID 48 should be critical")
 	}
@@ -144,7 +142,6 @@ maxFailedGPUs: 0
 	_ = os.WriteFile(path, []byte(content), 0644)
 	cfg, _ := Load(path)
 
-	// Default warning codes include 56.
 	if !cfg.IsWarningXID(56) {
 		t.Error("XID 56 should be warning")
 	}

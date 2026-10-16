@@ -188,8 +188,6 @@ func TestRunResultRefRejectsCrossKindNameAmbiguity(t *testing.T) {
 	}
 }
 
-// The declared checkpoint has to survive the annotation read, or run get has
-// nothing to key its diagnostic off.
 func TestRunResultRefCarriesDeclaredCheckpoint(t *testing.T) {
 	reader := &fakeRunResultReader{
 		responses: map[string]string{
@@ -208,13 +206,6 @@ func TestRunResultRefCarriesDeclaredCheckpoint(t *testing.T) {
 	}
 }
 
-// BUG-26's tail: the run reported success, wrote no artifact index, and
-// `tau run get` said nothing about the checkpoint the config had declared.
-// Naming the declaration is what connects an empty result back to a model that
-// was supposed to be servable.
-//
-// The wording deliberately points at the index rather than asserting it is
-// missing because the index lives outside the result path.
 func TestRunGetExplainsDeclaredButMissingCheckpoint(t *testing.T) {
 	cmd := &cobra.Command{}
 	var out bytes.Buffer
@@ -229,7 +220,6 @@ func TestRunGetExplainsDeclaredButMissingCheckpoint(t *testing.T) {
 			t.Errorf("output does not mention %q; got:\n%s", want, got)
 		}
 	}
-	// It must not claim the out-of-tree index was never written.
 	for _, banned := range []string{"no artifact index was written"} {
 		if strings.Contains(got, banned) {
 			t.Errorf("output asserts %q, which an empty listing does not establish:\n%s", banned, got)
@@ -237,8 +227,6 @@ func TestRunGetExplainsDeclaredButMissingCheckpoint(t *testing.T) {
 	}
 }
 
-// A run that declared nothing must keep main's plain listing: adding a
-// checkpoint note to every empty result would train researchers to ignore it.
 func TestRunGetKeepsPlainEmptyWhenNoCheckpointDeclared(t *testing.T) {
 	cmd := &cobra.Command{}
 	var out bytes.Buffer
@@ -256,8 +244,6 @@ func TestRunGetKeepsPlainEmptyWhenNoCheckpointDeclared(t *testing.T) {
 	}
 }
 
-// A declared checkpoint whose artifacts DID land must not be reported as
-// missing — the diagnostic keys off an empty listing, not off the declaration.
 func TestRunGetStaysQuietWhenArtifactsPresent(t *testing.T) {
 	cmd := &cobra.Command{}
 	var out bytes.Buffer

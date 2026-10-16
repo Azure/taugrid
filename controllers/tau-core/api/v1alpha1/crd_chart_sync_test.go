@@ -9,14 +9,6 @@ import (
 	"testing"
 )
 
-// The CRDs shipped by the tau-core-controller Helm chart are hand-maintained
-// byte-for-byte copies of the controller-gen output under config/crd/bases.
-// Nothing regenerates or syncs them, so a field added to the API types reaches
-// the chart only if someone remembers to copy the file. When they do not, the
-// installed CRD silently prunes the new field and the feature fails in a way
-// that looks like the API server ignoring valid input.
-//
-// This test is the missing sync check.
 func TestChartCRDsMatchGeneratedCRDs(t *testing.T) {
 	const (
 		generatedDir = "../../config/crd/bases"

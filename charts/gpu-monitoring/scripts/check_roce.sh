@@ -2,10 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks RoCE (RDMA over Converged Ethernet) link status.
-# Expects ROCE_DEVICES env var as a space-separated list of device:port pairs
-# that should be ACTIVE, e.g. "roceP2p1s0f0:1 rocep1s0f0:1"
-
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2

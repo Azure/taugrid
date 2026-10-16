@@ -1,4 +1,3 @@
-# CI test values — H200 (8-GPU SXM5, InfiniBand)
 gpuSkus:
   h200:
     instanceTypes:

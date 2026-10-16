@@ -18,12 +18,8 @@ import (
 )
 
 const (
-	// notReadyRequeue bounds recovery time while workspace dependencies are
-	// unavailable.
 	notReadyRequeue = 30 * time.Second
-	// readyRequeue lets the controller repair a deleted workspace LocalQueue
-	// without introducing a hard startup dependency on the Kueue CRDs.
-	readyRequeue = 5 * time.Minute
+	readyRequeue    = 5 * time.Minute
 )
 
 type TauWorkspaceReconciler struct {
@@ -122,9 +118,6 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// spec.queue is optional so a platform can declare the queue name once on
-	// the TauCluster singleton. Resolve it in memory before anything reads it;
-	// status.queue.localQueue then reports the effective queue to the CLI.
 	if strings.TrimSpace(workspace.Spec.Queue) == "" {
 		resolved, err := r.getDefaultWorkspaceQueue(ctx)
 		if err != nil {

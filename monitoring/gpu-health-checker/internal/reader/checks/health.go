@@ -13,7 +13,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// HealthReader checks DCGM health diagnostic results.
 type HealthReader struct{}
 
 func (r *HealthReader) Name() string { return "health" }
@@ -45,7 +44,6 @@ func (r *HealthReader) checkHealthDiagnostics(ctx context.Context, db *store.DB,
 		case "warning":
 			f.AddWarning(hc.GPU, fmt.Sprintf("GPU %d: %s %s — %s", hc.GPU, hc.System, hc.Status, hc.Message))
 		case "healthy":
-			// expected, no action
 		default:
 			slog.Warn("unexpected DCGM health status", "status", hc.Status, "gpu", hc.GPU, "system", hc.System)
 		}

@@ -82,8 +82,6 @@ spec:
           ports:
             - containerPort: 8080
               protocol: TCP
-          # Alerter has no /healthz or /readyz; /metrics is the only HTTP endpoint.
-          # Track upstream health endpoint as follow-up. See PR #134.
           livenessProbe:
             httpGet:
               path: /metrics

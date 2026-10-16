@@ -47,15 +47,6 @@ func (s *Store) EnsureExperimentIndex(ctx context.Context) (ExperimentIndexResul
 	}
 	defer tx.Rollback()
 
-	// Experiments are the named unit researchers compare runs within, and
-	// runs.experiment_id is the link. run_group is an arm/variant label on a
-	// run, NOT a level of its own -- a baseline arm and an ablation arm belong
-	// to one experiment, which is the whole point of comparing them.
-	//
-	// So the run_group backfill below is a fallback only: it gives an implicit
-	// experiment to runs that never got an explicit one, so that "every run
-	// belongs to an experiment" holds without collapsing arms into separate
-	// experiments.
 	rows, err := tx.QueryContext(ctx, `
 SELECT g.run_group_id, g.project, g.name, g.created_at, g.updated_at
 FROM run_groups g
@@ -210,10 +201,6 @@ func (s *Store) SearchExperiments(ctx context.Context, opts ExperimentSearchOpti
 }
 
 func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchOptions) ([]ExperimentRecord, error) {
-	// The CTE exposes the same (experiment_id, run_id) pairs the run_experiments
-	// join table used to, so every clause below is unchanged; only the source
-	// moved to the direct runs.experiment_id column. Unassigned runs carry ''
-	// and must not surface as an experiment.
 	with := `WITH workspace_run_experiments AS (
   SELECT re.experiment_id, re.run_id
   FROM runs re
@@ -231,7 +218,6 @@ func (s *Store) experimentCandidates(ctx context.Context, opts ExperimentSearchO
   ))
 )
 `
-	// Placeholder order: workspace, tag key, workspace, tag key, workspace.
 	clauses := []string{"(? = '' OR EXISTS (SELECT 1 FROM workspace_run_experiments scoped_re WHERE scoped_re.experiment_id = e.experiment_id))"}
 	args := []any{opts.Workspace, exptelemetry.TauWorkspaceTag, opts.Workspace, exptelemetry.TauWorkspaceTag, opts.Workspace}
 	if opts.Project != "" {
@@ -356,9 +342,6 @@ func (s *Store) experimentSummary(ctx context.Context, experiment ExperimentReco
 	if opts.Workspace != "" {
 		scoped := runs[:0]
 		for _, run := range runs {
-			// Untagged runs belong to the served workspace: this store is this
-			// deployment's own volume. The Kusto filter deliberately does the
-			// opposite, because TauExpMetrics is shared fleet-wide.
 			if runWorkspace := tags[run.RunID][exptelemetry.TauWorkspaceTag]; runWorkspace == opts.Workspace || runWorkspace == "" {
 				scoped = append(scoped, run)
 			}
@@ -434,9 +417,6 @@ func ensureRunExperimentIndexesTx(ctx context.Context, tx *sql.Tx, run RunRecord
 		experimentID = strings.TrimSpace(run.ExperimentID)
 	}
 
-	// The run group is an arm inside an experiment (baseline vs ablation), not
-	// an experiment of its own. Only fall back to it when the run names no
-	// experiment at all, so an unparented run still shows up somewhere.
 	if experimentID == "" {
 		if run.RunGroupID == "" {
 			return 0, nil
@@ -472,8 +452,6 @@ func ensureRunExperimentIndexesTx(ctx context.Context, tx *sql.Tx, run RunRecord
 	if err := upsertExperimentTx(ctx, tx, exp); err != nil {
 		return 0, err
 	}
-	// An explicitly named experiment wins over whatever a fallback may have
-	// assigned earlier, so this overwrites rather than claiming only-if-unset.
 	if err := setRunExperimentTx(ctx, tx, experimentID, run.RunID); err != nil {
 		return 0, err
 	}
@@ -535,10 +513,6 @@ ON CONFLICT(experiment_id) DO UPDATE SET
 	return err
 }
 
-// ensureRunGroupExperimentAssignmentsTx links runs that have no experiment yet
-// to the implicit experiment named after their run group. Runs already linked
-// to a named experiment are left alone, so arms of one experiment are never
-// split apart.
 func ensureRunGroupExperimentAssignmentsTx(ctx context.Context, tx *sql.Tx) (int, error) {
 	result, err := tx.ExecContext(ctx, `
 UPDATE runs SET experiment_id = run_group_id
@@ -550,9 +524,6 @@ WHERE experiment_id = '' AND coalesce(run_group_id, '') != ''`)
 	return int(rows), err
 }
 
-// setRunExperimentTx points a run at its experiment. It is an UPDATE rather
-// than an insert into a join table because a run belongs to exactly one
-// experiment; the previous M:N table let a run appear under several.
 func setRunExperimentTx(ctx context.Context, tx *sql.Tx, experimentID, runID string) error {
 	if err := validateID("experiment", experimentID); err != nil {
 		return err
@@ -564,8 +535,6 @@ func setRunExperimentTx(ctx context.Context, tx *sql.Tx, experimentID, runID str
 	return err
 }
 
-// assignRunExperimentIfUnsetTx claims a run for an experiment only when it has
-// none, so an explicit assignment is never overwritten by a fallback.
 func assignRunExperimentIfUnsetTx(ctx context.Context, tx *sql.Tx, experimentID, runID string) (bool, error) {
 	if err := validateID("experiment", experimentID); err != nil {
 		return false, err
@@ -598,8 +567,6 @@ func validateExperiment(exp ExperimentRecord) error {
 	return nil
 }
 
-// firstNonEmptyExperimentName prefers a group's human-readable name and falls
-// back to its id so an experiment is never nameless.
 func firstNonEmptyExperimentName(name, id string) string {
 	if strings.TrimSpace(name) != "" {
 		return name

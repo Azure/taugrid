@@ -13,7 +13,6 @@ func TestQuantityInt64(t *testing.T) {
 		raw  string
 		want int64
 	}{
-		// Plain integers (chart-authored values before K8s normalizes them).
 		{"0", 0},
 		{"1", 1},
 		{"8", 8},
@@ -21,34 +20,27 @@ func TestQuantityInt64(t *testing.T) {
 		{"1000", 1000},
 		{"100000", 100000},
 
-		// SI suffixes — Kubernetes normalizes 1000→"1k", 100000→"100k".
-		// This is the exact failure mode of the original parser.
 		{"1k", 1000},
 		{"100k", 100000},
 		{"1M", 1000000},
 		{"1G", 1000000000},
 
-		// Binary suffixes — used for memory quotas.
 		{"100Ki", 102400},
 		{"900Mi", 943718400},
 		{"900Gi", 966367641600},
 		{"100Ti", 109951162777600},
 
-		// Millicores — "500m" = 0.5 cores, rounds up to 1.
 		{"500m", 1},
 		{"100m", 1},
 		{"1500m", 2},
 		{"2000m", 2},
 
-		// Whitespace tolerance.
 		{" 8 ", 8},
 		{" 1k ", 1000},
 
-		// Empty / missing.
 		{"", 0},
 		{"  ", 0},
 
-		// Invalid — returns 0 (unknown quantity, not "quota is zero").
 		{"abc", 0},
 	} {
 		t.Run(tc.raw, func(t *testing.T) {
@@ -70,8 +62,6 @@ func TestQuantityUnmarshalJSON_Number(t *testing.T) {
 	}
 }
 
-// Reproduce the exact BUG-17 scenario: chart writes "1000", Kubernetes
-// normalizes to "1k", CLI reads it back via JSON unmarshal.
 func TestQuantityBug17_KubernetesNormalizedGPUQuota(t *testing.T) {
 	raw := `{
 		"spec": {

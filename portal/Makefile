@@ -12,8 +12,6 @@ VERSION_PKG := github.com/Azure/taugrid/core/version
 LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE)
 BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 
-# Pinned so a staticcheck release cannot fail CI on an unrelated change. Bump it
-# deliberately, in a PR that also fixes whatever the new version finds.
 STATICCHECK_VERSION := v0.7.0
 
 frontend/node_modules/.package-lock.json: frontend/package.json frontend/package-lock.json
@@ -36,7 +34,6 @@ install: frontend-build
 
 test:
 	go test ./...
-
 
 lint: frontend-typecheck
 	go vet ./...

@@ -1,7 +1,4 @@
 groups:
-  # ============================================================
-  # Immediate alerts — hardware failure or imminent failure
-  # ============================================================
   - name: immediate
     rules:
       - alert: GPUDoubleBitECCError
@@ -54,9 +51,6 @@ groups:
           summary: "Grace CPU uncorrectable memory ECC error on {{ $labels.instance }}"
           description: "node_memory_ECC_uncorrectable_total is {{ $value }}"
 
-  # ============================================================
-  # Degradation alerts — trending toward failure
-  # ============================================================
   - name: degradation
     rules:
       - alert: GPUCorrectableECCSlopeIncreasing

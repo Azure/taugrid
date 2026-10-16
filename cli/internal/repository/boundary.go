@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package repository resolves filesystem and Git worktree boundaries used by
-// repository-local Tau configuration.
 package repository
 
 import (
@@ -15,8 +13,6 @@ import (
 	"strings"
 )
 
-// Boundary is the nearest Git worktree containing StartDir. When Git is false,
-// Root is StartDir so automatic discovery cannot inherit files from a parent.
 type Boundary struct {
 	LexicalRoot     string
 	Root            string
@@ -25,7 +21,6 @@ type Boundary struct {
 	Git             bool
 }
 
-// Resolve returns the repository boundary for an existing file or directory.
 func Resolve(start string) (Boundary, error) {
 	if strings.TrimSpace(start) == "" {
 		var err error
@@ -98,7 +93,6 @@ type GitlinkIndex struct {
 	paths []string
 }
 
-// LoadGitlinks snapshots indexed submodule paths once for a repository.
 func LoadGitlinks(root string) (GitlinkIndex, error) {
 	cmd := gitCommand(root, "ls-files", "--stage", "-z")
 	output, err := cmd.Output()
@@ -123,7 +117,6 @@ func LoadGitlinks(root string) (GitlinkIndex, error) {
 	return index, nil
 }
 
-// AtOrAbove returns the indexed submodule path containing relativePath.
 func (index GitlinkIndex) AtOrAbove(relativePath string) (string, bool, error) {
 	relativePath = path.Clean(filepath.ToSlash(relativePath))
 	for _, indexedPath := range index.paths {
@@ -155,7 +148,6 @@ func (index GitlinkIndex) AtOrAbove(relativePath string) (string, bool, error) {
 	return "", false, nil
 }
 
-// GitlinkAtOrAbove is a convenience wrapper for one-off callers.
 func GitlinkAtOrAbove(root, relativePath string) (string, bool, error) {
 	index, err := LoadGitlinks(root)
 	if err != nil {
@@ -164,8 +156,6 @@ func GitlinkAtOrAbove(root, relativePath string) (string, bool, error) {
 	return index.AtOrAbove(relativePath)
 }
 
-// PathsOverlap reports whether two existing directories are the same directory
-// or one is a filesystem ancestor of the other.
 func PathsOverlap(first, second string) (bool, error) {
 	firstInfo, err := os.Stat(first)
 	if err != nil {
@@ -229,7 +219,6 @@ func findLexicalRoot(startDir, realRoot string) (string, error) {
 	return "", fmt.Errorf("resolve lexical Git worktree boundary from %s: no ancestor resolves to %s", startDir, realRoot)
 }
 
-// SamePath reports whether two existing paths identify the same filesystem object.
 func SamePath(first, second string) (bool, error) {
 	firstInfo, err := os.Stat(first)
 	if err != nil {
@@ -242,8 +231,6 @@ func SamePath(first, second string) (bool, error) {
 	return os.SameFile(firstInfo, secondInfo), nil
 }
 
-// PathContains reports whether root is the same directory as candidate or a
-// filesystem ancestor of candidate.
 func PathContains(root, candidate string) (bool, error) {
 	rootInfo, err := os.Stat(root)
 	if err != nil {
@@ -252,8 +239,6 @@ func PathContains(root, candidate string) (bool, error) {
 	return fileAncestorContains(rootInfo, candidate)
 }
 
-// ExistingPath returns an absolute lexical path, its symlink-resolved path, and
-// stat information for an existing path.
 func ExistingPath(path string) (string, string, os.FileInfo, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
@@ -275,7 +260,6 @@ func ExistingPath(path string) (string, string, os.FileInfo, error) {
 	return absolute, filepath.Clean(realPath), info, nil
 }
 
-// Contains reports whether candidate is root or a descendant of root.
 func Contains(root, candidate string) bool {
 	relative, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
 	if err != nil || filepath.IsAbs(relative) {

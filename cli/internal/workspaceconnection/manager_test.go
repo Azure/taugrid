@@ -1849,8 +1849,6 @@ func TestManagerRejectsLiveContractChangeNoninteractively(t *testing.T) {
 	}
 }
 
-// blockingVerifier models kubelogin waiting on a sign-in prompt that will never
-// be answered because no terminal is attached.
 type blockingVerifier struct{ calls int }
 
 func (b *blockingVerifier) Verify(ctx context.Context, _ Descriptor, _ string) (Verification, error) {
@@ -1859,8 +1857,6 @@ func (b *blockingVerifier) Verify(ctx context.Context, _ Descriptor, _ string) (
 	return Verification{}, ctx.Err()
 }
 
-// Revalidation only reads the TauWorkspace and runs `auth can-i`; it asks the
-// user nothing, so an automated caller with no TTY must still get through.
 func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
@@ -1907,8 +1903,6 @@ func TestManagerRevalidatesStaleConnectionWithoutTTY(t *testing.T) {
 	}
 }
 
-// The kubeconfig is kubelogin exec auth, so revalidation can block on a sign-in
-// prompt. With no terminal that would hang forever; it must fail fast instead.
 func TestManagerBoundsNonInteractiveRevalidation(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
@@ -1952,7 +1946,6 @@ func TestManagerBoundsNonInteractiveRevalidation(t *testing.T) {
 	}
 }
 
-// An interactive caller must stay unbounded so a real sign-in can complete.
 func TestManagerDoesNotBoundInteractiveRevalidation(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
@@ -1992,14 +1985,11 @@ func TestManagerDoesNotBoundInteractiveRevalidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cancellation error, got nil")
 	}
-	// It stopped because the caller cancelled, not because a timeout fired.
 	if errors.Is(err, ErrInteractiveRequired) {
 		t.Fatalf("interactive revalidation must not be bounded by the timeout: %v", err)
 	}
 }
 
-// seedConnection establishes one cached connection interactively so skew tests
-// start from a file this binary actually wrote.
 func seedConnection(t *testing.T, root, configDir string, now time.Time) {
 	t.Helper()
 	seed := Manager{
@@ -2020,8 +2010,6 @@ func seedConnection(t *testing.T, root, configDir string, now time.Time) {
 	}
 }
 
-// Approval must not be mistaken for a terminal: kubelogin can still block on a
-// stale credential, so revalidation stays bounded even when stdin has an answer.
 func TestManagerPipedApprovalStillBoundsRevalidation(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
@@ -2128,10 +2116,6 @@ func TestManagerEnsureDiscoveryUsesExactDescriptor(t *testing.T) {
 	}
 }
 
-// Device code is the supported non-TTY sign-in flow: it prints a code and waits
-// for a human to finish in a browser, which routinely outlives any short
-// deadline. Bounding credential acquisition would cancel exactly the path this
-// command advertises, so it must stay on the caller context.
 func TestManagerDoesNotBoundHumanPacedSignInAfterTrust(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	credentials := &slowCredentialProvider{delay: 80 * time.Millisecond, raw: []byte("apiVersion: v1\nkind: Config\n")}
@@ -2156,8 +2140,6 @@ func TestManagerDoesNotBoundHumanPacedSignInAfterTrust(t *testing.T) {
 	}
 }
 
-// An interactive caller must keep the unbounded context: a human can actually
-// answer the sign-in prompt, and a 30s cap would abort them mid-browser.
 func TestManagerDoesNotBoundInteractiveColdStart(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	slow := &slowCredentialProvider{delay: 80 * time.Millisecond, raw: []byte("apiVersion: v1\nkind: Config\n")}
@@ -2182,8 +2164,6 @@ func TestManagerDoesNotBoundInteractiveColdStart(t *testing.T) {
 	}
 }
 
-// slowCredentialProvider outlives the non-interactive timeout without blocking
-// forever, so it can prove the interactive path is not bounded.
 type slowCredentialProvider struct {
 	delay time.Duration
 	raw   []byte
@@ -2198,9 +2178,6 @@ func (s *slowCredentialProvider) UserKubeconfig(ctx context.Context, _ Descripto
 	}
 }
 
-// BlobFuse and other fixed-mode filesystems reject chmod on a file this process
-// just created. os.CreateTemp already made it 0600, so that must not abort the
-// connection, exactly as fileutil.WriteFileAtomic treats it.
 func TestWriteKubeconfigCandidateToleratesUnsupportedChmod(t *testing.T) {
 	original := candidateChmod
 	t.Cleanup(func() { candidateChmod = original })

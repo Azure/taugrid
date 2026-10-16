@@ -377,7 +377,6 @@ func TestWorkspaceScopedHistorySurvivesLiveObjectDeletion(t *testing.T) {
 		if _, err := reconciler.Reconcile(context.Background(), marker.namespace); err != nil {
 			t.Fatalf("record %s: %v", marker.name, err)
 		}
-		// A second relist before deletion must not append duplicate transitions.
 		before := len(store.records)
 		if _, err := reconciler.Reconcile(context.Background(), marker.namespace); err != nil {
 			t.Fatalf("relist %s: %v", marker.name, err)
@@ -431,8 +430,6 @@ func TestExactDuplicateSuppressionAndOutOfOrderObservations(t *testing.T) {
 	if len(writer.records) != firstCount {
 		t.Fatalf("duplicate records emitted: %d -> %d", firstCount, len(writer.records))
 	}
-	// An older queued observation can arrive after terminal status. It is safe to
-	// append because downstream readers order observations by observed_at/state.
 	source.jobs[0].Failed = 0
 	source.jobs[0].Conditions = nil
 	source.jobs[0].Suspended = true

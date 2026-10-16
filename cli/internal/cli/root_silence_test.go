@@ -9,10 +9,6 @@ import (
 	"testing"
 )
 
-// TestRootSilencesCobraErrorPrinting asserts the root does not let cobra print
-// the error itself. main() prints `error: %v` and exits 1; without
-// SilenceErrors cobra prints its own `Error: %v` first and every failure is
-// reported twice.
 func TestRootSilencesCobraErrorPrinting(t *testing.T) {
 	root := NewRoot()
 	if !root.SilenceErrors {

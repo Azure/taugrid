@@ -160,7 +160,6 @@ function ExperimentSearch() {
   }, [state.project, state.experiment]);
   const query = useExperimentsQuery({
     q: state.q,
-    // Keep discovery stable when selecting a result whose canonical project was not part of the search.
     project: queryProject,
     cursor: state.experiment ? '' : state.cursor,
   });

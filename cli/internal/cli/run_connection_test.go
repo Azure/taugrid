@@ -469,13 +469,6 @@ func TestExplicitContextBypassesDescriptor(t *testing.T) {
 	}
 }
 
-// An ambient TAU_CONTEXT names the target cluster for the run path exactly as
-// a typed --context does, so it must reach the dispatch options as explicit.
-//
-// A checked-in descriptor must not be silently overridden by a forgotten shell
-// variable, but treating an ambient context as unset lets the connection layer
-// take over and redirect KUBECONFIG to a cached cluster. The conflict is handled
-// by checkDescriptorContextConflict instead of either side winning quietly.
 func TestAmbientContextIsAnExplicitRunTarget(t *testing.T) {
 	t.Setenv("TAU_CONTEXT", "ambient-admin-context")
 	command := &cobra.Command{}

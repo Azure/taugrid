@@ -22,18 +22,12 @@ func runCluster(t *testing.T, args ...string) (string, error) {
 	return strings.TrimSpace(out.String() + stderr.String()), err
 }
 
-// releaseFixture is the state the read-only Helm verbs report for a release
-// that is already installed. Zero values mean "that read fails", which is how
-// tests exercise the degradation paths.
 type releaseFixture struct {
 	Release  string
 	Values   string
 	Metadata string
 }
 
-// installFakeHelmWithRelease answers the read-only Helm verbs from a fixture so
-// tests can drive the drain path, and passes every mutating verb to fake. The
-// split keeps arg assertions on `upgrade`/`uninstall` free of preflight noise.
 func installFakeHelmWithRelease(t *testing.T, fixture releaseFixture, fake helmCommandRunner) {
 	t.Helper()
 	original := runHelmCommand

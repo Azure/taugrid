@@ -32,13 +32,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-try:  # Lightning stays optional for lightweight Tau SDK installs.
+try:
     from lightning.pytorch.loggers import Logger as _LightningLogger
 except ModuleNotFoundError:  # pragma: no cover - exercised when Lightning is absent.
     _LightningLogger = object
 
 _ACTIVE_RUN: "Run | None" = None
-
 
 @dataclass(frozen=True)
 class Image:
@@ -46,7 +45,6 @@ class Image:
 
     path: str | os.PathLike[str]
     caption: str | None = None
-
 
 @dataclass(frozen=True)
 class Html:
@@ -58,7 +56,6 @@ class Html:
     content: str | os.PathLike[str]
     caption: str | None = None
 
-
 @dataclass(frozen=True)
 class Table:
     """JSON table artifact logged to Stellar."""
@@ -66,7 +63,6 @@ class Table:
     rows: Iterable[Mapping[str, Any]]
     columns: Iterable[str] | None = None
     caption: str | None = None
-
 
 @dataclass
 class _Artifact:
@@ -84,7 +80,6 @@ class _Artifact:
     source_dataset_name: str | None = None
     source_dataset_version: str | None = None
     source_dataset_digest: str | None = None
-
 
 class Run:
     """A W&B-shaped run handle backed by Tau/Stellar files."""
@@ -105,28 +100,20 @@ class Run:
     ):
         self.project = _required("project", project)
         self.name = _required("name", name)
-        # Smart group default: TAU_GROUP env > JOB_NAME prefix > "default"
         if group is None:
             job_prefix = os.environ.get("JOB_NAME", "").split("-")[0] if os.environ.get("JOB_NAME") else None
             group = os.environ.get("TAU_GROUP") or job_prefix or "default"
         self.group = group or "default"
-        # Stellar's hierarchy is project -> experiment -> run.
         self.experiment = experiment
         self.experiment_id = (
             experiment_id
             or os.environ.get("TAU_EXPERIMENT_ID")
             or os.environ.get("TAU_EXPERIMENT")
-            # Prefer the experiment name over the project: passing
-            # experiment="lr-sweep" alone should create an experiment called
-            # lr-sweep rather than collapsing every run into one experiment
-            # named after the project.
             or (_safe_name(self.experiment) if self.experiment else None)
             or project
         )
         self.store = Path(store).expanduser() if store else None
         self.owner = owner
-        # Resolved lazily in sync(): constructing a Run must not require the
-        # CLI to be installed, since local logging works entirely offline.
         self.tau_binary = tau_binary
         self.run_dir_name = _safe_name(self.name)
         base = Path(dir or os.environ.get("TAU_STELLAR_DIR", ".tau/stellar")).expanduser()
@@ -277,8 +264,6 @@ class Run:
             raise ValueError("stellar Run.sync requires store=...")
         self.store.mkdir(parents=True, exist_ok=True)
         if self.experiment_id:
-            # Also gated on the id, not the display name: `init` bootstraps the
-            # store, so skipping it leaves `track` with no manifest.json at all.
             init_args = [
                 "experiment", "--store", str(self.store), "init", self.experiment_id,
                 "--project", self.project,
@@ -308,11 +293,6 @@ class Run:
         track_args.extend(["--runtime", self.runtime, "--dependencies", self.dependencies, "--log-uri", self.log_uri])
         self._run_cli(track_args + artifact_args)
         if self.experiment_id:
-            # `track` carries no experiment flag, so the link is made here.
-            # Gate on the id, not the optional display name: experiment_id is
-            # independently settable (argument or TAU_EXPERIMENT_ID), and a run
-            # with no history import never reaches the `import jsonl` call
-            # below that would otherwise carry it.
             self._run_cli([
                 "experiment", "--store", str(self.store), "experiments", "tag-run",
                 self.name,
@@ -405,7 +385,6 @@ class Run:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("stellar run is already finished")
-
 
 class StellarLogger(_LightningLogger):
     """PyTorch Lightning logger that writes to a local Stellar run packet."""
@@ -505,7 +484,6 @@ class StellarLogger(_LightningLogger):
         self._warned_metric_keys.add(key)
         warnings.warn(message, RuntimeWarning, stacklevel=3)
 
-
 def init(**kwargs: Any) -> Run:
     """Create and set the active Stellar run."""
 
@@ -515,10 +493,8 @@ def init(**kwargs: Any) -> Run:
     _ACTIVE_RUN = Run(**kwargs)
     return _ACTIVE_RUN
 
-
 def log(data: Mapping[str, Any], step: int | None = None) -> None:
     _current().log(data, step=step)
-
 
 def log_artifact(
     name: str,
@@ -532,36 +508,29 @@ def log_artifact(
 ) -> Path:
     return _current().log_artifact(name, value, artifact_type=artifact_type, step=step, direction=direction, alias=alias, external_ref=external_ref)
 
-
 def use_artifact(ref: str, *, name: str | None = None) -> Path:
     return _current().use_artifact(ref, name=name)
-
 
 def finish(*, sync: bool = False) -> None:
     global _ACTIVE_RUN
     _current().finish(sync=sync)
     _ACTIVE_RUN = None
 
-
 def _current() -> Run:
     if _ACTIVE_RUN is None:
         raise RuntimeError("call tau.stellar.init(...) before logging")
     return _ACTIVE_RUN
-
 
 def _required(name: str, value: str | None) -> str:
     if not value:
         raise ValueError(f"stellar {name} is required")
     return value
 
-
 def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
 
-
 def _json_line(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, allow_nan=False) + "\n"
-
 
 def _metric_value(key: str, value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -574,10 +543,8 @@ def _metric_value(key: str, value: Any) -> float:
         raise ValueError(f"stellar.log metric {key!r} must be finite")
     return metric
 
-
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-") or "artifact"
-
 
 def _artifact_kind(name: str, value: Any) -> str:
     if isinstance(value, Table):
@@ -606,13 +573,11 @@ def _artifact_kind(name: str, value: Any) -> str:
         return "checkpoint"
     return "artifact"
 
-
 def _artifact_safe_name(name: str, step: int | None) -> str:
     safe = _safe_name(name)
     if step is None:
         return safe
     return f"{safe}-step-{int(step)}"
-
 
 def _artifact_caption(value: Any) -> str | None:
     caption = getattr(value, "caption", None)
@@ -620,7 +585,6 @@ def _artifact_caption(value: Any) -> str | None:
         return None
     caption = str(caption).strip()
     return caption or None
-
 
 def _artifact_cli_spec(artifact: _Artifact, uri: str) -> str:
     payload = {
@@ -643,7 +607,6 @@ def _artifact_cli_spec(artifact: _Artifact, uri: str) -> str:
             payload[key] = value
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-
 def _sync_idempotency_key(kind: str, run_dir_name: str, parts: Iterable[str]) -> str:
     digest = hashlib.sha256()
     for part in parts:
@@ -651,11 +614,9 @@ def _sync_idempotency_key(kind: str, run_dir_name: str, parts: Iterable[str]) ->
         digest.update(b"\0")
     return f"stellar-{run_dir_name}-{kind}-{digest.hexdigest()[:12]}"
 
-
 def _path_fingerprint(path: Path) -> str:
     stat = path.stat()
     return f"{path.name}:{stat.st_size}:{stat.st_mtime_ns}"
-
 
 def _artifact_direction(value: str) -> str:
     direction = (value or "output").strip().lower()
@@ -663,13 +624,11 @@ def _artifact_direction(value: str) -> str:
         raise ValueError("stellar artifact direction must be 'input' or 'output'")
     return direction
 
-
 def _optional_text(value: str | None) -> str | None:
     if value is None:
         return None
     value = str(value).strip()
     return value or None
-
 
 def _resolve_store_artifact(store: Path, ref: str) -> dict[str, str]:
     ref = ref.strip()
@@ -700,7 +659,6 @@ LIMIT 1
         raise FileNotFoundError(f"artifact {ref!r} was not found in {store}")
     return {key: str(row[key]) for key in row.keys()}
 
-
 def _runtime_metadata() -> str:
     payload = {
         "python": sys.version.split()[0],
@@ -709,7 +667,6 @@ def _runtime_metadata() -> str:
         "executable": sys.executable,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
-
 
 def _dependency_metadata() -> str:
     packages = []
@@ -722,7 +679,6 @@ def _dependency_metadata() -> str:
             break
     return json.dumps({"packages": packages}, sort_keys=True, separators=(",", ":"))
 
-
 def _config_mapping(config: Mapping[str, Any] | Namespace) -> dict[str, Any]:
     if isinstance(config, Namespace):
         raw = vars(config)
@@ -731,7 +687,6 @@ def _config_mapping(config: Mapping[str, Any] | Namespace) -> dict[str, Any]:
     else:
         raise TypeError(f"stellar config must be a mapping or argparse.Namespace, got {type(config).__name__}")
     return {str(key): _jsonable(value) for key, value in raw.items()}
-
 
 def _jsonable(value: Any) -> Any:
     if isinstance(value, (str, int, bool)) or value is None:
@@ -750,7 +705,6 @@ def _jsonable(value: Any) -> Any:
         return _config_mapping(value)
     return str(value)
 
-
 def _logger_metric_value(value: Any) -> float | None:
     value = _tensor_scalar_value(value)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -759,7 +713,6 @@ def _logger_metric_value(value: Any) -> float | None:
     if not math.isfinite(metric):
         return None
     return metric
-
 
 def _tensor_scalar_value(value: Any) -> Any:
     for method in ("detach", "cpu"):
@@ -773,7 +726,6 @@ def _tensor_scalar_value(value: Any) -> Any:
         except (TypeError, ValueError, RuntimeError):
             return value
     return value
-
 
 def _checkpoint_paths(checkpoint_callback: Any) -> list[tuple[str, Path]]:
     candidates: list[tuple[str, Any]] = [
@@ -795,6 +747,5 @@ def _checkpoint_paths(checkpoint_callback: Any) -> list[tuple[str, Path]]:
         seen.add(path)
         paths.append((label, path))
     return paths
-
 
 __all__ = ["Html", "Image", "Run", "StellarLogger", "Table", "finish", "init", "log", "log_artifact", "use_artifact"]

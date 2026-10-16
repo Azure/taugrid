@@ -14,19 +14,15 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// ClocksReader checks GPU clock throttle reasons.
 type ClocksReader struct{}
 
 func (r *ClocksReader) Name() string { return "clocks" }
 
-// Problematic throttle reason bits from the DCGM_FI_DEV_CLOCKS_EVENT_REASONS
-// bitmask. See DCGM documentation "Clock Throttle Reasons" and
-// nvml.h ClocksEventReasons constants.
 const (
-	throttleHWSlowdown   uint64 = 0x0000000000000008 // nvmlClocksEventReasonHwSlowdown
-	throttleHWThermal    uint64 = 0x0000000000000040 // nvmlClocksEventReasonHwThermalSlowdown
-	throttleHWPowerBrake uint64 = 0x0000000000000080 // nvmlClocksEventReasonHwPowerBrakeSlowdown
-	throttleSWThermal    uint64 = 0x0000000000000020 // nvmlClocksEventReasonSwThermalSlowdown
+	throttleHWSlowdown   uint64 = 0x0000000000000008
+	throttleHWThermal    uint64 = 0x0000000000000040
+	throttleHWPowerBrake uint64 = 0x0000000000000080
+	throttleSWThermal    uint64 = 0x0000000000000020
 )
 
 var throttleReasonNames = map[uint64]string{

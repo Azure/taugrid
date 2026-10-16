@@ -32,19 +32,15 @@ from tau.build import (
 )
 from tau.entrypoints import load_staged_module
 
-# Pulled in to share the binary-discovery + storage-path logic with the
-# decorator's submit code path.
 from tau.workloads import _find_portal_binary, _find_tau_binary  # type: ignore[attr-defined]
 
 EXPECTED_TAU_CLI_VERSION = "v" + TAU_VERSION
-
 
 def _load_module(path: Path):
     try:
         return load_staged_module(path, module_name="__tau_inspect__")
     except (FileNotFoundError, ImportError, ValueError) as exc:
         raise RuntimeError(f"cannot import {path}: {exc}") from exc
-
 
 def _find_handles_of_kind(module, kind: str):
     """Return [(attr_name, handle), ...] for handles of the given kind.
@@ -65,11 +61,9 @@ def _find_handles_of_kind(module, kind: str):
         handles.append((name, obj))
     return handles
 
-
 def _find_handles(module):
     """Combined train + eval handle list — used by `inspect`."""
     return _find_handles_of_kind(module, "train") + _find_handles_of_kind(module, "eval")
-
 
 def _checkpoint_artifact_for_handle(train_handle) -> str:
     manifest = train_handle.manifest()
@@ -84,7 +78,6 @@ def _checkpoint_artifact_for_handle(train_handle) -> str:
         subject="tau python submit: train manifest artifacts.checkpoint",
         error_type=RuntimeError,
     )
-
 
 def _resolve_upstream_checkpoint_path(train_handle, namespace: str, kube_context: Optional[str]) -> str:
     """Compute the pod-side absolute path of the train run's checkpoint artifact.
@@ -109,7 +102,6 @@ def _resolve_upstream_checkpoint_path(train_handle, namespace: str, kube_context
         / artifact
     ).as_posix()
 
-
 def _resource_name_for_handle(handle) -> str:
     extra_manifest = getattr(handle, "_extra_manifest", {}) or {}
     resource_naming = extra_manifest.get("resource_naming")
@@ -120,7 +112,6 @@ def _resource_name_for_handle(handle) -> str:
         prefix = "tau"
     return f"{prefix}-{handle._params.name}"
 
-
 def _kubectl_base(kube_context: Optional[str], namespace: str) -> list[str]:
     if not shutil.which("kubectl"):
         raise RuntimeError("tau python submit: kubectl not found on PATH")
@@ -128,7 +119,6 @@ def _kubectl_base(kube_context: Optional[str], namespace: str) -> list[str]:
     if kube_context:
         cmd += ["--context", kube_context]
     return cmd + ["-n", namespace]
-
 
 def _wait_for_rayjob_success(
     rayjob_name: str,
@@ -174,7 +164,6 @@ def _wait_for_rayjob_success(
         f"rayjob/{rayjob_name} to reach SUCCEEDED (last status: {last_status or '<none>'})"
     )
 
-
 def _delete_completed_rayjob(
     rayjob_name: str,
     namespace: str,
@@ -203,7 +192,6 @@ def _delete_completed_rayjob(
             + (": " + detail if detail else "")
         )
 
-
 def _parse_duration(s: str) -> float:
     """Mini Go-style duration parser: accepts 30s, 5m, 2h, 24h, 90m."""
     s = s.strip()
@@ -219,7 +207,6 @@ def _parse_duration(s: str) -> float:
         return float(s)
     except ValueError as e:
         raise ValueError(f"Tau Python SDK: invalid duration {s!r}; expected e.g. 30s, 5m, 2h") from e
-
 
 def _doctor(*, kube_context: Optional[str], namespace: str) -> int:
     print(f"tau python doctor: Tau Python SDK {TAU_VERSION}")
@@ -252,8 +239,6 @@ def _doctor(*, kube_context: Optional[str], namespace: str) -> int:
         print("tau python doctor: install the Tau CLI or set TAU_BINARY=/path/to/tau", file=sys.stderr)
         return 1
 
-    # Stellar sync shells to taugrid-portal, not tau. Advisory only: most runs
-    # never call stellar.sync(), so a missing portal CLI is not a doctor failure.
     try:
         portal_binary = _find_portal_binary()
         print(f"tau python doctor: taugrid-portal ({portal_binary})")
@@ -277,7 +262,6 @@ def _doctor(*, kube_context: Optional[str], namespace: str) -> int:
     print(f"tau python doctor: kubectl can create jobs.batch in namespace {namespace}")
     print("tau python doctor: ok")
     return 0
-
 
 def _orchestrate_build(
     module_path: Path,
@@ -308,7 +292,6 @@ def _orchestrate_build(
         )
     print(result)
     return 0
-
 
 def _orchestrate_submit_build(
     build_path: Path,
@@ -380,7 +363,6 @@ def _orchestrate_submit_build(
             )
     return 0
 
-
 def _orchestrate_submit(
     module_path: Path,
     *,
@@ -434,10 +416,6 @@ def _orchestrate_submit(
     train_handle = train_handles[0][1] if train_handles else None
     eval_handle = eval_handles[0][1] if eval_handles else None
 
-    # Cross-check: if eval declares `after`, it should match the train
-    # handle's name (or no train handle). Mismatched chains are likely a
-    # typo in the researcher's code — fail loudly rather than silently
-    # ignoring.
     if eval_handle is not None and eval_handle.after:
         if train_handle is None:
             print(
@@ -480,7 +458,6 @@ def _orchestrate_submit(
             **(resource_overrides or {}),
         )
 
-        # 2. Poll the train RayJob to completion (skip on dry-run).
         if dry_run is None and eval_handle is not None:
             rayjob_name = _resource_name_for_handle(train_handle)
             _wait_for_rayjob_success(
@@ -499,13 +476,11 @@ def _orchestrate_submit(
                     timeout=cleanup_timeout,
                 )
 
-    # 3. Submit eval (if present).
     if eval_handle is not None:
         upstream_path = ""
         if train_handle is not None:
             upstream_path = _resolve_upstream_checkpoint_path(train_handle, ns, kube_context)
         else:
-            # Eval-only submit needs an explicit upstream from the env.
             upstream_path = os.environ.get("TAU_UPSTREAM_CHECKPOINT", "")
             if not upstream_path:
                 print(
@@ -551,7 +526,6 @@ def _orchestrate_submit(
                 timeout=cleanup_timeout,
             )
     return 0
-
 
 def _add_workload_override_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-n", "--namespace", default=None, help="kubectl namespace (default: ray)")
@@ -653,7 +627,6 @@ def _add_workload_override_args(parser: argparse.ArgumentParser) -> None:
         help="Nsight Systems capture duration, e.g. 2m (default 2m in tau CLI)",
     )
 
-
 def _build_overrides_from_args(args: argparse.Namespace) -> BuildOverrides:
     return BuildOverrides(
         namespace=args.namespace,
@@ -677,7 +650,6 @@ def _build_overrides_from_args(args: argparse.Namespace) -> BuildOverrides:
         profile_duration=args.profile_duration,
         upstream_checkpoint=getattr(args, "upstream_checkpoint", None),
     )
-
 
 def main(argv: list[str] | None = None, *, prog: str = "tau python") -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
@@ -859,7 +831,6 @@ def main(argv: list[str] | None = None, *, prog: str = "tau python") -> int:
     if args.cmd == "doctor":
         return _doctor(kube_context=args.context, namespace=args.namespace)
     return 1
-
 
 if __name__ == "__main__":
     sys.exit(main())

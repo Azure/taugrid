@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// ECCReader checks ECC error counters and row remap status.
 type ECCReader struct{}
 
 func (r *ECCReader) Name() string { return "ecc" }

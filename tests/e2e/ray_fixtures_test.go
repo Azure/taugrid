@@ -226,15 +226,6 @@ func TestOtherRayJobFixturesUseResourceDiskForRayTemp(t *testing.T) {
 	}
 }
 
-// TestGPURayJobFixturesShipWorkerStdoutToKusto asserts the GPU worker pod
-// template carries the adx-mon/log-destination annotation. When a Ray worker
-// crashes, KubeRay deletes the pod and recreates it under a new name, so the
-// crash output is otherwise lost from kubelet (`kubectl logs --previous` only
-// covers a restart within a surviving pod). The annotation makes the node-local
-// adx-mon collector ship the worker's stdout to the Logs/ContainerLogs Kusto
-// table while the pod runs, so the failure reason survives post-mortem. The
-// head now also uses the same annotation for the driver-log offload sidecar, so
-// this test specifically asserts the worker copy remains in the worker section.
 func TestGPURayJobFixturesShipWorkerStdoutToKusto(t *testing.T) {
 	fixtures := []string{
 		"tests/e2e/stack/fixtures/inference-rayjob-gpu.yaml",
@@ -358,10 +349,6 @@ func TestStackRayJobTestsWaitForSubmitterLogMarkers(t *testing.T) {
 	if strings.Contains(text, "GetPodLogsByLabel(") {
 		t.Fatal("stack RayJob tests should wait for submitter log markers instead of reading logs once; Ray worker stdout can lag RayJob SUCCEEDED")
 	}
-	// The FineWeb IB test uses the full-log variant (WaitForFullPodLogsByLabelContaining)
-	// because its NET/IB init and late checkpoint/success sentinels span the whole run and
-	// cannot coexist in a tailed window; the other five use the tailed variant. Both satisfy
-	// "wait for submitter log markers", so count both toward the expected six.
 	waitMarkers := strings.Count(text, "WaitForPodLogsByLabelContaining(") +
 		strings.Count(text, "WaitForFullPodLogsByLabelContaining(")
 	if waitMarkers != 6 {

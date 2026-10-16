@@ -22,10 +22,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// topologyFlags carries placement intent resolved from a run config's policy
-// block (see configToDispatch). These knobs are config-first: there is no cobra
-// flag surface for them on `tau run`, and adding one would create a second
-// source of truth alongside `policy.*`.
 type topologyFlags struct {
 	team                     string
 	lane                     string
@@ -134,8 +130,6 @@ func prepareAutoQueueRender(o *jobrender.Options, allowImplicit bool, dryRun str
 	explicit := strings.EqualFold(strings.TrimSpace(o.QueueName), "auto")
 	implicit := dryRun != "client" && allowImplicit && strings.TrimSpace(o.QueueName) == ""
 	if implicit {
-		// Render a valid provisional manifest, then select from its effective
-		// scheduling contract and render once more with the selected queue.
 		o.QueueName = "auto"
 	}
 	return explicit, implicit

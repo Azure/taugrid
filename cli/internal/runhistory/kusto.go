@@ -57,9 +57,6 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 	if len(data) == 0 {
 		return nil
 	}
-	// Use queued ingestion directly. Managed ingestion may attempt streaming
-	// first and then fall back after consuming an io.Reader, which makes a
-	// lifecycle batch non-replayable. The recorder needs one durable path.
 	ingestor, err := azkustoingest.New(
 		azkustodata.NewConnectionStringBuilder(w.endpoint).WithTokenCredential(w.credential),
 		azkustoingest.WithDefaultDatabase(w.database),
@@ -74,15 +71,10 @@ func (w *kustoWriter) Write(ctx context.Context, records []Record) error {
 	result, err := ingestor.FromReader(writeCtx, bytes.NewReader(data),
 		azkustoingest.Database(w.database),
 		azkustoingest.Table(w.table),
-		// Keep the mapping inline for direct upgrades from releases that created
-		// only the table. The schema command also creates the same named mapping
-		// for operators and other ADX clients; both derive from expkusto.
 		azkustoingest.IngestionMapping(lifecycleIngestionMapping(), azkustoingest.JSON),
 		azkustoingest.FlushImmediately(),
 		azkustoingest.ReportResultToTable(),
 		azkustoingest.Tags([]string{"ingest-by:" + tag}),
-		// ADX expects ingestIfNotExists as a serialized collection of full extent
-		// tags, not as the bare tag value accepted by the SDK helper signature.
 		azkustoingest.IfNotExists(ingestIfNotExistsValue(tag)),
 	)
 	if err != nil {
@@ -103,9 +95,6 @@ func lifecycleIngestionMapping() []expkusto.RunLifecycleIngestionColumn {
 	return expkusto.RunLifecycleIngestionMapping()
 }
 
-// isSuccessfulIngestionStatus recognizes final ADX statuses that complete a
-// lifecycle write successfully. ADX reports an ingestIfNotExists duplicate as
-// Skipped; the original batch is already durable, so retrying it is incorrect.
 func isSuccessfulIngestionStatus(err error) bool {
 	status, statusErr := azkustoingest.GetIngestionStatus(err)
 	return statusErr == nil && isSuccessfulIngestionStatusCode(status)
@@ -115,9 +104,6 @@ func isSuccessfulIngestionStatusCode(status azkustoingest.StatusCode) bool {
 	return status == azkustoingest.Skipped
 }
 
-// marshalLifecycleRecords encodes the queued-ingestion payload as NDJSON: one
-// lifecycle observation per line. ADX JSON mappings consume each line as a
-// separate source record; a JSON array would require MultiJSON semantics.
 func marshalLifecycleRecords(records []Record) ([]byte, error) {
 	var data bytes.Buffer
 	encoder := json.NewEncoder(&data)
@@ -142,8 +128,6 @@ func ingestByTag(records []Record) string {
 func ingestIfNotExistsValue(tag string) string {
 	value, err := json.Marshal([]string{"ingest-by:" + tag})
 	if err != nil {
-		// json.Marshal of a string slice cannot fail. Keep the writer API simple
-		// while making an unexpected future change fail loudly.
 		panic(fmt.Sprintf("marshal ingestIfNotExists value: %v", err))
 	}
 	return string(value)

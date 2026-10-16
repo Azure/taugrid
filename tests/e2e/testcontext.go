@@ -1,10 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package e2e provides the test framework for taugrid e2e integration tests.
-//
-// Tests only run when AI_RUNTIME_E2E=1 is set. This prevents accidental execution
-// against a production cluster when running `go test ./...` locally.
 package e2e
 
 import (
@@ -28,10 +24,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// TestContext provides K8s clients and helpers for e2e tests.
-// It embeds *testing.T so all test methods (Logf, Helper, Cleanup, Failed, …)
-// are available directly on tc. It also stores a context.Context tied to the
-// test's lifetime and an artifact bundle for diagnostic capture on failure.
 type TestContext struct {
 	*testing.T
 	ctx           context.Context
@@ -41,7 +33,6 @@ type TestContext struct {
 	outcomeName   string
 }
 
-// SkipUnlessE2E skips the test unless AI_RUNTIME_E2E=1 is set.
 func SkipUnlessE2E(t testing.TB) {
 	t.Helper()
 	if os.Getenv("AI_RUNTIME_E2E") != "1" {
@@ -54,8 +45,6 @@ func managerWorkloadOnly() bool {
 		strings.EqualFold(strings.TrimSpace(os.Getenv("LARGE_GPU_WORKLOAD_ACCESS_MODE")), "manager")
 }
 
-// BuildClients creates typed and dynamic K8s clients from the current kubeconfig.
-// Use this in TestMain or other contexts where no *testing.T is available.
 func BuildClients() (kubernetes.Interface, dynamic.Interface, error) {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
@@ -82,13 +71,9 @@ func BuildClients() (kubernetes.Interface, dynamic.Interface, error) {
 	return kubeClient, dynClient, nil
 }
 
-// NewTestContext creates a TestContext from the current kubeconfig.
-// It skips the test if AI_RUNTIME_E2E=1 is not set.
 func NewTestContext(t *testing.T, ctx context.Context) *TestContext {
 	t.Helper()
 
-	// Initialise the result emitter (idempotent). Errors are non-fatal —
-	// a broken emitter must never block the actual test.
 	emitter, _ := results.Init()
 
 	startTime := time.Now()
@@ -100,9 +85,6 @@ func NewTestContext(t *testing.T, ctx context.Context) *TestContext {
 		outcomeName: t.Name(),
 	}
 
-	// Register outcome recording BEFORE SkipUnlessE2E — t.Skip calls
-	// runtime.Goexit(), so anything after it won't execute, but t.Cleanup
-	// callbacks registered before the skip still run.
 	t.Cleanup(func() {
 		if emitter == nil {
 			return
@@ -136,9 +118,6 @@ func NewTestContext(t *testing.T, ctx context.Context) *TestContext {
 	tc.kubeClient = kubeClient
 	tc.dynamicClient = dynClient
 
-	// Generic controller-log capture on failure — covers kueue + kuberay
-	// without per-test boilerplate. Test-specific dumps (CR state, workload
-	// lists) are registered via tc.OnFailure in each test.
 	t.Cleanup(func() {
 		if !t.Failed() || managerWorkloadOnly() {
 			return
@@ -150,9 +129,6 @@ func NewTestContext(t *testing.T, ctx context.Context) *TestContext {
 	return tc
 }
 
-// RecordOutcomeAs overrides the default TestOutcomes name for this test.
-// Most tests should keep the default t.Name(); matrix workflows can set a
-// test-local name that includes the target SKU or topology.
 func (tc *TestContext) RecordOutcomeAs(name string) {
 	tc.Helper()
 	if strings.TrimSpace(name) == "" {
@@ -161,30 +137,22 @@ func (tc *TestContext) RecordOutcomeAs(name string) {
 	tc.outcomeName = name
 }
 
-// KubeClient returns the typed Kubernetes client for direct API calls from tests
-// (e.g., fetching ConfigMap/DaemonSet object specs without polling helpers).
 func (tc *TestContext) KubeClient() kubernetes.Interface {
 	return tc.kubeClient
 }
 
-// DynamicClient returns the dynamic Kubernetes client for applying arbitrary CR fixtures.
 func (tc *TestContext) DynamicClient() dynamic.Interface {
 	return tc.dynamicClient
 }
 
-// Ctx returns the test-lifetime context passed to NewTestContext.
 func (tc *TestContext) Ctx() context.Context {
 	return tc.ctx
 }
 
-// Bundle returns the per-test artifact writer for custom diagnostic capture.
 func (tc *TestContext) Bundle() *bundle.Writer {
 	return tc.bundle
 }
 
-// OnFailure registers a cleanup function that runs only when the test has failed.
-// Use this to capture test-specific diagnostics (CR state, workload lists) that
-// complement the automatic pod/controller-log capture in WaitFor* methods.
 func (tc *TestContext) OnFailure(fn func()) {
 	tc.Helper()
 	tc.Cleanup(func() {
@@ -195,49 +163,6 @@ func (tc *TestContext) OnFailure(fn func()) {
 	})
 }
 
-// readFixture reads a file from the fixtures/ directory and expands template placeholders.
-// Supported placeholders:
-//   - {{RAY_IMAGE}}: value of the RAY_E2E_IMAGE env var (required when used)
-//   - {{RAY_VERSION}}: RAY_E2E_VERSION, Ray version parsed from RAY_E2E_IMAGE,
-//     or RAY_VERSION from images/ray/Makefile
-//   - {{TORCH_SPEC}}: value of TORCH_SPEC env var (e.g. "torch==2.4.1"); used by
-//     GPU fixtures to pin per-SKU driver-compatible wheels
-//   - {{TORCH_INDEX_URL}}: value of TORCH_INDEX_URL env var (e.g.
-//     "https://download.pytorch.org/whl/cu121")
-//   - {{GPU_NODE_SELECTOR_KEY}} / {{GPU_NODE_SELECTOR_VALUE}}: values of
-//     GPU_NODE_SELECTOR_KEY / GPU_NODE_SELECTOR_VALUE env vars; together they
-//     pin the RayJob worker to a specific node (e.g. `agentpool: a10` for
-//     managed pools, `kubernetes.io/hostname: flex-h100-...` for flex nodes)
-//   - {{RAY_SUBMITTER_NODE_SELECTOR_KEY}} / {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}:
-//     values of RAY_SUBMITTER_NODE_SELECTOR_KEY / RAY_SUBMITTER_NODE_SELECTOR_VALUE
-//     env vars; defaults to `kubernetes.azure.com/mode: system` so the KubeRay
-//     submitter Job stays off GPU nodes unless CI pins it to a dedicated CPU pool
-//   - {{NANOGPT_*}}: large-GPU Ray Train workload settings. Dataset URI, SHA256,
-//     and token-count placeholders are required when the large fixture is used;
-//     worker count and 2,000-step training defaults are provided for the live
-//     conformance path. The TAS annotation placeholder is rendered only for the
-//     ArgoCD queue path because the local fixture flavor is not topology-aware.
-//   - {{FINEWEB_*}}: 1.7B FineWeb FSDP/InfiniBand conformance workload settings.
-//     Dataset URI/SHA256/token-count placeholders are required when the FineWeb
-//     fixture is used; model-shape, bounded-step, checkpoint, and IB NCCL
-//     placeholders default to the 1.716B / first-checkpoint conformance values.
-//   - {{STACK_NAMESPACE}}, {{STACK_QUEUE}}, and {{STACK_LARGE_GPU_QUEUE}}:
-//     Kueue namespace/LocalQueue routing. Tests default to the local stack fixture
-//     queues unless E2E_STACK_USE_ARGOCD_QUEUE or explicit stack queue env vars opt
-//     into a pre-provisioned queue.
-//   - {{INFERENCE_SCRIPT_PAYLOAD_B64}} / {{INFERENCE_SCRIPT_PAYLOAD_DIGEST}},
-//     {{FINEWEB_SCRIPT_PAYLOAD_B64}} / {{FINEWEB_SCRIPT_PAYLOAD_DIGEST}},
-//     {{TRAINING_CPU_SCRIPT_PAYLOAD_B64}} / {{TRAINING_CPU_SCRIPT_PAYLOAD_DIGEST}},
-//     {{TRAINING_GPU_SCRIPT_PAYLOAD_B64}} / {{TRAINING_GPU_SCRIPT_PAYLOAD_DIGEST}},
-//     and {{NANOGPT_SCRIPT_PAYLOAD_B64}} / {{NANOGPT_SCRIPT_PAYLOAD_DIGEST}}:
-//     computed (not env-sourced) from the actual fixtures/inference_job.py,
-//     fixtures/fineweb_ray_train.py, fixtures/training_job_cpu.py,
-//     fixtures/training_job.py, and fixtures/nanogpt_ray_train.py driver
-//     scripts via the tests/e2e/internal/scriptpayload package (a test-only
-//     mirror of PR1's cli/internal/payload wire format), so
-//     every manager-routed RayJob fixture embeds a self-contained, head-only
-//     payload instead of depending on a ConfigMap that MultiKueue does not
-//     replicate to worker clusters.
 func readFixture(name string) ([]byte, error) {
 	path := filepath.Join("fixtures", name)
 	data, err := os.ReadFile(path)
@@ -372,21 +297,10 @@ func readFixture(name string) ([]byte, error) {
 	return data, nil
 }
 
-// ReadFixtureWithSubstitutions reads a YAML fixture and performs the exact
-// same placeholder substitution readFixture applies at apply/delete time
-// (including computing the embedded script payload placeholders), without
-// applying anything to a cluster. It exists so tests outside this package
-// (e.g. the stack package's payload fixture shape/integrity tests) can
-// assert against the fully-substituted fixture bytes using the same
-// substitution path exercised by ApplyFixtureWithClient.
 func ReadFixtureWithSubstitutions(name string) ([]byte, error) {
 	return readFixture(name)
 }
 
-// scriptPayload reads scriptFile from the fixtures directory and encodes it
-// as a single-file scriptpayload envelope, returning the base64-encoded
-// envelope and its hex SHA-256 digest for embedding into a fixture's
-// tau-payload initContainer env vars and payload-digest annotation.
 func scriptPayload(scriptFile string) (encoded string, digest string, err error) {
 	scriptPath := filepath.Join("fixtures", scriptFile)
 	scriptBytes, err := os.ReadFile(scriptPath)
@@ -432,7 +346,6 @@ func liveConformanceUsesArgoCDQueue() bool {
 	return false
 }
 
-// rayVersion resolves the KubeRay rayVersion that must match the test image.
 func rayVersion() (string, error) {
 	if rayVer := os.Getenv("RAY_E2E_VERSION"); rayVer != "" {
 		return rayVer, nil
@@ -476,15 +389,12 @@ func rayVersionFromImage(image string) string {
 	return version
 }
 
-// findRepoFile walks up from the current directory looking for a file relative to the repo root.
-// It detects the root by the presence of a go.work or .git directory.
 func findRepoFile(relPath string) (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	for {
-		// Check for repo root markers.
 		for _, marker := range []string{".git", "go.work"} {
 			if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
 				candidate := filepath.Join(dir, relPath)
@@ -502,7 +412,6 @@ func findRepoFile(relPath string) (string, error) {
 	}
 }
 
-// parseMakefileVars extracts simple "VAR ?= value" or "VAR := value" assignments from a Makefile.
 func parseMakefileVars(path string, keys ...string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -531,8 +440,6 @@ func parseMakefileVars(path string, keys ...string) (map[string]string, error) {
 	return result, scanner.Err()
 }
 
-// ApplyFixtureWithClient reads a YAML fixture and applies it using a dynamic client directly.
-// Use this in TestMain or setup/teardown where no TestContext is available.
 func ApplyFixtureWithClient(ctx context.Context, dynClient dynamic.Interface, name string) error {
 	yamlBytes, err := readFixture(name)
 	if err != nil {
@@ -541,8 +448,6 @@ func ApplyFixtureWithClient(ctx context.Context, dynClient dynamic.Interface, na
 	return applyYAMLWithClient(ctx, dynClient, yamlBytes)
 }
 
-// DeleteFixtureWithClient reads a YAML fixture and deletes the resources using a dynamic client directly.
-// Use this in TestMain or setup/teardown where no TestContext is available.
 func DeleteFixtureWithClient(ctx context.Context, dynClient dynamic.Interface, name string) error {
 	yamlBytes, err := readFixture(name)
 	if err != nil {
@@ -551,9 +456,6 @@ func DeleteFixtureWithClient(ctx context.Context, dynClient dynamic.Interface, n
 	return deleteYAMLWithClient(ctx, dynClient, yamlBytes)
 }
 
-// DeleteFixtureWithClientAndWait renders a fixture, deletes every object, and waits
-// until the deleted object UIDs are gone. Use it when another test process may
-// recreate the same fixed-name objects immediately.
 func DeleteFixtureWithClientAndWait(ctx context.Context, dynClient dynamic.Interface, name string, timeout time.Duration) error {
 	yamlBytes, err := readFixture(name)
 	if err != nil {
@@ -562,8 +464,6 @@ func DeleteFixtureWithClientAndWait(ctx context.Context, dynClient dynamic.Inter
 	return deleteYAMLWithClientAndWait(ctx, dynClient, yamlBytes, timeout)
 }
 
-// ApplyFixture reads a YAML fixture, applies it to the cluster, and registers
-// cleanup to delete the resources when the test finishes.
 func (tc *TestContext) ApplyFixture(t *testing.T, name string) {
 	t.Helper()
 	if err := ApplyFixtureWithClient(tc.ctx, tc.dynamicClient, name); err != nil {
@@ -574,15 +474,7 @@ func (tc *TestContext) ApplyFixture(t *testing.T, name string) {
 	})
 }
 
-// suiteFromCaller derives the suite name from the calling test's directory.
-// NewTestContext is called from tests/e2e/kueue/kueue_test.go → suite = "kueue".
-//
-// WARNING: This assumes a fixed call depth (2 frames up = the test function).
-// If NewTestContext is ever wrapped by an intermediate helper, the suite
-// derivation will silently return the wrong directory. If that happens,
-// switch to walking the stack for the first _test.go frame.
 func suiteFromCaller() string {
-	// Skip: 0=suiteFromCaller, 1=NewTestContext, 2=the actual test function.
 	_, file, _, ok := runtime.Caller(2)
 	if !ok {
 		return "unknown"

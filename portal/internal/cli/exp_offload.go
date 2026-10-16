@@ -564,8 +564,6 @@ func runMetricsOnlineOffloadOnce(ctx context.Context, store *expstore.Store, opt
 		}
 		checkpoint.Files[path] = jsonlutil.CheckpointForChunk(chunk)
 		if chunk.EndOffset > chunk.StartOffset {
-			// A later file may fail after this chunk was exported. Persist its
-			// offset now so appended rows cannot cause a different retry chunk.
 			if err := jsonlutil.WriteFileCheckpointSet(checkpointFile, metricsJSONLCheckpointSchemaVersion, checkpoint); err != nil {
 				return metricsOffloadResult{}, err
 			}

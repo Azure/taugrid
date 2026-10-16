@@ -40,7 +40,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY controllers/tau-core ./
 COPY core ../../core
 
-# CGO required for systemcrypto FIPS build; buildx sets TARGETOS/TARGETARCH per platform.
 ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \

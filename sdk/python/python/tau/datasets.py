@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-
 def dataset_file_reference(root: str | Path, raw_path: str, *, field_name: str = "path") -> tuple[str, Path]:
     """Return a portable dataset-relative path and resolved local path.
 
@@ -40,6 +39,5 @@ def dataset_file_reference(root: str | Path, raw_path: str, *, field_name: str =
     if rel_path == ".":
         raise ValueError(f"{field_name} must reference a file under dataset root: {raw_path!r}")
     return rel_path, candidate
-
 
 __all__ = ["dataset_file_reference"]

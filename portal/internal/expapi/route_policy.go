@@ -33,8 +33,6 @@ var capabilityRoutes = map[string]capabilityRoute{
 	"v2_exact_series":      {"/runs/_/series", http.MethodGet, true},
 }
 
-// WorkspaceRouteAllowed is the shared managed Portal allowlist. Unknown routes
-// fail closed, including any new capability not explicitly scoped here.
 func WorkspaceRouteAllowed(method, path string) bool {
 	if method == http.MethodHead {
 		method = http.MethodGet
@@ -79,8 +77,6 @@ func workspaceScopedV2Route(path string) bool {
 
 type workspaceRoutePolicyKey struct{}
 
-// WithWorkspaceRoutePolicy marks an already-authorized request at the Portal
-// mount boundary. This is intentionally not a client-controlled query/header.
 func WithWorkspaceRoutePolicy(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), workspaceRoutePolicyKey{}, true))
 }

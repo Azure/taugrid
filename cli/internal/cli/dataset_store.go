@@ -24,7 +24,6 @@ import (
 	"github.com/Azure/taugrid/core/kube"
 )
 
-// datasetRegistryPaths wires the dataset.Registry to the storage path helpers.
 func datasetRegistryPaths() dataset.Paths {
 	return dataset.Paths{
 		DatasetsDir:      storage.DatasetRegistryDatasetsDir,
@@ -37,10 +36,6 @@ func datasetRegistryPaths() dataset.Paths {
 	}
 }
 
-// pvcBackend adapts the helper-pod-over-blob-training machinery (the same
-// pattern tau data model uses) to the dataset.Backend interface. The dataset
-// registry control-plane JSON lives on the blob-training PVC at
-// /data/dataset-registry, alongside the model registry.
 type pvcBackend struct {
 	kubeContext string
 	namespace   string
@@ -64,10 +59,6 @@ func (b *pvcBackend) ReadFile(ctx context.Context, path string) ([]byte, error) 
 
 func (b *pvcBackend) WriteFile(ctx context.Context, path string, data []byte, overwrite bool) error {
 	if !overwrite {
-		// Best-effort immutability on the helper-pod path: refuse if the target
-		// already exists. This is a narrow TOCTOU window (v1 assumes a single
-		// registrar writer); Blob soft-delete/versioning is the recovery net.
-		// The az registry backend provides server-enforced conditional writes.
 		if _, err := b.ReadFile(ctx, path); err == nil {
 			return dataset.ErrExist
 		} else if !dataset.IsNotExist(err) {
@@ -92,14 +83,11 @@ func (b *pvcBackend) Delete(ctx context.Context, path string) error {
 	return deletePVCFile(ctx, b.kubeContext, b.namespace, datasetRunLabel(path), b.pvcName, path)
 }
 
-// datasetRunLabel derives a short, pod-name-safe label from a registry path.
 func datasetRunLabel(path string) string {
 	base := strings.TrimSuffix(filepath.Base(path), ".json")
 	return "ds-" + sanitizePodName(base)
 }
 
-// deletePVCFile removes a single file on the named PVC via a one-shot helper
-// pod, mirroring writePVCFile. Removing a missing path is not an error.
 func deletePVCFile(ctx context.Context, kubeContext, namespace, runName, pvcName, path string) error {
 	if pvcName == "" {
 		pvcName = defaultTauPVCName
@@ -142,22 +130,17 @@ func deletePVCFile(ctx context.Context, kubeContext, namespace, runName, pvcName
 	return nil
 }
 
-// hashedFile is one file scanned by a dataSource.
 type hashedFile struct {
 	Path   string
 	Bytes  int64
 	SHA256 string
 }
 
-// dataSource scans and hashes the actual dataset bytes for register/verify. The
-// local implementation hashes a directory in Go; the az implementation shells
-// out to `az storage blob` using the caller's Azure RBAC (no SAS).
 type dataSource interface {
 	scan(ctx context.Context) ([]hashedFile, error)
 	describe() string
 }
 
-// localDataSource hashes a local directory tree.
 type localDataSource struct{ root string }
 
 func (s localDataSource) describe() string { return "local:" + s.root }
@@ -215,8 +198,6 @@ func hashLocalFile(absPath, relPath string) (hashedFile, error) {
 	return hashedFile{Path: relPath, Bytes: n, SHA256: hex.EncodeToString(h.Sum(nil))}, nil
 }
 
-// azDataSource lists and hashes blobs under account/container/prefix using the
-// caller's Azure RBAC (az --auth-mode login). It never uses a SAS token.
 type azDataSource struct {
 	account   string
 	container string
@@ -238,9 +219,6 @@ func (s azDataSource) scan(ctx context.Context) ([]hashedFile, error) {
 		"--auth-mode", "login",
 		"-o", "json",
 	}
-	// Treat a non-empty prefix as a directory boundary so a prefix of "foo"
-	// matches foo/shard.bin but not foobar.bin, and the stripped relative path
-	// round-trips through NodeLocalStage.BlobURL (which re-joins prefix+path).
 	listPrefix := strings.TrimSuffix(s.prefix, "/")
 	if listPrefix != "" {
 		listPrefix += "/"
@@ -314,12 +292,6 @@ func runAz(ctx context.Context, args []string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// azBackend is a dataset.Backend over a blob container in the dedicated dataset
-// storage account, using the caller's Azure RBAC (az --auth-mode login, never a
-// SAS). It is the no-cluster registry path: register/verify can read and write
-// records from a laptop or CI before any cluster exists. Registry paths are
-// absolute (/data/dataset-registry/...); the backend maps them to container-
-// relative blob names by stripping rootPrefix.
 type azBackend struct {
 	account    string
 	container  string
@@ -484,11 +456,6 @@ func isAzNotFound(err error) bool {
 	return strings.Contains(s, "BlobNotFound") || strings.Contains(s, "ErrorCode:BlobNotFound") || strings.Contains(s, "does not exist")
 }
 
-// fileBackend is a dataset.Backend over a local filesystem directory. It maps
-// the absolute registry layout (/data/dataset-registry/...) onto root by
-// stripping rootPrefix, mirroring azBackend. It needs no cluster and no cloud,
-// so the registry can be exercised end-to-end on a laptop or committed to a
-// repo as a seed catalog, then promoted to the pvc/az backends unchanged.
 type fileBackend struct {
 	root       string
 	rootPrefix string
@@ -498,9 +465,6 @@ func newFileBackend(root string) *fileBackend {
 	return &fileBackend{root: root, rootPrefix: storage.DatasetRegistryDir}
 }
 
-// localPath maps an absolute registry path to a path under root. It fails
-// closed if p escapes the registry prefix or resolves outside root, so an
-// unsafe caller cannot read or write outside the seed directory.
 func (b *fileBackend) localPath(p string) (string, error) {
 	if p != b.rootPrefix && !strings.HasPrefix(p, b.rootPrefix+"/") {
 		return "", fmt.Errorf("path %q is outside registry root %q", p, b.rootPrefix)
@@ -543,8 +507,6 @@ func (b *fileBackend) WriteFile(_ context.Context, p string, data []byte, overwr
 		return err
 	}
 	if !overwrite {
-		// O_EXCL gives a real create-or-fail so immutability does not rely on a
-		// racy read-then-write (unlike the helper-pod pvc backend).
 		f, err := os.OpenFile(lp, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 		if err != nil {
 			if errors.Is(err, os.ErrExist) {
@@ -563,9 +525,6 @@ func (b *fileBackend) WriteFile(_ context.Context, p string, data []byte, overwr
 	return b.writeFileAtomic(lp, data)
 }
 
-// WriteFileAtomic implements dataset.AtomicWriteBackend for mutable ingest
-// status files. The replacement is durable before rename and leaves no
-// truncate-in-place window for concurrent status readers.
 func (b *fileBackend) WriteFileAtomic(_ context.Context, p string, data []byte) error {
 	lp, err := b.localPath(p)
 	if err != nil {
@@ -578,9 +537,6 @@ func (b *fileBackend) WriteFileAtomic(_ context.Context, p string, data []byte) 
 }
 
 func (b *fileBackend) writeFileAtomic(lp string, data []byte) error {
-	// Overwrite (mutable status) path: write to a temp file in the same
-	// directory and rename over the target so a reader never observes a
-	// partially-written status file (atomic replace on POSIX).
 	tmp, err := os.CreateTemp(filepath.Dir(lp), ".tau-ds-tmp-*")
 	if err != nil {
 		return err

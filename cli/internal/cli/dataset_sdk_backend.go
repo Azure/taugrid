@@ -23,42 +23,18 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 )
 
-// sdkBlobOps is the minimal container-scoped blob API the SDK-backed registry
-// needs. It is an interface so conditional-write behaviour can be exercised
-// with a fake client (no network). Real behaviour is provided by azSDKBlobOps
-// over an Azure blob container using DefaultAzureCredential.
 type sdkBlobOps interface {
-	// read returns the bytes of blobName or an error satisfying
-	// dataset.IsNotExist when the blob is absent.
 	read(ctx context.Context, blobName string) ([]byte, error)
-	// write uploads data at blobName. When overwrite is false and the blob
-	// already exists it returns an error satisfying dataset.IsExist. When
-	// overwrite is true the write is unconditional (used for mutable status).
 	write(ctx context.Context, blobName string, data []byte, overwrite bool) error
-	// listChildren returns the immediate hierarchical child segment names
-	// under prefix (a directory-style listing with "/" delimiter). prefix is
-	// container-relative and either empty or ends in "/".
 	listChildren(ctx context.Context, prefix string) ([]string, error)
-	// remove deletes blobName. Removing a missing blob is not an error.
 	remove(ctx context.Context, blobName string) error
 }
 
-// sdkAzBackend is a dataset.Backend over a blob container that uses the Azure
-// SDK (azidentity + azblob) directly, so it works inside the distroless Tau
-// image where the `az` CLI is unavailable. It provides server-enforced
-// conditional writes (If-None-Match for immutable records) so registry
-// immutability does not depend on a racy read-then-write.
-//
-// Registry paths are absolute (/data/dataset-registry/...); the backend maps
-// them to container-relative blob names by stripping rootPrefix, mirroring
-// azBackend.
 type sdkAzBackend struct {
 	ops        sdkBlobOps
 	rootPrefix string
 }
 
-// newSDKAzBackend builds an SDK-backed dataset.Backend over the dedicated
-// dataset storage account container using DefaultAzureCredential.
 func newSDKAzBackend(account, container string) (*sdkAzBackend, error) {
 	ops, err := newAzSDKBlobOps(account, container, nil)
 	if err != nil {
@@ -92,7 +68,6 @@ func (b *sdkAzBackend) Delete(ctx context.Context, p string) error {
 	return b.ops.remove(ctx, b.blobName(p))
 }
 
-// azSDKBlobOps is the real sdkBlobOps over an Azure blob container.
 type azSDKBlobOps struct {
 	container *container.Client
 }
@@ -141,8 +116,6 @@ func (o *azSDKBlobOps) write(ctx context.Context, blobName string, data []byte, 
 	bb := o.container.NewBlockBlobClient(blobName)
 	opts := &blockblob.UploadOptions{}
 	if !overwrite {
-		// Server-enforced create-or-fail: If-None-Match:* fails the upload if
-		// the blob already exists, so immutability is not a racy read-then-write.
 		opts.AccessConditions = &blob.AccessConditions{
 			ModifiedAccessConditions: &blob.ModifiedAccessConditions{
 				IfNoneMatch: to.Ptr(azcore.ETagAny),
@@ -213,6 +186,5 @@ func (o *azSDKBlobOps) remove(ctx context.Context, blobName string) error {
 	return nil
 }
 
-// ensure the interface guard so a signature drift is a compile error.
 var _ dataset.Backend = (*sdkAzBackend)(nil)
 var _ sdkBlobOps = (*azSDKBlobOps)(nil)

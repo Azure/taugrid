@@ -25,9 +25,9 @@ func TestShellSingleQuote(t *testing.T) {
 		{"", "''"},
 		{"foo", "'foo'"},
 		{"/data/checkpoints/finetunes/run-1/metrics.json", "'/data/checkpoints/finetunes/run-1/metrics.json'"},
-		{"a$b`c\\d", "'a$b`c\\d'"},       // dollar / backtick / backslash all neutralized inside single quotes
-		{"it's", `'it'\''s'`},            // embedded single quote uses canonical escape
-		{"$(rm -rf /)", "'$(rm -rf /)'"}, // command substitution is inert inside single quotes
+		{"a$b`c\\d", "'a$b`c\\d'"},
+		{"it's", `'it'\''s'`},
+		{"$(rm -rf /)", "'$(rm -rf /)'"},
 		{"--field=$(injected)", "'--field=$(injected)'"},
 	}
 	for _, tc := range cases {
@@ -72,21 +72,6 @@ func TestHelperPodYAML_RoundTrip(t *testing.T) {
 }
 
 func TestHelperPodYAML_ResistsYAMLInjection(t *testing.T) {
-	// A path supplied via the tau.azure.com/result-path Job annotation
-	// could in theory contain YAML metacharacters. The previous
-	// implementation text-templated the whole Pod YAML, so a crafted path
-	// could close the args block and inject a sibling key (hostNetwork,
-	// serviceAccountName, hostPID, etc.). The structural fix is that
-	// helperPodObject's Go type has no fields for those keys, so
-	// yaml.Marshal physically cannot emit them at any nesting depth —
-	// regardless of what the caller puts in Script. This test feeds an
-	// adversarial Script and verifies the byte-stream output:
-	//   (a) parses back into helperPodObject (it's well-formed YAML),
-	//   (b) lands the hostile bytes inside args[0] (where the API server
-	//       treats them as opaque sh -c content),
-	//   (c) does not contain hostNetwork/hostPID/serviceAccountName etc.
-	//       at column 0 (top-level) or column 2 (spec-level), which is
-	//       the only place those keys would have privileged effect.
 	hostile := "cat /etc/passwd\nhostNetwork: true\nserviceAccountName: cluster-admin\nhostPID: true\n# trailing"
 	out, err := helperPodYAML(helperPodSpec{
 		Name:      "tau-ls-hostile",
@@ -112,12 +97,8 @@ func TestHelperPodYAML_ResistsYAMLInjection(t *testing.T) {
 		t.Errorf("hostile content not preserved in args: %q", typed.Spec.Containers[0].Args[0])
 	}
 
-	// Line-by-line scan: the privileged keys must never appear at
-	// column 0 (top-level Pod field) or column 2/4 (spec-level field).
-	// Inside an indented block scalar they're inert sh -c argument bytes.
 	for _, line := range strings.Split(string(out), "\n") {
 		for _, key := range []string{"hostNetwork:", "hostPID:", "hostIPC:", "serviceAccountName:", "automountServiceAccountToken:"} {
-			// match at column 0 or column 2 or column 4 only
 			for _, prefix := range []string{key, "  " + key, "    " + key} {
 				if line == prefix || strings.HasPrefix(line, prefix+" ") {
 					t.Errorf("privileged key %q leaked as a structural YAML field: %q", key, line)

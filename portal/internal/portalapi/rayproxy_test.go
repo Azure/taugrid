@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// fakeRayReader returns canned Services JSON so validateRayTarget can run
-// head-svc discovery without a Kubernetes API.
 type fakeRayReader struct {
 	json string
 }
@@ -30,8 +28,6 @@ const rayHeadSvcJSON = `{"items":[
    "spec":{"type":"ClusterIP"}}
 ]}`
 
-// roundTripFunc is a stub RoundTripper so proxyToHead never dials a real head
-// Service; it returns a fixed 200 response we can assert reached the upstream.
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -61,7 +57,6 @@ func TestValidateRayTarget(t *testing.T) {
 }
 
 func TestValidateRayTargetEnforcesNamespace(t *testing.T) {
-	// Server with a configured namespace scope.
 	s := &Server{
 		ray: RayOptions{
 			Reader:    fakeRayReader{json: rayHeadSvcJSON},
@@ -123,7 +118,6 @@ func TestHandleRayProxyRejectsBadPath(t *testing.T) {
 	}
 }
 
-// serviceHost sanity: keeps the in-cluster DNS form the proxy dials.
 func TestServiceHost(t *testing.T) {
 	if got := serviceHost("ray", "alpha-head-svc"); got != "alpha-head-svc.ray.svc:8265" {
 		t.Fatalf("serviceHost = %q", got)

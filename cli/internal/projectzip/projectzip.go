@@ -1,20 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package projectzip builds a deterministic zip archive of a research project
-// directory for use as a Ray runtime_env working_dir.
-//
-// Ray resolves working_dir independently on every node and prepends the
-// unpacked directory to PYTHONPATH, which is what makes sibling modules and
-// local packages importable inside @ray.remote tasks on workers — not just in
-// the driver. Ray requires remote working_dir URIs to point at a .zip, and it
-// strips a single top-level directory when unpacking, so entries here are
-// written at the archive root to keep import paths predictable.
-//
-// Archives are byte-for-byte deterministic: entries are sorted, timestamps are
-// fixed, and compression is fixed. The same tree always produces the same
-// bytes, so a rendered workload spec stays stable across submissions and the
-// payload digest remains meaningful.
 package projectzip
 
 import (
@@ -30,9 +16,6 @@ import (
 	"time"
 )
 
-// DefaultExcludes are directory and file patterns never worth shipping to a
-// Ray cluster. They are matched per path segment for directories and against
-// the base name for files.
 var DefaultExcludes = []string{
 	".git",
 	".hg",
@@ -53,31 +36,19 @@ var DefaultExcludes = []string{
 	"*.egg-info",
 }
 
-// fixedModTime keeps archives reproducible. The zip format stores MS-DOS
-// timestamps, whose epoch starts in 1980; this is the earliest representable
-// value that round-trips cleanly.
 var fixedModTime = time.Date(1980, time.January, 1, 0, 0, 0, 0, time.UTC)
 
-// Options controls archive construction.
 type Options struct {
-	// Dir is the project root to archive.
-	Dir string
-	// Excludes are additional glob patterns, matched against both the base
-	// name and the archive-relative path.
+	Dir      string
 	Excludes []string
-	// MaxBytes caps the uncompressed total. Zero means unlimited.
 	MaxBytes int64
 }
 
-// File is one archived entry, used for reporting.
 type File struct {
 	Name string
 	Size int64
 }
 
-// Build walks Dir and returns a deterministic zip archive plus the entries it
-// contains, sorted by descending size so callers can report the biggest
-// contributors when a size limit is hit.
 func Build(o Options) ([]byte, []File, error) {
 	root, err := filepath.Abs(o.Dir)
 	if err != nil {
@@ -116,9 +87,6 @@ func Build(o Options) ([]byte, []File, error) {
 		if d.IsDir() {
 			return nil
 		}
-		// Symlinks are skipped rather than followed: a link pointing outside
-		// the project would silently widen what gets shipped, and a cyclic
-		// link would not terminate.
 		if !d.Type().IsRegular() {
 			return nil
 		}
@@ -181,8 +149,6 @@ func largestFirst(files []File) []File {
 	return out
 }
 
-// excluded reports whether an entry matches any exclude pattern, either by
-// base name or by its archive-relative path.
 func excluded(rel, name string, patterns []string) bool {
 	for _, pattern := range patterns {
 		if pattern == "" {
@@ -201,7 +167,6 @@ func excluded(rel, name string, patterns []string) bool {
 	return false
 }
 
-// DescribeLargest renders the biggest entries for an over-size error message.
 func DescribeLargest(files []File, n int) string {
 	if len(files) > n {
 		files = files[:n]

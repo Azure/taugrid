@@ -13,9 +13,6 @@ import (
 
 var envNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Var is the Tau env contract rendered into Kubernetes containers.
-// Value is for non-secret literals. ValueFrom.SecretKeyRef is for values
-// that must stay in Kubernetes Secrets and never appear in rendered YAML.
 type Var struct {
 	Name      string     `yaml:"name"`
 	Value     string     `yaml:"value,omitempty"`
@@ -82,8 +79,6 @@ func FromMap(values map[string]string) []Var {
 	return out
 }
 
-// Merge returns env vars sorted by name. Later entries override earlier entries,
-// matching CLI override semantics over profile/config defaults.
 func Merge(groups ...[]Var) ([]Var, error) {
 	byName := map[string]Var{}
 	for _, group := range groups {

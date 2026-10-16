@@ -19,9 +19,6 @@ import (
 	"github.com/Azure/taugrid/cli/internal/datasetingest"
 )
 
-// ---- helpers ----
-
-// makeReg builds an in-memory Registry with IngestStatusFile wired.
 func makeReg(t *testing.T) *dataset.Registry {
 	t.Helper()
 	mem := &memBackend{files: make(map[string][]byte)}
@@ -39,7 +36,6 @@ func makeReg(t *testing.T) *dataset.Registry {
 	return dataset.NewRegistry(mem, paths, nil)
 }
 
-// makeRec builds and registers a valid pretrain Record with the given files.
 func makeRec(t *testing.T, reg *dataset.Registry, name, version string, files []dataset.File) dataset.Record {
 	t.Helper()
 	total := int64(0)
@@ -70,7 +66,6 @@ func makeRec(t *testing.T, reg *dataset.Registry, name, version string, files []
 	return registered
 }
 
-// writeSourceFile writes data to srcDir/relPath and returns its sha256 and byte count.
 func writeSourceFile(t *testing.T, srcDir, relPath string, content []byte) (sha256hex string, bytes int64) {
 	t.Helper()
 	full := filepath.Join(srcDir, filepath.FromSlash(relPath))
@@ -84,7 +79,6 @@ func writeSourceFile(t *testing.T, srcDir, relPath string, content []byte) (sha2
 	return hex.EncodeToString(h[:]), int64(len(content))
 }
 
-// memBackend is an in-memory Backend for tests.
 type memBackend struct {
 	files map[string][]byte
 }
@@ -142,8 +136,6 @@ func (m *memBackend) Delete(_ context.Context, path string) error {
 	return nil
 }
 
-// ---- Full E2E: register → ingest → verify ready → repeat (idempotent) ----
-
 func TestRunWorker_fileBackend_fullE2E(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
@@ -179,14 +171,12 @@ func TestRunWorker_fileBackend_fullE2E(t *testing.T) {
 		t.Errorf("VerifiedBytes: want %d, got %d", bytes0+bytes1, result.Status.VerifiedBytes)
 	}
 
-	// Files must exist at the destination.
 	for _, name := range []string{"part-0.txt", "part-1.txt"} {
 		if _, err := os.Stat(filepath.Join(dstDir, name)); err != nil {
 			t.Errorf("destination file %s not found: %v", name, err)
 		}
 	}
 
-	// ---- Repeat call is idempotent (already ready) ----
 	result2, err := datasetingest.RunWorker(context.Background(), "myds", "v1", datasetingest.WorkerConfig{
 		Registry:  reg,
 		Source:    datasetingest.FileSource{Root: srcDir},
@@ -201,8 +191,6 @@ func TestRunWorker_fileBackend_fullE2E(t *testing.T) {
 		t.Errorf("repeat state: want ready, got %q", result2.Status.State)
 	}
 }
-
-// ---- Resume: partial completion, re-run skips completed files ----
 
 func TestRunWorker_resume(t *testing.T) {
 	srcDir := t.TempDir()
@@ -219,7 +207,6 @@ func TestRunWorker_resume(t *testing.T) {
 		{Path: "p1.txt", Bytes: bytes1, SHA256: sha1},
 	})
 
-	// Manually write a status that already has p0.txt completed.
 	partial := dataset.IngestStatus{
 		SchemaVersion: dataset.IngestStatusSchemaVersion,
 		Name:          "ds",
@@ -238,7 +225,6 @@ func TestRunWorker_resume(t *testing.T) {
 		VerifiedFiles: 1,
 		VerifiedBytes: bytes0,
 	}
-	// Write p0.txt to destination so FileSink skips it correctly.
 	if err := os.WriteFile(filepath.Join(dstDir, "p0.txt"), content0, 0o644); err != nil {
 		t.Fatalf("write p0.txt to dst: %v", err)
 	}
@@ -264,8 +250,6 @@ func TestRunWorker_resume(t *testing.T) {
 	}
 }
 
-// ---- Corruption rejection: existing destination with wrong sha256 ----
-
 func TestRunWorker_corruptionRejection(t *testing.T) {
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
@@ -278,7 +262,6 @@ func TestRunWorker_corruptionRejection(t *testing.T) {
 		{Path: "data.txt", Bytes: bytes, SHA256: sha},
 	})
 
-	// Write a corrupted file at the destination (wrong content, same name).
 	corrupt := []byte("bad bytes that are different")
 	if err := os.WriteFile(filepath.Join(dstDir, "data.txt"), corrupt, 0o644); err != nil {
 		t.Fatalf("write corrupt: %v", err)
@@ -299,25 +282,11 @@ func TestRunWorker_corruptionRejection(t *testing.T) {
 	}
 }
 
-// ---- Path traversal rejection ----
-
 func TestRunWorker_pathTraversal(t *testing.T) {
-	// A record with a traversal path. EnsureRegister validates paths, so we
-	// need to test the ingest layer directly via a bad manifest.
-	// Since EnsureRegister/Register also validates, we test validateRelPath
-	// indirectly through the fake source that returns data for a malformed path.
-	//
-	// We craft a source that accepts the traversal path to test the ingest
-	// layer's own guard.
 	badPath := "../escape.txt"
 	content := []byte("evil")
 	sha := sha256sum(content)
 
-	// We need a record with the traversal path. The dataset validator will
-	// reject it, so we use a workaround: start with a valid record and manually
-	// write a modified ingest status that references the bad path.
-	//
-	// Simpler: test validateRelPath via a fake source/sink.
 	fakeSource := &traversalSource{path: badPath, content: content}
 	fakeSink := &captureSink{}
 	fakeLocker := &noopLocker{}
@@ -333,15 +302,9 @@ func TestRunWorker_pathTraversal(t *testing.T) {
 		Assurance:     "manifest-supplied",
 		Pretrain:      &dataset.Pretrain{Tokenizer: "gpt2"},
 	}
-	// Register normally fails on invalid path; we bypass registration and
-	// directly call RunWorker with the fake source.
-	// Build the registry status manually.
 	rec.TotalBytes = int64(len(content))
 	rec.Digest = rec.ComputeDigest()
 
-	// We can't EnsureRegister because dataset validates paths. Instead, write
-	// the status manually through an alternate memBackend path.
-	// The ingest layer must reject the path before the sink sees it.
 	_, err := datasetingest.RunWorker(context.Background(), "badds", "v1", datasetingest.WorkerConfig{
 		Registry:  makeRegWithRecord(t, rec),
 		Source:    fakeSource,
@@ -353,8 +316,6 @@ func TestRunWorker_pathTraversal(t *testing.T) {
 		t.Fatal("expected path traversal error, got nil")
 	}
 }
-
-// ---- Context cancellation ----
 
 func TestRunWorker_contextCancellation(t *testing.T) {
 	srcDir := t.TempDir()
@@ -369,7 +330,7 @@ func TestRunWorker_contextCancellation(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	_, err := datasetingest.RunWorker(ctx, "ds", "v1", datasetingest.WorkerConfig{
 		Registry:  reg,
@@ -378,11 +339,7 @@ func TestRunWorker_contextCancellation(t *testing.T) {
 		Locker:    datasetingest.FileLocker{Dir: dstDir},
 		AttemptID: "cancel-test",
 	})
-	// May succeed (single-file, fast) or fail with context error — both are OK.
-	// What matters is no panic.
 	if err != nil && !strings.Contains(err.Error(), "context") && !strings.Contains(err.Error(), "cancel") {
-		// Context cancellation may surface as various error messages; just
-		// ensure the error is non-nil and non-panic.
 		t.Logf("cancellation error (expected): %v", err)
 	}
 
@@ -414,8 +371,6 @@ func TestRunWorker_LeaseRenewalFailureNeverProducesReadyStatus(t *testing.T) {
 		t.Fatalf("renewal failure must not produce ready status: %+v", status)
 	}
 }
-
-// ---- helpers for traversal test ----
 
 func sha256sum(b []byte) string {
 	h := sha256.Sum256(b)
@@ -456,8 +411,6 @@ func (l renewFailureLocker) Lock(ctx context.Context, _, _ string) (context.Cont
 	return lockCtx, func() error { return l.err }, nil
 }
 
-// makeRegWithRecord builds a registry that already has the given record and
-// an ingest status (bypassing validation that would reject the bad path).
 func makeRegWithRecord(t *testing.T, rec dataset.Record) *dataset.Registry {
 	t.Helper()
 	mem := &memBackend{files: make(map[string][]byte)}
@@ -474,11 +427,9 @@ func makeRegWithRecord(t *testing.T, rec dataset.Record) *dataset.Registry {
 	}
 	reg := dataset.NewRegistry(mem, paths, nil)
 
-	// Write the record JSON directly to bypass validation.
 	recJSON, _ := rec.Marshal()
 	_ = mem.WriteFile(context.Background(), paths.RecordFile(rec.Name, rec.Version), recJSON, false)
 
-	// Write a minimal registered status.
 	status := dataset.IngestStatus{
 		SchemaVersion: dataset.IngestStatusSchemaVersion,
 		Name:          rec.Name,

@@ -1,17 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package cost builds the portal's Cost board.
-//
-// The board's spine is allocation-based GPU-hours and estimated cost by TauGrid
-// workspace from CostTracking.GpuCostHourly. A second query uses GpuHealth()
-// utilization to list underutilized physical GPUs so operators can reclaim
-// capacity without treating exporter pods as owners.
-//
-// Data access is the shell-out kustoquery.Querier seam (shared with the Cluster
-// board), so tests inject a fake with canned Kusto JSON and no live ADX.
-// The portal queries Metrics and reaches CostTracking through a same-cluster
-// cross-database reference.
 package cost
 
 import (
@@ -25,22 +14,12 @@ import (
 	"github.com/Azure/taugrid/core/kustoquery"
 )
 
-// DefaultWindow is the chargeback look-back.
 const DefaultWindow = 7 * 24 * time.Hour
 
-// DefaultIdleThresholdPct flags a GPU as underutilized when its average
-// utilization over the window is below this.
 const DefaultIdleThresholdPct = 20.0
 
-// idleMinSamples requires a GPU to have enough utilization samples before it can
-// be called idle, so a GPU seen once at 0% is not reported. Mirrors the panel's
-// `Samples > 10`.
 const idleMinSamples = 10
 
-// Options controls the board queries. Window defaults to DefaultWindow;
-// IdleThresholdPct defaults to DefaultIdleThresholdPct. Namespace and Cluster,
-// when set, scope every query to one workspace's rows in the shared Metrics
-// database (both safe KQL literals).
 type Options struct {
 	Window           time.Duration
 	IdleThresholdPct float64
@@ -49,7 +28,6 @@ type Options struct {
 	Cluster          string
 }
 
-// WorkspaceCost is one workspace's allocation chargeback over the window.
 type WorkspaceCost struct {
 	Workspace         string       `json:"workspace"`
 	Namespace         string       `json:"namespace"`
@@ -62,9 +40,6 @@ type WorkspaceCost struct {
 	Coverage          CostCoverage `json:"coverage"`
 }
 
-// CostCoverage counts hourly allocation rows, except UtilizationSamples which
-// counts valid raw GPU utilization readings. Counts describe observed data,
-// not expected inventory or completeness over the requested time window.
 type CostCoverage struct {
 	ObservedSamples    int `json:"observedSamples"`
 	GPUHoursSamples    int `json:"gpuHoursSamples"`
@@ -72,8 +47,6 @@ type CostCoverage struct {
 	UtilizationSamples int `json:"utilizationSamples"`
 }
 
-// IdleCoverage separates observed GPU groups from groups with valid readings
-// and those with enough readings to assess idleness.
 type IdleCoverage struct {
 	ObservedGPUs    int `json:"observedGPUs"`
 	MeasuredGPUs    int `json:"measuredGPUs"`
@@ -82,7 +55,6 @@ type IdleCoverage struct {
 	ValidSamples    int `json:"validSamples"`
 }
 
-// IdleGPU is one underutilized GPU (average utilization below the threshold).
 type IdleGPU struct {
 	Instance   string  `json:"instance"`
 	GPU        string  `json:"gpu"`
@@ -93,9 +65,6 @@ type IdleGPU struct {
 	Samples    int     `json:"samples"`
 }
 
-// Snapshot is the Cost board payload: per-workspace allocation cost plus the
-// physical idle-GPU list and window-total rollups. Availability means at least
-// one valid cost/hour sample or idle-eligible GPU, not complete window coverage.
 type Snapshot struct {
 	Window                string          `json:"window"`
 	TotalGPUHours         float64         `json:"totalGPUHours"`
@@ -109,8 +78,6 @@ type Snapshot struct {
 	IdleGPUs              []IdleGPU       `json:"idleGPUs"`
 }
 
-// Board runs the allocation-cost and GpuHealth utilization queries via the
-// Querier and assembles the Snapshot.
 func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, error) {
 	window := opts.Window
 	if window <= 0 {
@@ -132,16 +99,10 @@ func Board(ctx context.Context, q kustoquery.Querier, opts Options) (Snapshot, e
 	return assemble(window, threshold, opts.Namespace, opts.Cluster, workspaceRows, idleRows), nil
 }
 
-// windowSeconds renders a duration as an integer-second count for ago(), never
-// below 1s (injection-proof literal).
 func windowSeconds(window time.Duration) int64 {
 	return max(int64(window/time.Second), 1)
 }
 
-// buildWorkspaceKQL renders allocation GPU-hours and estimated cost from the
-// hourly chargeback table. It accepts only schema-v4 rows because older rows
-// have no trustworthy cluster identity in shared ADX databases. gpu_count is
-// fractional GPU-hours; peak_gpu_count is each cluster's sampled peak.
 func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string) string {
 	if strings.TrimSpace(database) == "" {
 		database = "CostTracking"
@@ -164,8 +125,6 @@ func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string
 	b.WriteString("| summarize ClusterGpuHours=sum(gpu_count), ClusterCost=sum(hourly_cost), ClusterPeakGpus=max(reported_peak_gpu_count), ObservedSamples=count(), GPUHoursSamples=countif(isnotnull(gpu_count)), CostSamples=countif(isnotnull(hourly_cost)) by Timestamp, workspace, namespace, Cluster\n")
 	b.WriteString("| summarize HourlyGpuHours=sum(ClusterGpuHours), HourlyCost=sum(ClusterCost), HourlyPeakGpus=sum(ClusterPeakGpus), ObservedSamples=sum(ObservedSamples), GPUHoursSamples=sum(GPUHoursSamples), CostSamples=sum(CostSamples) by Timestamp, workspace, namespace\n")
 	b.WriteString("| summarize GpuHours=round(sum(HourlyGpuHours), 1), EstimatedCostUSD=round(sum(HourlyCost), 2), PeakGpus=round(max(HourlyPeakGpus), 2), ObservedSamples=sum(ObservedSamples), GPUHoursSamples=sum(GPUHoursSamples), CostSamples=sum(CostSamples) by workspace, namespace;\n")
-	// Schema-v4 avg_util already coalesces absent readings to zero. Query raw
-	// telemetry instead: that lost availability cannot be recovered from cost rows.
 	b.WriteString("let WorkspaceUtil = GpuHealth()\n")
 	fmt.Fprintf(&b, "| where Timestamp > ago(%ds)\n", windowSeconds(window))
 	b.WriteString("| where metric == 'gpu_utilization'\n")
@@ -186,8 +145,6 @@ func buildWorkspaceKQL(window time.Duration, database, namespace, cluster string
 	return b.String()
 }
 
-// buildIdleKQL returns every observed GPU group, including invalid-only groups,
-// so an empty idle list can be distinguished from missing or insufficient data.
 func buildIdleKQL(window time.Duration, namespace, cluster string) string {
 	var b strings.Builder
 	b.WriteString("GpuHealth()\n")
@@ -206,7 +163,6 @@ func buildIdleKQL(window time.Duration, namespace, cluster string) string {
 	return b.String()
 }
 
-// assemble folds the two result sets into a Snapshot and totals GPU-hours.
 func assemble(window time.Duration, threshold float64, namespace, cluster string, workspaceRows, idleRows []kustoquery.Row) Snapshot {
 	snap := Snapshot{
 		Window:     window.String(),
@@ -322,8 +278,6 @@ func sampleCount(row kustoquery.Row, column string) int {
 	return int(value)
 }
 
-// round1 rounds to one decimal, matching the KQL round(..., 1) so summed totals
-// don't accumulate float noise in the payload.
 func round1(v float64) float64 {
 	return math.Round(v*10) / 10
 }

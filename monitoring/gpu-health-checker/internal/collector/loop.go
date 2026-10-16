@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package collector implements the long-running DCGM sample collection daemon.
-// It reads DCGM field values and writes them to a SQLite database.
 package collector
 
 import (
@@ -21,12 +19,8 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// ErrTopologyChanged signals that GPU topology changed during collection.
-// The collector cannot safely continue with a stale DCGM group and must
-// restart so that the orchestrator (systemd / k8s) rebuilds the watch set.
 var ErrTopologyChanged = errors.New("gpu topology changed — collector restart required")
 
-// Collector manages the DCGM → SQLite collection loop.
 type Collector struct {
 	client    *dcgmclient.Client
 	db        *store.DB
@@ -36,7 +30,6 @@ type Collector struct {
 	verbose   bool
 }
 
-// New creates a new Collector.
 func New(client *dcgmclient.Client, db *store.DB, cfg *config.Config, interval, retention time.Duration, verbose bool) *Collector {
 	return &Collector{
 		client:    client,
@@ -48,7 +41,6 @@ func New(client *dcgmclient.Client, db *store.DB, cfg *config.Config, interval, 
 	}
 }
 
-// Run starts the collection loop. It blocks until the context is cancelled.
 func (c *Collector) Run(ctx context.Context) error {
 	gpuCount, err := c.client.GPUCount()
 	if err != nil {
@@ -56,7 +48,6 @@ func (c *Collector) Run(ctx context.Context) error {
 	}
 	slog.Info("collector starting", "gpus", gpuCount, "interval", c.interval, "retention", c.retention)
 
-	// Create a DCGM group containing all GPUs.
 	groupID, err := dcgm.CreateGroup("gpu_health_checker")
 	if err != nil {
 		return fmt.Errorf("create dcgm group: %w", err)
@@ -68,8 +59,7 @@ func (c *Collector) Run(ctx context.Context) error {
 		}
 	}
 
-	// Setup field watches: 1-second update frequency, retain for the collection interval.
-	updateFreqMicros := int64(1_000_000) // 1 second
+	updateFreqMicros := int64(1_000_000)
 	maxKeepAge := c.retention.Seconds()
 	maxKeepSamples := int32(c.retention / time.Second)
 	fg, err := dcgmclient.SetupFieldWatch(groupID, updateFreqMicros, maxKeepAge, maxKeepSamples)
@@ -78,12 +68,10 @@ func (c *Collector) Run(ctx context.Context) error {
 	}
 	defer func() { _ = fg.Destroy() }()
 
-	// Collect GPU static info once at startup and periodically.
 	if err := c.collectGPUInfo(gpuCount); err != nil {
 		slog.Error("initial GPU info collection failed", "error", err)
 	}
 
-	// Apply startup jitter to prevent thundering herd across nodes.
 	jitter := time.Duration(rand.Int64N(int64(c.interval)))
 	slog.Info("applying startup jitter", "jitter", jitter)
 	select {
@@ -92,7 +80,6 @@ func (c *Collector) Run(ctx context.Context) error {
 	case <-time.After(jitter):
 	}
 
-	// Run the first collection immediately, then on a ticker.
 	if err := c.collect(gpuCount, groupID); err != nil {
 		slog.Error("collection cycle failed", "error", err)
 	}
@@ -124,10 +111,7 @@ func (c *Collector) Run(ctx context.Context) error {
 	}
 }
 
-// collect reads all watched DCGM fields for all GPUs, inserts samples,
-// runs health diagnostics, and prunes old data.
 func (c *Collector) collect(gpuCount uint, groupID dcgm.GroupHandle) error {
-	// Check for GPU count changes (hot-add/removal).
 	currentCount, err := c.client.GPUCount()
 	if err != nil {
 		slog.Warn("GPU count check failed", "error", err)
@@ -166,19 +150,16 @@ func (c *Collector) collect(gpuCount uint, groupID dcgm.GroupHandle) error {
 		}
 	}
 
-	// Collect NVLink and NVSwitch link status.
 	if err := c.collectNVLinkStatus(now); err != nil {
 		slog.Error("nvlink status collection failed", "error", err)
 	}
 
-	// Run DCGM health diagnostics if enabled.
 	if c.cfg.Checks.Health.Enabled {
 		if err := c.collectHealthChecks(groupID, now); err != nil {
 			slog.Error("health check collection failed", "error", err, "level", c.cfg.Checks.Health.Level)
 		}
 	}
 
-	// Prune old data.
 	if err := c.db.Prune(c.retention); err != nil {
 		slog.Error("prune failed", "error", err)
 	}
@@ -187,12 +168,6 @@ func (c *Collector) collect(gpuCount uint, groupID dcgm.GroupHandle) error {
 	return nil
 }
 
-// healthWatchMask returns the DCGM health watch bitmask for the configured level.
-// When checkNVSwitch is false, NVSwitch watches are excluded even at level 3.
-//
-//	Level 1: PCIe, Memory, Thermal, Power, Driver (core hardware)
-//	Level 2: + NVLink, PMU, MCU, SM, InfoROM
-//	Level 3: + NVSwitch nonfatal/fatal (only if checkNVSwitch is true)
 func healthWatchMask(level int, checkNVSwitch bool) dcgm.HealthSystem {
 	mask := dcgm.DCGM_HEALTH_WATCH_PCIE |
 		dcgm.DCGM_HEALTH_WATCH_MEM |
@@ -216,9 +191,6 @@ func healthWatchMask(level int, checkNVSwitch bool) dcgm.HealthSystem {
 	return mask
 }
 
-// collectHealthChecks runs DCGM health diagnostics and stores results.
-// NVSwitch health watches are only included when NVSwitch hardware is present
-// (detected at client init via entity enumeration).
 func (c *Collector) collectHealthChecks(groupID dcgm.GroupHandle, now int64) error {
 	hasNVSwitch := c.client.Caps.HasNVSwitch && c.cfg.NVLink.CheckNVSwitch
 	mask := healthWatchMask(c.cfg.Checks.Health.Level, hasNVSwitch)
@@ -263,8 +235,6 @@ func (c *Collector) collectHealthChecks(groupID dcgm.GroupHandle, now int64) err
 	return nil
 }
 
-// collectNVLinkStatus queries NVLink link states and stores per-GPU and
-// per-NVSwitch active link counts as samples.
 func (c *Collector) collectNVLinkStatus(now int64) error {
 	summary, err := c.client.GetNVLinkStatus()
 	if err != nil {
@@ -291,8 +261,6 @@ func (c *Collector) collectNVLinkStatus(now int64) error {
 		})
 	}
 	for swIdx, counts := range summary.NVSwitchLinks {
-		// Store NVSwitch link counts with negative GPU index to distinguish
-		// from GPU entities. GPU field is int so -1000-swIdx gives a unique key.
 		gpu := -1 - int(swIdx)
 		samples = append(samples, store.Sample{
 			Timestamp: now,
@@ -320,7 +288,6 @@ func (c *Collector) collectNVLinkStatus(now int64) error {
 	return nil
 }
 
-// collectGPUInfo refreshes GPU static info in the database.
 func (c *Collector) collectGPUInfo(gpuCount uint) error {
 	now := time.Now().Unix()
 	for i := uint(0); i < gpuCount; i++ {
@@ -343,7 +310,6 @@ func (c *Collector) collectGPUInfo(gpuCount uint) error {
 	return nil
 }
 
-// fieldNameMap maps DCGM field IDs to their string names in the database.
 var fieldNameMap = map[dcgmclient.FieldID]string{
 	dcgmclient.FieldXIDErrors:            fieldnames.XIDErrors,
 	dcgmclient.FieldECCDBEVolTotal:       fieldnames.ECCDBEVol,
@@ -371,8 +337,6 @@ var fieldNameMap = map[dcgmclient.FieldID]string{
 	dcgmclient.FieldNVSwitchTemp:         fieldnames.NVSwitchTemp,
 }
 
-// fieldName maps a DCGM field ID to a human-readable name used as the
-// "field" column value in the samples table.
 func fieldName(fid dcgmclient.FieldID) string {
 	if name, ok := fieldNameMap[fid]; ok {
 		return name
@@ -387,7 +351,6 @@ func init() {
 	}
 }
 
-// healthSystemName maps a DCGM health system bitmask to a name.
 func healthSystemName(sys dcgm.HealthSystem) string {
 	switch sys {
 	case dcgm.DCGM_HEALTH_WATCH_PCIE:

@@ -1,15 +1,3 @@
-# GPU training config.
-#
-# tau/train.yaml is CPU-only so it can run before the platform has GPU capacity.
-# This config is the GPU counterpart: `policy.shape` is what actually requests
-# GPUs, so `1x` renders `nvidia.com/gpu: 1` on the pod. Raise it to `8x` for a
-# full node once the platform confirms that capacity exists.
-#
-#   tau run train-gpu
-#
-# Verify the rendered pod before submitting:
-#
-#   tau run --config tau/train-gpu.yaml --dry-run=client
 name: {{.RunName}}-train-gpu
 engine: job
 entrypoint: ../scripts/train.sh
@@ -30,19 +18,7 @@ runtime:
   cpu_limit: "16"
   memory_limit: 128Gi
 policy:
-  # Ask the platform which GPU classes this cluster exposes, then pin one:
-  # gpu_class: h200
   disable_default_priorities: true
-# Durable storage for datasets and checkpoints, mounted at /data.
-#
-# The platform must provision this PVC in your workspace namespace first, and
-# it must be Bound. Confirm before uncommenting, otherwise the pod stays
-# Pending with `persistentvolumeclaim "blob-training" not found`:
-#
-#   tau workspace check {{.Workspace}}
-#
-# storage:
-#   data_pvc: blob-training
 experiment:
   project: {{.Title}}
   title: {{.Title}} GPU train scaffold

@@ -12,18 +12,11 @@ import (
 	"time"
 )
 
-// Sample is a timestamped metric value for JSON serialization.
 type Sample struct {
 	Time  time.Time `json:"t"`
 	Value float64   `json:"v"`
 }
 
-// Availability captures one required scrape target's debounce state.
-//
-// Established records whether the writing process had proven the target's state
-// and was therefore publishing this condition. A snapshot written before this
-// field existed decodes as false, which is the conservative reading: the
-// restored process stays silent until it proves the state itself.
 type Availability struct {
 	FailingSince time.Time `json:"failingSince,omitempty"`
 	HealthySince time.Time `json:"healthySince,omitempty"`
@@ -31,7 +24,6 @@ type Availability struct {
 	Established  bool      `json:"established,omitempty"`
 }
 
-// Snapshot captures all in-memory state for persistence across restarts.
 type Snapshot struct {
 	History      map[string][]Sample     `json:"history"`
 	Pending      map[string]time.Time    `json:"pending"`
@@ -42,7 +34,6 @@ type Snapshot struct {
 
 const stateFile = "state.json"
 
-// Save writes the snapshot to disk atomically (write tmp → rename).
 func Save(dir string, snap *Snapshot) error {
 	snap.SavedAt = time.Now()
 	data, err := json.Marshal(snap)
@@ -67,8 +58,6 @@ func Save(dir string, snap *Snapshot) error {
 	return nil
 }
 
-// Load reads the snapshot from disk. Returns nil (no error) if the file
-// doesn't exist — the collector will start fresh.
 func Load(dir string, maxAge time.Duration) (*Snapshot, error) {
 	path := filepath.Join(dir, stateFile)
 	data, err := os.ReadFile(path)

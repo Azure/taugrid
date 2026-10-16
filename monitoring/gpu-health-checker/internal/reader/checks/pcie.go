@@ -14,7 +14,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// PCIeReader checks PCIe replay error rates.
 type PCIeReader struct{}
 
 func (r *PCIeReader) Name() string { return "pcie" }

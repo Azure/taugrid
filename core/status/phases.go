@@ -34,8 +34,6 @@ type Phase struct {
 	StartedAt time.Time   `json:"startedAt,omitempty,omitzero"`
 }
 
-// StartupPhases returns the structured lifecycle phases used by the human
-// renderer. Machine consumers should use this instead of parsing Render.
 func StartupPhases(s Snapshot) []Phase {
 	return startupPhasesAt(s, time.Now())
 }
@@ -1160,15 +1158,10 @@ func rayJobStatusFailed(rj RayJob) bool {
 	return false
 }
 
-// RayJobFailed reports whether any authoritative RayJob status field contains
-// a terminal failure marker.
 func RayJobFailed(rj RayJob) bool {
 	return rayJobStatusFailed(rj)
 }
 
-// singleLine collapses all whitespace runs into single spaces. Kubernetes
-// condition messages wrap across lines, and a raw newline would break the
-// rendered row it is placed in.
 func singleLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

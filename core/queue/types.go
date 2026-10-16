@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package queue builds a researcher-facing view of Kueue queue pressure.
 package queue
 
 import (
@@ -13,16 +12,11 @@ import (
 )
 
 const (
-	// DefaultNamespace is the default Kueue LocalQueue namespace for Tau workloads.
-	DefaultNamespace = runtopology.DefaultLocalQueueNamespace
-	// GPUResource re-exports the Kueue DRA GPU accounting resource name so
-	// queue consumers do not need a second import for the common case.
-	GPUResource = kueueapi.GPUResource
-	// GPUResourceDevicePlugin re-exports the NVIDIA device-plugin resource name.
+	DefaultNamespace        = runtopology.DefaultLocalQueueNamespace
+	GPUResource             = kueueapi.GPUResource
 	GPUResourceDevicePlugin = kueueapi.GPUResourceDevicePlugin
 )
 
-// Options controls live queue fetches and post-fetch filtering.
 type Options struct {
 	Namespace string
 	Team      string
@@ -30,7 +24,6 @@ type Options struct {
 	GPUClass  string
 }
 
-// Snapshot is the machine-readable queue/capacity view returned by Tau.
 type Snapshot struct {
 	Namespace string   `json:"namespace"`
 	Groups    []Group  `json:"groups"`
@@ -38,11 +31,7 @@ type Snapshot struct {
 	Warnings  []string `json:"warnings,omitempty"`
 }
 
-// Group is one user-facing queue slice projected from live Kueue objects.
 type Group struct {
-	// Namespace is the LocalQueue namespace this group reports on. It is set
-	// on every group so a cluster-wide snapshot can distinguish the same queue
-	// name across namespaces.
 	Namespace        string            `json:"namespace,omitempty"`
 	GPUClass         string            `json:"gpuClass"`
 	Team             string            `json:"team"`
@@ -65,7 +54,6 @@ type Group struct {
 	PendingWorkloads []PendingWorkload `json:"pendingWorkloads,omitempty"`
 }
 
-// Condition mirrors the small Kueue condition subset exposed in queue output.
 type Condition struct {
 	Type    string `json:"type"`
 	Status  string `json:"status"`
@@ -73,7 +61,6 @@ type Condition struct {
 	Message string `json:"message,omitempty"`
 }
 
-// PendingWorkload is a Kueue Workload that has not been admitted or finished.
 type PendingWorkload struct {
 	Name                       string    `json:"name"`
 	Namespace                  string    `json:"namespace"`
@@ -94,9 +81,6 @@ type PendingWorkload struct {
 	CreatedAt                  time.Time `json:"createdAt,omitempty"`
 }
 
-// SortPendingWorkloads orders the observed queue the same way TauGrid's
-// BestEffortFIFO baseline considers it: higher known priority first, then FIFO.
-// Workloads without an observed numeric priority follow prioritized workloads.
 func SortPendingWorkloads(workloads []PendingWorkload) {
 	sort.Slice(workloads, func(i, j int) bool {
 		a, b := workloads[i], workloads[j]

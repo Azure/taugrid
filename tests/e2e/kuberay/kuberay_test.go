@@ -1,14 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package kuberay contains e2e tests for the KubeRay operator.
-//
-// Tests verify that the KubeRay Helm chart deploys correctly and that
-// RayClusters can be created and reach a healthy running state.
-//
-// TestMain sets up a shared namespace for RayCluster tests and tears it
-// down at the end. Each test is fully independent — it creates and cleans
-// up its own RayCluster resources.
 package kuberay
 
 import (
@@ -34,7 +26,6 @@ const (
 )
 
 func TestMain(m *testing.M) {
-	// Skip all setup if e2e tests are not enabled
 	if os.Getenv("AI_RUNTIME_E2E") != "1" {
 		os.Exit(m.Run())
 	}
@@ -65,26 +56,19 @@ func runTests(m *testing.M) (code int) {
 func TestRayClusterRunning(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 
-	// CR-specific diagnostics on failure (controller logs are auto-captured by NewTestContext).
 	tc.OnFailure(func() {
 		tc.DumpPods(testNamespace, "")
 		tc.DumpEvents(testNamespace)
 		tc.DumpCRState(testNamespace, e2e.RayClusterGVR, testRayClusterName)
 	})
 
-	// RayCluster is created by TestMain — wait for pods to be Running
-
-	// Wait for the head pod to be Running and Ready.
 	err := tc.WaitForRunningPodsByLabel(testNamespace, "ray.io/node-type=head", 1, 3*time.Minute)
 	require.NoError(t, err, "RayCluster should have 1 running head pod")
 
-	// Wait for the worker pod to be Running and Ready (needs GCS connection to head).
 	err = tc.WaitForRunningPodsByLabel(testNamespace, "ray.io/node-type=worker", 1, 3*time.Minute)
 	require.NoError(t, err, "RayCluster should have 1 running worker pod")
 }
 
-// TestRayDataProgressBarsDisabled verifies that the operator injects
-// RAY_DATA_DISABLE_PROGRESS_BARS=1 into Ray containers via defaultContainerEnvs.
 func TestRayDataProgressBarsDisabled(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 

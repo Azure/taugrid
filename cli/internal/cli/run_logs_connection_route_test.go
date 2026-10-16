@@ -17,8 +17,6 @@ import (
 )
 
 func TestCachedRunLogsRouteUsesItsVerifiedSystemNamespace(t *testing.T) {
-	// An invalid endpoint proves the real execute path reached the selected
-	// ConfigMap, without contacting ADX or acquiring an Azure credential.
 	logPath := fakeKubectl(t, `
 if [ "$1 $2 $3 $4" != "--kubeconfig worker.conf --context worker" ]; then
   echo "wrong cluster route: $*" >&2; exit 3

@@ -139,7 +139,6 @@ func readMetricsCompletionStatus(path string) (metricsCompletionStatus, error) {
 	if err != nil {
 		return metricsCompletionStatus{}, err
 	}
-	// Retrying the same sentinel must not create a new terminal observation.
 	status.CompletedAt = info.ModTime().UTC().Format(time.RFC3339Nano)
 	rawText := strings.TrimSpace(string(raw))
 	if rawText == "" {

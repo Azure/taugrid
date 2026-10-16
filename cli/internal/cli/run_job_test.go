@@ -738,8 +738,6 @@ func TestExecuteRunTargetWritesBackResolvedNamespaceRayJob(t *testing.T) {
 	if err := executeRunTarget(parent, target, "tau run", runExperimentMetadata{}); err != nil {
 		t.Fatalf("executeRunTarget: %v", err)
 	}
-	// Verify the retry dispatch switch reads the resolved namespace from
-	// the ray target (not from stale targetOptions).
 	if rayjob.Options.namespace != "demo" {
 		t.Fatalf("RayJob target namespace not propagated: got %q, want %q", rayjob.Options.namespace, "demo")
 	}
@@ -930,9 +928,6 @@ func TestExecuteRunJobServerDryRunValidatesAuthoritativeQueue(t *testing.T) {
 	}
 }
 
-// TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn is the end-to-end
-// counterpart: when the researcher supplied both values, nothing is substituted
-// and the render must not claim their inputs will be re-resolved.
 func TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "train.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\necho train\n"), 0o755); err != nil {
@@ -968,10 +963,6 @@ func TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn(t *testing.T) {
 	}
 }
 
-// TestClientDryRunPlaceholdersReadAsUnresolved pins the one property the whole
-// approach rests on: a reader must not mistake a placeholder for a resolved
-// value. Angle brackets are illegal in RFC 1123 names, so the value is also
-// rejected server-side if it ever escapes.
 func TestClientDryRunPlaceholdersReadAsUnresolved(t *testing.T) {
 	for _, placeholder := range []string{clientDryRunQueuePlaceholder, clientDryRunNamespacePlaceholder} {
 		if !strings.Contains(placeholder, "unresolved") {
@@ -983,10 +974,6 @@ func TestClientDryRunPlaceholdersReadAsUnresolved(t *testing.T) {
 	}
 }
 
-// TestClientDryRunPlaceholderWarningNamesOnlySubstitutedFields guards against
-// telling a researcher their own explicit --namespace "is resolved at submit",
-// which reads as "your flag was ignored". The suppressed-entirely case is
-// covered end to end by TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn.
 func TestClientDryRunPlaceholderWarningNamesOnlySubstitutedFields(t *testing.T) {
 	got := clientDryRunPlaceholderWarning("namespace")
 	if strings.Contains(got, "queue") {

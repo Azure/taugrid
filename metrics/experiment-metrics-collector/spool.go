@@ -35,8 +35,6 @@ type terminalCheckpoint struct {
 	ChunkDigest string `json:"chunk_digest"`
 }
 
-// chunkManifest is the single durable pending-delivery record. It contains
-// enough source metadata and payload to resume after a crash.
 type chunkManifest struct {
 	SchemaVersion     string `json:"schema_version"`
 	ManifestDigest    string `json:"manifest_digest"`

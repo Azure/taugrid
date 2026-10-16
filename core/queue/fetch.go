@@ -15,9 +15,6 @@ import (
 	"github.com/Azure/taugrid/core/topology"
 )
 
-// BuildSnapshot is the pure parser/aggregator over one namespace's raw Kueue
-// JSON. Callers own the kubectl/API reads so the same mapping serves both the
-// CLI and the portal.
 func BuildSnapshot(namespace string, pol topology.Policy, localQueuesRaw, clusterQueuesRaw, workloadsRaw []byte, opts Options) (Snapshot, error) {
 	if strings.TrimSpace(namespace) == "" {
 		return Snapshot{}, errors.New("queue snapshot namespace is required")
@@ -372,8 +369,6 @@ func conditionsFrom(in []kueueapi.Condition) []Condition {
 	}
 	return out
 }
-
-// --- JSON shapes (subsets of Kueue resources) ---
 
 type workloadList struct {
 	Items []workloadItem `json:"items"`

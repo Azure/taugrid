@@ -16,13 +16,10 @@ import (
 	"github.com/Azure/taugrid/core/topology"
 )
 
-// RawRunner is the read-only kubectl surface used by queue validation.
 type RawRunner interface {
 	Raw(context.Context, []string, []byte) (string, error)
 }
 
-// ValidationOptions describes the resolved queue/lane selection a run path is
-// about to hand to Kubernetes.
 type ValidationOptions struct {
 	Namespace               string
 	QueueName               string
@@ -40,7 +37,6 @@ type ValidationOptions struct {
 	GPUResourceName         string
 }
 
-// ValidationReport is the read-only queue topology observed from the cluster.
 type ValidationReport struct {
 	Namespace      string   `json:"namespace"`
 	QueueName      string   `json:"queueName,omitempty"`
@@ -68,9 +64,6 @@ type validationTarget struct {
 	GPUResourceName         string
 }
 
-// ValidateSelection checks the selected LocalQueue and its backing Kueue
-// objects. It only performs kubectl get calls; it never creates, patches, or
-// repairs queue resources.
 func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions) (ValidationReport, error) {
 	requireActiveClusterQueue := strings.TrimSpace(opts.ClusterQueue) != ""
 	target := opts.resolve()
@@ -351,18 +344,6 @@ func getResourceFlavor(ctx context.Context, r RawRunner, name string) (kueueapi.
 	return item, nil
 }
 
-// gpuClassAllowedFlavors resolves which of a ClusterQueue's GPU-quota
-// ResourceFlavors satisfy an exact researcher gpu_class request.
-//
-// gpu_class is a Kueue ResourceFlavor node-label contract
-// (tau.azure.com/gpu-class), never a ResourceFlavor *name* heuristic: a
-// flavor named "nd-h200-v5" (or one that happens to contain "h100" in its
-// name, e.g. a mislabeled "legacy-h100-pool") only satisfies
-// gpu_class: h200-141gb if its spec.nodeLabels carries that exact value.
-// "any" skips only the class-label equality check. Every candidate is still
-// read and checked against the rendered selectors, tolerations, and topology
-// request. A non-nil, possibly-empty map is always returned so callers never
-// bypass ResourceFlavor validation.
 func gpuClassAllowedFlavors(
 	ctx context.Context,
 	r RawRunner,
@@ -752,8 +733,6 @@ func missingLocalQueueError(target validationTarget, detail string) error {
 	return fmt.Errorf("LocalQueue %q in namespace %q was not found (%s); choose a different --queue or ask the platform owner to inspect and repair that LocalQueue on the workspace cluster", target.QueueName, target.Namespace, detail)
 }
 
-// firstNonEmpty returns the first non-empty string, used to fill a validation
-// target from the live cluster when the caller left a field blank.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {

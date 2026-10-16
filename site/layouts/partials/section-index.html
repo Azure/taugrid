@@ -12,7 +12,6 @@
         {{ $pages = (where $pages "Parent.File.UniqueID" "==" $page.File.UniqueID) -}}
     {{ end -}}
     {{ if or $page.Params.no_list (eq (len $pages) 0) -}}
-    {{/* If no_list is true or there are no subpages, do not show a list. */}}
     {{ else if $page.Params.simple_list -}}
         <ul>
             {{ range $pages -}}

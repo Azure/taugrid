@@ -16,17 +16,10 @@ import (
 	"testing"
 )
 
-// The Tau CLI and this controller are separate Go modules with no dependency
-// in either direction. The CLI is published as an OSS artifact, while the
-// controller contract is internal to this module. Their shared surface remains
-// intentionally small, so a source-parsing contract test is cheaper and safer
-// than a third module or a controller dependency in the CLI.
 const cliMetadataPath = "../../../../core/workloadmeta/keys.go"
 
 var tauTokenRe = regexp.MustCompile(regexp.QuoteMeta(Domain) + `[A-Za-z0-9._-]*`)
 
-// sharedKeys contains only keys that cross the module boundary. Controller-only
-// namespace and quota keys do not belong in the CLI's canonical package.
 var sharedKeys = map[string]string{
 	"LabelWorkspace":        "LabelWorkspace",
 	"AnnotationResultScope": "AnnotationResultScope",
@@ -62,9 +55,6 @@ func TestSharedLabelKeysAgreeWithTauCLI(t *testing.T) {
 	}
 }
 
-// TestNoInlineTauKeyLiterals guards every Go package in this module, including
-// tests and fixtures. That matters because a test asserting the same stale
-// literal would otherwise stay green.
 func TestNoInlineTauKeyLiterals(t *testing.T) {
 	root := moduleRoot(t)
 	var offenders []string

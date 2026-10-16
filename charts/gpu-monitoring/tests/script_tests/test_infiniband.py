@@ -5,7 +5,6 @@ import unittest
 
 from helpers import ScriptTestCase
 
-
 class InfinibandTests(ScriptTestCase):
     def create_fabric(self, name, device_prefix, rate, pkey):
         root = self.test_root / name
@@ -84,7 +83,6 @@ class InfinibandTests(ScriptTestCase):
         self.assertIn(
             "EXPECTED_IB_PKEY must be an explicit hexadecimal PKey", output
         )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,6 @@ name: taugrid
 description: Kubernetes-native TauGrid distribution for fresh AKS clusters.
 type: application
 version: 0.4.4
-# Distribution metadata only; component images are owned by the child charts.
 appVersion: "0.4.4"
 kubeVersion: ">=1.30.0-0"
 keywords:
@@ -28,11 +27,6 @@ dependencies:
     version: 0.4.4
     repository: oci://mcr.microsoft.com/aks/ai-runtime/helm
     condition: components.taugridCore.enabled
-  # GPU node health monitoring follows the Tau control plane. Helm evaluates
-  # only the first condition path that exists in values, so leaving
-  # components.gpuMonitoring unset makes this track tauCoreController; setting
-  # it explicitly overrides that. A cluster running Tau workloads should not be
-  # able to end up with no GPU health signal by default.
   - name: gpu-monitoring
     version: 0.1.9
     repository: oci://mcr.microsoft.com/aks/ai-runtime/helm

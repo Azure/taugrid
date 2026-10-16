@@ -13,13 +13,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// A failed batch Job's own condition only ever carries "BackoffLimitExceeded",
-// which says nothing about why the run died. The real cause lives on the pods,
-// and Kubernetes deletes those pods along with the Job once
-// ttlSecondsAfterFinished elapses — so unless the recorder folds pod evidence
-// into the durable lifecycle row before that happens, the failure becomes
-// permanently undiagnosable. These tests pin that enrichment.
-
 func failedJobSource(pods []Pod) *fakeSource {
 	metadata := testMetadata("train")
 	return &fakeSource{
@@ -59,7 +52,6 @@ func TestFailedJobRecordsPodExitCode(t *testing.T) {
 	if record.State != StateFailed {
 		t.Fatalf("state = %q, want %q", record.State, StateFailed)
 	}
-	// The Job's own reason is kept so nothing that used to be recorded is lost.
 	if !strings.Contains(record.Reason, "BackoffLimitExceeded") {
 		t.Errorf("reason dropped the Job condition: %q", record.Reason)
 	}
@@ -84,8 +76,6 @@ func TestFailedJobRecordsOOMKill(t *testing.T) {
 	}
 }
 
-// A container stuck waiting never terminates, so there is no exit code — but
-// the waiting reason is exactly the diagnosis (bad image, bad config).
 func TestFailedJobRecordsWaitingReason(t *testing.T) {
 	record := terminalRecord(t, failedJobSource([]Pod{
 		jobPod("train-abc", ContainerState{Name: "trainer", Reason: "ImagePullBackOff", Message: "manifest unknown"}),
@@ -102,7 +92,6 @@ func TestFailedJobRecordsWaitingReason(t *testing.T) {
 	}
 }
 
-// A multi-pod Job must not write an unbounded row: one cause plus a count.
 func TestFailedJobSummaryIsBounded(t *testing.T) {
 	pods := []Pod{
 		jobPod("train-a", ContainerState{Name: "trainer", Terminated: true, ExitCode: 2, Reason: "Error", Message: strings.Repeat("x", 4000)}),
@@ -130,13 +119,8 @@ func TestFailedJobCountsAdditionalFailures(t *testing.T) {
 	}
 }
 
-// Succeeded containers are not failures; a Job that failed for another reason
-// must not be described by a container that exited 0.
 func TestSucceededContainersAreNotTreatedAsFailures(t *testing.T) {
 	pod := jobPod("train-abc", ContainerState{Name: "sidecar", Terminated: true, ExitCode: 0, Reason: "Completed"})
-	// A pod whose only container exited 0 reports phase Succeeded. Leaving the
-	// fixture's Failed phase here would assert against a state Kubernetes does
-	// not produce, and would mask the pod-level fallback rather than test it.
 	pod.Phase = "Succeeded"
 	record := terminalRecord(t, failedJobSource([]Pod{pod}))
 
@@ -145,10 +129,6 @@ func TestSucceededContainersAreNotTreatedAsFailures(t *testing.T) {
 	}
 }
 
-// A pod can fail with no container status at all — evicted, or rejected by
-// kubelet admission. The pod-level reason is then the only evidence, and
-// dropping it leaves the durable record at "BackoffLimitExceeded" despite the
-// cause being known and already captured by ListPods.
 func TestFailedJobRecordsPodLevelReasonWhenNoContainerFailed(t *testing.T) {
 	pod := jobPod("train-abc")
 	pod.Reason = "Evicted"
@@ -165,8 +145,6 @@ func TestFailedJobRecordsPodLevelReasonWhenNoContainerFailed(t *testing.T) {
 	}
 }
 
-// A pod with no reason at all still carries its phase, which is weak evidence
-// but strictly better than restating the Job condition.
 func TestFailedPodWithoutReasonStillRecorded(t *testing.T) {
 	record := terminalRecord(t, failedJobSource([]Pod{jobPod("train-abc")}))
 
@@ -175,10 +153,6 @@ func TestFailedPodWithoutReasonStillRecorded(t *testing.T) {
 	}
 }
 
-// Evidence strength, not pod name, must decide what the summary reports. A pod
-// sorting first alphabetically while merely waiting must not mask an OOM kill
-// on a later-named pod: only the strongest candidate is summarised, and the
-// pods are deleted with the Job.
 func TestStrongestEvidenceWinsOverLexicalOrder(t *testing.T) {
 	record := terminalRecord(t, failedJobSource([]Pod{
 		jobPod("train-aaa", ContainerState{Name: "trainer", Reason: "ImagePullBackOff"}),
@@ -193,7 +167,6 @@ func TestStrongestEvidenceWinsOverLexicalOrder(t *testing.T) {
 	}
 }
 
-// A non-zero exit outranks a container that terminated cleanly with a reason.
 func TestNonZeroExitOutranksCleanTermination(t *testing.T) {
 	record := terminalRecord(t, failedJobSource([]Pod{
 		jobPod("train-aaa", ContainerState{Name: "trainer", Terminated: true, ExitCode: 0, Reason: "Completed"}),
@@ -205,7 +178,6 @@ func TestNonZeroExitOutranksCleanTermination(t *testing.T) {
 	}
 }
 
-// Container-level evidence outranks a pod-level reason on another pod.
 func TestContainerEvidenceOutranksPodLevelReason(t *testing.T) {
 	evicted := jobPod("train-aaa")
 	evicted.Reason = "Evicted"
@@ -219,7 +191,6 @@ func TestContainerEvidenceOutranksPodLevelReason(t *testing.T) {
 	}
 }
 
-// Pods belonging to a different Job must never be attributed to this one.
 func TestPodCorrelationIgnoresForeignPods(t *testing.T) {
 	foreign := jobPod("other-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 9, Reason: "Error"})
 	foreign.OwnerName = "other"
@@ -233,8 +204,6 @@ func TestPodCorrelationIgnoresForeignPods(t *testing.T) {
 	}
 }
 
-// Correlation must also work off the Job-name label, since that is what older
-// clusters set and what survives an ownerReference rewrite.
 func TestPodCorrelationMatchesJobNameLabel(t *testing.T) {
 	pod := jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 5, Reason: "Error"})
 	pod.OwnerKind = ""
@@ -247,8 +216,6 @@ func TestPodCorrelationMatchesJobNameLabel(t *testing.T) {
 	}
 }
 
-// The lifecycle row is the durable artifact. Losing pod reads must degrade the
-// summary, never the record.
 func TestPodListFailureDegradesGracefully(t *testing.T) {
 	source := failedJobSource(nil)
 	source.podErr = context.DeadlineExceeded
@@ -266,8 +233,6 @@ func TestPodListFailureDegradesGracefully(t *testing.T) {
 	}
 }
 
-// The recorder de-duplicates by fingerprint, so a summary that churns between
-// passes would re-ingest forever.
 func TestFailureSummaryIsStableAcrossPasses(t *testing.T) {
 	pods := []Pod{
 		jobPod("train-b", ContainerState{Name: "trainer", Terminated: true, ExitCode: 3, Reason: "Error"}),
@@ -275,7 +240,6 @@ func TestFailureSummaryIsStableAcrossPasses(t *testing.T) {
 	}
 	first := terminalRecord(t, failedJobSource(pods))
 
-	// Same pods, reported in the opposite order by the API server.
 	reordered := []Pod{pods[1], pods[0]}
 	second := terminalRecord(t, failedJobSource(reordered))
 
@@ -285,8 +249,6 @@ func TestFailureSummaryIsStableAcrossPasses(t *testing.T) {
 	}
 }
 
-// Container messages are arbitrary user text. A byte-wise truncation would cut
-// a multi-byte rune in half and write invalid UTF-8 into the durable record.
 func TestFailureSummaryTruncationPreservesValidUTF8(t *testing.T) {
 	record := terminalRecord(t, failedJobSource([]Pod{
 		jobPod("train-abc", ContainerState{
@@ -306,11 +268,6 @@ func TestFailureSummaryTruncationPreservesValidUTF8(t *testing.T) {
 	}
 }
 
-// controller_version is a durable audit column in TauExpRunLifecycle. It used
-// to fall back to app.kubernetes.io/version, which nothing in TauGrid writes
-// and which researchers set to their own git SHA — so the column silently
-// recorded a plausible-looking value that was not a TauGrid version. Empty is
-// the only honest answer until tau stamps its own version (Azure/taugrid#113).
 func TestControllerVersionNeverBorrowsResearcherLabel(t *testing.T) {
 	metadata := testMetadata("train")
 	metadata.Annotations["app.kubernetes.io/version"] = "87703b5"
@@ -323,7 +280,6 @@ func TestControllerVersionNeverBorrowsResearcherLabel(t *testing.T) {
 	}
 }
 
-// The tau-owned annotation is still the real source, once something writes it.
 func TestControllerVersionUsesTauAnnotation(t *testing.T) {
 	metadata := testMetadata("train")
 	metadata.Annotations[workloadmeta.AnnotationControllerVerion] = "v0.3.0"
@@ -337,15 +293,6 @@ func TestControllerVersionUsesTauAnnotation(t *testing.T) {
 	}
 }
 
-// A transient pod-read failure must never overwrite evidence already recorded.
-//
-// Before this guard, a second pass without pod visibility re-emitted the same
-// terminal failure with the degraded "BackoffLimitExceeded" text. Both rows
-// carry an identical observed_at — it derives from the Job's terminal
-// condition, which does not move between passes — and the dashboards collapse
-// with arg_max(observed_at, *), whose tie-break on equal values is arbitrary.
-// The degraded row could therefore win and hide the exit code, which is the
-// exact evidence loss the failure summary exists to prevent.
 func TestTransientPodFailureDoesNotOverwriteRecordedEvidence(t *testing.T) {
 	source := failedJobSource([]Pod{
 		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 42, Reason: "Error"}),
@@ -362,7 +309,6 @@ func TestTransientPodFailureDoesNotOverwriteRecordedEvidence(t *testing.T) {
 	}
 	before := len(writer.records)
 
-	// Pod visibility is lost; the Job is unchanged and still terminal.
 	source.podErr = context.DeadlineExceeded
 	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
 		t.Fatal(err)
@@ -375,8 +321,6 @@ func TestTransientPodFailureDoesNotOverwriteRecordedEvidence(t *testing.T) {
 	}
 }
 
-// The guard must not suppress a first observation: if the failure was never
-// recorded, a degraded record is better than no record at all.
 func TestFirstFailureIsRecordedEvenWithoutPods(t *testing.T) {
 	source := failedJobSource(nil)
 	source.podErr = context.DeadlineExceeded
@@ -397,7 +341,6 @@ func TestFirstFailureIsRecordedEvenWithoutPods(t *testing.T) {
 	}
 }
 
-// Once pod reads recover, a genuinely richer record is still allowed through.
 func TestRecoveredPodsStillEnrichAnUnrecordedFailure(t *testing.T) {
 	source := failedJobSource(nil)
 	source.podErr = context.DeadlineExceeded
@@ -426,13 +369,6 @@ func TestRecoveredPodsStillEnrichAnUnrecordedFailure(t *testing.T) {
 	}
 }
 
-// The rollout sequence: a recorder deployed without the pods read verb records
-// degraded failures, then the Role is fixed and enriched records begin. Both
-// describe the same lifecycle event, so both would otherwise carry the same
-// observed_at, and arg_max(observed_at, *) would pick between them arbitrarily
-// — meaning the fix could appear not to have worked.
-//
-// The superseding observation must be strictly newer so the real cause wins.
 func TestEnrichedFailureSupersedesAnEarlierDegradedOne(t *testing.T) {
 	source := failedJobSource(nil)
 	source.podErr = context.DeadlineExceeded
@@ -468,8 +404,6 @@ func TestEnrichedFailureSupersedesAnEarlierDegradedOne(t *testing.T) {
 	}
 }
 
-// A first observation must keep lifecycle-event semantics: its observed_at is
-// when the failure happened, not when the recorder noticed.
 func TestFirstFailureKeepsLifecycleEventTime(t *testing.T) {
 	source := failedJobSource([]Pod{
 		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 3, Reason: "Error"}),
@@ -483,23 +417,17 @@ func TestFirstFailureKeepsLifecycleEventTime(t *testing.T) {
 		if record.State != StateFailed {
 			continue
 		}
-		// newTestReconciler pins Now to 10:01; the fixture's lifecycle time is 10:00.
 		if record.ObservedAt.Equal(time.Date(2026, 7, 16, 10, 1, 0, 0, time.UTC)) {
 			t.Errorf("first observation used poll time %s instead of the lifecycle event time", record.ObservedAt)
 		}
 	}
 }
 
-// Job names are reused. With background deletion an old pod can outlive its
-// Job while an identically named Job is created immediately after, and
-// name-only correlation would persist the dead Job's failure under the new
-// Job's identity — a durable record that is not merely weak but wrong.
 func TestPodFromAnEarlierSameNameJobIsNotAdopted(t *testing.T) {
 	stale := jobPod("train-old", ContainerState{Name: "trainer", Terminated: true, ExitCode: 99, Reason: "Error"})
 	stale.OwnerUID = "uid-previous-job"
 
 	source := failedJobSource([]Pod{stale})
-	// The live Job carries its own identity; testMetadata sets UID uid-train.
 	record := terminalRecord(t, source)
 
 	if strings.Contains(record.Message, "exit code 99") {
@@ -517,8 +445,6 @@ func TestPodMatchingThisJobUIDIsAdopted(t *testing.T) {
 	}
 }
 
-// The controller-uid label carries the same identity for pods whose
-// ownerReference has been stripped.
 func TestControllerUIDLabelIsHonoured(t *testing.T) {
 	pod := jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 5, Reason: "Error"})
 	pod.OwnerKind = ""
@@ -531,10 +457,6 @@ func TestControllerUIDLabelIsHonoured(t *testing.T) {
 	}
 }
 
-// The recorder is restartable. A scheme that remembers what it already wrote
-// in process memory silently stops working after a restart — exactly when a
-// degraded record is most likely to be the one already durable. Ordering must
-// therefore be a pure function of the record's own evidence.
 func TestEvidenceOrderingSurvivesRecorderRestart(t *testing.T) {
 	source := failedJobSource(nil)
 	source.podErr = context.DeadlineExceeded
@@ -544,8 +466,6 @@ func TestEvidenceOrderingSurvivesRecorderRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A brand new Reconciler stands in for a restarted recorder: no memory of
-	// the degraded row it is about to supersede.
 	source.podErr = nil
 	source.pods = []Pod{jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 7, Reason: "Error"})}
 	second := &fakeWriter{}
@@ -564,10 +484,6 @@ func TestEvidenceOrderingSurvivesRecorderRestart(t *testing.T) {
 	}
 }
 
-// A successful pod list that correlates no pods is not enrichment. Such a
-// record must never displace evidence already recorded — the earlier fix
-// retimestamped it as newer, which made arg_max replace an exit code with the
-// generic Job reason deterministically.
 func TestEmptyPodListDoesNotDisplaceRecordedEvidence(t *testing.T) {
 	source := failedJobSource([]Pod{
 		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 42, Reason: "Error"}),
@@ -580,8 +496,6 @@ func TestEmptyPodListDoesNotDisplaceRecordedEvidence(t *testing.T) {
 	enriched := terminalFailureRecord(t, writer.records)
 	before := len(writer.records)
 
-	// Pods are gone — listed successfully, but the Job's pods have been
-	// collected. podErr stays nil, so this is the "successful but empty" path.
 	source.pods = nil
 	if _, err := reconciler.Reconcile(context.Background(), "ray"); err != nil {
 		t.Fatal(err)

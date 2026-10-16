@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// NVLinkReader checks NVLink status and CRC error rates.
 type NVLinkReader struct{}
 
 func (r *NVLinkReader) Name() string { return "nvlink" }

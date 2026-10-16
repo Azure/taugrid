@@ -14,13 +14,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The artifact index is the link that makes CLI-only train -> serve work:
-// `tau serve deploy --from-finetune` resolves a checkpoint by reading
-// <durable>/finetunes/<run>/artifacts.json, and before this step the only
-// writer of that file was the Python SDK wrapper. Managed workflows run the
-// researcher's script directly, so a CLI-only run produced no index and every
-// registry-aware serve path failed to resolve it.
-
 const artifactManifestGPU = `
 schema_version: 1
 name: artifact-demo
@@ -76,16 +69,11 @@ func TestRenderEmitsArtifactIndexStep(t *testing.T) {
 					t.Errorf("rendered %s missing %q", kind, want)
 				}
 			}
-			// It must run after training, not before: the whole point is that
-			// it indexes a checkpoint the script has already written.
 			idxTrain := strings.Index(s, "/script/train.py")
 			idxFinal := strings.Index(s, "TAU_ARTIFACT_CHECKPOINT=")
 			if idxTrain < 0 || idxFinal < 0 || idxFinal < idxTrain {
 				t.Errorf("finalize step at %d must come after train.py at %d", idxFinal, idxTrain)
 			}
-			// Every rendered doc must still be valid YAML — the snippet is
-			// embedded in a block scalar and a single mis-indented line
-			// silently changes the document structure.
 			assertAllDocsParse(t, s)
 		})
 	}
@@ -105,13 +93,6 @@ func TestRenderOmitsArtifactIndexWhenNoCheckpointDeclared(t *testing.T) {
 	}
 }
 
-// The declared checkpoint has to be legible from the workload, not only from
-// the entrypoint text, so a later command can tell a run that produced nothing
-// from one whose promised artifact is missing.
-//
-// Asserts on the decoded value rather than a rendered substring: this renderer
-// quotes scalars and rayjobrender does not, and that difference is incidental
-// to the property under test.
 func TestRenderAnnotatesDeclaredCheckpoint(t *testing.T) {
 	for _, kind := range []string{"job", "rayjob"} {
 		t.Run(kind, func(t *testing.T) {
@@ -136,8 +117,6 @@ func TestRenderOmitsCheckpointAnnotationWhenNoneDeclared(t *testing.T) {
 	}
 }
 
-// firstDocAnnotation decodes the workload document and returns one of its
-// metadata.annotations values.
 func firstDocAnnotation(t *testing.T, rendered, key string) string {
 	t.Helper()
 	var doc struct {
@@ -159,20 +138,6 @@ func firstDocAnnotation(t *testing.T, rendered, key string) string {
 	}
 }
 
-// TestRenderedEntrypointArtifactStepRuns executes the artifact step exactly as
-// the container receives it: decoded out of the YAML block scalar, which is
-// where the indentation IndentedScript adds is removed again.
-//
-// Running the pre-decode text instead would test a string that never exists at
-// runtime — the indented heredoc terminator is invalid shell, and the YAML
-// parser is what makes it valid. dash is included because the RayJob templates
-// are handed to KubeRay and run under /bin/sh, which is not guaranteed to be
-// bash.
-//
-// Both workload kinds are covered because they indent by different amounts
-// (storagePreflightIndent returns 14 for Job and 4 for RayJob), and the Job
-// carries the step in container args while the RayJob carries it in
-// spec.entrypoint.
 func TestRenderedEntrypointArtifactStepRuns(t *testing.T) {
 	for _, shell := range []string{"bash", "dash"} {
 		if _, err := exec.LookPath(shell); err != nil {
@@ -187,10 +152,6 @@ func TestRenderedEntrypointArtifactStepRuns(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			entrypoint := renderedEntrypointCarryingArtifactStep(t, renderForArtifactTest(t, artifactManifestGPU, kind))
 
-			// The whole entrypoint has to parse, not just the artifact tail.
-			// A heredoc that swallows the lines after it leaves a dangling
-			// `if` and takes the training command down with it, so a syntax
-			// check scoped to the tail would miss exactly that failure.
 			for _, shell := range []string{"bash", "dash"} {
 				cmd := exec.Command(shell, "-n")
 				cmd.Stdin = strings.NewReader(entrypoint)
@@ -231,14 +192,6 @@ func TestRenderedEntrypointArtifactStepRuns(t *testing.T) {
 	}
 }
 
-// TestRenderedHeredocTerminatorIsUnindented pins the property the shell
-// correctness above depends on, by name rather than by consequence.
-//
-// The terminator is quoted (<<'EOF', not <<-), so an indented one does not
-// terminate the heredoc. IndentedScript does indent it — in the YAML file it
-// sits at column 14 or 4 — and the block scalar is what strips that back off.
-// If a renderer ever emitted the snippet somewhere the indentation survives,
-// every line after the terminator would be swallowed into the Python body.
 func TestRenderedHeredocTerminatorIsUnindented(t *testing.T) {
 	const terminator = "TAU_ARTIFACT_INDEX_EOF"
 	for _, kind := range []string{"job", "rayjob"} {
@@ -261,9 +214,6 @@ func TestRenderedHeredocTerminatorIsUnindented(t *testing.T) {
 	}
 }
 
-// renderedEntrypointCarryingArtifactStep returns the full shell script the
-// container runs, decoded from the rendered YAML. The Job carries it in the
-// container args; the RayJob carries it in spec.entrypoint.
 func renderedEntrypointCarryingArtifactStep(t *testing.T, rendered string) string {
 	t.Helper()
 	dec := yaml.NewDecoder(strings.NewReader(rendered))

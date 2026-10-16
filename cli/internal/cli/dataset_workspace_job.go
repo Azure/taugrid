@@ -20,22 +20,14 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// datasetKubeRunner is the minimal kubectl surface the workspace dataset Jobs
-// need. It is an interface with a package-level factory so tests can inject a
-// fake runner and assert the exact apply/get/logs/delete command sequence
-// without a live cluster.
 type datasetKubeRunner interface {
 	Raw(ctx context.Context, extraArgs []string, stdin []byte) (string, error)
 }
 
-// newDatasetKubeRunner builds the real kubectl runner. Overridden in tests.
 var newDatasetKubeRunner = func(kubeContext string) datasetKubeRunner {
 	return kube.New(kubeContext)
 }
 
-// datasetFetchWorkspace reads a TauWorkspace by name. It is a package-level
-// variable (not an inline call) so tests can supply a workspace object without
-// a live cluster. The real implementation shells `kubectl get workspace`.
 var datasetFetchWorkspace = func(ctx context.Context, kubeContext, namespace, name string) (tauworkspace.Workspace, error) {
 	r := kube.New(kubeContext)
 	raw, err := r.Raw(ctx, []string{"-n", namespace, "get", "workspace.tau.azure.com", name, "-o", "json"}, nil)
@@ -45,13 +37,10 @@ var datasetFetchWorkspace = func(ctx context.Context, kubeContext, namespace, na
 	return tauworkspace.Parse([]byte(raw))
 }
 
-// Bounded Job safety limits. Registration and status are short control-plane
-// operations; ingest gets a longer deadline because project datasets may be
-// hundreds of GiB. Finished Jobs are garbage-collected.
 const (
 	datasetJobBackoffLimit    = 2
-	datasetJobTTLSeconds      = 3600 // delete 1h after finish
-	datasetJobDeadlineSeconds = 3600 // hard 1h wall-clock cap
+	datasetJobTTLSeconds      = 3600
+	datasetJobDeadlineSeconds = 3600
 	datasetJobWorkerContainer = "worker"
 	datasetJobPollInterval    = 3 * time.Second
 	datasetJobDefaultWait     = 30 * time.Minute
@@ -59,20 +48,12 @@ const (
 	datasetIngestWait         = 24*time.Hour + 5*time.Minute
 )
 
-// workspaceIdentity is the validated subset of a Ready TauWorkspace that a
-// dataset Job needs: the target namespace and the workload-identity service
-// account. clientID is validated present (federated identity must be wired)
-// even though the pod consumes it via the ServiceAccount annotation.
 type workspaceIdentity struct {
 	Namespace          string
 	ServiceAccountName string
 	ClientID           string
 }
 
-// validateWorkspaceForJob enforces the workspace contract before any Job is
-// rendered: the workspace must be Ready (phase Ready AND status observed the
-// current generation), must resolve a target namespace, and must declare a
-// workload-identity ServiceAccount with a client ID.
 func validateWorkspaceForJob(ws tauworkspace.Workspace) (workspaceIdentity, error) {
 	if !tauworkspace.Ready(ws) {
 		return workspaceIdentity{}, fmt.Errorf(
@@ -103,8 +84,6 @@ func validateWorkspaceForJob(ws tauworkspace.Workspace) (workspaceIdentity, erro
 	}
 	return workspaceIdentity{Namespace: ns, ServiceAccountName: sa, ClientID: clientID}, nil
 }
-
-// --- Job manifest types (typed to guarantee the identity/security fields) ---
 
 type k8sObjectMeta struct {
 	Name      string            `yaml:"name"`
@@ -192,27 +171,20 @@ type k8sJob struct {
 	Spec       k8sJobSpec    `yaml:"spec"`
 }
 
-// datasetWorkerJobSpec is the render-time input for a dataset worker Job.
 type datasetWorkerJobSpec struct {
-	JobName     string
-	Namespace   string
-	ServiceAcct string
-	Image       string
-	DatasetName string
-	Version     string
-	// Command is the fixed argv prefix (e.g. tau data dataset ingest-worker NAME@VERSION).
-	Command []string
-	// FlagArgs are ordered flag args appended after Command.
-	FlagArgs []string
-	Labels   map[string]string
-	// ActiveDeadlineSeconds overrides the short control-plane default.
+	JobName               string
+	Namespace             string
+	ServiceAcct           string
+	Image                 string
+	DatasetName           string
+	Version               string
+	Command               []string
+	FlagArgs              []string
+	Labels                map[string]string
 	ActiveDeadlineSeconds int
-	// ConfigMapMount, when non-nil, mounts a ConfigMap read-only into the worker
-	// container (used by register to transport the immutable record).
-	ConfigMapMount *datasetConfigMapMount
+	ConfigMapMount        *datasetConfigMapMount
 }
 
-// datasetConfigMapMount describes a read-only ConfigMap volume mount.
 type datasetConfigMapMount struct {
 	ConfigMapName string
 	MountPath     string
@@ -220,12 +192,6 @@ type datasetConfigMapMount struct {
 
 func boolPtr(b bool) *bool { return &b }
 
-// renderDatasetWorkerJob builds a hardened batch/v1 Job manifest. The pod runs
-// as the workspace ServiceAccount with the azure.workload.identity/use label so
-// the webhook injects the federated token; it is non-root, read-only-root-fs,
-// drops all capabilities, and mounts an emptyDir scratch at /tmp (with TMPDIR /
-// HOME pointed there) so a read-only root filesystem stays compatible with the
-// SDK credential/token cache.
 func renderDatasetWorkerJob(s datasetWorkerJobSpec) ([]byte, error) {
 	activeDeadlineSeconds := s.ActiveDeadlineSeconds
 	if activeDeadlineSeconds == 0 {
@@ -299,7 +265,6 @@ func renderDatasetWorkerJob(s datasetWorkerJobSpec) ([]byte, error) {
 	return yaml.Marshal(job)
 }
 
-// k8sConfigMap is a minimal typed ConfigMap for record transport.
 type k8sConfigMap struct {
 	APIVersion string            `yaml:"apiVersion"`
 	Kind       string            `yaml:"kind"`
@@ -307,7 +272,6 @@ type k8sConfigMap struct {
 	Data       map[string]string `yaml:"data"`
 }
 
-// renderRecordConfigMap builds a ConfigMap carrying a single record file.
 func renderRecordConfigMap(name, namespace, fileName, payload string, labels map[string]string) ([]byte, error) {
 	cm := k8sConfigMap{
 		APIVersion: "v1",
@@ -322,8 +286,6 @@ func renderRecordConfigMap(name, namespace, fileName, payload string, labels map
 	return yaml.Marshal(cm)
 }
 
-// sanitizeLabelValue produces a Kubernetes-label-safe value from an arbitrary
-// string (max 63 chars, [a-z0-9-], trimmed of leading/trailing separators).
 func sanitizeLabelValue(s string) string {
 	san := sanitizePodName(s)
 	if len(san) > 63 {
@@ -332,8 +294,6 @@ func sanitizeLabelValue(s string) string {
 	return san
 }
 
-// datasetJobName builds a deterministic, DNS-1123-safe name from a prefix,
-// dataset name, and version.
 func datasetJobName(prefix, name, version string) string {
 	base := prefix + "-" + sanitizePodName(name)
 	if version != "" {
@@ -349,9 +309,6 @@ func datasetJobName(prefix, name, version string) string {
 	return base
 }
 
-// datasetRunJobName gives each worker attempt a distinct Job name. Kubernetes
-// Jobs do not restart after reaching a terminal state, so reusing a deterministic
-// name would make a failed ingest impossible to resume.
 var datasetJobSequence atomic.Uint64
 
 func datasetRunJobName(prefix, name, version string) string {
@@ -360,8 +317,6 @@ func datasetRunJobName(prefix, name, version string) string {
 	return datasetJobName(prefix+"-"+attempt, name, version)
 }
 
-// applyManifest applies YAML via `kubectl apply -f -`. dryRun "" applies for
-// real; "client"/"server" validate without mutation.
 func applyManifest(ctx context.Context, r datasetKubeRunner, manifest []byte, dryRun string) (string, error) {
 	args := []string{"apply", "-f", "-"}
 	if dryRun != "" {
@@ -370,9 +325,6 @@ func applyManifest(ctx context.Context, r datasetKubeRunner, manifest []byte, dr
 	return r.Raw(ctx, args, manifest)
 }
 
-// waitForJob polls a Job until it succeeds or reports a terminal Failed
-// condition. The cumulative failed-pod count is not terminal while Kubernetes
-// still has backoffLimit retries available.
 func waitForJob(ctx context.Context, r datasetKubeRunner, namespace, jobName string, timeout time.Duration) (string, error) {
 	return waitForJobPolling(ctx, r, namespace, jobName, timeout, datasetJobPollInterval)
 }
@@ -410,7 +362,6 @@ func waitForJobPolling(
 	}
 }
 
-// jobLogs fetches the worker container logs for a Job.
 func jobLogs(ctx context.Context, r datasetKubeRunner, namespace, jobName string) (string, error) {
 	return r.Raw(ctx, []string{
 		"-n", namespace, "logs", "job/" + jobName,
@@ -418,7 +369,6 @@ func jobLogs(ctx context.Context, r datasetKubeRunner, namespace, jobName string
 	}, nil)
 }
 
-// deleteConfigMap best-effort removes a transport ConfigMap.
 func deleteConfigMap(ctx context.Context, r datasetKubeRunner, namespace, cmName string) error {
 	_, err := r.Raw(ctx, []string{
 		"-n", namespace, "delete", "configmap/" + cmName,
@@ -427,9 +377,6 @@ func deleteConfigMap(ctx context.Context, r datasetKubeRunner, namespace, cmName
 	return err
 }
 
-// extractJSONObject returns the last balanced-looking JSON object span from
-// worker stdout logs. kubectl logs may prefix warnings, so we scan for the
-// final '{' ... '}' span.
 func extractJSONObject(logs string) ([]byte, error) {
 	start := strings.IndexByte(logs, '{')
 	end := strings.LastIndexByte(logs, '}')
@@ -439,7 +386,6 @@ func extractJSONObject(logs string) ([]byte, error) {
 	return []byte(logs[start : end+1]), nil
 }
 
-// parseWorkerOutput extracts the complete stable ingest result from worker logs.
 func parseWorkerOutput(logs string) (datasetIngestResult, error) {
 	raw, err := extractJSONObject(logs)
 	if err != nil {
@@ -452,7 +398,6 @@ func parseWorkerOutput(logs string) (datasetIngestResult, error) {
 	return out, nil
 }
 
-// writeManifests writes rendered manifests to w for dry-run inspection.
 func writeManifests(w io.Writer, manifests ...[]byte) {
 	for i, m := range manifests {
 		if i > 0 {

@@ -24,10 +24,8 @@ import tau
 import tau.cli as tau_cli
 from tau._cluster import render_wrapper
 
-
 def _write_python(path: Path, source: str) -> None:
     path.write_text(textwrap.dedent(source).strip() + "\n")
-
 
 def _write_argv_recorder(path: Path, recorder: Path) -> None:
     path.write_text(
@@ -38,7 +36,6 @@ def _write_argv_recorder(path: Path, recorder: Path) -> None:
     )
     path.chmod(0o755)
 
-
 def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -47,7 +44,6 @@ def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> N
         f"shutil.copyfile(sys.argv[sys.argv.index('--config') + 1], {str(copied_config)!r})\n"
     )
     path.chmod(0o755)
-
 
 def _write_fake_nsys(path: Path) -> None:
     _write_python(
@@ -83,10 +79,6 @@ def _write_fake_nsys(path: Path) -> None:
         """,
     )
     path.chmod(0o755)
-
-
-# ---------- cluster wrapper template tests --------------------------------
-
 
 def test_worker_profile_helper_records_and_finalizes_ray_nsys_artifacts(tmp_path):
     bin_dir = tmp_path / "bin"
@@ -155,7 +147,6 @@ def test_worker_profile_helper_records_and_finalizes_ray_nsys_artifacts(tmp_path
     assert metadata["completion_reason"] == "nsys-capture-range-complete"
     assert "rank-8.nsys-rep" in (profile_dir / "rank-8.summary.md").read_text()
 
-
 def test_single_worker_wrapper_records_pending_profile_metadata(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -221,7 +212,6 @@ def test_single_worker_wrapper_records_pending_profile_metadata(tmp_path):
     assert metadata["completion_reason"] == "ray-worker-profile-pending"
     assert not (profile_dir / "rank-0.nsys-rep").exists()
 
-
 def test_cluster_wrapper_finds_decorated_handle(tmp_path):
     """End-to-end: render wrapper, drop a fake user module + manifest, run it."""
     user_module = tmp_path / "researcher_train.py"
@@ -248,9 +238,6 @@ def test_cluster_wrapper_finds_decorated_handle(tmp_path):
         manifest_path.open("w"),
     )
 
-    # The wrapper expects the user module at /script/<filename>. Simulate by
-    # rendering with an absolute path swap: write the wrapper with USER_MODULE_PATH
-    # pointing at our tmp file. We do this by editing the rendered constant.
     wrapper_src = render_wrapper(user_module.name).replace(
         'USER_MODULE_PATH = "/script/" + USER_MODULE_FILENAME',
         f'USER_MODULE_PATH = {str(user_module)!r}',
@@ -271,7 +258,6 @@ def test_cluster_wrapper_finds_decorated_handle(tmp_path):
     assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
     assert "CTX_NAME=cluster-e2e" in res.stdout
     assert "CTX_GPUS=1" in res.stdout
-
 
 def test_cluster_wrapper_shim_exposes_dataset_jsonl_and_entrypoint_helpers(tmp_path):
     root = tmp_path / "dataset"
@@ -340,7 +326,6 @@ def test_cluster_wrapper_shim_exposes_dataset_jsonl_and_entrypoint_helpers(tmp_p
     assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
     assert 'HELPER_RESULT={"rel_path": "records/train.jsonl", "result": "answer:41!"}' in res.stdout
 
-
 def test_cluster_wrapper_runs_train_entrypoint_generated_module(tmp_path):
     entrypoint = tmp_path / "pure_torch.py"
     _write_python(
@@ -388,7 +373,6 @@ def test_cluster_wrapper_runs_train_entrypoint_generated_module(tmp_path):
 
     assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
     assert "ENTRYPOINT_VALUE=42!" in res.stdout
-
 
 def _write_fake_torch_module(root: Path) -> None:
     _write_python(
@@ -517,17 +501,14 @@ def _write_fake_torch_module(root: Path) -> None:
         """
         import torch
 
-
         def scale(value, factor):
             return value * factor
-
 
         def encode_image_features(features):
             vector = torch.tensor(features)
             return torch.tensor([vector.mean().item(), torch.relu(vector).sum().item()])
         """,
     )
-
 
 def _run_entrypoint_as_tau_job(tmp_path: Path, handle, entrypoint: Path) -> subprocess.CompletedProcess:
     user_module = tmp_path / "tau_user_module.py"
@@ -552,7 +533,6 @@ def _run_entrypoint_as_tau_job(tmp_path: Path, handle, entrypoint: Path) -> subp
         check=False,
         env=env,
     )
-
 
 @pytest.mark.parametrize(
     ("filename", "source", "args", "kwargs", "expected_stdout", "expected_checkpoint"),
@@ -714,7 +694,6 @@ def test_pytorch_entrypoint_files_run_as_tau_jobs(
     artifact = tmp_path / "data" / "checkpoints" / "finetunes" / handle._params.name / "artifacts" / "last.safetensors"
     assert artifact.read_text() == expected_checkpoint
 
-
 def test_importable_worker_shim_exposes_dataset_jsonl_and_entrypoint_helpers(tmp_path):
     namespace: dict[str, object] = {"__name__": "wrapper_for_test"}
     exec(render_wrapper("researcher_train.py"), namespace)
@@ -754,7 +733,6 @@ print(json.dumps({{"rel_path": rel_path, "result": result}}, sort_keys=True))
 
     assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
     assert res.stdout.strip() == '{"rel_path": "records/eval.jsonl", "result": "eval:7"}'
-
 
 def test_generated_wrapper_subprocess_finalizes_checkpoint_and_model_record(tmp_path):
     user_module = tmp_path / "researcher_train.py"
@@ -833,7 +811,6 @@ def test_generated_wrapper_subprocess_finalizes_checkpoint_and_model_record(tmp_
     registry_record = tmp_path / "data" / "model-registry" / "models" / "sample-lora" / "runs" / "cluster-e2e.json"
     assert json.loads(registry_record.read_text())["record_path"] == str(model_record_path)
 
-
 def test_cluster_wrapper_finalizes_checkpoint_artifact_directory(tmp_path):
     user_module = tmp_path / "researcher_train.py"
     _write_python(
@@ -883,7 +860,6 @@ def test_cluster_wrapper_finalizes_checkpoint_artifact_directory(tmp_path):
     assert (artifact_dir / "final.safetensors").read_bytes() == b"checkpoint"
     assert json.loads((artifact_dir / "nested" / "metadata.json").read_text()) == {"ok": True}
 
-
 def test_cluster_wrapper_fails_when_declared_checkpoint_missing(tmp_path):
     user_module = tmp_path / "researcher_train.py"
     _write_python(
@@ -928,10 +904,6 @@ def test_cluster_wrapper_fails_when_declared_checkpoint_missing(tmp_path):
     assert "declared checkpoint artifact" in res.stderr
     assert "missing.safetensors" in res.stderr
 
-
-# ---------- Regression tests for /review-found blockers -------------------
-
-
 def test_extra_manifest_allows_non_reserved_keys():
     @tau.train(
         name="x",
@@ -944,7 +916,6 @@ def test_extra_manifest_allows_non_reserved_keys():
     m = f.manifest()
     assert m["lora"] == {"target_modules": ["q", "v"]}
     assert m["base"] == {"variant": "sample-1.3b"}
-
 
 def test_cluster_wrapper_supports_top_level_imports(tmp_path):
     """`from tau import train, Ctx` must work on-cluster, mirroring the
@@ -982,7 +953,6 @@ def test_cluster_wrapper_supports_top_level_imports(tmp_path):
     assert res.returncode == 0, f"stderr:\n{res.stderr}\nstdout:\n{res.stdout}"
     assert "OK_TOP=top" in res.stdout
     assert "CTX_IS=" in res.stdout
-
 
 def test_cluster_wrapper_supports_config_helpers_at_import_time(tmp_path):
     """Project modules can compose config locally and still import on-cluster.
@@ -1037,7 +1007,6 @@ def test_cluster_wrapper_supports_config_helpers_at_import_time(tmp_path):
     assert "CFG_DATA=/datasets/captioner/train.jsonl" in res.stdout
     assert "SECRET_REF=hf-token:token" in res.stdout
     assert "MOUNT=/datasets/captioner:True" in res.stdout
-
 
 def test_chained_submit_releases_train_rayjob_before_eval(monkeypatch):
     events = []
@@ -1109,7 +1078,6 @@ def test_chained_submit_releases_train_rayjob_before_eval(monkeypatch):
     eval_kwargs = events[3][1]
     assert eval_kwargs["upstream_checkpoint"] == "/data/checkpoints/finetunes/demo/artifacts/last.safetensors"
 
-
 def test_chained_submit_forwards_data_pvc_and_node_selector(monkeypatch):
     events = []
 
@@ -1179,7 +1147,6 @@ def test_chained_submit_forwards_data_pvc_and_node_selector(monkeypatch):
     assert events[1][1]["disable_default_priorities"] is True
     assert events[1][1]["cpu_request"] == 4
     assert events[1][1]["memory_request"] == "32Gi"
-
 
 def test_python_submit_cli_parses_data_pvc_and_node_selector(monkeypatch, tmp_path):
     module = tmp_path / "experiment.py"
@@ -1252,7 +1219,6 @@ def test_python_submit_cli_parses_data_pvc_and_node_selector(monkeypatch, tmp_pa
         "memory_limit": "32Gi",
     }
 
-
 def test_python_submit_cli_parses_priority_tier(monkeypatch, tmp_path):
     module = tmp_path / "experiment.py"
     module.write_text("import tau\n")
@@ -1268,7 +1234,6 @@ def test_python_submit_cli_parses_priority_tier(monkeypatch, tmp_path):
 
     assert rc == 0
     assert captured["priority_tier"] == "priority"
-
 
 def test_chained_submit_can_keep_train_rayjob(monkeypatch):
     events = []
@@ -1336,20 +1301,13 @@ def test_chained_submit_can_keep_train_rayjob(monkeypatch):
     assert events[3] == ("wait-train", "tau-demo-eval")
     assert events[4] == ("delete-train", "tau-demo-eval")
 
-
-# --- multi-node (workers > 1) plumbing ---
-
-
 def test_workers_kwarg_defaults_to_one_and_omits_from_manifest():
     @tau.train(name="single", gpus=1)
     def f(ctx):
         pass
 
     m = f.manifest()
-    # Default workers=1 must NOT emit compute.workers so the manifest stays
-    # byte-identical to v1.0 manifests for older tau binaries.
     assert "workers" not in m["compute"]
-
 
 def test_workers_kwarg_two_emits_compute_workers():
     @tau.train(
@@ -1361,7 +1319,6 @@ def test_workers_kwarg_two_emits_compute_workers():
     m = f.manifest()
     assert m["compute"] == {"gpus": 8, "workers": 2}
 
-
 def test_workers_kwarg_visible_on_local_ctx():
     captured = {}
 
@@ -1372,7 +1329,6 @@ def test_workers_kwarg_visible_on_local_ctx():
     f()
     assert captured["ctx"].workers == 2
     assert captured["ctx"].gpus == 8
-
 
 def test_submit_writes_workers_to_config_when_multi_node(tmp_path, monkeypatch):
     """When workers>1 the SDK writes compute.workers into generated config."""
@@ -1398,7 +1354,6 @@ def test_submit_writes_workers_to_config_when_multi_node(tmp_path, monkeypatch):
     assert config["compute"]["workers"] == 2
     assert config["run"]["workload_kind"] == "rayjob"
 
-
 def test_submit_writes_lane_kwarg_to_config(tmp_path, monkeypatch):
     """`lane=` on @tau.train must land in policy.lane."""
     recorder = tmp_path / "tau_argv.txt"
@@ -1420,7 +1375,6 @@ def test_submit_writes_lane_kwarg_to_config(tmp_path, monkeypatch):
     assert argv[1:3] == ["run", "--config"]
     config = yaml.safe_load(copied_config.read_text())
     assert config["policy"]["lane"] == "large-memory"
-
 
 def test_submit_lane_kwarg_overrides_decorator_lane(tmp_path, monkeypatch):
     """submit(lane=...) overrides the decorator's lane kwarg, mirroring
@@ -1444,7 +1398,6 @@ def test_submit_lane_kwarg_overrides_decorator_lane(tmp_path, monkeypatch):
     assert argv[1:3] == ["run", "--config"]
     config = yaml.safe_load(copied_config.read_text())
     assert config["policy"]["lane"] == "elastic"
-
 
 def _write_fake_torch_package(
     tmp_path, *, cuda_available: bool, cuda_device_count: int = 1
@@ -1518,7 +1471,6 @@ def _write_fake_torch_package(
     )
     calls_path.write_text("")
     return calls_path
-
 
 def _write_fake_ray_train_package(tmp_path, *, supports_worker_runtime_env: bool = True) -> Path:
     calls_path = tmp_path / "ray_calls.txt"
@@ -1617,7 +1569,6 @@ def _write_fake_ray_train_package(tmp_path, *, supports_worker_runtime_env: bool
     calls_path.write_text("")
     return calls_path
 
-
 def _run_rendered_multi_node_wrapper(
     tmp_path: Path,
     *,
@@ -1684,7 +1635,6 @@ def _run_rendered_multi_node_wrapper(
     )
     return res, torch_calls.read_text().splitlines(), ray_calls.read_text().splitlines()
 
-
 def test_cluster_wrapper_ray_train_single_visible_gpu_leaves_device_unchanged(tmp_path):
     res, torch_calls, ray_calls = _run_rendered_multi_node_wrapper(
         tmp_path, cuda_device_count=1, local_rank=3
@@ -1700,7 +1650,6 @@ def test_cluster_wrapper_ray_train_single_visible_gpu_leaves_device_unchanged(tm
     assert "classic pod-level GPU visibility" not in res.stdout
     assert "RunConfig does not support worker_runtime_env" not in res.stdout
 
-
 def test_cluster_wrapper_ray_train_uses_dedicated_worker_when_workers_is_one(tmp_path):
     res, torch_calls, ray_calls = _run_rendered_multi_node_wrapper(
         tmp_path, cuda_device_count=1, local_rank=0, gpus=1, workers=1
@@ -1713,7 +1662,6 @@ def test_cluster_wrapper_ray_train_uses_dedicated_worker_when_workers_is_one(tmp
         "trainer:1:True:{'GPU': 1}:SPREAD",
         "run_config_worker_runtime_env:{'pip': ['torch==2.4.0']}",
     ]
-
 
 def test_cluster_wrapper_ray_train_classic_pod_gpu_visibility_selects_local_rank(tmp_path):
     res, torch_calls, ray_calls = _run_rendered_multi_node_wrapper(
@@ -1729,7 +1677,6 @@ def test_cluster_wrapper_ray_train_classic_pod_gpu_visibility_selects_local_rank
     ]
     assert "classic pod-level GPU visibility" in res.stdout
     assert "LOCAL_RANK 11 -> cuda:3" in res.stdout
-
 
 def test_cluster_wrapper_initializes_single_pod_distributed_before_user_fn(tmp_path):
     """workers=1 with WORLD_SIZE>1 must initialize torch.distributed before
@@ -1787,7 +1734,6 @@ def test_cluster_wrapper_initializes_single_pod_distributed_before_user_fn(tmp_p
         "user_seen:True",
         "destroy",
     ]
-
 
 def test_cluster_wrapper_single_pod_distributed_pins_cuda_rank(tmp_path):
     """GPU pods should use nccl and pin CUDA to LOCAL_RANK before user code."""

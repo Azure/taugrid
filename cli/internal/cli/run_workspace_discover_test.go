@@ -17,8 +17,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// fakeKubectl installs a kubectl on PATH that records every invocation's
-// argv to a log file and replies with the given script body.
 func fakeKubectl(t *testing.T, body string) (logPath string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -41,11 +39,6 @@ func discoverCmd() *cobra.Command {
 	return cmd
 }
 
-// The researcher Role the tau-core controller creates grants `get` on the one
-// workspace by ResourceName and nothing else; the tau-core Kind suite asserts
-// `can-i list workspaces` is denied on purpose. Discovery must therefore work
-// with list permanently Forbidden, or the v0 default-workspace feature fails
-// for exactly the persona it exists to serve.
 func TestDiscoverPrimaryWorkspaceWorksWithoutListPermission(t *testing.T) {
 	logPath := fakeKubectl(t, `
 case "$*" in
@@ -81,8 +74,6 @@ esac
 	}
 }
 
-// writeConnectionDescriptor creates a repo containing a workspace connection
-// descriptor naming the given workspace, and makes it the working directory.
 func writeConnectionDescriptor(t *testing.T, workspace string) {
 	t.Helper()
 	root := t.TempDir()
@@ -111,11 +102,6 @@ func writeConnectionDescriptor(t *testing.T, workspace string) {
 	t.Chdir(root)
 }
 
-// An operator may rename the one workspace off the default. That researcher's
-// Role is keyed to the custom name, so both the default-name get and the list
-// are Forbidden: guessing the name cannot work, and the name has to come from
-// somewhere. It comes from the connection descriptor, which already carries a
-// required `workspace` field for exactly this purpose.
 func TestDiscoverPrimaryWorkspaceUsesDescriptorNameWhenOnlyThatGetIsPermitted(t *testing.T) {
 	writeConnectionDescriptor(t, "research")
 	logPath := fakeKubectl(t, `
@@ -146,8 +132,6 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The descriptor names the workspace outright, so spending a round trip on
-	// a default-name get that is guaranteed to be forbidden is pure waste.
 	first := strings.SplitN(strings.TrimSpace(string(calls)), "\n", 2)[0]
 	if !strings.Contains(first, "research") {
 		t.Fatalf("the descriptor name must be tried first, got: %q", first)
@@ -157,10 +141,6 @@ esac
 	}
 }
 
-// The reviewer's scenario on #1282: an operator runs a custom-named primary,
-// and a later `taugrid-default` lingers as a blocked CR. A named get finds the
-// blocked object first, so discovery must not stop there -- it has to reach the
-// list, where the real primary is visible.
 func TestDiscoverPrimaryWorkspaceDoesNotSelectBlockedNamedWorkspace(t *testing.T) {
 	fakeKubectl(t, `
 case "$*" in

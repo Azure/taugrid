@@ -20,35 +20,26 @@ import (
 )
 
 const (
-	// heartbeatInterval controls how often we patch the API when nothing changed.
-	// With the default 15s scrape interval, 20 cycles ≈ 5 minutes.
-	// Note: if --scrape-interval is changed, the effective heartbeat period scales accordingly.
 	heartbeatCycles = 20
 )
 
-// Writer patches Node conditions based on rule evaluation results.
-// It tracks the last-known status per condition type so that
-// LastTransitionTime is only updated on actual status changes.
-// Heartbeat patches are jittered to avoid thundering herd at scale.
 type Writer struct {
 	clientset        kubernetes.Interface
 	nodeName         string
-	lastStatus       map[string]corev1.ConditionStatus // conditionType → last written status
-	heartbeatCounter int                               // tracks cycles for throttled heartbeats
-	jitterOffset     int                               // random offset so not all nodes patch at the same cycle
+	lastStatus       map[string]corev1.ConditionStatus
+	heartbeatCounter int
+	jitterOffset     int
 }
 
-// NewWriter creates a new condition Writer.
 func NewWriter(clientset kubernetes.Interface, nodeName string) *Writer {
 	return &Writer{
 		clientset:    clientset,
 		nodeName:     nodeName,
 		lastStatus:   make(map[string]corev1.ConditionStatus),
-		jitterOffset: rand.IntN(heartbeatCycles), // each node gets a random offset
+		jitterOffset: rand.IntN(heartbeatCycles),
 	}
 }
 
-// WriteConditions patches the Node's status conditions based on rule results.
 func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) error {
 	now := metav1.NewTime(time.Now())
 	var conditions []corev1.NodeCondition
@@ -66,10 +57,7 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 		}
 
 		if prev, ok := w.lastStatus[r.ConditionType]; ok && prev == status {
-			// Status unchanged — keep existing transition time on the server.
-			// We still include the condition so heartbeat updates.
 		} else {
-			// Status changed (or first write) — set transition time.
 			cond.LastTransitionTime = now
 			changed = true
 		}
@@ -81,7 +69,6 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 		return nil
 	}
 
-	// Patch immediately on status change. Otherwise heartbeat every ~5min, jittered.
 	w.heartbeatCounter++
 	if !changed && (w.heartbeatCounter+w.jitterOffset)%heartbeatCycles != 0 {
 		return nil
@@ -100,7 +87,6 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 		return fmt.Errorf("patching node %s conditions: %w", w.nodeName, err)
 	}
 
-	// Update last-known status after successful patch.
 	for _, r := range results {
 		w.lastStatus[r.ConditionType] = resultStatus(r)
 	}
@@ -135,7 +121,6 @@ type nodeStatusPatch struct {
 	Conditions []corev1.NodeCondition `json:"conditions"`
 }
 
-// Merge patches must clear empty diagnostics but omit unchanged transition times.
 func (p nodeStatusPatch) MarshalJSON() ([]byte, error) {
 	type conditionPatch struct {
 		Type               corev1.NodeConditionType `json:"type"`
@@ -162,7 +147,6 @@ func (p nodeStatusPatch) MarshalJSON() ([]byte, error) {
 	}{Conditions: conditions})
 }
 
-// ExportLastStatus returns the last-known condition statuses for persistence.
 func (w *Writer) ExportLastStatus() map[string]string {
 	out := make(map[string]string, len(w.lastStatus))
 	for k, v := range w.lastStatus {
@@ -171,7 +155,6 @@ func (w *Writer) ExportLastStatus() map[string]string {
 	return out
 }
 
-// RestoreLastStatus loads previously persisted condition statuses.
 func (w *Writer) RestoreLastStatus(statuses map[string]string) {
 	for k, v := range statuses {
 		w.lastStatus[k] = corev1.ConditionStatus(v)

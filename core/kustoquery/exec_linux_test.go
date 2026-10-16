@@ -162,8 +162,6 @@ func TestClientQueryBoundsWaitForDescendantHoldingPipes(t *testing.T) {
 	if string(out) != "[]" {
 		t.Fatalf("stdout = %q, want []", out)
 	}
-	// The bound only needs to rule out the descendant's unbounded 30s sleep;
-	// the race detector slows signal delivery around the WaitDelay path.
 	const tolerance = commandWaitDelay + 3*time.Second
 	if elapsed > tolerance {
 		t.Fatalf("Query took %s with inherited pipes, want at most %s", elapsed, tolerance)

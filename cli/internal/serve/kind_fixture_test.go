@@ -13,8 +13,6 @@ import (
 	"github.com/Azure/taugrid/core/topology"
 )
 
-// The operator smoke uses the distributed renderer with CPU-only fixture
-// resources. GPU allocation and cross-host placement remain unit-test contracts.
 func TestRenderKindRayServiceFixture(t *testing.T) {
 	p := distributedRayProfile()
 	p.Topology.WorkloadPriorityClassName = "kind-serve-priority"
@@ -81,7 +79,6 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 			}
 		}
 	}
-	// Kind has one host; leave system affinity and tolerations on the head.
 	delete(workerTemplate["spec"].(map[string]any), "affinity")
 	metadata := object["metadata"].(map[string]any)
 	delete(metadata, "annotations")

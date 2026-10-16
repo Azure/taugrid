@@ -6,17 +6,11 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
-# Deprecated compatibility key. Namespaced resources always follow the Helm
-# release namespace; any non-empty value is rejected during rendering.
 namespace: ""
 labels: {}
 
-# Port for NPD's K8s exporter. Changed from default 20256 to avoid
-# conflict with AKS's built-in gpu-monitoring host process.
 npdPort: 20260
 
-# Fallback PKey for custom profiles that omit gpuSkus.<profile>.ib_pkey.
-# Built-in profiles set this explicitly because fabrics use different PKeys.
 ibPkey: "0xffff"
 
 env: []
@@ -36,13 +30,6 @@ daemonset:
   tolerations:
     - operator: Exists
   nodeSelector: {}
-  # Also require kubernetes.azure.com/accelerator=nvidia in the node affinity.
-  # Off by default: that label is applied only to AKS-managed node pools, so
-  # requiring it silently excludes externally-joined GPU nodes (which report
-  # kubernetes.azure.com/managed=false) and leaves them entirely unmonitored.
-  # The instanceTypeLabelKeys match below is already GPU-specific, since every
-  # SKU overlay enumerates explicit GPU VM sizes. Set to true only to restrict a
-  # deployment to AKS-managed GPU pools.
   requireAcceleratorLabel: false
   instanceTypeLabelKeys:
     - node.kubernetes.io/instance-type
@@ -54,9 +41,6 @@ securityContext:
 resources: {}
 
 configMap:
-  # Base for the RBAC-separated immutable executable/config Secret; the chart
-  # appends a content hash and points every per-SKU DaemonSet at that object.
-  # The configMap key is retained for values compatibility.
   name: gpu-monitoring-gpu
 
 monitors:
@@ -75,8 +59,6 @@ volumes:
   localtime:
     hostPath: /etc/localtime
 
-# When enabled, NPD pods tolerate all NoSchedule/NoExecute taints so they
-# keep running on nodes that the standalone node-tainter has tainted.
 nodeTainter:
   enabled: true
 
@@ -93,70 +75,23 @@ nodeExporter:
       cpu: "100m"
       memory: "128Mi"
 
-# The chart's constrained DCGM health-source contract. These are the only two
-# fields this chart accepts for DCGM health; the chart itself owns the
-# dcgm-exporter scrape target, its fixed DcgmExporterUnavailable condition, and
-# its 2m unavailable / 1m available debounce. See README "DCGM health
-# sources" for the full per-source contract and cross-cloud mapping.
-#
-# These are global defaults. gpuSkus.<profile>.dcgmHealth overrides only
-# `source` and/or `exporterUrl` for that profile, so a mixed cluster can run
-# managed AKS nodes alongside GPU Operator nodes without touching the rest of
-# each profile's configuration. metricsCollector.enabled must be literal
-# `true` for every enabled profile; both sources' contracts include the fixed
-# DcgmExporterUnavailable scrape target and every DCGM_* collector rule, and
-# the collector is the only component that renders them. Disabling DCGM
-# health monitoring entirely means disabling the gpu-monitoring component or
-# chart release itself, not disabling the collector alone.
 dcgmHealth:
-  # Exactly one of:
-  #   host-dcgmi — run the host `dcgmi` health-watch lifecycle (init, warm,
-  #     liveness repair, `dcgmi health -c`) and scrape the host-local exporter.
-  #   exporter   — scrape a remote/Service DCGM exporter only; no host dcgmi.
   source: host-dcgmi
   exporterUrl: http://localhost:19400/metrics
 
-# Optional reduced metrics profile for an externally owned NVIDIA DCGM
-# exporter. This is only for the explicit extendedHealthChecks opt-in below.
-# Point that exporter's configuration at this object separately; the chart
-# does not modify AKS-managed services, GPU Operator ClusterPolicy, or another
-# release's DaemonSet.
 dcgmExporterMetrics:
   enabled: false
   name: gpu-monitoring-dcgm-metrics
   namespace: gpu-operator
 
-# Lightweight metrics collector — replaces Prometheus sidecar.
-# Scrapes DCGM + node-exporter, evaluates threshold/rate rules,
-# and patches Kubernetes Node conditions directly.
 metricsCollector:
   enabled: true
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/gpu-metrics-collector
-    # 9632b704bca1 — merged TauGrid main source containing collector PR #140.
-    # Set exactly one of tag or digest; tag is for local builds, published
-    # deployments use the digest.
-    #
-    # The fixed DcgmExporterUnavailable contract below requires a collector
-    # build that understands the `required` / `availabilityCondition`
-    # scrape-target fields. An older image ignores them and publishes no
-    # condition.
-    #
-    # This repository owns the collector source and build context. MCR
-    # publication runs only from merged TauGrid main. Pin this to the immutable
-    # digest of the public image published from the merged source containing
-    # that support — digest only, never a floating tag and never latest. See the
-    # chart README section "Collector image requirement and release ordering".
     tag: ""
     digest: sha256:233aba6519e39d9a65069ba168a4cef0aed45a3ebe3080f14d3d0b98dd1076ef
   scrapeInterval: "15s"
-  # Enables health checks that need metrics outside the normal NVIDIA/AKS
-  # exporter profile. AKS has no supported API for replacing its managed
-  # exporter's field list, so this requires a separately managed exporter.
   extendedHealthChecks: false
-  # Optional fail-closed coverage for extended per-GPU metrics. Requires
-  # extendedHealthChecks=true and a collector image that supports
-  # --require-metric-coverage. The legacy default digest does not support it.
   requireMetricCoverage: false
   resources:
     requests:
@@ -164,21 +99,9 @@ metricsCollector:
       memory: "64Mi"
     limits:
       cpu: "100m"
-      # 256Mi OOMKilled the collector every 1-3h on 8-GPU H200 nodes, where the
-      # DCGM scrape returns far more series than on smaller SKUs and the rule
-      # engine retains per-series history across the rate windows.
       memory: "512Mi"
-  # By default the collector scrapes node-exporter only when this chart deploys
-  # the node-exporter sidecar. Set nodeExporterScrape: true to scrape an
-  # external hostNetwork node-exporter on :9100 without deploying a second
-  # sidecar that would collide on the host port.
-  # nodeExporterScrape: true
-  # Implicitly append an NPD scrape target to every per-SKU collector ConfigMap.
-  # NPD's Prometheus exporter listens on `npdPort + 1` (see daemonset.yaml
-  # `--prometheus-port`). Set to false to disable.
   npdScrape: true
   rules:
-    # Extended: ECC Double-Bit Errors (any increase over 1m → drain)
     - name: ecc-dbe-retired
       extended: true
       perGpu: true
@@ -197,8 +120,6 @@ metricsCollector:
       threshold: 0
       window: 1m
       for: 1m
-    # Extended: NVLink replay errors. CRC counters are intentionally omitted;
-    # raw increments need topology- and generation-specific thresholds.
     - name: nvlink-replay
       extended: true
       perGpu: true
@@ -208,7 +129,6 @@ metricsCollector:
       threshold: 0
       window: 1m
       for: 1m
-    # Critical: XID Errors (current nonzero raw gauge, specific codes → drain)
     - name: xid-48
       metricName: DCGM_FI_DEV_XID_ERRORS
       labels:
@@ -251,7 +171,6 @@ metricsCollector:
       conditionType: XIDError95
       mode: instant
       threshold: 0
-    # Critical: InfiniBand (any increase over 1m → taint)
     - name: ib-link-down
       metricName: node_infiniband_link_downed_total
       conditionType: IBLinkDown
@@ -266,7 +185,6 @@ metricsCollector:
       threshold: 0
       window: 1m
       for: 1m
-    # Extended: Correctable ECC degradation.
     - name: ecc-sbe-volatile-rate
       extended: true
       perGpu: true
@@ -285,7 +203,6 @@ metricsCollector:
       threshold: 0
       window: 5m
       for: 5m
-    # Warning: PCIe Replay (rate >5 in 5m → taint)
     - name: pcie-replay
       perGpu: true
       metricName: DCGM_FI_DEV_PCIE_REPLAY_COUNTER
@@ -294,7 +211,6 @@ metricsCollector:
       threshold: 5
       window: 5m
       for: 5m
-    # Extended GB200 Grace CPU memory ECC from node-exporter.
     - name: grace-cpu-ecc-uncorrectable
       extended: true
       metricName: node_memory_ECC_uncorrectable_total
@@ -311,30 +227,7 @@ metricsCollector:
       window: 10m
       for: 5m
 
-# --------------------------------------------------------------------------
-# Per-SKU GPU monitoring.
-#
-# Each entry creates a DaemonSet that targets nodes with matching VM instance
-# types via node affinity on "node.kubernetes.io/instance-type". All
-# DaemonSets are always deployed; pods only schedule on nodes whose instance
-# type is listed in that SKU's instanceTypes list.
-#
-# When a new GPU node joins the cluster with a matching instance type, the
-# correct DaemonSet automatically schedules a monitoring pod on it.
-#
-# Leave empty to render every profile. Set profile names here to render only a
-# deployment-specific subset without nulling Helm's deep-merged gpuSkus map.
 enabledGpuSkus: []
-#
-# To add a new GPU SKU, add an entry here with the appropriate instanceTypes
-# and monitoring parameters.
-#
-# dcgmHealth optionally overrides the global dcgmHealth.source and/or
-# .exporterUrl for one profile. This supports mixed clusters where managed GPU
-# nodes use the default host-dcgmi source and GPU Operator nodes use a
-# node-local exporter Service instead. A non-loopback DCGM Service must use
-# internalTrafficPolicy: Local.
-# --------------------------------------------------------------------------
 gpuSkus:
   a100:
     instanceTypes:
@@ -345,9 +238,6 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
-    # Preserves the chart 0.1.3 eight-device expectation. A handoff proposed
-    # 0x800b for Flex A100, but no captured sysfs read or fabric document
-    # verified it; do not change this default until authoritative evidence exists.
     ib_pkey: "0x8003"
     ib_rate_gbps: 200
     ib_flap_threshold_short: 2
@@ -356,7 +246,6 @@ gpuSkus:
     nvme_size_count: 0
     nvme_size: "0"
     imex_procname: "imex"
-    # Managed A100 nodes are healthy with the driver contract set to 0.
     create_imex_channel_expected: "0"
   h100:
     instanceTypes:
@@ -366,7 +255,6 @@ gpuSkus:
     gpu_driver_versions: '("535.54.03")'
     vbios_versions: '("96.00.89.00.01" "96.00.99.00.01" "96.00.A5.00.01" "96.00.BC.00.01")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_5:1 mlx5_6:1 mlx5_7:1 mlx5_8:1 mlx5_9:1"
-    # Preserves the chart 0.1.3 eight-device expectation.
     ib_pkey: "0x8003"
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -430,7 +318,6 @@ gpuSkus:
     gpu_driver_versions: '("580.126.09")'
     vbios_versions: '("96.00.BC.00.02")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1 mlx5_4:1 mlx5_5:1 mlx5_6:1 mlx5_7:1"
-    # Directly verified against the live East US 2 H200 fabric.
     ib_pkey: "0x8001"
     ib_flap_threshold_short: 2
     ib_flap_check_window: 3600
@@ -447,7 +334,6 @@ gpuSkus:
     gpu_driver_versions: '("580.65.06")'
     vbios_versions: '("97.00.B9.00.23" "97.00.B9.00.69")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
-    # Preserves the chart 0.1.3 non-eight-device expectation.
     ib_pkey: "0xffff"
     ib_rate_gbps: 400
     ib_flap_threshold_short: 2
@@ -462,13 +348,10 @@ gpuSkus:
       - Standard_ND128isr_GB300_v6
       - Standard_ND128isrG5_GB300_v6
     num_gpus: 4
-    # This profile retains the historical NVLinkB200Inactive condition name so
-    # existing condition consumers remain compatible across Blackwell SKUs.
     monitor_config: custom-plugin-monitor-gb200.json
     gpu_driver_versions: '("")'
     vbios_versions: '("")'
     ib_devices: "mlx5_0:1 mlx5_1:1 mlx5_2:1 mlx5_3:1"
-    # Preserves the chart 0.1.3 non-eight-device expectation.
     ib_pkey: "0xffff"
     ib_rate_gbps: 800
     ib_flap_threshold_short: 2

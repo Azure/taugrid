@@ -1,17 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package queuequota builds a read-only researcher view of the Kueue quota
-// backing one workspace: what the workspace's ClusterQueue nominally holds per
-// ResourceFlavor, how much of it is currently reserved and used, and which
-// nodes each flavor selects.
-//
-// It is deliberately separate from core/queue. That package is topology-policy
-// driven — it groups Tau presets into queues and accounts only for GPUs. This
-// one starts from a single named ClusterQueue and reports every resource in it
-// (cpu, memory, and GPU alike), which is what a researcher needs in order to
-// size a config's compute block. It has no portal consumer, so per cli/AGENTS.md
-// it stays in the CLI module rather than widening core.
 package queuequota
 
 import (
@@ -24,10 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// SchemaVersion identifies the JSON shape emitted by `tau workspace quota show`.
 const SchemaVersion = "tau.workspace.quota.v1"
 
-// Report is the machine-readable quota view for one workspace.
 type Report struct {
 	Schema       string    `json:"schema"`
 	Workspace    string    `json:"workspace,omitempty"`
@@ -39,8 +26,6 @@ type Report struct {
 	Warnings     []string  `json:"warnings,omitempty"`
 }
 
-// Workloads is the LocalQueue's workload census. Counts are only meaningful
-// when Found is true; a missing LocalQueue must not read as "zero queued work".
 type Workloads struct {
 	Found     bool `json:"found"`
 	Pending   int  `json:"pending"`
@@ -48,20 +33,14 @@ type Workloads struct {
 	Reserving int  `json:"reserving"`
 }
 
-// Flavor is one ResourceFlavor's slice of the ClusterQueue.
 type Flavor struct {
-	Name string `json:"name"`
-	// FlavorFound distinguishes "the ResourceFlavor object was not readable"
-	// from "it selects no nodes". Reporting an empty nodeLabels map for an
-	// unreadable flavor would claim it schedules anywhere.
+	Name        string            `json:"name"`
 	FlavorFound bool              `json:"flavorFound"`
 	NodeLabels  map[string]string `json:"nodeLabels,omitempty"`
 	Tolerations []Toleration      `json:"tolerations,omitempty"`
 	Resources   []ResourceQuota   `json:"resources"`
 }
 
-// Toleration mirrors the ResourceFlavor toleration fields researchers need to
-// understand why their pods landed on a tainted node pool.
 type Toleration struct {
 	Key      string `json:"key,omitempty"`
 	Operator string `json:"operator,omitempty"`
@@ -69,9 +48,6 @@ type Toleration struct {
 	Effect   string `json:"effect,omitempty"`
 }
 
-// ResourceQuota is one resource's quota within one flavor. Quantities are kept
-// in canonical Kubernetes string form ("160Gi", not a byte count) so the output
-// can be pasted straight back into a Tau config's compute block.
 type ResourceQuota struct {
 	Name           string `json:"name"`
 	Nominal        string `json:"nominal"`
@@ -79,33 +55,20 @@ type ResourceQuota struct {
 	LendingLimit   string `json:"lendingLimit,omitempty"`
 	Reserved       string `json:"reserved,omitempty"`
 	Used           string `json:"used,omitempty"`
-	// Remaining is nominal minus reserved, floored at zero. It is informational
-	// only: Kueue is a queueing system, so a request larger than the remainder
-	// is not an error, it simply waits.
-	Remaining string `json:"remaining"`
-	Borrowed  string `json:"borrowed,omitempty"`
+	Remaining      string `json:"remaining"`
+	Borrowed       string `json:"borrowed,omitempty"`
 }
 
-// Input is the raw kubectl JSON the report is built from. Keeping Build a pure
-// function of bytes is what makes the arithmetic and rendering testable without
-// a cluster.
 type Input struct {
 	Workspace       string
 	Namespace       string
 	LocalQueue      string
 	ClusterQueue    string
 	ClusterQueueRaw []byte
-	// LocalQueueRaw is optional. A researcher may be able to read the
-	// ClusterQueue without being able to read the LocalQueue.
-	LocalQueueRaw []byte
-	// FlavorsRaw maps ResourceFlavor name to its JSON. Flavors named by the
-	// ClusterQueue but absent here are reported as not found.
-	FlavorsRaw map[string][]byte
+	LocalQueueRaw   []byte
+	FlavorsRaw      map[string][]byte
 }
 
-// Build parses Kueue objects into a Report. It never fails on missing optional
-// inputs; it records them as warnings so the researcher can tell "I lack RBAC
-// for this" apart from "there is none".
 func Build(in Input) (Report, error) {
 	var cq clusterQueueDoc
 	if err := json.Unmarshal(in.ClusterQueueRaw, &cq); err != nil {
@@ -190,11 +153,6 @@ func buildResourceQuota(rq flavorResourceQuota, reserved, used string) ResourceQ
 	return out
 }
 
-// canonical normalizes a quantity to the form a researcher would write in a Tau
-// config. Kueue echoes byte-scale resources in whichever suffix the manifest
-// used, so a ClusterQueue can report memory as "17179869184" while the config
-// next to it says "16Gi". Rendering those side by side is what makes quota
-// output unusable, so byte-scale resources are always shown in binary SI.
 func canonical(resourceName, value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -202,8 +160,6 @@ func canonical(resourceName, value string) string {
 	}
 	q, err := resource.ParseQuantity(value)
 	if err != nil {
-		// Preserve whatever the API server said rather than dropping it; an
-		// unparseable quantity is still more informative than a blank cell.
 		return value
 	}
 	if isByteScaleResource(resourceName) {
@@ -212,10 +168,6 @@ func canonical(resourceName, value string) string {
 	return q.String()
 }
 
-// isByteScaleResource reports whether a Kubernetes resource name is measured in
-// bytes, and therefore reads naturally in binary SI. Counted resources such as
-// cpu and nvidia.com/gpu must not be reformatted that way — 2048 CPUs is not
-// "2Ki".
 func isByteScaleResource(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if i := strings.LastIndex(name, "/"); i >= 0 {
@@ -227,9 +179,6 @@ func isByteScaleResource(name string) bool {
 		strings.HasSuffix(name, "-storage")
 }
 
-// subtractFloored returns a-b, never negative. An empty minuend means the
-// ClusterQueue declared no quota for this resource, which is not the same as
-// zero remaining, so it stays empty.
 func subtractFloored(resourceName, a, b string) string {
 	if strings.TrimSpace(a) == "" {
 		return ""
@@ -252,7 +201,6 @@ func subtractFloored(resourceName, a, b string) string {
 	return canonical(resourceName, left.String())
 }
 
-// RenderTable renders the researcher-facing table.
 func RenderTable(r Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Workspace:     %s\n", dash(r.Workspace))

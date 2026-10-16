@@ -48,7 +48,6 @@ const (
 	TauRetryAttemptTag = "tau_retry_attempt"
 )
 
-// ValidateID enforces the identifier contract shared by expstore and telemetry producers.
 func ValidateID(kind, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s is required", kind)

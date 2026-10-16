@@ -1,7 +1,4 @@
 groups:
-  # ============================================================
-  # Immediate alerts — hardware failure or imminent failure
-  # ============================================================
   - name: immediate
     rules:
       - alert: GPUDoubleBitECCError
@@ -46,9 +43,6 @@ groups:
           summary: "InfiniBand link downed on {{ $labels.device }} port {{ $labels.port }}"
           description: "node_infiniband_link_downed_total increased by {{ $value }}"
 
-  # ============================================================
-  # Degradation alerts — trending toward failure
-  # ============================================================
   - name: degradation
     rules:
       - alert: GPUCorrectableECCSlopeIncreasing

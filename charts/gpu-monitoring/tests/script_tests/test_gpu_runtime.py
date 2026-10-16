@@ -5,7 +5,6 @@ import unittest
 
 from helpers import ScriptTestCase
 
-
 class GpuRuntimeTests(ScriptTestCase):
     def test_gpu_simulation_env_cannot_bypass_real_check(self):
         output = self.run_script(
@@ -434,7 +433,6 @@ class GpuRuntimeTests(ScriptTestCase):
         self.assertIn("GPU Xid errors detected", first)
         second = self.run_script("check_gpu_xid.sh", expected=1, env=env)
         self.assertIn("XID 79 already logged", second)
-
 
 if __name__ == "__main__":
     unittest.main()

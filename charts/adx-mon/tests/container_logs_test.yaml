@@ -4,7 +4,6 @@ templates:
 
 tests:
 
-  # ── Disabled by default ──────────────────────────────────────────
   - it: does not render static-pod-target when containerLogs disabled
     set:
       adx.clusterUrl: "https://test.kusto.windows.net"
@@ -14,7 +13,6 @@ tests:
           path: data["config.toml"]
           pattern: "static-pod-target"
 
-  # ── Enabled with targets ────────────────────────────────────────
   - it: renders static-pod-target blocks when containerLogs enabled
     set:
       adx.clusterUrl: "https://test.kusto.windows.net"
@@ -49,7 +47,6 @@ tests:
           path: data["config.toml"]
           pattern: '"ray.io/is-ray-node" = "yes"'
 
-  # ── Renders without namespace (labels only) ─────────────────────
   - it: omits namespace field when not specified
     set:
       adx.clusterUrl: "https://test.kusto.windows.net"
@@ -66,7 +63,6 @@ tests:
           path: data["config.toml"]
           pattern: "\\[\\[host-log\\.static-pod-target\\]\\]\\n.*namespace"
 
-  # ── Works independently of journalLogs ──────────────────────────
   - it: renders host-log section with only containerLogs (journalLogs disabled)
     set:
       adx.clusterUrl: "https://test.kusto.windows.net"
@@ -89,7 +85,6 @@ tests:
           path: data["config.toml"]
           pattern: "journal-target"
 
-  # ── Both journalLogs and containerLogs enabled ──────────────────
   - it: renders both journal-target and static-pod-target when both enabled
     set:
       adx.clusterUrl: "https://test.kusto.windows.net"
@@ -109,7 +104,6 @@ tests:
           path: data["config.toml"]
           pattern: "\\[\\[host-log\\.static-pod-target\\]\\]"
 
-  # ── values-ai-runtime.yaml preset ────────────────────────────────
   - it: renders all 5 default targets with values-ai-runtime.yaml
     values:
       - ../values-ai-runtime.yaml
@@ -138,7 +132,6 @@ tests:
           path: data["config.toml"]
           pattern: "destination = 'Logs:ContainerLogs'"
 
-  # ── Default parsers fallback ────────────────────────────────────
   - it: defaults parsers to json when not specified
     set:
       adx.clusterUrl: "https://test.kusto.windows.net"

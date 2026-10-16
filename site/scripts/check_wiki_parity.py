@@ -1,7 +1,5 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
-
 
 from __future__ import annotations
 
@@ -13,14 +11,12 @@ import sys
 import tomllib
 import urllib.parse
 
-
 ALLOWED_MATURITY = {
     "alpha",
     "beta",
     "ga",
     "deprecated",
     "planned",
-    # Compatibility aliases for separately maintained pages during migration.
     "shipped",
     "experimental",
     "implementing",
@@ -33,7 +29,6 @@ MATURITY_PATTERN = re.compile(
 WIKI_PREFIX = (
     "https://github.com/Azure/taugrid/wiki/"
 )
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check site/wiki ownership metadata")
@@ -162,7 +157,6 @@ def main() -> int:
         f"and {len(site_only)} reviewed site-only groups"
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

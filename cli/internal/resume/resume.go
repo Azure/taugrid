@@ -12,12 +12,12 @@ import (
 type FailureReason int
 
 const (
-	ReasonUnknown   FailureReason = iota
-	ReasonOOMKilled               // container OOMKilled
-	ReasonPreempted               // Kueue preemption or pod disruption
-	ReasonEvicted                 // node-pressure eviction
-	ReasonCompleted               // workload succeeded — not a failure
-	ReasonRunning                 // workload still in progress
+	ReasonUnknown FailureReason = iota
+	ReasonOOMKilled
+	ReasonPreempted
+	ReasonEvicted
+	ReasonCompleted
+	ReasonRunning
 )
 
 func (r FailureReason) String() string {

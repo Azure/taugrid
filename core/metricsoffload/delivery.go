@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package metricsoffload owns shared metrics delivery defaults and budgets.
 package metricsoffload
 
 import (
@@ -19,10 +18,6 @@ const (
 	MaxTerminalDrainTimeout      = 2 * time.Hour
 )
 
-// TerminalDrainTimeout returns the finite workload-side deadline that covers
-// every configured ADX attempt, exponential retry backoff, and a small
-// coordination grace period. Each attempt's timeout covers both queued
-// submission and final-status confirmation.
 func TerminalDrainTimeout(maxAttempts int, retryBackoff, finalStatusTimeout time.Duration) (time.Duration, error) {
 	if maxAttempts < 0 || maxAttempts > MaxADXAttempts {
 		return 0, fmt.Errorf("adx_max_attempts must be between 0 and %d", MaxADXAttempts)

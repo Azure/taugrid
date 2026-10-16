@@ -54,10 +54,6 @@ spec:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.operator.resources | nindent 12 }}
-          # No ports/probes: operator uses controller-runtime with metrics server
-          # disabled (BindAddress: "0"). Distroless base means no shell for exec
-          # probes. Track upstream health endpoint as follow-up.
-          # NOTE: AKS Automatic requires probes; operator needs upstream changes first.
           volumeMounts:
             - mountPath: /etc/ssl/certs
               name: ca-certs

@@ -1,4 +1,3 @@
-# Build artifacts and local-only paths — keep the image build context small.
 cli/bin/
 **/*.test
 .git/

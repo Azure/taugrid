@@ -23,7 +23,6 @@ func installedRelease(values, metadata string) releaseFixture {
 	return releaseFixture{Release: defaultTauGridRelease, Values: values, Metadata: metadata}
 }
 
-// recordHelm captures every mutating Helm invocation in order.
 func recordHelm(calls *[][]string) helmCommandRunner {
 	return func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
 		*calls = append(*calls, append([]string(nil), args...))
@@ -31,11 +30,6 @@ func recordHelm(calls *[][]string) helmCommandRunner {
 	}
 }
 
-// The bug: Helm's UninstallOrder deletes the Kueue controller Deployment before
-// the Kueue custom resources, so nothing is left to clear their
-// resource-in-use finalizers and `helm uninstall --wait` blocks until timeout.
-// Draining the queue policy first, while the controller still runs, removes
-// those objects from the release manifest entirely.
 func TestClusterUninstallDrainsQueueBeforeUninstall(t *testing.T) {
 	stubForceConflicts(t, false)
 	var calls [][]string
@@ -90,11 +84,6 @@ func TestClusterUninstallExposesWaitAndTimeoutEscapeHatch(t *testing.T) {
 	}
 }
 
-// Each of these flags turns the drain into a different bug: --install would
-// install the chart during an uninstall, --atomic would roll back and recreate
-// the queue just deleted, and --wait blocks on the new resource set rather than
-// on the deletions, so it only costs time on the unhealthy clusters people are
-// actually uninstalling.
 func TestClusterUninstallDrainOmitsDangerousFlags(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata), recordHelm(&calls))
@@ -109,10 +98,6 @@ func TestClusterUninstallDrainOmitsDangerousFlags(t *testing.T) {
 	}
 }
 
-// Re-rendering the release from a different chart version would diff far more
-// than the queue policy. Helm honours --version only when it resolves the chart
-// from a repository; for a local --chart path the files on disk win, so this
-// guards the repository case.
 func TestClusterUninstallPassesDeployedChartVersion(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, `{"version":"0.0.9"}`), recordHelm(&calls))
@@ -165,8 +150,6 @@ func TestClusterUninstallSkipsDrain(t *testing.T) {
 	}
 }
 
-// A drain that cannot run must never block teardown: the outcome is exactly
-// today's behaviour, which the guidance text then explains.
 func TestClusterUninstallContinuesWhenDrainFails(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata),
@@ -207,8 +190,6 @@ func TestClusterUninstallReportsLeftoversOnFailure(t *testing.T) {
 	}
 }
 
-// Guidance that names the chart defaults would send an operator with a renamed
-// queue to objects that do not exist.
 func TestClusterUninstallGuidanceUsesConfiguredQueueNames(t *testing.T) {
 	values := `{"baselineQueue":{"enabled":false,"name":"research-cq","flavor":{"name":"gpu-flavor"},"topology":{"enabled":true,"name":"rack-topology"}}}`
 	installFakeHelmWithRelease(t, installedRelease(values, deployedMetadata),
@@ -227,8 +208,6 @@ func TestClusterUninstallGuidanceUsesConfiguredQueueNames(t *testing.T) {
 	}
 }
 
-// A Topology is only rendered when baselineQueue.topology.enabled is set, so
-// naming it unconditionally would tell operators to delete a nonexistent object.
 func TestClusterUninstallGuidanceOmitsDisabledTopology(t *testing.T) {
 	values := `{"baselineQueue":{"enabled":false,"topology":{"enabled":false,"name":"rack-topology"}}}`
 	installFakeHelmWithRelease(t, installedRelease(values, deployedMetadata),
@@ -242,8 +221,6 @@ func TestClusterUninstallGuidanceOmitsDisabledTopology(t *testing.T) {
 	}
 }
 
-// Skipping in silence would read as "there was no queue to drain" when the
-// truth is "could not tell", and those leave the cluster in different states.
 func TestClusterUninstallReportsSkipWhenValuesUnreadable(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, releaseFixture{Release: defaultTauGridRelease, Metadata: deployedMetadata}, recordHelm(&calls))
@@ -260,8 +237,6 @@ func TestClusterUninstallReportsSkipWhenValuesUnreadable(t *testing.T) {
 	}
 }
 
-// After a successful drain those objects are gone, so naming them would send
-// the operator after resources that no longer exist.
 func TestClusterUninstallOmitsRecoveryAfterSuccessfulDrain(t *testing.T) {
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata),
 		func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
@@ -270,8 +245,6 @@ func TestClusterUninstallOmitsRecoveryAfterSuccessfulDrain(t *testing.T) {
 			}
 			return nil
 		})
-	// A drain counts as done only once the objects are confirmed gone, so this
-	// case has to say so rather than reach for a live cluster to find out.
 	stubQueuePolicyPresent(t, false)
 
 	out, err := runCluster(t, "uninstall", "--yes")

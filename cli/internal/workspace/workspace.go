@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package workspace contains the client-side shape of TauWorkspace objects.
 package workspace
 
 import (
@@ -13,14 +12,11 @@ import (
 )
 
 const (
-	APIGroup         = "tau.azure.com"
-	APIVersion       = APIGroup + "/v1alpha1"
-	KindWorkspace    = "TauWorkspace"
-	KindQuotaRequest = "TauQuotaRequest"
-	SystemNamespace  = "tau-system"
-	// LegacySystemNamespace is used only when reading connection artifacts
-	// created before cluster.systemNamespace was part of their contract. New
-	// installs and newly generated descriptors always write SystemNamespace.
+	APIGroup              = "tau.azure.com"
+	APIVersion            = APIGroup + "/v1alpha1"
+	KindWorkspace         = "TauWorkspace"
+	KindQuotaRequest      = "TauQuotaRequest"
+	SystemNamespace       = "tau-system"
 	LegacySystemNamespace = "tau-platform"
 
 	AuthorizationModeWorkspaceRBAC = "workspace-rbac"
@@ -59,28 +55,12 @@ type WorkspaceTarget struct {
 }
 
 type WorkspaceDefaults struct {
-	OutputRoot string `json:"outputRoot,omitempty" yaml:"outputRoot,omitempty"`
-	// ScratchMount is not part of the TauWorkspace CRD schema, so the API
-	// server prunes it on write. It is kept here only so reads of an object
-	// that somehow carries it do not fail; do not add new consumers.
-	ScratchMount string `json:"scratchMount,omitempty" yaml:"scratchMount,omitempty"`
-	Priority     string `json:"priority,omitempty" yaml:"priority,omitempty"`
-	// TTLSecondsAfterFinished mirrors WorkspaceDefaults.ttlSecondsAfterFinished
-	// in the CRD: the workspace-level default retention for finished batch
-	// Jobs. A pointer keeps "unset" distinct from an explicit value, because
-	// zero is a legal Kubernetes TTL meaning "delete immediately".
+	OutputRoot              string `json:"outputRoot,omitempty" yaml:"outputRoot,omitempty"`
+	ScratchMount            string `json:"scratchMount,omitempty" yaml:"scratchMount,omitempty"`
+	Priority                string `json:"priority,omitempty" yaml:"priority,omitempty"`
 	TTLSecondsAfterFinished *int64 `json:"ttlSecondsAfterFinished,omitempty" yaml:"ttlSecondsAfterFinished,omitempty"`
 }
 
-// MinTTLSecondsAfterFinished mirrors the CRD's durability floor for
-// WorkspaceDefaults.ttlSecondsAfterFinished. The CRD enforces it on write, but
-// a workspace created against an older schema can still carry a shorter value,
-// so readers re-check rather than trust the stored object.
-//
-// The floor exists because finished-Job retention races the lifecycle
-// recorder: below roughly an order of magnitude above its observation
-// interval, a Job that finishes just after a poll is collected with its pods
-// before the next pass, and the durable record is lost rather than shortened.
 const MinTTLSecondsAfterFinished int64 = 600
 
 type WorkspaceWorkloadIdentity struct {

@@ -48,8 +48,6 @@ func serveDeployRender(t *testing.T, args ...string) (string, string, error) {
 	return out.String(), stderr.String(), err
 }
 
-// TestServeDeployStampsQueueOnPodTemplate is the regression guard for #1317.
-// Client dry-run resolves the same authoritative queue and profile as apply.
 func TestServeDeployStampsQueueOnPodTemplate(t *testing.T) {
 	rendered, stderr, err := serveDeployRender(t,
 		"h100-infer",

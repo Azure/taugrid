@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package serve renders profile-bound serving workloads. Distributed
-// RayServices use a CPU head and a fixed pool of GPU worker Pods.
 package serve
 
 import (
@@ -19,7 +17,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// Default RayService parameters. Pinned; bump deliberately.
 const (
 	DefaultRayVersion = "2.40.0"
 	DefaultImportPath = "serve:app"
@@ -27,16 +24,15 @@ const (
 	DashboardPort     = 8265
 )
 
-// Options collects everything the renderer needs that isn't in the Profile.
 type Options struct {
-	Name        string // required
-	Namespace   string // required
-	Image       string // overrides Profile.Runtime.Image
-	Replicas    int    // serve deployment replicas when ReplicasSet is true
-	ReplicasSet bool   // render a Ray Serve deployment override
-	ImportPath  string // Ray Serve import path (default serve:app)
-	ServePort   int    // Serve HTTP port on head and workers (default 8000)
-	RayVersion  string // default 2.40.0
+	Name        string
+	Namespace   string
+	Image       string
+	Replicas    int
+	ReplicasSet bool
+	ImportPath  string
+	ServePort   int
+	RayVersion  string
 	Args        []string
 	Env         map[string]string
 	EnvVars     []envspec.Var
@@ -48,13 +44,11 @@ type Options struct {
 	Volumes      []Volume
 
 	Autoscaling *AutoscalingOptions
-	Workers     int32          // profile workerCount; >1 uses a CPU head plus GPU workers
-	ShmSize     string         // optional memory-backed /dev/shm capacity
-	AppArgs     map[string]any // optional application-builder arguments
+	Workers     int32
+	ShmSize     string
+	AppArgs     map[string]any
 }
 
-// Render turns a resolved Profile + Options into a single-document YAML
-// RayService manifest ready for `kubectl apply -f -`.
 func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
@@ -97,9 +91,6 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	gpuLabels := gpu.Labels()
 	gpuAnnotations := gpu.Annotations()
 
-	// Kueue's RayService integration watches the CR for queue-name; without it
-	// the CR is never admitted, so an unlabelled RayService is a submit that
-	// silently never runs. Also propagated to head pod labels for observability.
 	queueName := profileLocalQueue(p)
 	if queueName == "" {
 		return nil, errors.New("render RayService: Kueue LocalQueue is required")
@@ -160,7 +151,6 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		headContainer["volumeMounts"] = volumeMountsToAny(o.VolumeMounts)
 	}
 
-	// Resources: CPU/memory requests from profile, plus device-plugin GPUs.
 	resources := map[string]any{}
 	if p.Resources.Requests != nil {
 		resources["requests"] = copyResources(p.Resources.Requests)
@@ -224,7 +214,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if o.Autoscaling != nil {
 		a := o.Autoscaling.WithDefaults()
 		if a.TargetQPS == 0 {
-			a.TargetQPS = 5 // RayService default; HPA path uses 0 = CPU-only
+			a.TargetQPS = 5
 		}
 		fmt.Fprintf(&serveConfig, "    deployments:\n")
 		fmt.Fprintf(&serveConfig, "      - name: default\n")

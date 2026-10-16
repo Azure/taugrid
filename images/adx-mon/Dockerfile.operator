@@ -1,15 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Stage 1: Build with MSFT Go (Debian-based) for FIPS compliance
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS builder
-# TODO: change default to v0.2.0 once adx-mon team tags a release
 ARG ADX_MON_VERSION=main
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git gcc && rm -rf /var/lib/apt/lists/*
 
-# Clone adx-mon at pinned version tag (must be a named ref — commit SHAs not supported)
 RUN git clone --depth 1 --branch ${ADX_MON_VERSION} \
     https://github.com/Azure/adx-mon.git /code
 WORKDIR /code
@@ -21,7 +18,6 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOEXPERIMENT=systemcrypto \
               -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" \
     -o ./bin/operator ./cmd/operator
 
-# Stage 2: Distroless runtime image
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
 
 LABEL org.opencontainers.image.source=https://github.com/Azure/adx-mon

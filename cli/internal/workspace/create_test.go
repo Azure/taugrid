@@ -73,10 +73,6 @@ func TestRenderCreationDeclaresResearcherReadyWorkspace(t *testing.T) {
 	}
 }
 
-// An operator can stand up an Entra cluster before the researchers' identity
-// group exists, so an omitted --principal-name falls back to the workspace
-// name rather than blocking. The binding it produces names a group nobody
-// asserts, which is inert rather than over-permissive.
 func TestRenderCreationDefaultsResearcherIdentityToTheWorkspaceName(t *testing.T) {
 	options := defaultCreateOptions()
 	options.PrincipalName = ""
@@ -86,8 +82,6 @@ func TestRenderCreationDefaultsResearcherIdentityToTheWorkspaceName(t *testing.T
 	if err != nil {
 		t.Fatalf("omitted principal must not block creation: %v", err)
 	}
-	// Both the external principal and the RBAC subject must land on the
-	// workspace name; a subject left empty would render an unbindable subject.
 	for _, want := range []string{
 		"kubernetesSubject:\n    kind: Group\n    name: " + options.Name + "\n",
 		"principalRef:\n    name: " + options.Name + "\n    provider: entra\n",
@@ -98,9 +92,6 @@ func TestRenderCreationDefaultsResearcherIdentityToTheWorkspaceName(t *testing.T
 	}
 }
 
-// The fallback is safe only because Entra asserts groups by object ID. A
-// GitHub team slug has the same shape as a workspace name, so defaulting there
-// could bind a real team; it must fail instead.
 func TestRenderCreationRefusesToGuessAGitHubTeam(t *testing.T) {
 	options := defaultCreateOptions()
 	options.PrincipalProvider = PrincipalProviderGitHub
@@ -113,8 +104,6 @@ func TestRenderCreationRefusesToGuessAGitHubTeam(t *testing.T) {
 	}
 }
 
-// An explicitly-empty --principal-name is a shell variable that did not
-// expand. It used to fail loudly; it must not now silently bind a group.
 func TestRenderCreationRejectsAnExplicitlyEmptyPrincipal(t *testing.T) {
 	options := defaultCreateOptions()
 	options.PrincipalName = ""
@@ -126,8 +115,6 @@ func TestRenderCreationRejectsAnExplicitlyEmptyPrincipal(t *testing.T) {
 	}
 }
 
-// A blank --principal-name is a typo, not an omission, so it must still fail
-// rather than silently taking the workspace name.
 func TestRenderCreationRejectsBlankResearcherIdentity(t *testing.T) {
 	options := defaultCreateOptions()
 	options.PrincipalName = "   "
@@ -138,10 +125,6 @@ func TestRenderCreationRejectsBlankResearcherIdentity(t *testing.T) {
 	}
 }
 
-// The "binds nobody" guarantee rests on Entra asserting groups by OBJECT ID,
-// which makes an object-ID-shaped workspace name the one string that could
-// make the defaulted subject real. A UUID is a valid DNS-1123 subdomain, so
-// nothing else stops it from becoming a workspace name.
 func TestRenderCreationRefusesToDefaultAnObjectIDShapedName(t *testing.T) {
 	options := defaultCreateOptions()
 	options.Name = "f9a2b52f-f481-4ef7-917a-4d0fef04bba3"
@@ -156,8 +139,6 @@ func TestRenderCreationRefusesToDefaultAnObjectIDShapedName(t *testing.T) {
 	}
 }
 
-// Naming the group explicitly is always allowed: the operator has stated the
-// subject, so there is nothing left to guess.
 func TestRenderCreationAllowsAnObjectIDShapedNameWithAnExplicitPrincipal(t *testing.T) {
 	options := defaultCreateOptions()
 	options.Name = "f9a2b52f-f481-4ef7-917a-4d0fef04bba3"
@@ -168,8 +149,6 @@ func TestRenderCreationAllowsAnObjectIDShapedNameWithAnExplicitPrincipal(t *test
 	}
 }
 
-// The guard keys on shape, not on any registry, so it must match the casing and
-// reject near-misses rather than any name containing a dash.
 func TestEntraObjectIDMatchesOnlyTheClaimShape(t *testing.T) {
 	for _, name := range []string{
 		"f9a2b52f-f481-4ef7-917a-4d0fef04bba3",
@@ -183,9 +162,7 @@ func TestEntraObjectIDMatchesOnlyTheClaimShape(t *testing.T) {
 		"research",
 		"taugrid-default",
 		"my-team-2026",
-		// One hex digit short in the first group.
 		"f9a2b52-f481-4ef7-917a-4d0fef04bba3",
-		// A UUID with a suffix is a different name, not an object ID.
 		"f9a2b52f-f481-4ef7-917a-4d0fef04bba3-dev",
 	} {
 		if entraObjectID.MatchString(name) {

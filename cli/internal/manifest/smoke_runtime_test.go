@@ -45,9 +45,6 @@ runtime:
 }
 
 func TestSmokeRuntimePipRequired(t *testing.T) {
-	// Tau ships no fallback pip list — a manifest without runtime.pip
-	// must be rejected at Parse() time so the user knows to declare the
-	// per-pod Python environment their trainer needs.
 	yamlBytes := []byte(`
 schema_version: 1
 name: smoke-default

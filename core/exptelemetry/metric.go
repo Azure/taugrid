@@ -42,7 +42,6 @@ var protectedMetricTagKeys = map[string]struct{}{
 	"exported_at":      {},
 }
 
-// MetricEvent is the canonical typed metric point exchanged by Tau components.
 type MetricEvent struct {
 	SchemaVersion  string            `json:"schema_version"`
 	EventID        string            `json:"event_id"`
@@ -67,7 +66,6 @@ type MetricEvent struct {
 	ExportedAt     time.Time         `json:"exported_at"`
 }
 
-// NewMetricEvent applies the v1 schema and deterministic event identity.
 func NewMetricEvent(event MetricEvent) (MetricEvent, error) {
 	if event.SchemaVersion == "" {
 		event.SchemaVersion = MetricEventSchemaV1
@@ -81,13 +79,10 @@ func NewMetricEvent(event MetricEvent) (MetricEvent, error) {
 	return event, nil
 }
 
-// ComputeEventID is an alias for DeterministicEventID.
 func (e MetricEvent) ComputeEventID() string {
 	return e.DeterministicEventID()
 }
 
-// DeterministicEventID returns a SHA-256 identity for the raw chart point.
-// Export time and tags are deliberately excluded because they are delivery metadata.
 func (e MetricEvent) DeterministicEventID() string {
 	identity := struct {
 		WorkspaceID   string    `json:"workspace_id"`
@@ -121,7 +116,6 @@ func (e MetricEvent) DeterministicEventID() string {
 	return "metric-" + hex.EncodeToString(sum[:])
 }
 
-// Validate verifies the v1 metric contract.
 func (e MetricEvent) Validate() error {
 	if e.SchemaVersion != MetricEventSchemaV1 {
 		return fmt.Errorf("unknown metric schema %q", e.SchemaVersion)
@@ -173,17 +167,14 @@ func validateMetricTime(name string, value time.Time) error {
 	return nil
 }
 
-// MarshalNDJSON returns the event's canonical one-line NDJSON representation.
 func (e MetricEvent) MarshalNDJSON() ([]byte, error) {
 	return EncodeMetricNDJSON(e)
 }
 
-// MarshalMetricEventNDJSON returns the event's canonical one-line NDJSON representation.
 func MarshalMetricEventNDJSON(event MetricEvent) ([]byte, error) {
 	return EncodeMetricNDJSON(event)
 }
 
-// EncodeMetricNDJSON returns one canonical JSON object followed by one newline.
 func EncodeMetricNDJSON(event MetricEvent) ([]byte, error) {
 	normalized, err := NewMetricEvent(event)
 	if err != nil {

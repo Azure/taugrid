@@ -50,7 +50,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- Metrics table pre-creation ---
   - it: "renders metrics ManagementCommands when enabled"
     template: templates/management-commands/precreate-metrics-tables.yaml
     set:
@@ -104,7 +103,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- Logs table pre-creation ---
   - it: "renders logs ManagementCommand when enabled"
     template: templates/management-commands/precreate-logs-tables.yaml
     set:
@@ -136,7 +134,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- Integration with values-ai-runtime.yaml ---
   - it: "values-ai-runtime enables both metrics and logs precreation"
     template: templates/management-commands/precreate-metrics-tables.yaml
     values:

@@ -23,10 +23,8 @@ from tau import (
 )
 from tau.serve import serve as serve_workload
 
-
 def _write_python(path: Path, source: str) -> None:
     path.write_text(textwrap.dedent(source).strip() + "\n")
-
 
 def _write_argv_recorder(path: Path, recorder: Path) -> None:
     path.write_text(
@@ -37,7 +35,6 @@ def _write_argv_recorder(path: Path, recorder: Path) -> None:
     )
     path.chmod(0o755)
 
-
 def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -46,7 +43,6 @@ def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> N
         f"shutil.copyfile(sys.argv[sys.argv.index('--config') + 1], {str(copied_config)!r})\n"
     )
     path.chmod(0o755)
-
 
 def test_generated_run_config_includes_priority_tier() -> None:
     generated = _workloads._generated_run_config(
@@ -61,7 +57,6 @@ def test_generated_run_config_includes_priority_tier() -> None:
     )
 
     assert generated["policy"]["priority_tier"] == "priority"
-
 
 def test_decorator_returns_handle():
     captured = {}
@@ -87,7 +82,6 @@ def test_decorator_returns_handle():
     assert result is captured["ctx"]
     assert captured["steps"] == 5
     assert captured["ctx"].name == "t1"
-
 
 def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
     assert exported_serve is serve_workload
@@ -127,7 +121,6 @@ def test_serve_accepts_train_handle_and_delegates_to_cli(tmp_path):
     assert argv[argv.index("--dry-run") + 1] == "client"
     assert argv[argv.index("--context") + 1] == "kind-taugrid"
 
-
 def test_serve_accepts_model_ref_and_delegates_to_cli(tmp_path):
     recorder = tmp_path / "tau_argv.txt"
     fake = tmp_path / "tau"
@@ -144,7 +137,6 @@ def test_serve_accepts_model_ref_and_delegates_to_cli(tmp_path):
     assert argv[:4] == [str(fake), "serve", "deploy", "sample-endpoint"]
     assert argv[argv.index("--from-model") + 1] == "sample-lora:best-loss"
 
-
 def test_manifest_shape_matches_tau_v1():
     @train(name="my-ft", gpus=2)
     def f(ctx):
@@ -157,14 +149,12 @@ def test_manifest_shape_matches_tau_v1():
     assert m["eval"] == {}
     assert m["artifacts"] == {"checkpoint": "last.safetensors"}
 
-
 def test_train_manifest_declares_custom_checkpoint_artifact():
     @train(name="my-ft", gpus=2, checkpoint_artifact="rank0/final.safetensors")
     def f(ctx):
         pass
 
     assert f.manifest()["artifacts"] == {"checkpoint": "rank0/final.safetensors"}
-
 
 def test_train_manifest_declares_model_registry_metadata():
     @train(
@@ -189,7 +179,6 @@ def test_train_manifest_declares_model_registry_metadata():
         "metric_direction": "lower",
     }
 
-
 def test_train_manifest_allows_cpu_only_gpus_zero():
     @train(name="cpu-only", gpus=0, workers=4)
     def f(ctx):
@@ -197,7 +186,6 @@ def test_train_manifest_allows_cpu_only_gpus_zero():
 
     m = f.manifest()
     assert m["compute"] == {"gpus": 0, "workers": 4}
-
 
 def test_manifest_extras_merge():
     @train(
@@ -210,9 +198,7 @@ def test_manifest_extras_merge():
 
     m = f.manifest()
     assert m["lora"] == {"target_modules": ["q", "v"]}
-    # extras must not clobber the canonical fields:
     assert m["compute"] == {"gpus": 4}
-
 
 def test_train_config_env_secret_and_mount_contract(tmp_path):
     cfg = tmp_path / "train.yaml"
@@ -254,7 +240,6 @@ dataset:
     ]
     assert m["dataset"]["path"] == "/datasets/base/train.jsonl"
 
-
 def test_train_manifest_declares_primary_data_pvc():
     @train(
         name="pvc-run",
@@ -272,7 +257,6 @@ def test_train_manifest_declares_primary_data_pvc():
             {"name": "labels", "pvc": "labels-pvc", "mountPath": "/labels", "readOnly": True}
         ],
     }
-
 
 def test_train_manifest_declares_resource_sizing():
     @train(
@@ -294,7 +278,6 @@ def test_train_manifest_declares_resource_sizing():
         "worker_cpus": 2,
         "worker_memory": "16Gi",
     }
-
 
 def test_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
@@ -322,7 +305,6 @@ def test_submit_data_pvc_override_rewrites_manifest(tmp_path, monkeypatch):
     assert res.returncode == 0
     manifest = yaml.safe_load(copied_manifest.read_text())
     assert manifest["storage"]["data_pvc"] == "lustre-research"
-
 
 def test_submit_resource_override_rewrites_manifest(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
@@ -362,7 +344,6 @@ def test_submit_resource_override_rewrites_manifest(tmp_path, monkeypatch):
     assert manifest["compute"]["memory"] == "32Gi"
     assert manifest["compute"]["cpu_limit"] == 4
     assert manifest["compute"]["memory_limit"] == "32Gi"
-
 
 def test_secret_from_env_rewrites_to_job_scoped_secret(tmp_path, monkeypatch):
     recorder = tmp_path / "argv.txt"
@@ -416,7 +397,6 @@ def test_secret_from_env_rewrites_to_job_scoped_secret(tmp_path, monkeypatch):
     }
     assert "fake-token-value" not in manifest_text
 
-
 def test_manifest_secret_from_file_resolves_payload_and_refs(tmp_path):
     token_file = tmp_path / "hf-token.txt"
     token_file.write_text("file-token-value\n")
@@ -457,7 +437,6 @@ def test_manifest_secret_from_file_resolves_payload_and_refs(tmp_path):
         }
     ]
 
-
 def test_local_call_passes_ctx():
     captured = {}
 
@@ -472,7 +451,6 @@ def test_local_call_passes_ctx():
     assert ctx.smoke_pairs == 3
     assert ctx.is_remote is False
     assert ctx.manifest["compute"]["gpus"] == 1
-
 
 def test_submit_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     """Replace tau binary with a fake recorder; assert the subprocess argv."""
@@ -510,7 +488,6 @@ def test_submit_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     assert config["policy"]["namespace"] == "ray"
     assert config["policy"]["team"] == "research"
     assert config["policy"]["preset"] == "azure.research.training.2x"
-
 
 def test_submit_forwards_profiler_flags(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
@@ -550,7 +527,6 @@ def test_submit_forwards_profiler_flags(tmp_path, monkeypatch):
     assert config["policy"]["queue"] == "dev"
     assert config["policy"]["gpu_class"] == "any"
 
-
 def test_train_entrypoint_returns_handle_and_runs_local_script(tmp_path):
     script = tmp_path / "probe.py"
     _write_python(
@@ -581,7 +557,6 @@ def test_train_entrypoint_returns_handle_and_runs_local_script(tmp_path):
         "pass_ctx": False,
     }
 
-
 def test_train_entrypoint_can_pass_ctx_to_local_script(tmp_path):
     script = tmp_path / "job.py"
     _write_python(
@@ -602,7 +577,6 @@ def test_train_entrypoint_can_pass_ctx_to_local_script(tmp_path):
     )
 
     assert handle() == "entrypoint-ctx:2:ok"
-
 
 def test_train_entrypoint_submit_stages_generated_module_entrypoint_and_extra_scripts(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
@@ -636,7 +610,6 @@ def test_train_entrypoint_submit_stages_generated_module_entrypoint_and_extra_sc
     assert manifest["entrypoint"]["script"] == "/script/tau_entrypoint_train.py"
     assert manifest["entrypoint"]["function"] == "main"
 
-
 def test_train_entrypoint_accepts_absolute_pvc_path_without_staging(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
     copied_config = tmp_path / "tau.yaml"
@@ -657,7 +630,6 @@ def test_train_entrypoint_accepts_absolute_pvc_path_without_staging(tmp_path, mo
     extra_values = config["workflow"]["extra_scripts"]
     assert len(extra_values) == 1
     assert handle.manifest()["entrypoint"]["script"] == "/data/scripts/train_probe.py"
-
 
 def test_submit_forwards_gpu_resource_mode_and_node_selector_kwargs(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"
@@ -684,7 +656,6 @@ def test_submit_forwards_gpu_resource_mode_and_node_selector_kwargs(tmp_path, mo
     config = yaml.safe_load(copied_config.read_text())
     assert config["compute"]["gpu_resource_mode"] == "device-plugin"
     assert config["policy"]["node_selector"] == {"agentpool": "gpu", "gpu": "a100"}
-
 
 def test_serve_invokes_tau_cli_with_correct_args(tmp_path, monkeypatch):
     recorder = tmp_path / "tau_argv.txt"

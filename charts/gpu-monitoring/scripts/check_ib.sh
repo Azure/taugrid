@@ -2,8 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks only InfiniBand port identity, state, and rate. PKey
-# validation is intentionally owned by check_ib_pkeys.sh.
 readonly EXPECTED_IB_GBPS="${EXPECTED_IB_GBPS:-400}"
 readonly EXPECTED_IB_DEVS="${IB_DEVICES:-}"
 readonly SYSFS_ROOT="${SYSFS_ROOT:-/sys}"

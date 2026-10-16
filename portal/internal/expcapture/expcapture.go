@@ -1,11 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package expcapture maps status run profiles into experiment store records.
-//
-// It exists so that the status package can project a run without importing the
-// experiment store: status produces a storage-neutral status.RunProfileRecord,
-// and this package translates it into the store's record types.
 package expcapture
 
 import (
@@ -14,7 +9,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/expstore"
 )
 
-// RunData projects a status snapshot into experiment store records.
 func RunData(s status.Snapshot, c status.CostProfile, opts status.ExperimentRunDataOptions) (expstore.RecordRunDataOptions, error) {
 	profile, err := status.ExperimentRunProfile(s, c, opts)
 	if err != nil {
@@ -23,7 +17,6 @@ func RunData(s status.Snapshot, c status.CostProfile, opts status.ExperimentRunD
 	return FromRunProfile(profile), nil
 }
 
-// FromRunProfile converts a storage-neutral run profile into store records.
 func FromRunProfile(p status.RunProfileRecord) expstore.RecordRunDataOptions {
 	run := expstore.RunRecord{
 		RunID:       p.RunID,

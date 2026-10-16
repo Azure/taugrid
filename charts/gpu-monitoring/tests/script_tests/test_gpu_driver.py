@@ -5,7 +5,6 @@ import unittest
 
 from helpers import ScriptTestCase
 
-
 class GpuDriverTests(ScriptTestCase):
     def driver_env(self, expected=None):
         driver_root = self.test_root / "proc" / "driver" / "nvidia"
@@ -89,7 +88,6 @@ class GpuDriverTests(ScriptTestCase):
     def test_legacy_missing_parameter_passes(self):
         output = self.run_script("check_gpu_driver.sh", env=self.driver_env())
         self.assertIn("not exposed by this driver", output)
-
 
 if __name__ == "__main__":
     unittest.main()

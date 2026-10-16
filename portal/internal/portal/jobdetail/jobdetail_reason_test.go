@@ -5,12 +5,6 @@ package jobdetail
 
 import "testing"
 
-// RayJob failures have always been legible in the UI because KubeRay puts the
-// cause on status.reason/status.message and parseRayJob forwards it. Batch Jobs
-// carry the equivalent text on their terminal condition, but parseJob used to
-// read only {type,status} and drop it — making batch Jobs the one workload kind
-// whose terminal cause was invisible.
-
 func TestParseJobSurfacesTerminalFailureReason(t *testing.T) {
 	raw := []byte(`{
 	  "metadata":{"name":"train","creationTimestamp":"2026-07-16T10:00:00Z"},
@@ -48,8 +42,6 @@ func TestParseJobSurfacesTerminalCompletionReason(t *testing.T) {
 	}
 }
 
-// Suspended is not an outcome. Reporting it as the terminal explanation would
-// describe a queued Job as though it had finished.
 func TestParseJobIgnoresNonTerminalConditions(t *testing.T) {
 	raw := []byte(`{
 	  "metadata":{"name":"train","creationTimestamp":"2026-07-16T10:00:00Z"},
@@ -67,7 +59,6 @@ func TestParseJobIgnoresNonTerminalConditions(t *testing.T) {
 	}
 }
 
-// A condition that flipped back to False is history, not the current outcome.
 func TestParseJobIgnoresFalseTerminalConditions(t *testing.T) {
 	raw := []byte(`{
 	  "metadata":{"name":"train","creationTimestamp":"2026-07-16T10:00:00Z"},

@@ -289,10 +289,6 @@ VALUES (?, ?, ?, ?, nullif(?, ''), ?, nullif(?, ''),
 	if err != nil {
 		return false, err
 	}
-	// runs.experiment_id above is the run -> experiment link, so the experiment
-	// row has to exist for it to point at. Doing it here rather than leaving it
-	// to the EnsureExperimentIndex backfill matters: that backfill falls back to
-	// the run group, which would split an experiment's arms apart.
 	if run.ExperimentID != "" {
 		if _, err := ensureImplicitExperimentTx(ctx, tx, ExperimentRecord{
 			ExperimentID: run.ExperimentID,

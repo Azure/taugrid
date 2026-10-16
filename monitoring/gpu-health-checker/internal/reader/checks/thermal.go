@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/taugrid/monitoring/gpu-health-checker/internal/store"
 )
 
-// ThermalReader checks thermal and power violation counters.
 type ThermalReader struct{}
 
 func (r *ThermalReader) Name() string { return "thermal" }
@@ -134,14 +133,11 @@ func (r *ThermalReader) checkNVSwitchTemp(ctx context.Context, db *store.DB, cfg
 	return nil
 }
 
-// getLatestTemp returns a formatted string with the latest GPU temperature,
-// or an empty string if unavailable.
 func getLatestTemp(ctx context.Context, db *store.DB, gpu int) string {
 	samples, err := db.QuerySamples(ctx, fieldnames.GPUTemp, gpu, time.Time{})
 	if err != nil || len(samples) == 0 {
 		return ""
 	}
-	// Get the latest sample.
 	latest := samples[len(samples)-1]
 	return fmt.Sprintf(" (temp=%.0f°C)", latest.Value)
 }

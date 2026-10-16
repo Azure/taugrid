@@ -29,13 +29,10 @@ const (
 	defaultLocalQueueLabel = "kueue.x-k8s.io/default-local-queue"
 )
 
-// AdoptRunner is the narrow kubectl surface used by workspace adoption.
 type AdoptRunner interface {
 	Raw(ctx context.Context, args []string, stdin []byte) (string, error)
 }
 
-// AdoptOptions describes an existing namespace and its platform-owned
-// dependencies. Adoption never creates these resources.
 type AdoptOptions struct {
 	Name            string
 	Namespace       string
@@ -223,7 +220,6 @@ func renderAdoption(o AdoptOptions, metadata ObjectMeta) ([]byte, error) {
 	return raw, nil
 }
 
-// RenderAdoption renders the only object workspace adoption may apply.
 func RenderAdoption(options AdoptOptions) ([]byte, error) {
 	options = options.withDefaults()
 	if err := options.validate(); err != nil {
@@ -269,8 +265,6 @@ type storageClassDocument struct {
 	Metadata objectMetadata `json:"metadata"`
 }
 
-// AdoptionPreflight records the immutable identities and contracts observed by
-// the read-only preflight.
 type AdoptionPreflight struct {
 	NamespaceUID            string
 	QueueUID                string
@@ -288,7 +282,6 @@ type AdoptionPreflight struct {
 	Queue                   string
 }
 
-// Summary returns a concise deterministic result suitable for CLI output.
 func (p AdoptionPreflight) Summary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "preflight passed: Namespace %s; LocalQueue %s/%s -> ClusterQueue %s",
@@ -328,8 +321,6 @@ func requireNotTerminating(kind, name, deletionTimestamp string) error {
 	return nil
 }
 
-// PreflightAdoption validates the existing namespace, queue, backing
-// ClusterQueue, optional PVC, and any existing TauWorkspace without mutation.
 func PreflightAdoption(ctx context.Context, runner AdoptRunner, options AdoptOptions) (AdoptionPreflight, error) {
 	o := options.withDefaults()
 	if err := o.validate(); err != nil {
@@ -533,9 +524,6 @@ func verifyStablePreflight(before, after AdoptionPreflight) error {
 	return nil
 }
 
-// ApplyAdoption repeats preflight, verifies observed identities are stable,
-// then server-side dry-runs and conditionally creates only the TauWorkspace.
-// A compatible existing workspace is an idempotent no-op.
 func ApplyAdoption(ctx context.Context, runner AdoptRunner, options AdoptOptions, initial AdoptionPreflight) (string, error) {
 	o := options.withDefaults()
 	current, err := PreflightAdoption(ctx, runner, o)

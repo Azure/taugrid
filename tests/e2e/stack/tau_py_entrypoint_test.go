@@ -28,10 +28,6 @@ const (
 	tauPyGPUEntrypointRayJob  = "tau-" + tauPyGPUEntrypointRunName
 )
 
-// TestTauPyEntrypointRayJob validates the Tau Python SDK's "pure PyTorch
-// file" contract on a live Kueue/KubeRay stack. The user entrypoint imports no
-// Tau APIs: tau.train(entrypoint=...) stages it and sibling helpers, submits a
-// RayJob, and the cluster wrapper loads the function by path.
 func TestTauPyEntrypointRayJob(t *testing.T) {
 	if os.Getenv("E2E_TAU_PY_ENTRYPOINT") != "1" {
 		t.Skip("set E2E_TAU_PY_ENTRYPOINT=1 to run the tau-py entrypoint RayJob smoke test")
@@ -82,11 +78,6 @@ func TestTauPyEntrypointRayJob(t *testing.T) {
 	require.NoError(t, err, "Tau Python entrypoint RayJob should reach SUCCEEDED status")
 }
 
-// TestTauPyEntrypointRayJobGPU is the golden Tau live e2e for the "submit a
-// pure PyTorch file" contract on GPU nodes. Unlike the CPU smoke above, this
-// uses real torch, requests nvidia.com/gpu on a dedicated worker, asserts the
-// control head stays on the system pool, and the user code fails unless CUDA
-// is available.
 func TestTauPyEntrypointRayJobGPU(t *testing.T) {
 	if os.Getenv("E2E_TAU_PY_ENTRYPOINT_GPU") != "1" {
 		t.Skip("set E2E_TAU_PY_ENTRYPOINT_GPU=1 to run the tau-py GPU entrypoint RayJob e2e")
@@ -300,7 +291,6 @@ import pathlib
 
 import tau
 
-
 root = pathlib.Path(__file__).parent
 runtime_pip = json.loads(os.environ.get("TAU_PY_ENTRYPOINT_RUNTIME_PIP", '["setuptools"]'))
 if not isinstance(runtime_pip, list) or not runtime_pip:
@@ -336,7 +326,6 @@ import torch
 
 from tensor_helpers import fit_batch, make_batches, rounded_state
 
-
 class TinyRegressor(torch.nn.Module):
     def __init__(self):
         self.weight = 0.0
@@ -347,7 +336,6 @@ class TinyRegressor(torch.nn.Module):
 
     def parameters(self):
         return [self]
-
 
 def main(checkpoint_dir):
     torch.manual_seed(7)
@@ -381,14 +369,12 @@ def main(checkpoint_dir):
         ([2.0, 3.0], [5.0, 7.0]),
     ]
 
-
 def fit_batch(model, xs, ys, *, lr):
     errors = model(xs) - ys
     grad_w = 2.0 * (errors * xs).mean().item()
     grad_b = 2.0 * errors.mean().item()
     model.weight -= lr * grad_w
     model.bias -= lr * grad_b
-
 
 def rounded_state(model, losses):
     return {
@@ -401,7 +387,6 @@ def rounded_state(model, losses):
 import pathlib
 
 _seed = None
-
 
 class _Tensor:
     def __init__(self, values):
@@ -446,20 +431,16 @@ class _Tensor:
     def __mul__(self, other):
         return self._binary(other, lambda left, right: left * right)
 
-
 def tensor(values):
     return _Tensor(values)
-
 
 def manual_seed(seed):
     global _seed
     _seed = int(seed)
 
-
 def save(payload, path):
     path = pathlib.Path(path)
     path.write_text(json.dumps(payload, sort_keys=True))
-
 
 class nn:
     class Module:
@@ -470,7 +451,6 @@ class nn:
         def __call__(self, prediction, target):
             error = prediction - target
             return (error * error).mean()
-
 
 class optim:
     class SGD:
@@ -495,7 +475,6 @@ import os
 import pathlib
 
 import tau
-
 
 root = pathlib.Path(__file__).parent
 runtime_pip = json.loads(os.environ.get("TAU_PY_GPU_ENTRYPOINT_RUNTIME_PIP", "[]"))
@@ -544,7 +523,6 @@ import torch
 
 from gpu_helpers import make_batch
 
-
 class TinyCudaRegressor(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -552,7 +530,6 @@ class TinyCudaRegressor(torch.nn.Module):
 
     def forward(self, features):
         return self.linear(features)
-
 
 def main(checkpoint_dir):
     if not torch.cuda.is_available():
@@ -593,7 +570,6 @@ def main(checkpoint_dir):
     )
 `)
 	writeFile(t, filepath.Join(dir, "gpu_helpers.py"), `import torch
-
 
 def make_batch(device):
     features = torch.tensor(

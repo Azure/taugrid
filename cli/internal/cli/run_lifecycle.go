@@ -242,9 +242,6 @@ func kubectlDiagnosticCommands(kubeContext, kubeconfig, namespace, name string, 
 		return nil
 	}
 	if snap.JobFound && snap.RayJob.Found {
-		// Status gives a same-name batch Job precedence. The fetched pod set can
-		// contain both Job and Ray pods, so use the Job selector rather than
-		// emitting pod-specific commands that could cross workload boundaries.
 		snap.Pods = nil
 	}
 	base := []string{"kubectl"}
@@ -469,8 +466,6 @@ Kubernetes job-name=<name> label selector.`,
 	return cmd
 }
 
-// rayJobLogs fetches Ray Job execution logs from the head pod.
-// Returns an error if the workload is not a RayJob or the logs cannot be retrieved.
 func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, follow bool, tail int) (string, error) {
 	jobID, headPod, err := resolveRayJobLogTarget(ctx, r, namespace, name)
 	if err != nil {
@@ -480,9 +475,6 @@ func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, fol
 		return "", nil
 	}
 
-	// The log-offload sidecar supports Kubernetes' native tail and follow
-	// semantics. Prefer it for bounded reads; older RayJobs without the sidecar
-	// fall back to the Ray Dashboard CLI below.
 	var sidecarOut string
 	var sidecarErr error
 	if tail >= 0 {
@@ -507,13 +499,6 @@ func rayJobLogs(ctx context.Context, r *kube.Runner, namespace, name string, fol
 		return out, nil
 	}
 
-	// The exec path only works while the ray-head container is alive. KubeRay
-	// tears it down when the RayJob reaches a terminal state, so on a job that
-	// merely SUCCEEDED this fails with "container not found (ray-head)" and the
-	// researcher cannot read the output of their own completed run.
-	//
-	// The head pod also runs a log-offload sidecar that holds the same driver
-	// output and outlives the ray-head container, so fall back to reading it.
 	if tail < 0 {
 		sidecarOut, err := rayDriverSidecarLogs(ctx, r, namespace, headPod, follow, tail)
 		if err == nil {
@@ -608,8 +593,6 @@ func rayJobLogExecArgs(namespace, headPod, jobID string, follow bool) []string {
 	return args
 }
 
-// rayDriverSidecarLogs reads driver output from the log-offload sidecar, which
-// survives the ray-head container's teardown on job completion.
 func rayDriverSidecarLogs(ctx context.Context, r *kube.Runner, namespace, headPod string, follow bool, tail int) (string, error) {
 	out, err := r.Raw(ctx, rayDriverSidecarLogArgs(namespace, headPod, follow, tail), nil)
 	if err != nil {
@@ -796,7 +779,6 @@ func deleteWorkload(ctx context.Context, r kubeRawRunner, name, ns string, w io.
 		jobErr = nil
 	}
 
-	// Clean up headless Service used by multi-node torchrun jobs.
 	svcName := name + "-headless"
 	out, _ = r.Raw(ctx,
 		[]string{"-n", ns, "delete", "service", svcName, "--ignore-not-found"}, nil)

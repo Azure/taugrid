@@ -12,16 +12,11 @@ import (
 	"strings"
 )
 
-// HTTPSSource reads public dataset bytes from a strict HTTPS source root. It
-// intentionally has no credential or token support: public HTTP(S) URLs with
-// query strings, userinfo, or fragments are rejected.
 type HTTPSSource struct {
 	base   *url.URL
 	client *http.Client
 }
 
-// NewHTTPSSource constructs a public HTTPS source. client may be nil, in which
-// case http.DefaultClient is used.
 func NewHTTPSSource(root string, client *http.Client) (*HTTPSSource, error) {
 	if err := ValidateAzureURL(root); err != nil {
 		return nil, err
@@ -41,8 +36,6 @@ func NewHTTPSSource(root string, client *http.Client) (*HTTPSSource, error) {
 
 func (s *HTTPSSource) Describe() string { return s.base.String() }
 
-// Open resolves a manifest-relative path below the configured root, performs a
-// context-aware GET, and accepts only successful HTTPS responses.
 func (s *HTTPSSource) Open(ctx context.Context, relPath string) (io.ReadCloser, int64, error) {
 	if err := validateHTTPSRelativePath(relPath); err != nil {
 		return nil, 0, err

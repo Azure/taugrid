@@ -16,11 +16,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portalbin"
 )
 
-// Stellar moved out of the tau CLI, so every command this package hands a user
-// to copy has to name taugrid-portal. A stale "tau experiment ..." still
-// compiles and still renders — it only fails when someone pastes it — so these
-// are the assertions that turn that into a build-time failure.
-
 func TestActionCommandsNameThePortalBinary(t *testing.T) {
 	actions := buildActions("/data/exp", "vision-r3", "experiment", nil, "eval/accuracy")
 
@@ -43,7 +38,6 @@ func TestActionCommandsNameThePortalBinary(t *testing.T) {
 		}
 	}
 
-	// NextCommand takes a different branch when no metric is selected.
 	noMetric := buildActions("/data/exp", "vision-r3", "experiment", nil, "")
 	if !strings.HasPrefix(noMetric.NextCommand, portalbin.ExperimentCmd+" ") {
 		t.Fatalf("NextCommand without a metric = %q, want prefix %q", noMetric.NextCommand, portalbin.ExperimentCmd)
@@ -67,11 +61,6 @@ func TestRunObserveCommandNamesThePortalBinary(t *testing.T) {
 	}
 }
 
-// TestNoGoSourceGeneratesTauExperimentCommands is the fail-closed half. The
-// assertions above cover the fields that exist today; this one covers the ones
-// someone adds tomorrow. It reads string literals from the AST rather than
-// grepping, so the comments that legitimately describe the pre-split commands
-// do not trip it.
 func TestNoGoSourceGeneratesTauExperimentCommands(t *testing.T) {
 	forbidden := []string{"tau experiment", "tau exp ", "tau portal "}
 

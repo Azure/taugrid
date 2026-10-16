@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// CostProfile is the optional cost slice of a run profile.
 type CostProfile struct {
 	Status     string
 	Profile    string
@@ -29,14 +28,11 @@ type CostProfile struct {
 	Error      string
 }
 
-// ProfileField is one stable run-profile observation.
 type ProfileField struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 }
 
-// RunProfileFields returns the complete run profile shared by human and
-// machine renderers.
 func RunProfileFields(s Snapshot, c CostProfile) []ProfileField {
 	fields := make([]ProfileField, 0, 55)
 	row := func(name, value string) {
@@ -106,8 +102,6 @@ func RunProfileFields(s Snapshot, c CostProfile) []ProfileField {
 	return fields
 }
 
-// RenderRunProfile appends the researcher-facing "what happened to my run?"
-// view: queue wait, runtime, shape, cost, artifact hints, and explicit gaps.
 func RenderRunProfile(s Snapshot, c CostProfile) string {
 	var b strings.Builder
 	b.WriteString("\nRun profile:\n")
@@ -339,7 +333,6 @@ func runtimeSummary(s Snapshot) string {
 	} else {
 		state = "finished"
 	}
-	// For RayJobs, use deployment status to determine if finished.
 	if s.RayJobFound && !s.JobFound {
 		switch s.RayJobStatus {
 		case "Complete", "Failed":

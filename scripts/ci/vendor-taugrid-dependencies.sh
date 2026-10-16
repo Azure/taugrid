@@ -166,8 +166,6 @@ preserve_kueue_crd_retention() (
   local crd
   local patched=0
 
-  # Kueue 0.18.2 used this policy, so restoring it in newer vendored charts also
-  # makes a direct enabled-to-disabled upgrade retain CRDs owned by the release.
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/taugrid-kueue.XXXXXX")"
   trap 'rm -rf "$work_dir"' EXIT
   tar -xzf "$archive" -C "$work_dir"
@@ -235,9 +233,6 @@ vendor_taugrid_dependencies() {
     if [[ -f "${local_chart}/Chart.yaml" ]]; then
       local_version=$(awk '$1 == "version:" { print $2; exit }' "${local_chart}/Chart.yaml")
       if [[ "$local_version" != "$version" ]]; then
-        # gpu-monitoring has an independent release cadence. When the umbrella
-        # intentionally remains on an older published version, vendor that OCI
-        # artifact instead of forcing an unrelated TauGrid distribution bump.
         if [[ "$name" == "gpu-monitoring" && "$repository" == oci://* ]] &&
           version_is_older "$version" "$local_version"; then
           helm pull "${repository}/${name}" --version "$version" --destination "$vendor_dir"

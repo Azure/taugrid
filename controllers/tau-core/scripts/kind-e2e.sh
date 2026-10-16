@@ -4,41 +4,6 @@
 
 set -euo pipefail
 
-# Tau core controller Kind E2E
-# ============================
-#
-# Proves the Kubernetes-native TauWorkspace onboarding path end to end on a
-# local Kind cluster, using direct Kubernetes desired state as a GitOps stand-in:
-#
-#   1. Build the current controller image and install it (Deployment and RBAC)
-#      plus the v0.5 tau.azure.com CRDs
-#      from the chart's Kustomize manifests via `kubectl apply -k`.
-#   2. Prove topology labels reconcile on an existing native-style Node, a newly
-#      joined Flex-style Node, and subsequent label drift.
-#   3. Apply a native TauWorkspace as platform desired state.
-#   4. Prove the Workspace reaches Ready without a storage readiness condition,
-#      while a platform-owned PVC binds for later workloads.
-#   5. Prove the researcher subject can get the one workspace in
-#      tau-system and create/read ordinary namespaced workload resources,
-#      but cannot read another namespace's secrets or create cluster-scoped
-#      resources.
-#   6. Delete only the TauWorkspace desired state and prove the controller's
-#      finalizer removes controller-owned resources while platform-owned
-#      Namespace/PVC state remains.
-#   7. Assert only workspaces.tau.azure.com is ever used (the legacy
-#      rune.example.com prototype API is never touched by this flow).
-#
-# Ownership / scope
-# ------------------
-# This file (and any new files under this scripts/ directory) is the only
-# thing this test module is allowed to change. It never edits controller
-# reconcile logic, the Tau CLI, tau-queues, docs, or a live cluster.
-#
-# GPU: Kind has no GPU device plugin and this script installs no real Kueue
-# controller. The mock ClusterQueue below carries a fake `nvidia.com/gpu`
-# resource purely so the render contract exercises the real schema shape;
-# nothing here schedules, claims, or executes on a real GPU.
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONTROLLER_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd -- "${CONTROLLER_DIR}/../.." && pwd)"
@@ -49,7 +14,7 @@ IMAGE_DOCKERFILE="${REPO_ROOT}/images/tau-core-controller/Dockerfile"
 
 CLUSTER_NAME="${TAU_CORE_KIND_CLUSTER_NAME:-tau-core-e2e}"
 KUBE_CONTEXT="${TAU_CORE_KIND_CONTEXT:-kind-${CLUSTER_NAME}}"
-SYSTEM_NAMESPACE="tau-system" # fixed: cli/internal/workspace.SystemNamespace
+SYSTEM_NAMESPACE="tau-system"
 WORKSPACE_NAME="${TAU_CORE_KIND_WORKSPACE:-aurora}"
 WORKSPACE_GROUP="${TAU_CORE_KIND_GROUP:-aurora-researchers}"
 TARGET_NAMESPACE="${TAU_CORE_KIND_TARGET_NAMESPACE:-aurora}"
@@ -67,9 +32,6 @@ LOCAL_IMAGE="$(tau_kind_qualify_image "${CONTAINER_ENGINE}" "${LOCAL_IMAGE}")"
 SCRATCH_DIR="${CONTROLLER_DIR}/.kind-e2e-scratch"
 CREATED_CLUSTER=0
 
-# Bounded wrapper: prefer GNU coreutils `timeout` (Linux CI), fall back to
-# macOS's `gtimeout` (Homebrew coreutils) if present, else run unbounded (the
-# caller is still expected to be a short, deterministic command).
 bounded() {
   local seconds="$1"
   shift
@@ -113,13 +75,6 @@ cleanup() {
   return "${status}"
 }
 trap cleanup EXIT
-
-# ---------------------------------------------------------------------------
-# Static guards: no cluster, no Docker, no network required. These run first
-# so `TAU_CORE_KIND_STATIC_ONLY=1` can validate the harness itself (and
-# the manifests it depends on) in an environment where Docker/Kind are
-# unavailable.
-# ---------------------------------------------------------------------------
 
 echo "== static guard: legacy rune.example.com API must not appear in the manifests/code this harness installs =="
 legacy_hits="$(grep -rn "rune\.example\.com" \
@@ -178,11 +133,6 @@ if [[ "${STATIC_ONLY}" == "1" ]]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Live cluster steps below. Kind supports Docker by default and Podman when
-# KIND_EXPERIMENTAL_PROVIDER=podman. Build and load through the same provider.
-# ---------------------------------------------------------------------------
-
 for tool in kind kubectl go python3 "${CONTAINER_ENGINE}" sed; do
   tau_kind_need "${tool}"
 done
@@ -191,7 +141,7 @@ echo "== checking ${CONTAINER_ENGINE} engine reachability (bounded 15s) =="
 if ! bounded 15 "${CONTAINER_ENGINE}" info >/dev/null 2>&1; then
   echo "${CONTAINER_ENGINE} engine is not reachable (${CONTAINER_ENGINE} info timed out or failed)." >&2
   echo "This harness requires a working container engine for Kind. Skipping the live cluster run." >&2
-  exit 69 # EX_UNAVAILABLE
+  exit 69
 fi
 
 rm -rf "${SCRATCH_DIR}"
@@ -208,16 +158,6 @@ fi
 
 kubectl config use-context "${KUBE_CONTEXT}" >/dev/null
 
-# --- Mock workload CRDs ----------------------------------------------------
-#
-# LocalQueue is served in BOTH v1beta1 and v1beta2: the controller's own
-# queueStatus()/clusterQueueGPUQuota() (internal/controller/workspace_controller.go)
-# get LocalQueue/ClusterQueue at v1beta1, while reconciliation applies
-# LocalQueue at v1beta2 (matching the production Kueue API). Both
-# schemas are intentionally x-kubernetes-preserve-unknown-fields so the
-# default "None" conversion strategy is a lossless passthrough between them.
-# RayJob and RayService are present so the researcher connection verifier can
-# check both workload types without installing a KubeRay controller.
 cat >"${SCRATCH_DIR}/mock-workload-crds.yaml" <<'YAML'
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -399,9 +339,6 @@ kubectl wait --for=condition=Established \
   -f "${SCRATCH_DIR}/mock-workload-crds.yaml" \
   --timeout="${WAIT_SECONDS}s"
 
-# --- Establish the Tau APIs before applying the same full kustomization ArgoCD
-# applies. kubectl's RESTMapper cannot discover a CRD and its TauCluster
-# instance in one fresh-cluster apply pass. ---
 kubectl apply -f "${APP_BASE_DIR}/kustomize/namespace.yaml"
 kubectl apply -f "${APP_BASE_DIR}/crds"
 kubectl wait --for=condition=Established \
@@ -411,9 +348,6 @@ kubectl wait --for=condition=Established \
   --timeout="${WAIT_SECONDS}s"
 kubectl apply -k "${APP_BASE_DIR}"
 
-# --- Build and load the controller plus the pinned workload fixture. Loading
-# both makes the live assertions deterministic even when Kind nodes have no
-# registry egress.
 "${CONTAINER_ENGINE}" build \
   --file "${IMAGE_DOCKERFILE}" \
   --tag "${LOCAL_IMAGE}" \
@@ -422,10 +356,6 @@ load_local_image
 "${CONTAINER_ENGINE}" pull "${WORKLOAD_IMAGE}"
 tau_kind_load_image "${CONTAINER_ENGINE}" "${CLUSTER_NAME}" "${WORKLOAD_IMAGE}"
 
-# Overlay the Deployment with the locally-built image and
-# imagePullPolicy: Never so nothing tries to reach the network, plus
-# --leader-elect=false since a single-replica Kind run has no need for the
-# extra Lease-acquisition startup latency.
 sed -E \
   -e "s#image: mcr\.microsoft\.com/aks/ai-runtime/tau-core-controller(:[^[:space:]]+|@sha256:[a-f0-9]+)#image: ${LOCAL_IMAGE}#" \
   -e "s#imagePullPolicy: IfNotPresent#imagePullPolicy: Never#" \
@@ -434,12 +364,6 @@ sed -E \
 kubectl apply -f "${SCRATCH_DIR}/deployment.local.yaml"
 kubectl -n "${SYSTEM_NAMESPACE}" rollout status deployment/tau-core-controller --timeout="${ROLLOUT_WAIT_SECONDS}s"
 
-# --- Continuous native/Flex Node topology reconciliation -------------------
-#
-# Kind cannot join a real AKS Flex machine, so this uses the exact portable
-# contract shared by both providers: node.kubernetes.io/instance-type. The
-# existing Kind Node stands in for an AKS-managed pool Node; a newly created
-# Node object stands in for a later Flex join.
 echo "== proving continuous native and Flex Node topology reconciliation =="
 native_node="$(kubectl get nodes -l 'node-role.kubernetes.io/control-plane' -o jsonpath='{.items[0].metadata.name}')"
 kubectl label node "${native_node}" \
@@ -476,10 +400,6 @@ while (( SECONDS < deadline )); do
 done
 [[ "${nodes_ready:-}" == "True" ]]
 
-# --- Manual, Immediate-binding StorageClass + unclaimed PV so the
-# platform-owned PVC is usable by later workload exercises without a
-# consuming pod. Path is inside the ephemeral Kind node container, not this
-# host.
 "${CONTAINER_ENGINE}" exec "${CLUSTER_NAME}-control-plane" \
   sh -c 'mkdir -p /var/local/tau-workspace-e2e-pv && chmod 0777 /var/local/tau-workspace-e2e-pv'
 cat >"${SCRATCH_DIR}/manual-storage.yaml" <<YAML
@@ -565,9 +485,6 @@ kubectl patch cluster.tau.azure.com cluster \
   --type=merge \
   --patch-file "${SCRATCH_DIR}/taucluster-profile-patch.yaml"
 
-# ---------------------------------------------------------------------------
-# Native desired state: platform applies TauWorkspace directly.
-# ---------------------------------------------------------------------------
 echo "== building a researcher impersonation kubeconfig =="
 kubectl config view --raw --minify --flatten --context "${KUBE_CONTEXT}" -o json >"${SCRATCH_DIR}/kubeconfig-impersonation.json"
 cat >"${SCRATCH_DIR}/add-impersonation-context.py" <<'PY'
@@ -627,10 +544,6 @@ spec:
 YAML
 kubectl apply --server-side --field-manager=tau-kind-e2e -f "${SCRATCH_DIR}/workspace.yaml"
 
-# ---------------------------------------------------------------------------
-# Wait for the reconciled namespace/ServiceAccount and Ready phase, and
-# separately require the PVC to be Bound before workload exercises use it.
-# ---------------------------------------------------------------------------
 deadline=$((SECONDS + WAIT_SECONDS))
 while (( SECONDS < deadline )); do
   kubectl get namespace "${TARGET_NAMESPACE}" >/dev/null 2>&1 && break
@@ -715,11 +628,6 @@ fi
 kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{.metadata.finalizers}' | grep -q "tau.azure.com/workspace-cleanup"
 
-# ---------------------------------------------------------------------------
-# RBAC boundary: researcher can read their own workspace and work in their
-# namespace, but cannot read another namespace's secrets or create
-# cluster-scoped resources.
-# ---------------------------------------------------------------------------
 echo "== RBAC boundary checks for the researcher subject =="
 kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
@@ -738,13 +646,9 @@ kubectl auth can-i get "clusters.tau.azure.com/cluster" --as=researcher@example.
 [[ "$(kubectl auth can-i get clusters.tau.azure.com/other --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i list workspaces.tau.azure.com -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i update "workspaces.tau.azure.com/${WORKSPACE_NAME}" -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
-# Cannot read another namespace's secrets: tau-researcher-v1 is bound via a
-# namespace-scoped RoleBinding in the target namespace only, so this same
-# subject has zero permissions in tau-system (or any other namespace).
 [[ "$(kubectl auth can-i get secrets -n "${SYSTEM_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 kubectl auth can-i list secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
 kubectl auth can-i get secrets -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
-# Cannot create cluster-scoped resources.
 [[ "$(kubectl auth can-i create namespaces --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i create clusterroles --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
 [[ "$(kubectl auth can-i create persistentvolumes --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" || true)" == "no" ]]
@@ -790,12 +694,6 @@ if KUBECONFIG="${SCRATCH_DIR}/kubeconfig-impersonation.json" \
 fi
 grep -q "quota decision annotations are platform-owned" "${SCRATCH_DIR}/quota-self-approval.txt"
 
-# ---------------------------------------------------------------------------
-# Tau CLI exercise: workspace status, connection descriptor, run
-# train/smoke/status/logs against the reconciled workspace. This is the
-# ordinary researcher path. Every Tau invocation below uses the researcher
-# impersonation context, so the test cannot pass through Kind-admin access.
-# ---------------------------------------------------------------------------
 cd "${TAU_DIR}"
 KUBECONFIG="${SCRATCH_DIR}/kubeconfig-impersonation.json" \
   go run ./cmd/tau workspace status "${WORKSPACE_NAME}" --context researcher | tee "${SCRATCH_DIR}/tau-workspace-status.txt"
@@ -852,8 +750,6 @@ policy:
   disable_default_priorities: true
 YAML
 
-# Approve the checked-in connection through a pseudo-terminal so the following
-# client dry-run exercises cached, noninteractive connection reuse.
 if ! (
   cd "${tau_home}"
   export HOME="${tau_home}/home"
@@ -886,8 +782,6 @@ PY
 fi
 grep -q "Connected." "${tau_home}/workspace-connection.txt"
 
-# Use the provider-neutral kubeconfig path through the cached noninteractive
-# connection before the following submission.
 if ! (
   cd "${tau_home}"
   HOME="${tau_home}/home" TAU_CONFIG_DIR="${tau_home}/tau-config" \
@@ -926,10 +820,6 @@ train_job="project-train"
 kubectl -n "${TARGET_NAMESPACE}" get job "${train_job}" -o jsonpath='{.spec.suspend}' | grep -qx true
 kubectl -n "${TARGET_NAMESPACE}" get job "${train_job}" -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/queue-name}' | grep -qx "${WORKSPACE_NAME}"
 
-# The Kind fixture installs Kueue CRDs only (no real Kueue controller, no
-# GPU device plugin). Unsuspend by hand to model admission after proving
-# Tau submitted through the designated LocalQueue -- this is a CPU-only Job,
-# not a claim of real GPU scheduling or execution.
 kubectl -n "${TARGET_NAMESPACE}" patch job "${train_job}" --type=merge -p '{"spec":{"suspend":false}}' >/dev/null
 kubectl -n "${TARGET_NAMESPACE}" wait --for=condition=complete "job/${train_job}" --timeout="${WAIT_SECONDS}s"
 
@@ -950,11 +840,6 @@ grep -q rune-project-train-ok "${tau_home}/logs.out"
 
 kubectl -n "${TARGET_NAMESPACE}" delete job "${train_job}" --wait=false >/dev/null
 
-# ---------------------------------------------------------------------------
-# Authorization migration: the same platform-owned desired state can explicitly
-# switch to cluster-wide mode without granting system:authenticated or leaving
-# stale subject-specific RBAC. Existing workload identity remains intact.
-# ---------------------------------------------------------------------------
 echo "== switching TauWorkspace to cluster-wide existing authorization =="
 kubectl -n "${SYSTEM_NAMESPACE}" patch "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   --type=json -p='[
@@ -990,11 +875,6 @@ if kubectl -n "${SYSTEM_NAMESPACE}" get role "tau-workspace-reader-${WORKSPACE_N
 fi
 kubectl -n "${TARGET_NAMESPACE}" get serviceaccount tau-workload >/dev/null
 
-# ---------------------------------------------------------------------------
-# Finalizer / cleanup semantics: remove only TauWorkspace desired state.
-# Platform-owned Namespace/PVC remain; controller-owned LocalQueue,
-# RBAC/ServiceAccount, and platform-reader access are removed by the finalizer.
-# ---------------------------------------------------------------------------
 echo "== delete TauWorkspace desired state and wait for finalizer =="
 if ! kubectl -n "${SYSTEM_NAMESPACE}" delete \
   "workspaces.tau.azure.com/${WORKSPACE_NAME}" \

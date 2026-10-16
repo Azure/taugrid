@@ -37,8 +37,6 @@ func TestEncodeIsDeterministic(t *testing.T) {
 }
 
 func TestEncodeOrdersFilesCanonicallyRegardlessOfMapOrder(t *testing.T) {
-	// Go map iteration order is randomized; build the same logical payload
-	// from maps that would iterate differently and confirm identical output.
 	a := New(map[string][]byte{"b.py": []byte("b"), "a.py": []byte("a"), "c.py": []byte("c")})
 	b := New(map[string][]byte{"c.py": []byte("c"), "a.py": []byte("a"), "b.py": []byte("b")})
 
@@ -66,12 +64,12 @@ func TestEncodeRejectsPayloadOverSanityCeiling(t *testing.T) {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		"1048577",    // actual size
-		"1048576",    // limit in bytes
-		"1024 KiB",   // limit in human units
-		"by 1 bytes", // overage
-		"custom",     // image remedy
-		"PVC",        // PVC remedy
+		"1048577",
+		"1048576",
+		"1024 KiB",
+		"by 1 bytes",
+		"custom",
+		"PVC",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("over-ceiling error missing %q, actionable detail expected:\n%s", want, msg)
@@ -79,11 +77,6 @@ func TestEncodeRejectsPayloadOverSanityCeiling(t *testing.T) {
 	}
 }
 
-// TestEncodeRejectsIncompressiblePayloadOverEnvEntryLimit covers the binding
-// constraint. Compression means the decoded ceiling is no longer what protects
-// execve(2), so an incompressible payload well under MaxDecodedBytes must still
-// be rejected -- otherwise it would render a pod whose initContainer cannot
-// start.
 func TestEncodeRejectsIncompressiblePayloadOverEnvEntryLimit(t *testing.T) {
 	incompressible := make([]byte, 256*1024)
 	if _, err := rand.Read(incompressible); err != nil {
@@ -107,12 +100,9 @@ func TestEncodeRejectsIncompressiblePayloadOverEnvEntryLimit(t *testing.T) {
 	}
 }
 
-// TestEncodeAcceptsRealisticScriptWellOverOldCap is the regression test for the
-// reported failure: a 66 KiB research pipeline used to be rejected outright by
-// the old 64 KiB cap. Compression must leave it comfortably inside the budget.
 func TestEncodeAcceptsRealisticScriptWellOverOldCap(t *testing.T) {
 	const oldCap = 64 * 1024
-	script := realisticPythonSource(66381) // the exact reported size
+	script := realisticPythonSource(66381)
 	if len(script) <= oldCap {
 		t.Fatalf("test input must exceed the old cap to be a regression test, got %d", len(script))
 	}
@@ -125,11 +115,6 @@ func TestEncodeAcceptsRealisticScriptWellOverOldCap(t *testing.T) {
 		len(script), entry, MaxEnvEntryBytes, MaxEnvEntryBytes-entry)
 }
 
-// TestEnvEntryLimitBoundaryIsExact pins both sides of the binding guard with a
-// byte-exact boundary. Incompressible input is used so the crossing point is
-// deterministic and the search is cheap: the largest accepted payload must
-// produce an entry at or under MaxEnvEntryBytes, and one byte more must be
-// rejected.
 func TestEnvEntryLimitBoundaryIsExact(t *testing.T) {
 	blob := make([]byte, 256*1024)
 	if _, err := rand.Read(blob); err != nil {
@@ -170,10 +155,6 @@ func TestEnvEntryLimitBoundaryIsExact(t *testing.T) {
 		lo, entry, lo+1)
 }
 
-// realisticPythonSource generates deterministic, realistically-compressible
-// Python-shaped source of exactly n bytes. Using repeated "x" bytes would make
-// compression look far better than it is on real code; using random bytes would
-// make it look far worse.
 func realisticPythonSource(n int) []byte {
 	var b bytes.Buffer
 	for i := 0; b.Len() < n; i++ {
@@ -185,12 +166,6 @@ func realisticPythonSource(n int) []byte {
 	return b.Bytes()[:n]
 }
 
-// TestEncodedEnvValueStaysUnderMaxArgStrlen proves the budgeted
-// MaxEnvEntryBytes really does keep the single TAU_PAYLOAD_B64=<encoded>
-// environment entry under Linux's MAX_ARG_STRLEN (131072 bytes), the kernel's
-// per-argument/environment value size limit enforced by execve(2). This is the
-// constraint the payload cap is derived from -- not etcd object size, and not
-// the client-side apply annotation limit.
 func TestEncodedEnvValueStaysUnderMaxArgStrlen(t *testing.T) {
 	if MaxEnvEntryBytes >= maxArgStrlen {
 		t.Fatalf("MaxEnvEntryBytes=%d must stay under MAX_ARG_STRLEN=%d", MaxEnvEntryBytes, maxArgStrlen)
@@ -208,8 +183,6 @@ func TestEncodedEnvValueStaysUnderMaxArgStrlen(t *testing.T) {
 		len(atCap), len(envEntry), MaxEnvEntryBytes, maxArgStrlen)
 }
 
-// TestEncodeCompressesEnvelope pins the actual mechanism: the transported bytes
-// must be gzip, and must be materially smaller than the raw JSON envelope.
 func TestEncodeCompressesEnvelope(t *testing.T) {
 	script := realisticPythonSource(64 * 1024)
 	encoded, _, err := Encode(New(map[string][]byte{"train.py": script}))
@@ -272,8 +245,6 @@ func TestDecodeFailsIntegrityCheckOnTamperedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	// Flip the encoded envelope's first character to simulate truncation or
-	// corruption in transit.
 	mutated := []byte(encoded)
 	if mutated[0] == 'A' {
 		mutated[0] = 'B'
@@ -286,10 +257,6 @@ func TestDecodeFailsIntegrityCheckOnTamperedEnvelope(t *testing.T) {
 	}
 }
 
-// TestInitContainerScriptDecodesAndVerifies executes the exact Python script
-// embedded via InitContainerScript against a real python3 interpreter,
-// proving the runtime integrity/decoding logic (not just the Go mirror in
-// Decode) works end-to-end. It skips if python3 is not on PATH.
 func TestInitContainerScriptDecodesAndVerifies(t *testing.T) {
 	python3, err := exec.LookPath("python3")
 	if err != nil {
@@ -329,9 +296,6 @@ func TestInitContainerScriptDecodesAndVerifies(t *testing.T) {
 	}
 }
 
-// TestInitContainerScriptRejectsTamperedDigest proves the runtime script
-// fails closed (non-zero exit, no files written) when the digest does not
-// match, matching Decode's behavior.
 func TestInitContainerScriptRejectsTamperedDigest(t *testing.T) {
 	python3, err := exec.LookPath("python3")
 	if err != nil {

@@ -458,7 +458,6 @@ kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" rollout status deploy/
 kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" rollout status \
   "deploy/${TAUGRID_RELEASE}-kueue-controller-manager" --timeout=180s
 
-# This test-only lane is workload fixture data, not cluster installation state.
 kubectl --context "$KUBE_CONTEXT" apply -f "$EXAMPLE_DIR/kind-kueue-lanes.yaml"
 kubectl --context "$KUBE_CONTEXT" patch cluster.tau.azure.com cluster \
   --type=merge \
@@ -513,7 +512,6 @@ kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete rayjob.ray.io "$RAY_JOB
   --cascade=foreground --timeout="$WAIT_TIMEOUT"
 wait_for_ray_cleanup "$WAIT_TIMEOUT"
 
-# Exercise a real schema upgrade while retaining an existing legacy-role CR.
 kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" delete workspace.tau.azure.com kind-legacy \
   --ignore-not-found --timeout="$WAIT_TIMEOUT"
 kubectl --context "$KUBE_CONTEXT" patch crd workspaces.tau.azure.com --type=json \

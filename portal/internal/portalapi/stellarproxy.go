@@ -19,8 +19,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/expcockpit"
 )
 
-// ExperimentsBackend grants the Portal authority to read a trusted, fixed-scope
-// Stellar service. It is deliberately separate from browser navigation URLs.
 type ExperimentsBackend struct {
 	URL             string `json:"url"`
 	BearerTokenFile string `json:"bearerTokenFile,omitempty"`
@@ -99,8 +97,6 @@ func (s *Server) proxyStellar(w http.ResponseWriter, r *http.Request, scope Work
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	// Start with an empty header map: no viewer identity, cookies, forwarding
-	// headers, authorization, or other browser-supplied credentials cross this boundary.
 	upstream, err := http.NewRequestWithContext(ctx, r.Method, target.String(), nil)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "cannot construct trusted experiment request")
@@ -172,8 +168,6 @@ func (s *Server) proxyStellar(w http.ResponseWriter, r *http.Request, scope Work
 			writeJSONError(w, http.StatusNotFound, "artifact was not found for the workspace target")
 			return
 		}
-		// Range is the sole browser header forwarded, after media authorization,
-		// so native video seeking works without forwarding identity or credentials.
 		if value := r.Header.Get("Range"); value != "" {
 			upstream.Header.Set("Range", value)
 		}
@@ -192,8 +186,6 @@ func (s *Server) proxyStellar(w http.ResponseWriter, r *http.Request, scope Work
 		writeJSONError(w, http.StatusBadGateway, "trusted experiment backend is unavailable")
 		return
 	}
-	// Never replay Set-Cookie, Location, authentication challenges, CORS, or
-	// upstream navigation policy. Media/report content is isolated with sandbox CSP.
 	for _, header := range []string{"Content-Type", "Content-Length", "Content-Disposition", "Accept-Ranges", "Content-Range"} {
 		if value := response.Header.Get(header); value != "" {
 			w.Header().Set(header, value)
@@ -230,7 +222,6 @@ func trustedStellarProbe(request *http.Request, scope WorkspaceScope, route stri
 	default:
 		return nil, errors.New("trusted experiment probe route is not supported")
 	}
-	// Rebuild from configured authority, never from a request's URL or Host.
 	target.Path = base + prefix + route
 	target.RawQuery = query.Encode()
 	probe, err := http.NewRequestWithContext(request.Context(), http.MethodGet, target.String(), nil)

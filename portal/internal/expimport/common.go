@@ -147,8 +147,6 @@ func writeJSONFileAtomic(path string, value any) error {
 	return nil
 }
 
-// expandPathPatterns resolves a set of glob patterns to concrete paths,
-// falling back to the literal pattern when a glob matches nothing.
 func expandPathPatterns(patterns []string, flag string) ([]string, error) {
 	var out []string
 	for _, pattern := range patterns {

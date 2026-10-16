@@ -12,7 +12,6 @@ import (
 
 const defaultGPUResourceName = "nvidia.com/gpu"
 
-// GPUContract is the profile-level device-plugin GPU contract.
 type GPUContract struct {
 	Count int
 	Size  string
@@ -48,8 +47,6 @@ func (c GPUContract) Summary() string {
 	return strings.Join(parts, ",")
 }
 
-// AddGPUResources adds the NVIDIA device-plugin resource to requests and
-// limits. A non-positive count is a no-op for CPU-only profiles.
 func AddGPUResources(resources map[string]any, count int) {
 	if count <= 0 {
 		return

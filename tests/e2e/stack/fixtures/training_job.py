@@ -14,7 +14,6 @@ inside a Ray worker.
 """
 import ray
 
-
 @ray.remote(num_gpus=1)
 def train_once():
     import torch
@@ -54,7 +53,6 @@ def train_once():
         raise RuntimeError(f"FAIL: loss did not decrease ({first:.4f} -> {last:.4f})")
 
     return {"device": str(device), "first_loss": first, "last_loss": last}
-
 
 ray.init()
 cluster_resources = ray.cluster_resources()

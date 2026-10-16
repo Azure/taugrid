@@ -12,12 +12,9 @@ import (
 	"github.com/Azure/taugrid/cli/internal/depcontract"
 )
 
-// fakeRunner is a minimal, no-live-cluster stand-in for internal/kube.Runner
-// used only by these tests. Responses are keyed by the joined args so tests
-// can assert exactly which read-only kubectl calls preflight makes.
 type fakeRunner struct {
-	responses map[string]string // joined-args -> stdout
-	missing   map[string]bool   // joined-args -> simulate "not found" error
+	responses map[string]string
+	missing   map[string]bool
 	calls     []string
 }
 
@@ -204,9 +201,6 @@ func TestCheckMultiKueuePreflight_PVCMissingOnOneWorker(t *testing.T) {
 		!strings.Contains(msg, "platform-managed PVC") || !strings.Contains(msg, "pre-provision and bind it") {
 		t.Fatalf("expected PVC failure to name kind/name/worker, got: %s", msg)
 	}
-	// worker-a has the PVC but no StorageClass check response was
-	// registered because worker-b never resolved a class name to check
-	// parity against — confirm no panics / unexpected calls happened.
 }
 
 func TestCheckMultiKueuePreflight_PVCPhaseBoundAcrossWorkersPasses(t *testing.T) {

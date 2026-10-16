@@ -16,7 +16,6 @@ PLATFORMS ?= linux/amd64,linux/arm64
 
 .PHONY: build test lint docker-build docker-push clean
 
-# Registry-based BuildKit cache (set CACHE_REPO to enable)
 comma := ,
 CACHE_REPO ?=
 CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_REPO):cache --cache-to type=registry$(comma)ref=$(CACHE_REPO):cache$(comma)mode=max)

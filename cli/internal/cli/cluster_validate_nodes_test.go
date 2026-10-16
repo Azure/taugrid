@@ -496,8 +496,6 @@ func TestAssessHealthFlagsMIGEnabledWithNoInstancesAsUnhealthy(t *testing.T) {
 	}
 }
 
-// MIG with instances configured is a supported way to run GPUs, so it must not
-// be reported as a fault.
 func TestAssessHealthAllowsMIGWithConfiguredInstances(t *testing.T) {
 	d := validationData{HasOutput: true, GPUCount: 1, MIGMode: "Enabled", MIGInstances: 7}
 	res := assessHealth(d, gpuNodeInfo{Name: "n1", AllocGPU: 1})
@@ -549,9 +547,6 @@ func TestAdvertisesNVIDIAResourceCoversMIGAndOverrides(t *testing.T) {
 	}
 }
 
-// A DRA cluster publishes GPUs as ResourceSlices, not as nvidia.com/* extended
-// resources, so a healthy DRA node advertises zero allocatable GPUs. It must
-// not be reported as a missing device plugin.
 func TestDiscoverStrandedGPUNodesIgnoresDRANodes(t *testing.T) {
 	nodesJSON := `{"items":[{"metadata":{"name":"gpu-dra","labels":{"node.kubernetes.io/instance-type":"Standard_NC24ads_A100_v4"}},"status":{"allocatable":{"cpu":"24"}}},
 	{"metadata":{"name":"gpu-stranded","labels":{"node.kubernetes.io/instance-type":"Standard_NC24ads_A100_v4"}},"status":{"allocatable":{"cpu":"24"}}}]}`
@@ -573,8 +568,6 @@ func TestDiscoverStrandedGPUNodesIgnoresDRANodes(t *testing.T) {
 	}
 }
 
-// MIG advertises per-profile resources rather than nvidia.com/gpu; such a node
-// is registered and must not be reported as stranded.
 func TestDiscoverStrandedGPUNodesIgnoresMIGAdvertisedNodes(t *testing.T) {
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
@@ -590,13 +583,6 @@ func TestDiscoverStrandedGPUNodesIgnoresMIGAdvertisedNodes(t *testing.T) {
 		t.Fatalf("got %+v, want none (MIG-advertised node is registered)", got)
 	}
 }
-
-// --- GPU source detection -------------------------------------------------
-//
-// Managed workflows submit against device-plugin, DRA, or MIG resources, so
-// discovery has to account for all three. These tests pin the four properties
-// that matter: device-plugin parity, DRA-only detection, no double counting
-// when a node offers both, and a sane MIG count.
 
 func nodeItemsFromJSON(t *testing.T, raw string) []nodeItem {
 	t.Helper()
@@ -616,7 +602,6 @@ func gpuNode(t *testing.T, name, alloc string) []nodeItem {
 		`"status":{"allocatable":{`+alloc+`}}}]}`)
 }
 
-// Device-plugin nodes must be counted exactly as before this change.
 func TestClassifyGPUNodesCountsDevicePluginNodesUnchanged(t *testing.T) {
 	got := classifyGPUNodes(gpuNode(t, "dp", `"nvidia.com/gpu":"8"`), nil)
 	if len(got) != 1 {
@@ -633,8 +618,6 @@ func TestClassifyGPUNodesCountsDevicePluginNodesUnchanged(t *testing.T) {
 	}
 }
 
-// A node with no GPUs at all is still skipped, and a zero-quantity
-// nvidia.com/gpu is not a GPU node.
 func TestClassifyGPUNodesSkipsNonGPUNodes(t *testing.T) {
 	if got := classifyGPUNodes(gpuNode(t, "cpu", `"cpu":"8"`), nil); len(got) != 0 {
 		t.Fatalf("got %+v, want none for a CPU node", got)
@@ -644,9 +627,6 @@ func TestClassifyGPUNodesSkipsNonGPUNodes(t *testing.T) {
 	}
 }
 
-// A DRA-only node advertises no nvidia.com/* resource at all. Before this
-// change it was skipped entirely, so an all-DRA cluster reported "no GPU nodes
-// found" and failed --min-healthy on healthy hardware.
 func TestClassifyGPUNodesDetectsDRAOnlyNodes(t *testing.T) {
 	got := classifyGPUNodes(gpuNode(t, "dra", `"cpu":"96"`), map[string]int{"dra": 8})
 	if len(got) != 1 {
@@ -660,8 +640,6 @@ func TestClassifyGPUNodesDetectsDRAOnlyNodes(t *testing.T) {
 	}
 }
 
-// A node running both a device plugin and a DRA driver must be counted once,
-// from the device plugin, not 8+8.
 func TestClassifyGPUNodesDoesNotDoubleCountDevicePluginAndDRA(t *testing.T) {
 	got := classifyGPUNodes(gpuNode(t, "both", `"nvidia.com/gpu":"8"`), map[string]int{"both": 8})
 	if len(got) != 1 {
@@ -675,9 +653,6 @@ func TestClassifyGPUNodesDoesNotDoubleCountDevicePluginAndDRA(t *testing.T) {
 	}
 }
 
-// MIG nodes advertise profile slices, never nvidia.com/gpu. They must be
-// discovered (not silently skipped), and must not carry the raw slice total as
-// a whole-GPU count, because that count is then compared against nvidia-smi.
 func TestClassifyGPUNodesReportsMIGSlicesWithoutFakingWholeGPUs(t *testing.T) {
 	got := classifyGPUNodes(gpuNode(t, "mig", `"nvidia.com/mig-1g.10gb":"7","nvidia.com/mig-2g.20gb":"2"`), nil)
 	if len(got) != 1 {
@@ -694,8 +669,6 @@ func TestClassifyGPUNodesReportsMIGSlicesWithoutFakingWholeGPUs(t *testing.T) {
 	}
 }
 
-// The regression this guards: AllocGPU=9 vs nvidia-smi's 1 physical GPU would
-// report a perfectly healthy MIG node as UNHEALTHY.
 func TestAssessHealthDoesNotFlagMIGNodeOnSliceCountMismatch(t *testing.T) {
 	node := classifyGPUNodes(gpuNode(t, "mig", `"nvidia.com/mig-1g.10gb":"7"`), nil)[0]
 	d := validationData{HasOutput: true, GPUCount: 1, MIGMode: "Enabled", MIGInstances: 7}
@@ -704,7 +677,6 @@ func TestAssessHealthDoesNotFlagMIGNodeOnSliceCountMismatch(t *testing.T) {
 	}
 }
 
-// A resourceName override for whole GPUs is not a MIG profile.
 func TestClassifyGPUNodesTreatsNonMIGOverridesAsWholeGPUs(t *testing.T) {
 	got := classifyGPUNodes(gpuNode(t, "override", `"nvidia.com/a100":"4"`), nil)
 	if len(got) != 1 || got[0].Source != gpuSourceDevicePlugin || got[0].AllocGPU != 4 {
@@ -713,8 +685,6 @@ func TestClassifyGPUNodesTreatsNonMIGOverridesAsWholeGPUs(t *testing.T) {
 }
 
 func TestNodesWithResourceSlicesCountsDistinctGPUDevices(t *testing.T) {
-	// Two slices for the same pool partition one node's devices; a repeated
-	// device name across slices must not inflate the count.
 	slices := `{"items":[
 		{"spec":{"driver":"gpu.nvidia.com","nodeName":"n1","pool":{"name":"n1"},"devices":[{"name":"gpu-0"},{"name":"gpu-1"}]}},
 		{"spec":{"driver":"gpu.nvidia.com","nodeName":"n1","pool":{"name":"n1"},"devices":[{"name":"gpu-1"},{"name":"gpu-2"}]}},
@@ -734,8 +704,6 @@ func TestNodesWithResourceSlicesCountsDistinctGPUDevices(t *testing.T) {
 	}
 }
 
-// Clusters without resource.k8s.io, or without RBAC to list it, must degrade to
-// extended-resource detection rather than failing the command.
 func TestNodesWithResourceSlicesDegradesWhenAPIUnavailable(t *testing.T) {
 	runner := &fakeRawRunner{outputs: map[string]string{}, errors: map[string]error{}}
 	if got := nodesWithResourceSlices(context.Background(), runner); len(got) != 0 {
@@ -743,8 +711,6 @@ func TestNodesWithResourceSlicesDegradesWhenAPIUnavailable(t *testing.T) {
 	}
 }
 
-// End to end through the command: a DRA-only cluster must find its node instead
-// of printing "no GPU nodes found".
 func TestRunClusterValidateNodesDiscoversDRAOnlyCluster(t *testing.T) {
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
@@ -765,15 +731,11 @@ func TestRunClusterValidateNodesDiscoversDRAOnlyCluster(t *testing.T) {
 	if !strings.Contains(out.String(), "found 1 GPU node") {
 		t.Fatalf("expected 1 discovered GPU node, got:\n%s", out.String())
 	}
-	// The pod could not be created, so validation still fails; that is the
-	// pre-existing behaviour and not what this test is about.
 	if err == nil {
 		t.Fatal("expected the failed validation pod to surface an error")
 	}
 }
 
-// The single node fetch is shared between the inventory and the stranded
-// report, so the command must not issue it twice.
 func TestRunClusterValidateNodesFetchesNodesOnce(t *testing.T) {
 	runner := &fakeRawRunner{
 		outputs: map[string]string{
@@ -793,20 +755,6 @@ func TestRunClusterValidateNodesFetchesNodesOnce(t *testing.T) {
 	}
 }
 
-// --- real cluster data ----------------------------------------------------
-//
-// Every other fixture in this file is hand-written, which only proves the
-// classifier is self-consistent with data we invented. testdata/
-// cluster-nodes.json is a trimmed capture of
-// `kubectl get nodes -o json` from the <cluster> test cluster
-// (2x A100 + 2x H200 GPU nodes, 5 system nodes), reduced to names, the labels
-// detection reads, and allocatable capacity.
-//
-// It carries a shape none of the hand-written fixtures had: a real H200 node
-// advertises nvidia.com/gpu: 8 *and* nvidia.com/mig-1g.18gb, mig-2g.35gb,
-// mig-3g.71gb all at quantity "0". Nodes are only MIG-partitioned when a
-// profile has non-zero capacity, so those zero entries must not push the node
-// down the MIG arm, which would report AllocGPU 0 for a healthy 8-GPU node.
 func TestClassifyGPUNodesAgainstRealClusterInventory(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "cluster-nodes.json"))
 	if err != nil {
@@ -817,15 +765,13 @@ func TestClassifyGPUNodesAgainstRealClusterInventory(t *testing.T) {
 		t.Fatalf("fixture has %d nodes, want the captured 9", len(items))
 	}
 
-	// The cluster has no DRA drivers installed, which is itself the common
-	// real-world case the detection has to stay correct for.
 	got := classifyGPUNodes(items, nil)
 
 	want := map[string]int{
-		"aks-gpu-98828081-vmss000000": 8, // Standard_ND96amsr_A100_v4
-		"aks-gpu-98828081-vmss000001": 8, // Standard_ND96amsr_A100_v4
-		"flex-h200-eastus2euap-6m22l": 8, // Standard_ND96isr_H200_v5, zero-qty MIG keys
-		"flex-h200-eastus2euap-c8r87": 8, // Standard_ND96isr_H200_v5
+		"aks-gpu-98828081-vmss000000": 8,
+		"aks-gpu-98828081-vmss000001": 8,
+		"flex-h200-eastus2euap-6m22l": 8,
+		"flex-h200-eastus2euap-c8r87": 8,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("classified %d GPU nodes, want %d: %+v", len(got), len(want), got)
@@ -853,9 +799,6 @@ func TestClassifyGPUNodesAgainstRealClusterInventory(t *testing.T) {
 	}
 }
 
-// The same real capture must not produce a stranded-node warning: every GPU
-// node on it has a registered device plugin, and the system nodes are not GPU
-// hardware. A false warning here would train people to ignore a real one.
 func TestClassifyStrandedGPUNodesFindsNoneOnHealthyRealCluster(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "cluster-nodes.json"))
 	if err != nil {
@@ -866,8 +809,6 @@ func TestClassifyStrandedGPUNodesFindsNoneOnHealthyRealCluster(t *testing.T) {
 	}
 }
 
-// Zero-quantity MIG profiles alongside a real nvidia.com/gpu count, reduced to
-// the property under test. Taken from flex-h200-eastus2euap-6m22l.
 func TestCountNVIDIAResourcesIgnoresZeroQuantityMIGProfiles(t *testing.T) {
 	whole, mig := countNVIDIAResources(map[string]string{
 		"nvidia.com/gpu":         "8",
@@ -883,25 +824,11 @@ func TestCountNVIDIAResourcesIgnoresZeroQuantityMIGProfiles(t *testing.T) {
 	}
 }
 
-// Guards the fixture itself, not the classifier. The capture contains two H200
-// nodes that look interchangeable, but flex-h200-eastus2euap-6m22l is the only
-// real-world instance of a MIG-capable card running in whole-GPU mode:
-// nvidia.com/gpu:8 alongside nvidia.com/mig-*:0. It is the sole evidence that
-// precedence checks whole-GPU capacity before MIG profile keys. Pruning it as a
-// duplicate would leave a MIG-first classifier -- which reports that node as 0
-// GPUs -- passing every remaining test in this file.
-//
-// Asserting the property rather than the node count means trimming the fixture
-// fails with a reason instead of an off-by-one someone can "fix" by editing 9.
 func TestRealClusterFixtureRetainsMIGCapableWholeGPUNode(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "cluster-nodes.json"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	// Read allocatable directly rather than through countNVIDIAResources. This
-	// test makes a claim about the fixture, so it must not fail when only the
-	// production code changes -- otherwise a counting bug reports itself as a
-	// missing fixture node and sends the reader to the wrong file.
 	for _, it := range nodeItemsFromJSON(t, string(raw)) {
 		wholeGPU, zeroedMIGProfile := false, false
 		for name, qty := range it.Status.Allocatable {
@@ -917,7 +844,7 @@ func TestRealClusterFixtureRetainsMIGCapableWholeGPUNode(t *testing.T) {
 			}
 		}
 		if wholeGPU && zeroedMIGProfile {
-			return // property preserved
+			return
 		}
 	}
 	t.Fatal("fixture no longer contains a MIG-capable node running in whole-GPU mode " +

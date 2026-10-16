@@ -30,8 +30,6 @@ type ExplicitConfig struct {
 	Resolved string
 }
 
-// SelectProject applies submission project precedence without selecting a
-// connection or interpreting a workload name.
 func (c *Catalog) SelectProject(options SelectionOptions) (*Project, error) {
 	explicitName := strings.TrimSpace(options.ProjectName)
 	var explicitProject *Project
@@ -101,8 +99,6 @@ func (c *Catalog) SelectProject(options SelectionOptions) (*Project, error) {
 	return nil, fmt.Errorf("Tau project is ambiguous; rerun with --project <name>. Valid projects: %s", strings.Join(c.Names(), ", "))
 }
 
-// SelectLifecycleProject applies only explicit, containing-CWD, and one-project
-// selection. Workload names are intentionally never treated as target names.
 func (c *Catalog) SelectLifecycleProject(projectName, cwd string) (*Project, error) {
 	projectName = strings.TrimSpace(projectName)
 	if projectName != "" {
@@ -123,8 +119,6 @@ func (c *Catalog) SelectLifecycleProject(projectName, cwd string) (*Project, err
 	return nil, fmt.Errorf("lifecycle routing is ambiguous; rerun with --project <name>. Valid projects: %s", strings.Join(c.Names(), ", "))
 }
 
-// ProjectForPath returns the unique project that lexically and physically owns
-// an existing config path.
 func (c *Catalog) ProjectForPath(path string) (*Project, error) {
 	project, ok, err := c.containingProject(path, true)
 	if err != nil {
@@ -188,7 +182,6 @@ func (c *Catalog) containingProject(path string, requireRegular bool) (*Project,
 	return matches[0], true, nil
 }
 
-// ResolveInput chooses a config only after a project has been selected.
 func (p *Project) ResolveInput(explicitConfig, target string) (RunInput, error) {
 	if strings.TrimSpace(explicitConfig) != "" {
 		return RunInput{ConfigPath: filepath.Clean(explicitConfig), ExplicitConfig: true}, nil
@@ -215,8 +208,6 @@ func (p *Project) ResolveInput(explicitConfig, target string) (RunInput, error) 
 	)
 }
 
-// ResolveExplicitConfig validates and absolutizes --config while preserving the
-// caller's original cleaned spelling for config-relative rendering behavior.
 func ResolveExplicitConfig(cwd, config string) (ExplicitConfig, error) {
 	if strings.TrimSpace(config) == "" {
 		return ExplicitConfig{}, nil

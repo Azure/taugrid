@@ -2,8 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks only the configured InfiniBand PKey. Link identity, state,
-# and rate validation is intentionally owned by check_ib.sh.
 readonly EXPECTED_IB_DEVS="${IB_DEVICES:-}"
 readonly EXPECTED_IB_PKEY="${EXPECTED_IB_PKEY:-}"
 readonly SYSFS_ROOT="${SYSFS_ROOT:-/sys}"

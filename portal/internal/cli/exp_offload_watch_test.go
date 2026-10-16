@@ -73,7 +73,6 @@ func TestMetricsOffloadWatchMetadataCheckpointRestartAndFinalFlush(t *testing.T)
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			// Reopen the actual store on each watch start, retaining only durable state.
 			watch := func() []metricsOffloadResult {
 				t.Helper()
 				store, err := expstore.Open(ctx, storePath)
@@ -270,8 +269,6 @@ func TestMetricsOffloadWatchLaterFileFailureDoesNotReplayEarlierChunk(t *testing
 	if _, err := runMetricsOffloadWatch(context.Background(), store, opts, time.Millisecond, 1, nil); err == nil {
 		t.Fatal("later invalid file did not stop the watch")
 	}
-	// Work already exported before a later file fails must survive restart,
-	// even if the producer appends more data before the failed file is repaired.
 	requireMetricsHistoryOffsetForTest(t, opts, history, int64(len(metadata)+len(firstScalar)))
 	checkpoint, err := jsonlutil.ReadFileCheckpointSet(filepath.Join(opts.Out, "metrics_jsonl_checkpoint.json"), metricsJSONLCheckpointSchemaVersion)
 	if err != nil {

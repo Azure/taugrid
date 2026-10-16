@@ -22,14 +22,12 @@ print(f"Cluster resources: {cluster_resources}")
 GPU_AVAILABLE = cluster_resources.get("GPU", 0) > 0
 print(f"GPU_AVAILABLE = {GPU_AVAILABLE}")
 
-# Synthetic linear regression data: y = 3x + 2 + noise.
 NUM_SAMPLES = 64
 rng = np.random.default_rng(seed=42)
 xs = rng.uniform(-1.0, 1.0, size=(NUM_SAMPLES, 1)).astype(np.float32)
 ys = (3.0 * xs + 2.0 + rng.normal(0, 0.05, size=xs.shape)).astype(np.float32)
 samples = [{"x": xs[i], "y": ys[i]} for i in range(NUM_SAMPLES)]
 ds = ray.data.from_items(samples)
-
 
 class Trainer:
     def __init__(self):
@@ -71,7 +69,6 @@ class Trainer:
         batch["loss"] = [last_loss] * len(batch["x"])
         return batch
 
-
 POOL_SIZE = 1 if GPU_AVAILABLE else 2
 BATCH_SIZE = 8
 INNER_STEPS = 12
@@ -87,7 +84,6 @@ last_losses = [r["last_loss"] for r in results]
 mean_first = float(np.mean(first_losses))
 mean_last = float(np.mean(last_losses))
 
-# Basic sanity: training should reduce loss within each actor's deterministic SGD loop.
 print(f"mean_first_loss={mean_first:.6f} mean_last_loss={mean_last:.6f}")
 assert mean_last < mean_first, (
     f"Expected loss to decrease during SGD; got first={mean_first}, last={mean_last}"

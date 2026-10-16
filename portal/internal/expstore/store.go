@@ -148,17 +148,12 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("migrate %s.%s: %w", migration.table, migration.column, err)
 		}
 	}
-	// Created after the additive column pass rather than in schemaSQL, because
-	// schemaSQL runs first and indexing a column an older store has not gained
-	// yet fails the whole open.
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_runs_experiment ON runs(experiment_id)`); err != nil {
 		return fmt.Errorf("create idx_runs_experiment: %w", err)
 	}
 	if err := s.migrateArtifactsSchema(ctx); err != nil {
 		return err
 	}
-	// Walk an older store forward to the current schema, then persist the new
-	// version so the upgrade is not repeated on every open.
 	migrated, err := applySchemaMigrations(ctx, s.db, s.manifest.SchemaVersion)
 	if err != nil {
 		return err
@@ -183,9 +178,6 @@ var additiveColumnMigrations = []struct {
 	column     string
 	definition string
 }{
-	// runs.experiment_id is the run -> experiment link. It lives here as well as
-	// in schemaSQL so that a store predating it gains the column before the
-	// index below is created.
 	{"runs", "experiment_id", "experiment_id TEXT NOT NULL DEFAULT ''"},
 	{"artifacts", "preview", "preview TEXT"},
 	{"artifacts", "external_ref", "external_ref TEXT"},
@@ -316,11 +308,6 @@ func (s *Store) initMetadata(ctx context.Context, opts InitOptions) (InitResult,
 		return InitResult{}, err
 	}
 
-	// The experiment is the named unit the researcher compares runs within, so
-	// it is keyed on the name they passed to `experiment init --name`. Run
-	// groups are arms/variants inside it (baseline vs ablation), not separate
-	// experiments -- keying on the group would split an experiment into pieces
-	// that can no longer be compared.
 	experiment := ExperimentRecord{
 		ExperimentID: opts.Name,
 		Project:      opts.Project,
@@ -462,8 +449,6 @@ func (s *Store) Status(ctx context.Context, target string) (Status, error) {
 	if err == nil {
 		status.TargetType = "experiment"
 		status.Experiment = &experiment
-		// Counts must key off the resolved experiment id, not the user-supplied
-		// target, which may be the experiment's human name.
 		if err := s.fillExperimentStatus(ctx, &status, experiment.ExperimentID); err != nil {
 			return Status{}, err
 		}
@@ -665,8 +650,6 @@ func (s *Store) fillExperimentStatus(ctx context.Context, status *Status, experi
 	if status.Runs, err = s.count(ctx, "SELECT count(*) FROM runs WHERE experiment_id = ?", experimentID); err != nil {
 		return err
 	}
-	// An experiment's arms are the distinct groups its runs sit in. run_groups
-	// no longer carries an experiment_id, so this is the only path.
 	if status.RunGroups, err = s.count(ctx,
 		"SELECT count(*) FROM (SELECT DISTINCT run_group_id FROM runs WHERE run_id IN ("+runSubquery+"))",
 		experimentID); err != nil {
@@ -801,10 +784,6 @@ FROM runs WHERE run_id = ?`, []any{id})
 	return result.Rows[0], nil
 }
 
-// experiment resolves by experiment_id, falling back to name. Under the
-// workspace -> project -> experiment -> run model the experiment id is the run
-// group, but researchers routinely refer to an experiment by the human name
-// they passed to `experiment init --name`, so both must resolve.
 func (s *Store) experiment(ctx context.Context, id string) (ExperimentRecord, error) {
 	var exp ExperimentRecord
 	err := s.db.QueryRowContext(ctx, `

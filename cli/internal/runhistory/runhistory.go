@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package runhistory records metadata-only Kubernetes run lifecycle observations.
 package runhistory
 
 import (
@@ -36,19 +35,13 @@ const (
 	StateCancelled = "cancelled"
 )
 
-// Source is the narrow Kubernetes read surface required by the recorder.
 type Source interface {
 	ListJobs(context.Context, string) ([]Job, error)
 	ListRayJobs(context.Context, string) ([]RayJob, error)
 	ListWorkloads(context.Context, string) ([]Workload, error)
-	// ListPods backs the terminal failure summary for batch Jobs. Pods are the
-	// only place the real cause of a Job failure is recorded, and they are
-	// deleted with the Job on TTL expiry.
 	ListPods(context.Context, string) ([]Pod, error)
 }
 
-// Writer persists lifecycle observations. Implementations must acknowledge writes
-// before returning nil.
 type Writer interface {
 	Write(context.Context, []Record) error
 }
@@ -73,12 +66,8 @@ type Metadata struct {
 	Annotations     map[string]string
 	OwnerKind       string
 	OwnerName       string
-	// OwnerUID identifies the controller instance, not just its name. Job
-	// names are reused: a Job can be deleted in the background and an
-	// identically named one created immediately, so name alone cannot tell
-	// this Job's pods from its predecessor's.
-	OwnerUID string
-	Deleting bool
+	OwnerUID        string
+	Deleting        bool
 }
 
 type Condition struct {
@@ -119,18 +108,6 @@ type Workload struct {
 	Conditions   []Condition
 }
 
-// Pod carries the pod-level evidence the recorder needs to explain a terminal
-// batch Job failure.
-//
-// A Job's own Failed condition only ever says "BackoffLimitExceeded" — the
-// actual cause (non-zero exit code, OOM kill, image pull failure) lives on the
-// pods, and Kubernetes deletes those pods along with the Job once
-// ttlSecondsAfterFinished elapses. Reading them here is what makes the durable
-// lifecycle record survive that garbage collection with the cause intact.
-//
-// RayJobs do not need this: KubeRay already puts the failure text on the RayJob
-// object itself, which is why Ray failures were always legible and batch Job
-// failures were not.
 type Pod struct {
 	Metadata
 	Phase      string
@@ -138,8 +115,6 @@ type Pod struct {
 	Containers []ContainerState
 }
 
-// ContainerState is one container's terminal or blocked state. Only fields that
-// explain a failure are kept; no logs, no environment, no command line.
 type ContainerState struct {
 	Name       string
 	ExitCode   int32
@@ -149,8 +124,6 @@ type ContainerState struct {
 	OOMKilled  bool
 }
 
-// Record intentionally contains only workload metadata. It never contains pod
-// specs, environment values, logs, metrics, or artifact contents.
 type Record struct {
 	ObservedAt         time.Time         `json:"observed_at"`
 	ObservationID      string            `json:"observation_id"`
@@ -222,10 +195,7 @@ type Result struct {
 	Emitted         int    `json:"emitted"`
 	RayJobsStatus   string `json:"rayjobs_status"`
 	WorkloadsStatus string `json:"workloads_status"`
-	// PodsStatus reports whether pod-level failure evidence was readable this
-	// pass. "unavailable" means failure summaries fall back to the Job
-	// condition reason alone.
-	PodsStatus string `json:"pods_status"`
+	PodsStatus      string `json:"pods_status"`
 }
 
 type Reconciler struct {
@@ -237,16 +207,10 @@ type Reconciler struct {
 	ResultScope   string
 	WriterRetries int
 	Now           func() time.Time
-	// Log, when set, receives operational notices. It is deliberately not a
-	// per-poll trace: only transitions are written, so a recorder polling
-	// every 30s does not flood its own logs.
-	Log io.Writer
+	Log           io.Writer
 
-	mu   sync.Mutex
-	seen map[string]map[string]struct{}
-	// terminalFailed records the durable IDs that have already had a failed
-	// terminal observation emitted, so a later pass that lost pod visibility
-	// cannot overwrite the enriched evidence with a degraded restatement.
+	mu             sync.Mutex
+	seen           map[string]map[string]struct{}
 	terminalFailed map[string]struct{}
 	lastPodsStatus string
 }
@@ -286,10 +250,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 		result.WorkloadsStatus = "missing-crd"
 		workloads = nil
 	}
-	// Pods only enrich the failure summary. A pod read failure must never cost
-	// us the lifecycle record itself, which is the durable artifact — degrade to
-	// the Job-condition reason instead, exactly as before this enrichment
-	// existed.
 	pods, podErr := r.Source.ListPods(ctx, namespace)
 	result.PodsStatus = "available"
 	if podErr != nil {
@@ -306,11 +266,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, namespace string) (Result, e
 	for _, job := range jobs {
 		records, rank := observationsForJob(job, correlatedWorkloads(job.Metadata, runID(job.Metadata), workloads), correlatedPods(job.Metadata, pods), r.Cluster, r.WorkspaceID, r.ResultScope, now)
 		assignObservationIDs(records)
-		// An observation that explains nothing cannot improve on a failure
-		// already recorded, and re-emitting one only adds a row that loses the
-		// collapse. Correctness does not depend on this — evidence ordering
-		// already guarantees the weaker row cannot win — but it keeps the
-		// table free of restatements of "BackoffLimitExceeded".
 		if rank == evidenceNone {
 			records = r.withoutRecordedFailures(records)
 		}
@@ -390,13 +345,6 @@ func (r *Reconciler) markSeen(records []Record) {
 	}
 }
 
-// withoutRecordedFailures drops failed terminal records for runs whose failure
-// has already been written. Callers apply it only to evidence-free
-// observations, so the record being dropped is strictly less informative than
-// the one already durable.
-//
-// A first observation is never dropped: if the failure has not been recorded
-// yet, a record naming only the Job condition is better than none.
 func (r *Reconciler) withoutRecordedFailures(records []Record) []Record {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -412,10 +360,6 @@ func (r *Reconciler) withoutRecordedFailures(records []Record) []Record {
 	return out
 }
 
-// notePodsStatus reports pod-visibility transitions exactly once per change.
-// Losing pod reads silently degrades every batch-Job failure summary, and the
-// most common cause — a Role without the pods read verb — produces no other
-// symptom: the recorder stays healthy and simply writes weaker records.
 func (r *Reconciler) notePodsStatus(status string, podErr error) {
 	r.mu.Lock()
 	previous := r.lastPodsStatus
@@ -470,22 +414,6 @@ func observationsForJob(job Job, workloads []Workload, pods []Pod, cluster, work
 	return withEvidenceOrdering(records, rank), rank
 }
 
-// evidenceOrderingStep separates observations of one terminal failure by how
-// much they explain.
-//
-// Every observation of the same failure derives observed_at from the Job's
-// terminal condition, which does not move, so they all collide. The dashboards
-// collapse with arg_max(observed_at, *), whose tie-break is arbitrary — a row
-// naming the exit code can lose to one saying only "BackoffLimitExceeded".
-//
-// Offsetting by evidence rank makes the collapse resolve to the best available
-// explanation, and does so as a pure function of the record's own content.
-// That matters more than it first appears: the recorder is restartable, so any
-// scheme relying on process-local memory of what was already written silently
-// stops working after a restart, exactly when a degraded record is most likely
-// to be the one already durable. A few milliseconds is far below the
-// resolution at which a lifecycle timestamp is read, and preserves ordering
-// against every other event.
 const evidenceOrderingStep = time.Millisecond
 
 func withEvidenceOrdering(records []Record, rank evidenceRank) []Record {
@@ -500,24 +428,8 @@ func withEvidenceOrdering(records []Record, rank evidenceRank) []Record {
 	return records
 }
 
-// maxFailureMessageLength bounds the durable message. A Job can fail with
-// hundreds of pods and a container message can itself be long; the lifecycle
-// row is an index, not a log store, so the summary is truncated rather than
-// allowed to grow without limit.
 const maxFailureMessageLength = 512
 
-// correlatedPods returns the pods belonging to one Job.
-//
-// Ownership is matched by controller UID whenever both sides carry one,
-// because Job names are reused. With background deletion a pod can outlive its
-// Job while an identically named Job is created immediately after, and
-// name-only matching would then attribute the dead Job's failure to the new
-// one. The batch.kubernetes.io/controller-uid label carries the same identity
-// for pods whose ownerReference has been stripped.
-//
-// Name and job-name labels remain a fallback for pods that carry no ownership
-// at all, which is how older clusters and hand-built pods present. A pod whose
-// ownership contradicts this Job is never matched by name.
 func correlatedPods(metadata Metadata, pods []Pod) []Pod {
 	var out []Pod
 	for _, pod := range pods {
@@ -529,17 +441,6 @@ func correlatedPods(metadata Metadata, pods []Pod) []Pod {
 	return out
 }
 
-// podMatchesJob decides whether a pod belongs to this Job instance.
-//
-// When both sides can assert a controller UID that comparison is conclusive
-// and nothing else is consulted — this is the case that matters, because Job
-// names are reused and a stale pod would otherwise be adopted by its
-// successor.
-//
-// When identity is unavailable on either side, ownership by name is used, and
-// a pod that names some other Job as its controller is rejected outright
-// rather than falling through to labels. Only a pod with no ownership at all
-// is matched on the job-name labels.
 func podMatchesJob(pod Pod, metadata Metadata) bool {
 	podUID := podControllerUID(pod)
 	jobUID := strings.TrimSpace(metadata.UID)
@@ -553,9 +454,6 @@ func podMatchesJob(pod Pod, metadata Metadata) bool {
 		pod.Labels["job-name"] == metadata.Name
 }
 
-// podControllerUID returns the UID of the Job that created the pod, preferring
-// the ownerReference and falling back to the label the Job controller stamps,
-// which survives an ownerReference being stripped.
 func podControllerUID(pod Pod) string {
 	if uid := strings.TrimSpace(pod.OwnerUID); uid != "" {
 		return uid
@@ -566,36 +464,16 @@ func podControllerUID(pod Pod) string {
 	return strings.TrimSpace(pod.Labels["controller-uid"])
 }
 
-// evidenceRank orders failure explanations by how much they actually explain.
-// It drives three decisions: which candidate is summarised, whether a later
-// observation may supersede an earlier one, and how the durable rows sort when
-// the dashboards collapse them.
 type evidenceRank int
 
 const (
-	// evidenceNone is the Job's own terminal condition, which says only
-	// "BackoffLimitExceeded" and explains nothing.
 	evidenceNone evidenceRank = iota
-	// evidenceWaiting is a container that never ran: ImagePullBackOff,
-	// CreateContainerConfigError. Real, but weaker than an actual exit.
 	evidenceWaiting
-	// evidencePodReason is a pod-level failure with no container detail —
-	// eviction, kubelet admission rejection, node pressure.
 	evidencePodReason
-	// evidenceTerminated is a container that ran and exited without a
-	// distinguishing fatal signal.
 	evidenceTerminated
-	// evidenceFatal is an OOM kill or a non-zero exit: the most specific
-	// cause available, and the one a reader almost always wants.
 	evidenceFatal
 )
 
-// enrichFailureFromPods replaces a Job's generic terminal reason with the
-// actual cause taken from its pods, and reports how strong that evidence is.
-//
-// The Job condition reason is kept as a prefix so nothing that used to be in
-// the record is lost — a reader still sees "BackoffLimitExceeded", now followed
-// by the exit code or OOM kill that produced it.
 func enrichFailureFromPods(reason, message string, pods []Pod) (string, string, evidenceRank) {
 	candidates := failureCandidates(pods)
 	if len(candidates) == 0 {
@@ -629,8 +507,6 @@ func enrichFailureFromPods(reason, message string, pods []Pod) (string, string, 
 	return enrichedReason, truncate(summary.String(), maxFailureMessageLength), best.rank
 }
 
-// failureCandidate is one explanation for a Job's failure, drawn either from a
-// container state or from the pod itself.
 type failureCandidate struct {
 	pod        string
 	container  string
@@ -641,15 +517,6 @@ type failureCandidate struct {
 	rank       evidenceRank
 }
 
-// failureCandidates returns every explanation a Job's pods offer, strongest
-// first.
-//
-// Ordering is by evidence strength, not by name: a pod named "a" stuck in
-// ImagePullBackOff must not mask a pod named "b" that was OOM-killed, because
-// only the strongest candidate is summarised and the pods are deleted with the
-// Job. Names break ties so the same Job always produces the same summary — a
-// record whose text churned between polls would defeat fingerprint
-// de-duplication and re-ingest on every interval.
 func failureCandidates(pods []Pod) []failureCandidate {
 	var out []failureCandidate
 	for _, pod := range pods {
@@ -664,10 +531,6 @@ func failureCandidates(pods []Pod) []failureCandidate {
 			containerEvidence = true
 			out = append(out, containerCandidate(pod.Name, container))
 		}
-		// A pod can fail with no container status at all — evicted, or
-		// rejected by kubelet admission. ListPods captures that reason, and
-		// dropping it here would leave the durable record at
-		// "BackoffLimitExceeded" despite the cause being known.
 		if !containerEvidence {
 			if candidate, ok := podCandidate(pod); ok {
 				out = append(out, candidate)
@@ -715,8 +578,6 @@ func containerCandidate(podName string, container ContainerState) failureCandida
 func podCandidate(pod Pod) (failureCandidate, bool) {
 	reason := strings.TrimSpace(pod.Reason)
 	if reason == "" {
-		// Phase alone is not an explanation, but it is better than silence
-		// when the pod is unambiguously failed.
 		if !strings.EqualFold(pod.Phase, "Failed") {
 			return failureCandidate{}, false
 		}
@@ -729,9 +590,6 @@ func podCandidate(pod Pod) (failureCandidate, bool) {
 	}, true
 }
 
-// truncate bounds the summary without splitting a UTF-8 rune. Container
-// messages are arbitrary user text, and a byte-wise cut mid-rune would write
-// invalid UTF-8 into the durable record.
 func truncate(s string, limit int) string {
 	if len(s) <= limit {
 		return s
@@ -827,50 +685,37 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		ownerKindValue = ownerKind
 	}
 	return Record{
-		ObservedAt:      now,
-		DurableID:       durableID(cluster, metadata, ownerKind),
-		RunID:           runID(metadata),
-		WorkspaceID:     first(annotations[experiment.AnnotationWorkspaceID], labels[workloadmeta.LabelWorkspace], defaultWorkspaceID),
-		ResultScope:     first(annotations[experiment.AnnotationResultScope], defaultResultScope),
-		Project:         project,
-		ExperimentID:    experimentID,
-		Group:           text(annotations[experiment.AnnotationStellarGroup]),
-		Tags:            stellarTags(annotations[experiment.AnnotationStellarTags]),
-		OwnerKind:       ownerKindValue,
-		OwnerName:       ownerName,
-		Namespace:       metadata.Namespace,
-		Cluster:         cluster,
-		ResourceUID:     metadata.UID,
-		ResourceVersion: metadata.ResourceVersion,
-		Generation:      metadata.Generation,
-		SubmittedAt:     metadata.CreatedAt,
-		CreatedAt:       metadata.CreatedAt,
-		AdmittedAt:      admittedAt,
-		LocalQueue:      localQueue,
-		ClusterQueue:    clusterQueue,
-		WorkloadKind:    first(labels[experiment.LabelWorkloadKind], workloadKind),
-		Image:           text(annotations[experiment.AnnotationImage]),
-		ImageDigest:     text(annotations[experiment.AnnotationImageDigest]),
-		ConfigHash:      text(annotations[experiment.AnnotationConfigHash]),
-		CodeSHA:         text(annotations[experiment.AnnotationCodeSHA]),
-		TauCommand:      text(annotations[experiment.AnnotationTauCommand]),
-		ResultPath:      text(annotations[experiment.AnnotationResultPath]),
-		ResultPVC:       text(annotations[experiment.AnnotationResultPVC]),
-		ArtifactURI:     uri(annotations[experiment.AnnotationArtifactURI]),
-		CheckpointURI:   uri(annotations[experiment.AnnotationCheckpointURI]),
-		// controller_version is a durable audit column. It is populated only
-		// from tau's own annotation, never from app.kubernetes.io/version.
-		//
-		// That fallback used to be here and was actively harmful: nothing in
-		// the tree writes tau.azure.com/controller-version, so the fallback
-		// always won, and app.kubernetes.io/version is a researcher-set label
-		// carrying the researcher's own git SHA. The column therefore recorded
-		// a plausible-looking value that was not a TauGrid version at all —
-		// worse than empty, because a reader cannot tell it is wrong.
-		//
-		// An unknown version must read as unknown. See Azure/taugrid#113 for
-		// recording the producing tau version properly, which is what will
-		// populate this column.
+		ObservedAt:         now,
+		DurableID:          durableID(cluster, metadata, ownerKind),
+		RunID:              runID(metadata),
+		WorkspaceID:        first(annotations[experiment.AnnotationWorkspaceID], labels[workloadmeta.LabelWorkspace], defaultWorkspaceID),
+		ResultScope:        first(annotations[experiment.AnnotationResultScope], defaultResultScope),
+		Project:            project,
+		ExperimentID:       experimentID,
+		Group:              text(annotations[experiment.AnnotationStellarGroup]),
+		Tags:               stellarTags(annotations[experiment.AnnotationStellarTags]),
+		OwnerKind:          ownerKindValue,
+		OwnerName:          ownerName,
+		Namespace:          metadata.Namespace,
+		Cluster:            cluster,
+		ResourceUID:        metadata.UID,
+		ResourceVersion:    metadata.ResourceVersion,
+		Generation:         metadata.Generation,
+		SubmittedAt:        metadata.CreatedAt,
+		CreatedAt:          metadata.CreatedAt,
+		AdmittedAt:         admittedAt,
+		LocalQueue:         localQueue,
+		ClusterQueue:       clusterQueue,
+		WorkloadKind:       first(labels[experiment.LabelWorkloadKind], workloadKind),
+		Image:              text(annotations[experiment.AnnotationImage]),
+		ImageDigest:        text(annotations[experiment.AnnotationImageDigest]),
+		ConfigHash:         text(annotations[experiment.AnnotationConfigHash]),
+		CodeSHA:            text(annotations[experiment.AnnotationCodeSHA]),
+		TauCommand:         text(annotations[experiment.AnnotationTauCommand]),
+		ResultPath:         text(annotations[experiment.AnnotationResultPath]),
+		ResultPVC:          text(annotations[experiment.AnnotationResultPVC]),
+		ArtifactURI:        uri(annotations[experiment.AnnotationArtifactURI]),
+		CheckpointURI:      uri(annotations[experiment.AnnotationCheckpointURI]),
 		ControllerVersion:  text(annotations[workloadmeta.AnnotationControllerVerion]),
 		ExperimentTracking: tracking,
 		ExperimentSource:   source,

@@ -2,33 +2,20 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
-# IB Link Flap Detection Script for Node Problem Detector
-# Detects InfiniBand link instability through multiple monitoring methods
-#
-# State format (line-oriented, one snapshot per line):
-#   TIMESTAMP DEV1=STATE1 DEV2=STATE2 ...
-# Example:
-#   1713140000 mlx5_0:1=up mlx5_1:1=up mlx5_2:1=down
-
 set -euo pipefail
 
-# Exit codes
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2
 
-# Configuration (templated by Helm)
 readonly EXPECTED_IB_DEVS="${IB_DEVICES:-}"
 readonly FLAP_THRESHOLD="${IB_FLAP_THRESHOLD_SHORT:-2}"
 readonly CHECK_WINDOW="${IB_FLAP_CHECK_WINDOW:-3600}"
 readonly JOURNAL_FLAP_WINDOW=120
 
-# Storage configuration (host path volume mount)
 readonly STATE_FILE="${IB_FLAP_STATE_FILE:-/var/lib/ib-state/ib_flap_state.txt}"
 readonly TEMP_STATE_FILE="${IB_FLAP_TEMP_STATE_FILE:-/tmp/ib_flap_state.txt}"
 
-# Logging functions
 log_warn() {
     echo "[WARN] $*" >&2
 }
@@ -37,7 +24,6 @@ log_error() {
     echo "[ERROR] $*" >&2
 }
 
-# Shell robustness
 safe_command_check() {
     local cmd="$1"
     command -v "$cmd" >/dev/null 2>&1 || which "$cmd" >/dev/null 2>&1 || type "$cmd" >/dev/null 2>&1
@@ -52,8 +38,6 @@ is_device_monitored() {
     done
     return 1
 }
-
-# ── State file management ──
 
 get_state_file() {
     if [[ -w "$(dirname "$STATE_FILE")" ]] 2>/dev/null; then
@@ -76,7 +60,6 @@ load_state() {
     local content
     content=$(cat "$state_file" 2>/dev/null) || true
 
-    # Detect old JSON format and discard it
     local first_char
     first_char=$(echo "$content" | head -c1)
     if [[ "$first_char" == "[" || "$first_char" == "{" ]]; then
@@ -97,12 +80,10 @@ save_state() {
     current_time=$(date +%s)
     local cutoff=$((current_time - CHECK_WINDOW))
 
-    # Keep every timestamped sample in the configured analysis window.
     local cleaned
     cleaned=$(echo "$state_data" | awk -v cutoff="$cutoff" \
         'NF > 0 && $1 ~ /^[0-9]+$/ && $1 >= cutoff')
 
-    # Atomic write via temp + mv
     local temp_file="${state_file}.tmp.$$"
     if echo "$cleaned" > "$temp_file" 2>/dev/null; then
         if mv "$temp_file" "$state_file" 2>/dev/null; then
@@ -114,15 +95,10 @@ save_state() {
     return 1
 }
 
-# ── IB state collection ──
-
 get_current_ib_state_ibstat() {
-    # Outputs: DEV1=STATE1 DEV2=STATE2 ...
-    # States: up, down, unknown
 
     if ! safe_command_check "ibstat"; then
         log_warn "ibstat command not available"
-        # Output all devices as unknown
         for ib_dev in $EXPECTED_IB_DEVS; do
             printf "%s=unknown " "$ib_dev"
         done
@@ -144,9 +120,6 @@ get_current_ib_state_ibstat() {
         port=$(echo "$ib_dev" | sed 's/.*://')
 
         local state_info
-        # Use exact-string comparisons (not substring regex) so dev="mlx5_1"
-        # does not also match "mlx5_10"/"mlx5_11" on systems with ≥10 HCAs,
-        # and port="1" does not also match "Port 10:"/"Port 11:".
         state_info=$(echo "$ibstat_output" | awk -v dev="'$device_name'" -v port_tok="${port}:" '
             /^CA / {
                 in_device = ($2 == dev)
@@ -167,7 +140,6 @@ get_current_ib_state_ibstat() {
     done
 }
 
-# Build a snapshot line: "TIMESTAMP DEV1=STATE1 DEV2=STATE2 ..."
 build_snapshot() {
     local current_time
     current_time=$(date +%s)
@@ -176,17 +148,12 @@ build_snapshot() {
     echo "${current_time} ${device_states}"
 }
 
-# ── Flap analysis ──
-
-# Extract the state of a device from a snapshot line
 get_device_state() {
     local line="$1"
     local device="$2"
     echo "$line" | tr ' ' '\n' | awk -F= -v dev="$device" '$1 == dev { print $2; exit }'
 }
 
-# Analyze state history for link flaps (ibstat transitions)
-# Returns 0 (OK) or 1 (NONOK)
 analyze_flaps() {
     local state_data="$1"
     local current_time
@@ -199,7 +166,6 @@ analyze_flaps() {
         local transitions=0
         local prev_state=""
 
-        # Read snapshots in order, count state transitions within window
         while IFS= read -r line; do
             [[ -z "$line" ]] && continue
             local ts
@@ -222,7 +188,6 @@ analyze_flaps() {
             prev_state="$cur_state"
         done <<< "$state_data"
 
-        # Match original semantics: complete flaps = transitions / 2
         local complete_flaps=$((transitions / 2))
         if [[ $complete_flaps -ge $FLAP_THRESHOLD ]]; then
             flap_reports+=("$ib_dev: $complete_flaps ibstat state flaps in CHECK_WINDOW (threshold: $FLAP_THRESHOLD)")
@@ -230,7 +195,6 @@ analyze_flaps() {
         fi
     done
 
-    # Channel 2: journalctl kernel log analysis
     local journal_issues
     journal_issues=$(analyze_journalctl_flaps "$current_time")
     if [[ -n "$journal_issues" ]]; then
@@ -249,7 +213,6 @@ analyze_flaps() {
     fi
 }
 
-# Analyze journalctl for link flaps
 analyze_journalctl_flaps() {
     local current_time="$1"
 
@@ -269,8 +232,6 @@ analyze_journalctl_flaps() {
 
     local regex='([[:alnum:]_.-]+):[[:space:]]+Port:[[:space:]]+([0-9]+)[[:space:]]+Link[[:space:]]+(DOWN|ACTIVE|INIT)'
 
-    # Track per-device: last_state and transition count using temp files
-    # (associative arrays not available in all bash versions on minimal images)
     local tmpdir
     tmpdir=$(mktemp -d)
 
@@ -306,7 +267,6 @@ analyze_journalctl_flaps() {
         fi
     done <<< "$journal_output"
 
-    # Collect results
     for ib_dev in $EXPECTED_IB_DEVS; do
         if [[ -f "$tmpdir/${ib_dev}.count" ]]; then
             local flaps
@@ -320,20 +280,15 @@ analyze_journalctl_flaps() {
     rm -rf "$tmpdir"
 }
 
-# ── Main ──
-
 main() {
-    # Bail out early if no devices configured
     if [[ -z "$EXPECTED_IB_DEVS" ]]; then
         echo "No IB devices configured, skipping check"
         exit $OK
     fi
 
-    # Load existing state
     local state_data
     state_data=$(load_state)
 
-    # Take new snapshot and append
     local snapshot
     snapshot=$(build_snapshot)
     if [[ -n "$state_data" ]]; then
@@ -343,12 +298,10 @@ ${snapshot}"
         state_data="$snapshot"
     fi
 
-    # Save updated state (handles cleanup and rotation)
     if ! save_state "$state_data"; then
         log_warn "Failed to save state, continuing with analysis"
     fi
 
-    # Analyze for flaps and report
     if analyze_flaps "$state_data"; then
         exit $OK
     else

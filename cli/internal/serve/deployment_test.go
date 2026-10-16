@@ -111,7 +111,6 @@ func TestRenderDeployment_Defaults(t *testing.T) {
 	if strategy["type"] != "Recreate" {
 		t.Fatalf("Deployment updates should not surge scarce GPU pods, got strategy=%v", strategy)
 	}
-	// Deployment-level queue label
 	labels := getPath(t, doc, "metadata", "labels").(map[string]any)
 	if labels["kueue.x-k8s.io/queue-name"] != "serving-queue" {
 		t.Fatalf("missing queue-name label: %v", labels)
@@ -123,7 +122,6 @@ func TestRenderDeployment_Defaults(t *testing.T) {
 	if deployAnn[workloadmeta.AnnotationGPUContract] != "count=1,size=l" {
 		t.Fatalf("deployment annotations should expose GPU contract: %v", deployAnn)
 	}
-	// Pod-template Kueue managed label + suspending-parent annotation
 	podLabels := getPath(t, doc, "spec", "template", "metadata", "labels").(map[string]any)
 	if podLabels["kueue.x-k8s.io/managed"] != "true" {
 		t.Fatalf("pod template missing kueue.x-k8s.io/managed=true: %v", podLabels)
@@ -132,18 +130,12 @@ func TestRenderDeployment_Defaults(t *testing.T) {
 	if podAnn["kueue.x-k8s.io/pod-suspending-parent"] != "deployment" {
 		t.Fatalf("pod template missing suspending-parent annotation: %v", podAnn)
 	}
-	// The pod template must carry queue-name alongside the managed label and
-	// the suspending-parent annotation, because that annotation makes Kueue's
-	// Pod webhook gate the pod before it consults queue-name. #1317 shipped the
-	// Deployment-level label while omitting this one, so asserting only the
-	// Deployment would not catch it.
 	if podLabels["kueue.x-k8s.io/queue-name"] != "serving-queue" {
 		t.Fatalf("pod template must carry queue-name or its pods gate forever: %v", podLabels)
 	}
 	if podAnn[workloadmeta.AnnotationGPUContract] != "count=1,size=l" {
 		t.Fatalf("pod template annotations should expose GPU contract: %v", podAnn)
 	}
-	// Main container image from profile runtime.image
 	containers := getPath(t, doc, "spec", "template", "spec", "containers").([]any)
 	if len(containers) != 1 {
 		t.Fatalf("want 1 container, got %d", len(containers))
@@ -288,7 +280,6 @@ func TestRenderDeployment_Volumes(t *testing.T) {
 	if len(vols) != 4 {
 		t.Fatalf("want 4 volumes, got %d", len(vols))
 	}
-	// Check each kind is wired
 	want := map[string]string{
 		"data":  "persistentVolumeClaim",
 		"shm":   "emptyDir",
@@ -303,7 +294,6 @@ func TestRenderDeployment_Volumes(t *testing.T) {
 			t.Fatalf("volume %q missing %q key: %v", name, expectKey, m)
 		}
 	}
-	// VolumeMounts
 	containers := spec["containers"].([]any)
 	c := containers[0].(map[string]any)
 	vms := c["volumeMounts"].([]any)
@@ -449,8 +439,6 @@ func TestRenderDeployment_EnvStableOrder(t *testing.T) {
 		},
 	}
 	b, _ := RenderDeployment(p, o)
-	// Env must be emitted in deterministic lexical order. ASCII '_' is
-	// 0x5F; 'N' is 0x4E, so "ANOTHER" < "A_VAR" byte-wise.
 	s := string(b)
 	posAnother := strings.Index(s, "name: ANOTHER")
 	posAVar := strings.Index(s, "name: A_VAR")
@@ -671,14 +659,6 @@ func TestRenderDeployment_Autoscaling_Validation(t *testing.T) {
 	})
 }
 
-// TestRenderDeployment_ProfileWithoutQueue_IsRejected pins the fail-closed
-// half of the Kueue contract.
-//
-// Kueue's Pod webhook initializes suspend from the pod-suspending-parent
-// annotation, so the queue-name check never runs for an annotated pod and the
-// scheduling gate is applied unconditionally. Such a pod is not degraded but
-// unrecoverable: gated forever, with no Workload object for an operator to
-// find (#1317). Refuse to render it.
 func TestRenderDeployment_ProfileWithoutQueue_IsRejected(t *testing.T) {
 	p := deployBaseProfile()
 	p.Queue = ""

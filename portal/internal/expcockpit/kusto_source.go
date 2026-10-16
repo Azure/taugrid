@@ -92,7 +92,6 @@ type KustoMetricRow struct {
 	HasLifecycle        bool     `json:"has_lifecycle,omitempty"`
 }
 
-// UnmarshalJSON normalizes rows written before the experiment-axis rename.
 func (r *KustoMetricRow) UnmarshalJSON(data []byte) error {
 	type alias KustoMetricRow
 	aux := struct {
@@ -126,18 +125,11 @@ type KustoSource struct {
 	TargetPoints      int
 	QueryCommand      string
 	QueryArgs         []string
-	// NativeQuery runs generated KQL against ADX through the azure-kusto-go SDK
-	// and returns the raw JSON response. When set it replaces the
-	// --kusto-query-command shell adapter, so deployments no longer need to stage
-	// a shell plus a hand-rolled IMDS-token script into the distroless image.
-	// QueryCommand still wins when both are configured.
-	NativeQuery func(ctx context.Context, query string) (string, error)
-	StaleAfter  time.Duration
-	Now         func() time.Time
+	NativeQuery       func(ctx context.Context, query string) (string, error)
+	StaleAfter        time.Duration
+	Now               func() time.Time
 }
 
-// hasRemoteQuery reports whether this source can reach ADX at all — through the
-// shell adapter or the native SDK transport.
 func (s KustoSource) hasRemoteQuery() bool {
 	return strings.TrimSpace(s.QueryCommand) != "" || s.NativeQuery != nil
 }
@@ -146,9 +138,6 @@ func (s KustoSource) BuildSeries(ctx context.Context, opts SeriesOptions) (Serie
 	return s.buildSeries(ctx, opts, false)
 }
 
-// BuildTypedSeries serves canonical Portal series from the stable typed metric
-// event Function. Legacy BuildSeries remains available to explicit CLI/report
-// consumers.
 func (s KustoSource) BuildTypedSeries(ctx context.Context, opts SeriesOptions) (SeriesDetail, error) {
 	return s.buildSeries(ctx, opts, true)
 }
@@ -665,10 +654,6 @@ func (s KustoSource) searchRuns(ctx context.Context, opts expstore.RunSearchOpti
 	}, nil
 }
 
-// SearchCatalogExperiments reads run identities from TauExpRunCatalogRows() so
-// lifecycle-only experiments remain discoverable, then enriches them from
-// TauExpSeriesCatalogRows(). Helm selects the function implementations; Portal
-// neither knows nor models alternate catalog implementations.
 func (s KustoSource) SearchCatalogExperiments(ctx context.Context, opts expstore.ExperimentSearchOptions) (expstore.ExperimentSearchResult, error) {
 	opts = normalizeKustoExperimentSearchOptions(opts)
 	if err := validateKustoCatalogMetricFilters(opts.MetricFilters); err != nil {
@@ -841,9 +826,6 @@ func catalogExperimentSummaries(rows []KustoMetricRow, runs []expstore.RunSearch
 	return out
 }
 
-// SearchCatalogRuns reads TauExpRunCatalogRows() for lifecycle/detail and
-// TauExpSeriesCatalogRows() for metric names and summaries. The stable
-// functions encapsulate Helm-time implementation selection.
 func (s KustoSource) SearchCatalogRuns(ctx context.Context, opts expstore.RunSearchOptions) (expstore.RunSearchResult, error) {
 	opts = normalizeKustoRunSearchOptions(opts)
 	if err := validateKustoCatalogMetricFilters(opts.MetricFilters); err != nil {
@@ -1396,11 +1378,6 @@ func parseKustoFrameArray(raw []byte) ([]KustoMetricRow, bool, error) {
 		rows, err := parseKustoTableRows(frame.Columns, frame.Rows)
 		return rows, true, err
 	}
-	// Fragmented v2 REST stream: the PrimaryResult table is split across a
-	// TableHeader (Columns + TableId) and one or more TableFragment frames
-	// (Rows for the matching TableId). This is what azure-kusto-go QueryToJson
-	// emits when the response is progressive; the DataTable branch above then
-	// only ever sees QueryProperties/QueryCompletionInformation.
 	for i, frame := range frames {
 		if frame.FrameType != "TableHeader" {
 			continue
@@ -1906,9 +1883,6 @@ func filterKustoRowsByWorkspace(rows []KustoMetricRow, workspaceID string) []Kus
 				rowWorkspace = strings.TrimSpace(tags[exptelemetry.TauWorkspaceTag])
 			}
 		}
-		// Untagged rows are NOT admitted here, unlike the local store. ADX
-		// TauExpMetrics is a fleet-wide table shared by every workspace, so an
-		// untagged row is of unknown ownership rather than implicitly ours.
 		if rowWorkspace == workspaceID {
 			out = append(out, row)
 		}

@@ -1,13 +1,7 @@
-{{/*
-Expand the name of the chart.
-*/}}
 {{- define "gpu-monitoring.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Create a default fully qualified app name.
-*/}}
 {{- define "gpu-monitoring.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
@@ -21,9 +15,6 @@ Create a default fully qualified app name.
 {{- end }}
 {{- end }}
 
-{{/*
-Create a default namespace.
-*/}}
 {{- define "gpu-monitoring.namespace" -}}
 {{- if trim (default "" .Values.namespace) -}}
 {{- fail "gpu-monitoring.namespace is no longer supported; install the release with --namespace to move TauGrid system components together" -}}
@@ -31,16 +22,10 @@ Create a default namespace.
 {{- .Release.Namespace -}}
 {{- end }}
 
-{{/*
-Create chart name and version as used by the chart label.
-*/}}
 {{- define "gpu-monitoring.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Common labels
-*/}}
 {{- define "gpu-monitoring.labels" -}}
 helm.sh/chart: {{ include "gpu-monitoring.chart" . }}
 {{ include "gpu-monitoring.selectorLabels" . }}
@@ -53,7 +38,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- end }}
 
-{{/* Custom plugin monitor configs bundled into the immutable executable Secret. */}}
 {{- define "gpu-monitoring.bundledMonitorConfigNames" -}}
 - custom-plugin-monitor.json
 - custom-plugin-monitor-h100.json
@@ -62,7 +46,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 - custom-plugin-monitor-spark.json
 {{- end }}
 
-{{/* Validate profile fields consumed unconditionally by DaemonSet rendering. */}}
 {{- define "gpu-monitoring.validateProfile" -}}
 {{- $name := .name -}}
 {{- $sku := .sku -}}
@@ -93,14 +76,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end }}
 
-{{/*
-The 0.1.6 chart publicly exposed a generic scrape-target availability/ownership
-API (metricsCollector.scrapeTargets, metricsCollector.dcgmAvailability, and the
-matching gpuSkus.<profile> keys, plus dcgm_health_required). Chart 0.1.7
-replaced it with the constrained dcgmHealth.source / dcgmHealth.exporterUrl
-contract. Fail loudly rather than silently ignoring the removed keys so a
-values file written against 0.1.6 cannot deploy with an unintended default.
-*/}}
 {{- define "gpu-monitoring.validateNoLegacyDcgmKeys" -}}
 {{- $migration := "migrate to dcgmHealth.source and dcgmHealth.exporterUrl (see the README \"DCGM health sources\" section)" -}}
 {{- if hasKey .Values.metricsCollector "scrapeTargets" -}}
@@ -124,10 +99,6 @@ values file written against 0.1.6 cannot deploy with an unintended default.
 {{- end -}}
 {{- end }}
 
-{{/*
-Fail closed when a deployment selects an unknown or structurally unsafe profile.
-An empty selection renders and therefore validates every configured profile.
-*/}}
 {{- define "gpu-monitoring.validateEnabledGpuSkus" -}}
 {{- include "gpu-monitoring.validateNoLegacyDcgmKeys" . -}}
 {{- if empty .Values.enabledGpuSkus -}}
@@ -144,14 +115,6 @@ An empty selection renders and therefore validates every configured profile.
 {{- end -}}
 {{- end }}
 
-{{/*
-Fail closed when two enabled profiles claim the same instance type. Profiles are
-isolated by instance-type node affinity, so a node runs exactly one collector.
-That isolation is what makes a Node condition single-owner: two collectors on one
-node would race to publish the same availability condition from different
-endpoints. Instance types are compared case-insensitively because profiles list
-both the API and lowercase spellings of the same VM size.
-*/}}
 {{- define "gpu-monitoring.validateProfileInstanceTypes" -}}
 {{- $owners := dict -}}
 {{- range $skuName, $sku := .Values.gpuSkus -}}
@@ -167,7 +130,6 @@ both the API and lowercase spellings of the same VM size.
 {{- end -}}
 {{- end }}
 
-{{/* Environment names owned by the chart or its DCGM lifecycle wrappers. */}}
 {{- define "gpu-monitoring.reservedEnvNames" -}}
 - NODE_NAME
 - NPD_GPU_REQUIRED
@@ -193,7 +155,6 @@ both the API and lowercase spellings of the same VM size.
 - NPD_GPU_SIMULATION
 {{- end }}
 
-{{/* User-provided entries must neither override chart state nor duplicate names. */}}
 {{- define "gpu-monitoring.validateReservedEnv" -}}
 {{- $reserved := include "gpu-monitoring.reservedEnvNames" . | fromYamlArray -}}
 {{- $seen := dict -}}
@@ -209,13 +170,6 @@ both the API and lowercase spellings of the same VM size.
 {{- end -}}
 {{- end }}
 
-{{/*
-Classify a dcgm-exporter URL using only the endpoint forms this chart accepts:
-an absolute, entirely lowercase HTTP(S) URL with no whitespace, backslashes,
-userinfo credentials, query string, or fragment, and either a loopback host
-(localhost/127.0.0.1) or a remote host/service. Callers must reject "invalid"
-before rendering the URL.
-*/}}
 {{- define "gpu-monitoring.dcgmExporterUrlKind" -}}
 {{- $url := .url -}}
 {{- if not (kindIs "string" $url) -}}
@@ -249,7 +203,6 @@ invalid
 {{- end -}}
 {{- end }}
 
-{{/* Convert scalar identifiers to the exact string emitted by quote/toYaml. */}}
 {{- define "gpu-monitoring.scalarIdentifier" -}}
 {{- $value := .value -}}
 {{- if or (kindIs "string" $value) (kindIs "bool" $value) (kindIs "float64" $value) (kindIs "int" $value) (kindIs "int64" $value) -}}
@@ -257,7 +210,6 @@ invalid
 {{- end -}}
 {{- end }}
 
-{{/* A human-readable type label for a validation error message; nil reports as "null" rather than Go's "invalid" reflect.Kind name. */}}
 {{- define "gpu-monitoring.dcgmHealthKindLabel" -}}
 {{- if kindIs "invalid" .value -}}
 null
@@ -266,21 +218,6 @@ null
 {{- end -}}
 {{- end }}
 
-{{/*
-Resolve one profile's effective DCGM health source contract. Global dcgmHealth
-values are the default; gpuSkus.<profile>.dcgmHealth overrides only the keys
-it sets, so a profile can override just `source`, just `exporterUrl`, or both
-while a mixed cluster keeps the rest of its configuration untouched.
-Returns the settings as YAML; callers decode it with fromYaml.
-
-Only a key that is completely absent from gpuSkus.<profile> counts as "no
-per-profile override". A key present with a null or any other non-map value
-(a string, bool, number, or list) fails loudly here, with the profile name in
-the message, before it ever reaches deepCopy/mergeOverwrite — those Sprig
-functions panic with an unreadable reflect error on a non-map input, and a
-silently-ignored null would hide a typo behind the global default instead of
-surfacing it.
-*/}}
 {{- define "gpu-monitoring.effectiveDcgmHealth" -}}
 {{- $root := .root -}}
 {{- $sku := .sku -}}
@@ -300,13 +237,6 @@ surfacing it.
 {{- $effective | toYaml -}}
 {{- end }}
 
-{{/*
-Validate one profile's effective DCGM health source contract. `source` is a
-closed two-value enum and the chart itself owns the dcgm-exporter scrape
-target and its fixed DcgmExporterUnavailable condition and debounce, so no
-other availability field is accepted here. The error text never echoes the
-URL value so a credentialed or token-bearing endpoint cannot leak into it.
-*/}}
 {{- define "gpu-monitoring.validateDcgmHealth" -}}
 {{- $skuName := .skuName -}}
 {{- $effective := .effective -}}
@@ -330,11 +260,6 @@ URL value so a credentialed or token-bearing endpoint cannot leak into it.
 {{- end -}}
 {{- end }}
 
-{{/*
-Every rendered profile enters host mount namespaces through wrapper scripts.
-Only dcgmHealth.source=host-dcgmi additionally requires host networking, since
-it is the only source that reaches the host-local exporter over loopback.
-*/}}
 {{- define "gpu-monitoring.validateHostNamespaces" -}}
 {{- $profileCount := 0 -}}
 {{- $hostDcgmi := false -}}
@@ -362,15 +287,6 @@ it is the only source that reaches the host-local exporter over loopback.
 {{- end -}}
 {{- end }}
 
-{{/*
-Both remaining dcgmHealth sources include the fixed DcgmExporterUnavailable
-scrape target and its collector rules: host-dcgmi still scrapes the host-local
-dcgm-exporter over loopback, and exporter scrapes a remote/Service exporter.
-The metrics collector is therefore mandatory for every enabled profile — it is
-the only component that renders that scrape target, its availability
-condition, and every DCGM_* rule. Deployment-level chart/component disable
-(not disabling the collector alone) is the only opt-out.
-*/}}
 {{- define "gpu-monitoring.validateDcgmHealthContracts" -}}
 {{- $customPluginMonitor := .Values.monitors.customPluginMonitor -}}
 {{- if not (kindIs "bool" $customPluginMonitor) -}}
@@ -388,13 +304,6 @@ condition, and every DCGM_* rule. Deployment-level chart/component disable
 {{- end -}}
 {{- end }}
 
-{{/*
-The chart owns the fixed DcgmExporterUnavailable condition for any profile
-whose effective dcgmHealth.source scrapes an exporter (host-dcgmi or
-exporter). This is a minimal collision guard, not a generic condition
-language: it only checks that no collector rule or effective NPD monitor
-condition claims that reserved name.
-*/}}
 {{- define "gpu-monitoring.validateDcgmExporterUnavailableGuard" -}}
 {{- $root := .root -}}
 {{- $sku := .sku -}}
@@ -429,11 +338,6 @@ condition claims that reserved name.
 {{- end -}}
 {{- end }}
 
-{{/*
-Render a selected custom plugin monitor config. Profiles without host dcgmi keep
-the permanent condition rule so NPD transitions initial or stale False to
-Unknown, but omit the temporary rule that would emit recurring warning events.
-*/}}
 {{- define "gpu-monitoring.renderMonitorConfig" -}}
 {{- $root := .root -}}
 {{- $sku := .sku -}}
@@ -451,7 +355,6 @@ Unknown, but omit the temporary rule that would emit recurring warning events.
 {{- $config | toPrettyJson -}}
 {{- end }}
 
-{{/* Return the Secret data key mounted as the profile's custom monitor config. */}}
 {{- define "gpu-monitoring.monitorConfigKey" -}}
 {{- if eq (include "gpu-monitoring.dcgmHealthRequired" .) "0" -}}
 {{- $config := include "gpu-monitoring.renderMonitorConfig" . -}}
@@ -461,10 +364,6 @@ Unknown, but omit the temporary rule that would emit recurring warning events.
 {{- end -}}
 {{- end }}
 
-{{/*
-Render executable scripts and monitor configs stored in the shared Secret. The
-same block is hashed for the Secret name so its identity cannot drift from data.
-*/}}
 {{- define "gpu-monitoring.executableBundleData" -}}
 {{- range $name := (include "gpu-monitoring.bundledMonitorConfigNames" . | fromYamlArray) }}
 {{ $name }}: |
@@ -548,10 +447,6 @@ check_roce.sh: |
 {{ tpl (.Files.Get "scripts/check_roce.sh") . | indent 2 }}
 {{- end }}
 
-{{/*
-Require the host dcgmi lifecycle only when the profile's effective
-dcgmHealth.source is host-dcgmi. exporter profiles never run it.
-*/}}
 {{- define "gpu-monitoring.dcgmHealthRequired" -}}
 {{- $root := .root -}}
 {{- $sku := .sku -}}
@@ -560,18 +455,6 @@ dcgmHealth.source is host-dcgmi. exporter profiles never run it.
 {{- ternary "1" "0" (and $root.Values.monitors.customPluginMonitor (eq $effective.source "host-dcgmi")) -}}
 {{- end }}
 
-{{/*
-Render one SKU's metrics collector rules. The DaemonSet hashes this exact payload
-so ConfigMap changes roll only the affected profile.
-
-The chart constructs and owns the dcgm-exporter scrape target and its fixed
-DcgmExporterUnavailable contract; there is no configurable required,
-availabilityCondition, condition name, or debounce. Both remaining sources
-(host-dcgmi and exporter) scrape the profile's effective
-dcgmHealth.exporterUrl, so every accepted config renders the dcgm-exporter
-target. Baseline rules always render; rules marked extended render only when
-metricsCollector.extendedHealthChecks is enabled.
-*/}}
 {{- define "gpu-monitoring.metricsCollectorConfig" -}}
 {{- $root := .root }}
 {{- $sku := .sku }}
@@ -659,28 +542,17 @@ rules:
   {{- toYaml $rules | nindent 2 }}
 {{- end }}
 
-{{/*
-Content-address the executable bundle so updates create a new immutable object.
-Truncating the configurable base keeps the complete DNS label within 63 bytes.
-*/}}
 {{- define "gpu-monitoring.executableBundleName" -}}
 {{- $dataHash := include "gpu-monitoring.executableBundleData" . | sha256sum | trunc 10 -}}
 {{- $baseName := .Values.configMap.name | default "gpu-monitoring-gpu" | trunc 52 | trimSuffix "-" -}}
 {{- printf "%s-%s" $baseName $dataHash -}}
 {{- end }}
 
-{{/*
-Selector labels
-*/}}
 {{- define "gpu-monitoring.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "gpu-monitoring.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
-{{/*
-Render a first-party image from exactly one immutable digest or legacy tag.
-Call with: include "gpu-monitoring.image" (dict "component" "metricsCollector" "image" .Values.metricsCollector.image)
-*/}}
 {{- define "gpu-monitoring.image" -}}
 {{- $component := .component -}}
 {{- $image := .image -}}

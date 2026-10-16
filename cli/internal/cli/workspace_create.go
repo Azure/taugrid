@@ -78,11 +78,7 @@ namespace and defaults to NAME.`,
 			if options.OutputRoot == "" {
 				options.OutputRoot = "/data/projects/" + options.Name + "/runs"
 			}
-			// An explicitly-empty --principal-name is a shell variable that did
-			// not expand, not a request for the default, so gate on presence.
 			options.DefaultPrincipalToName = !cmd.Flags().Changed("principal-name")
-			// Ask the options what they resolved to rather than re-deriving it
-			// here: the notice has to describe the manifest that was rendered.
 			inertSubject := options.PrincipalWasDefaulted()
 
 			manifest, err := tauworkspace.RenderCreation(options)
@@ -95,10 +91,6 @@ namespace and defaults to NAME.`,
 				return err
 			}
 			if inertSubject {
-				// A second create is refused as conflicting intent once the
-				// object exists, so the remediation depends on whether it does
-				// — which preflight already knows. Reading --apply alone would
-				// send a repeated preview at a rerun that cannot work.
 				exists := apply || report.ExistingWorkspaceName != ""
 				fmt.Fprintf(cmd.OutOrStdout(), "# %s\n", inertSubjectNotice(options, exists))
 			}
@@ -135,10 +127,6 @@ namespace and defaults to NAME.`,
 	return cmd
 }
 
-// inertSubjectNotice names the remediation that works from where the operator
-// is standing. The two differ because v0 permits one workspace: while nothing
-// exists, rerunning with the group is the fix, but once the object is there a
-// second create is refused as conflicting intent and only an edit gets there.
 func inertSubjectNotice(options tauworkspace.CreateOptions, workspaceExists bool) string {
 	remediation := "rerun with --principal-name <group>"
 	if workspaceExists {

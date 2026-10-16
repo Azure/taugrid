@@ -13,7 +13,6 @@ import yaml
 
 from helpers import CHART_DIR
 
-
 def render(template, chart=CHART_DIR):
     return subprocess.run(
         ["helm", "template", "wiring", str(chart), "--show-only", template],
@@ -21,7 +20,6 @@ def render(template, chart=CHART_DIR):
         capture_output=True,
         text=True,
     ).stdout
-
 
 class BundleWiringTests(unittest.TestCase):
     def test_bundle_name_changes_with_script_content(self):
@@ -198,7 +196,6 @@ class BundleWiringTests(unittest.TestCase):
             },
             condition_types,
         )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,32 +33,17 @@ import (
 //go:embed assets/managed-workflow-job.yaml.tmpl assets/managed-workflow-rayjob.yaml.tmpl assets/managed-workflow-rayjob-eval.yaml.tmpl assets/managed-workflow-rayjob-cpu.yaml.tmpl
 var assets embed.FS
 
-// Asset returns the embedded file at "assets/<name>".
 func Asset(name string) ([]byte, error) {
 	return assets.ReadFile("assets/" + name)
 }
 
-// AssetNames returns the script files bundled into the script payload by
-// default (currently empty — the trainer is always supplied via
-// --main-script). Kept as a function for API stability and to give
-// future generic helpers a hook to opt in.
 func AssetNames() []string {
 	return nil
 }
 
-// payloadFileNamePattern validates destination names for files embedded in a
-// self-contained payload (script bundle or manifest copy) and for storage
-// mount names. Kept permissive-but-safe: letters, digits, '.', '_', '-'.
 var payloadFileNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 var migProfileRE = regexp.MustCompile(`^\d+g\.\d+gb$`)
 
-// Two independent self-contained payloads are embedded per workload (see
-// Design A in issue #869): a script bundle (tau assets + researcher's
-// train.py + any extra scripts) and a redacted copy of the manifest YAML.
-// Each gets its own initContainer, volume, digest annotation, and target
-// directory so the two never collide even though they share env var *names*
-// (TAU_PAYLOAD_B64 etc. — safe because each initContainer has its own
-// isolated env scope).
 const (
 	scriptPayloadInitContainerName   = "tau-script-payload"
 	manifestPayloadInitContainerName = "tau-manifest-payload"
@@ -66,36 +51,21 @@ const (
 	scriptPayloadTargetDir   = "/script"
 	manifestPayloadTargetDir = "/manifest"
 
-	// maxRenderedWorkloadBytes bounds the final rendered workload object
-	// (the Job/RayJob document alone, not the optional JobSecret or SPC
-	// documents) as re-serialized to JSON — the shape `kubectl apply
-	// --server-side` and MultiKueue's admission mirroring both see. This is
-	// enforced in addition to, not instead of, payload.MaxDecodedBytes:
-	// that cap bounds each individual payload's decoded size, this one
-	// bounds the fully-rendered object carrying both payloads plus every
-	// other field (env, labels, annotations, etc).
 	maxRenderedWorkloadBytes = 200 * 1024
 )
 
-// ExtraScript is a researcher-supplied file mounted into /script alongside the
-// embedded trainer sources.
 type ExtraScript struct {
 	Name string
 	Data []byte
 }
 
-// WorkloadKind selects which CRD `Render` emits as the third document.
 const (
 	WorkloadKindJob        = "job"
 	WorkloadKindRayJob     = "rayjob"
 	WorkloadKindRayJobEval = "rayjob-eval"
 	defaultWorkloadKind    = WorkloadKindJob
 	rayOverwriteCmdKey     = "ray.io/overwrite-container-cmd"
-	// defaultRayJobImage is the canonical first-party MCR GPU workload image
-	// for Tau-managed GPU workloads. It is used by the single-pod batch Job,
-	// GPU RayJobs, and the Job/RayJob payload init containers so shipped
-	// workloads stay on the repo's first-party image contract by default.
-	defaultRayJobImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
+	defaultRayJobImage     = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
 )
 
 const (
@@ -104,9 +74,6 @@ const (
 	GPUResourceModeMIG          = "mig"
 )
 
-// NormalizeGPUResourceMode converts user-facing aliases into the renderer's
-// resource modes. Empty means the current default: standard NVIDIA device
-// plugin resources.
 func NormalizeGPUResourceMode(mode string) (string, error) {
 	normalized := strings.TrimSpace(strings.ToLower(mode))
 	switch normalized {
@@ -121,105 +88,37 @@ func NormalizeGPUResourceMode(mode string) (string, error) {
 	}
 }
 
-// MIGResourceName returns the device-plugin extended resource name for a MIG
-// profile (e.g., "1g.18gb" → "nvidia.com/mig-1g.18gb").
 func MIGResourceName(profile string) string {
 	return "nvidia.com/mig-" + strings.TrimSpace(profile)
 }
 
-// RenderOptions controls workload rendering.
 type RenderOptions struct {
-	// Manifest is the parsed + validated user manifest (drives name, gpus, etc.).
-	Manifest *Manifest
-	// ManifestRaw is the source manifest YAML the trainer reads in-pod after
-	// renderer-owned sanitization, such as redacting secret refs from the
-	// embedded manifest payload copy.
-	ManifestRaw []byte
-	// ManifestFilename is the basename to expose at /manifest/<filename>
-	// inside the pod. The trainer's --manifest arg is set to this path.
-	ManifestFilename string
-	// Namespace defaults to the workload namespace if empty.
-	Namespace string
-	// SmokePairs caps (init,truth) pairs for fast iteration. 0 = full dataset.
-	SmokePairs int
-	// ExtraScripts are added to the script payload. Names must be valid
-	// payload file names and must not collide with embedded trainer files.
-	ExtraScripts []ExtraScript
-	// TopologyProfile is the resolved profile backing a platform preset. The
-	// finetune manifest still drives trainer semantics; this profile drives
-	// scheduling metadata and run-profile explainability.
-	TopologyProfile *profile.Profile
-	// TopologyOptions carries preset/operator topology intent for Kueue.
-	TopologyOptions topology.Options
-	// ProfileName is stamped on the Job for run-profile output. Defaults to
-	// "tau-finetune" for legacy manifest-only submits.
-	ProfileName string
-	// Labels and Annotations carry preset metadata resolved by the CLI.
-	Labels      map[string]string
-	Annotations map[string]string
-	// WorkloadKind selects which CRD to emit as the third document. Empty
-	// or "job" emits a batch/v1 Job (today's default; torchrun launcher).
-	// "rayjob" emits a ray.io/v1 RayJob. CPU manifests (compute.gpus=0)
-	// use CPU-only head + worker pod sets.
-	WorkloadKind string
-	// GPUResourceMode selects how GPU pods acquire GPUs:
-	//   - device-plugin (default): request/limit nvidia.com/gpu
-	//   - dra: use ResourceClaimTemplates (full-gpu / ds-*).
-	//   - mig: request/limit nvidia.com/mig-{profile} (MIG partitioned GPUs).
-	GPUResourceMode string
-	// MIGProfile is the MIG slice profile name (e.g., "1g.18gb", "3g.71gb").
-	// Required when GPUResourceMode is "mig".
-	MIGProfile string
-	// NodeSelector adds or overrides pod node selectors after topology-derived
-	// selectors. Use this for standard clusters that label GPUs with keys like
-	// gpu=a100 instead of tau.azure.com/gpu-class.
-	NodeSelector map[string]string
-	// MainScript supplies the researcher's trainer (or tau-py wrapper).
-	// REQUIRED: tau does not ship a fallback trainer. The bash entrypoint
-	// in every workload template invokes `python3 /script/train.py`, so
-	// the bytes here become the training entrypoint embedded in the script
-	// payload.
-	MainScript []byte
-	// UpstreamCheckpoint is the cluster-side path to an upstream training
-	// run's checkpoint. Only meaningful for WorkloadKindRayJobEval — gets
-	// rendered into the eval pod's TAU_UPSTREAM_CHECKPOINT env var, which
-	// the cluster wrapper exposes as ctx.upstream_checkpoint to the user
-	// fn. Empty (default) renders an empty env var, which the wrapper
-	// turns into ctx.upstream_checkpoint = None.
-	UpstreamCheckpoint string
-	// JobSecret is an optional generated job-scoped Secret applied with the
-	// workload. Client dry-runs redact values.
-	JobSecret *JobSecret
-	// RedactSecrets suppresses generated Secret values in rendered YAML.
-	RedactSecrets bool
-	// Profile configures opt-in Ray Train worker profiling for RayJob
-	// workloads. Empty Mode preserves the default unprofiled behavior.
-	Profile ProfileOptions
-	// MetricsOffload configures an opt-in sidecar that tails
-	// metrics-history.jsonl from the RayJob head pod and remote-writes the
-	// imported rows for Stellar/Kusto. Empty Image disables the sidecar.
-	MetricsOffload MetricsOffloadOptions
-	// KVSpec holds the parsed Key Vault spec when runtime.env_kv is set.
-	// When non-nil, Render emits a SecretProviderClass document and injects
-	// CSI volume/mount + workload-identity pod label into the workload.
-	KVSpec *kvspec.Spec
-	// ServiceAccountName sets the pod spec's serviceAccountName field.
-	// Typically sourced from the resolved workload identity.
-	ServiceAccountName string
-	// TTLSecondsAfterFinished overrides how long the rendered batch Job is
-	// retained after it finishes. Zero keeps the template's built-in
-	// retention, so an unset value renders exactly what it always did.
-	//
-	// Job engine only. RayJob templates carry their own, much shorter, TTL
-	// which governs Ray cluster teardown rather than record retention, and is
-	// deliberately not driven from here.
+	Manifest                *Manifest
+	ManifestRaw             []byte
+	ManifestFilename        string
+	Namespace               string
+	SmokePairs              int
+	ExtraScripts            []ExtraScript
+	TopologyProfile         *profile.Profile
+	TopologyOptions         topology.Options
+	ProfileName             string
+	Labels                  map[string]string
+	Annotations             map[string]string
+	WorkloadKind            string
+	GPUResourceMode         string
+	MIGProfile              string
+	NodeSelector            map[string]string
+	MainScript              []byte
+	UpstreamCheckpoint      string
+	JobSecret               *JobSecret
+	RedactSecrets           bool
+	Profile                 ProfileOptions
+	MetricsOffload          MetricsOffloadOptions
+	KVSpec                  *kvspec.Spec
+	ServiceAccountName      string
 	TTLSecondsAfterFinished int64
 }
 
-// ProfileOptions configures opt-in Nsight Systems profiling for Ray Train
-// worker actors. Rank may be a non-negative rank, a comma-separated rank set,
-// or "all". Duration must be positive because RayJob profiling wraps Ray Train
-// worker process launch with nsys for a bounded collection window.
 type ProfileOptions struct {
 	Mode     string
 	Rank     string
@@ -230,66 +129,10 @@ type ProfileOptions struct {
 type JobSecret struct {
 	Name       string            `json:"name" yaml:"name"`
 	StringData map[string]string `json:"stringData" yaml:"stringData"`
-	// OwnerName is the Job/RayJob name that owns this Secret. Used for
-	// labelling; the actual ownerReference (which needs the UID) is patched
-	// after apply.
-	OwnerName string `json:"-" yaml:"-"`
-	// OwnerKind is "Job" or "RayJob".
-	OwnerKind string `json:"-" yaml:"-"`
+	OwnerName  string            `json:"-" yaml:"-"`
+	OwnerKind  string            `json:"-" yaml:"-"`
 }
 
-// Render returns the rendered workload document(s) — a self-contained
-// workload ([Job or RayJob, selected by RenderOptions.WorkloadKind], plus an
-// optional leading Secret document and an optional trailing
-// SecretProviderClass document) — concatenated with `---` separators,
-// exactly what `kubectl apply -f -` expects. Researchers never see this;
-// tau submits it for them.
-//
-// Design A (issue #869 PR2): the researcher's script bundle and the
-// (redacted) manifest copy are embedded directly in the workload's head/
-// single pod as two independent self-contained payloads (internal/payload),
-// each decoded by its own initContainer into its own emptyDir volume, rather
-// than mirrored via generated ConfigMaps. This makes the workload
-// self-contained: MultiKueue mirrors the workload object to a worker
-// cluster but not auxiliary objects like a ConfigMap, so a ConfigMap-backed
-// script/manifest would silently vanish on the worker.
-//
-// Worker payload delivery is NOT uniform across the four templates, but it
-// is uniform *within* every RayJob template: every RayJob worker pod set
-// (managed-workflow-rayjob, managed-workflow-rayjob-cpu, and managed-workflow-rayjob-eval alike)
-// gets the script-only payload; the manifest payload is always head-only.
-//   - managed-workflow-job.yaml.tmpl is single-pod: head and "worker" are the same
-//     pod, so it always gets both payloads.
-//   - managed-workflow-rayjob.yaml.tmpl and managed-workflow-rayjob-cpu.yaml.tmpl, when
-//     rendering multi-node (Workers>1), dispatch to the SDK wrapper's
-//     ray.train.torch.TorchTrainer path. That path's worker actor closure
-//     re-reads /script/<trainer-filename> from each worker pod's own local
-//     disk (verified against tau-py/_cluster.py) — Ray's runtime_env
-//     working_dir mechanism does not reliably reach TorchTrainer's actor
-//     pool on a pre-existing cluster, and RunConfig(worker_runtime_env=...)
-//     is unsupported on Ray 2.39 (the H200/RDMA image), so there is no
-//     Ray-native substitute.
-//   - managed-workflow-rayjob-eval.yaml.tmpl's CPU workers run plain ray.remote
-//     score tasks against the head's actor. The head DOES ship the
-//     researcher's user module to them via Ray's own runtime_env
-//     working_dir mechanism (tau-py's _prepare_eval_worker_working_dir) —
-//     but that mechanism only stages the single user-module file (plus a
-//     small importable tau shim), never any --extra-script files the
-//     researcher's module may import from disk at runtime. The pre-PR2
-//     ConfigMap era mounted the *entire* script bundle (train.py + every
-//     extra script) onto every CPU worker pod's local disk, so a helper
-//     module imported from /script "just worked" there; removing that
-//     without a substitute silently breaks any eval workload using
-//     --extra-script once work actually reaches a CPU worker. There is no
-//     Ray-native mechanism that ships extra on-disk files to a pre-existing
-//     cluster's static worker pool for plain ray.remote scheduling either,
-//     so CPU eval workers get the same script-only payload (tau-
-//     script-payload initContainer + "script" emptyDir) as the two Ray
-//     Train templates' workers.
-//
-// No RayJob worker pod (train or eval) ever gets the manifest payload:
-// /manifest is parsed exactly once, on the head, before any worker actor is
-// spawned or any task is dispatched.
 func Render(opts RenderOptions) ([]byte, error) {
 	if opts.Manifest == nil {
 		return nil, fmt.Errorf("Render: Manifest required")
@@ -316,9 +159,6 @@ func Render(opts RenderOptions) ([]byte, error) {
 		}
 		scripts[fn] = b
 	}
-	// MainScript becomes the trainer entrypoint embedded at /script/train.py.
-	// The bash launcher in every workload template invokes
-	// `python3 /script/train.py`.
 	scripts["train.py"] = opts.MainScript
 	for _, extra := range opts.ExtraScripts {
 		if err := validateExtraScript(extra); err != nil {
@@ -354,14 +194,6 @@ func Render(opts RenderOptions) ([]byte, error) {
 		return nil, err
 	}
 
-	// Encode the two self-contained payloads. Each is independently subject
-	// to payload.MaxEnvEntryBytes, which bounds the rendered
-	// TAU_PAYLOAD_B64=<encoded> environment entry — the quantity the kernel
-	// actually limits (MAX_ARG_STRLEN) when kubelet execve(2)s the
-	// initContainer. That is what catches payloads packing many small files
-	// under long names, which stay trivially under the decoded-content
-	// ceiling but blow past the env entry limit once JSON framing, per-file
-	// name overhead, and base64 expansion are applied.
 	scriptEncoded, scriptDigest, err := payload.Encode(payload.New(scripts))
 	if err != nil {
 		return nil, fmt.Errorf("script payload: %w", err)
@@ -371,27 +203,16 @@ func Render(opts RenderOptions) ([]byte, error) {
 		return nil, fmt.Errorf("manifest payload: %w", err)
 	}
 	embeds := payloadEmbeds{
-		ScriptEncoded:   scriptEncoded,
-		ScriptDigest:    scriptDigest,
-		ManifestEncoded: manifestEncoded,
-		ManifestDigest:  manifestDigest,
-		// artifacts.checkpoint drives the post-training artifact index step.
-		// Empty means the manifest declared no checkpoint, and the entrypoint
-		// renders exactly as it did before this field existed.
+		ScriptEncoded:      scriptEncoded,
+		ScriptDigest:       scriptDigest,
+		ManifestEncoded:    manifestEncoded,
+		ManifestDigest:     manifestDigest,
 		CheckpointArtifact: opts.Manifest.Artifacts.Checkpoint,
 	}
-	// Stamp both digests on the workload's own annotations *before*
-	// buildSchedulingMetadata runs, so they land in metadata.annotations —
-	// `kubectl describe`/`get -o yaml` then shows which payload bytes a
-	// running workload was rendered with.
 	opts.Annotations = mergeStringMaps(opts.Annotations, map[string]string{
 		workloadmeta.AnnotationScriptPayloadDigest:   scriptDigest,
 		workloadmeta.AnnotationManifestPayloadDigest: manifestDigest,
-		// Records the declaration so `tau run get` can tell a run that
-		// produced nothing from one whose promised artifact is missing.
-		// mergeStringMaps drops empty values, so a manifest with no
-		// artifacts.checkpoint renders no annotation.
-		workloadmeta.AnnotationCheckpointArtifact: strings.TrimSpace(opts.Manifest.Artifacts.Checkpoint),
+		workloadmeta.AnnotationCheckpointArtifact:    strings.TrimSpace(opts.Manifest.Artifacts.Checkpoint),
 	})
 
 	var buf bytes.Buffer
@@ -438,9 +259,6 @@ func Render(opts RenderOptions) ([]byte, error) {
 	storageMounts := opts.Manifest.StorageMounts()
 	resources := resourceSizingFor(opts.Manifest, kind)
 
-	// Key Vault integration: merge KV-synced env vars and stamp the
-	// workload-identity pod label so the mutating webhook injects the
-	// projected service account token volume.
 	spcName := ""
 	if opts.KVSpec != nil && len(opts.KVSpec.Entries) > 0 {
 		spcName = kvspec.SPCName(resourceName)
@@ -489,8 +307,6 @@ func Render(opts RenderOptions) ([]byte, error) {
 		scheduling.PodMetadataBlock = renderPodMetadata(scheduling.PodLabels, scheduling.PodAnnotations, 4)
 	}
 
-	// Inject execution contract env vars for RayJob workloads (backfill #1025
-	// gap: the manifest renderer was missing these authoritative vars).
 	if kind == WorkloadKindRayJob || kind == WorkloadKindRayJobEval {
 		gpus := opts.Manifest.Compute.GPUs
 		workers := opts.Manifest.Compute.Workers
@@ -573,10 +389,6 @@ func Render(opts RenderOptions) ([]byte, error) {
 		if err := opts.Manifest.ValidateRayJobResourceName(); err != nil {
 			return nil, err
 		}
-		// Eval-specific guards: cpu_workers must be set (the whole point of
-		// rayjob-eval is the CPU fanout — without it, just use rayjob);
-		// multi-node training shape (compute.workers > 1) is incoherent for
-		// an eval (eval is always 1 GPU worker + N CPU workers, not N GPU workers).
 		if opts.Manifest.Compute.GPUs <= 0 {
 			return nil, fmt.Errorf("workload kind %q requires compute.gpus > 0 for the eval GPU worker; use @tau.train/--workload-kind=rayjob for CPU-only work", kind)
 		}
@@ -717,21 +529,6 @@ func redactManifestSecretRefs(raw []byte) ([]byte, error) {
 	return out, nil
 }
 
-// schedulingMetadata carries the topology/Kueue decoration the workload
-// templates need. Two parallel views are exposed so the Job and RayJob
-// builders can share the resolution logic but render at different YAML
-// indents:
-//
-//   - Pre-rendered string blocks (JobLabels, JobAnnotationsBlock,
-//     PodMetadataBlock, NodeSelectorBlock, PodPriorityClassBlock) are
-//     baked at the indents the existing Job template expects (4/2/4/6/6).
-//     The Job builder substitutes them verbatim.
-//
-//   - Raw maps + scalars (Labels, Annotations, PodLabels, PodAnnotations,
-//     NodeSelector, PodPriorityClassName) carry the same data
-//     un-indented so the RayJob builder can render them at its own deeper
-//     indents (rayClusterSpec.headGroupSpec.template.spec is two levels
-//     below the Job's template.spec).
 type schedulingMetadata struct {
 	ProfileName           string
 	LaneLabel             string
@@ -743,7 +540,6 @@ type schedulingMetadata struct {
 	PodPriorityClassBlock string
 	ServiceAccountName    string
 
-	// Raw views — used by buildRayJob to re-render at deeper indents.
 	Labels               map[string]string
 	Annotations          map[string]string
 	PodLabels            map[string]string
@@ -1065,51 +861,18 @@ func quoteYAMLString(v string) string {
 	return strconv.Quote(v)
 }
 
-// payloadEmbeds carries the two encoded self-contained payloads (see Design
-// A in issue #869 PR2) that get embedded in a workload's head/single pod:
-// the script bundle and the redacted manifest copy. Each field pair
-// (Encoded, Digest) is the return value of a payload.Encode call.
 type payloadEmbeds struct {
-	ScriptEncoded   string
-	ScriptDigest    string
-	ManifestEncoded string
-	ManifestDigest  string
-	// CheckpointArtifact is the manifest's artifacts.checkpoint value. It
-	// travels with the payload embeds because, like them, it is baked into
-	// the rendered entrypoint rather than into the pod spec.
+	ScriptEncoded      string
+	ScriptDigest       string
+	ManifestEncoded    string
+	ManifestDigest     string
 	CheckpointArtifact string
 }
 
-// payloadInitContainersYAML renders both initContainers (script payload,
-// manifest payload) that decode/verify/write the two embedded payloads into
-// their own emptyDir volumes ("script", "manifest") before the main
-// container starts. image is the workload's own image — no additional image
-// is pulled since every Tau-managed image ships Python 3, which is all
-// payload.InitContainerScript needs. indent is the indentation, in spaces,
-// of the surrounding pod spec's `containers:`/`volumes:` keys; the new
-// `initContainers:` key (and everything under it) is rendered at that same
-// indent so it drops in immediately above `containers:` unchanged.
-//
-// Used for every head/single pod (managed-workflow-job.yaml.tmpl, and the head pod
-// of the three RayJob templates). Every RayJob worker pod (Ray Train GPU/
-// CPU workers, and eval CPU workers alike) instead uses
-// workerScriptPayloadInitContainersYAML below — a script-only variant (see
-// the package doc on Render's Design A comment for why no RayJob worker
-// pod ever needs the manifest payload).
 func payloadInitContainersYAML(image string, embeds payloadEmbeds, indent int) string {
 	return initContainersBlock(indent, payloadInitContainerItemsYAML(image, embeds, indent, true))
 }
 
-// workerScriptPayloadInitContainersYAML renders only the script payload's
-// initContainer (never the manifest payload's) at the given indent, for use
-// on any RayJob worker pod template — Ray Train GPU/CPU workers and eval
-// CPU workers alike. See the package doc on Render's Design A comment: Ray
-// Train worker actors re-read /script/<trainer-filename> from local disk
-// directly (tau-py's TorchTrainer path), while eval CPU workers need the
-// full script bundle on local disk because Ray's runtime_env working_dir
-// mechanism only ships the single user-module file to them, never any
-// --extra-script files. Neither worker kind ever reads /manifest, which is
-// loaded exactly once on the head before any worker is spawned.
 func workerScriptPayloadInitContainersYAML(image string, embeds payloadEmbeds, indent int) string {
 	var b strings.Builder
 	b.WriteString(payloadInitContainerItemsYAML(image, embeds, indent, false))
@@ -1133,15 +896,11 @@ func payloadInitContainerItemsYAML(image string, embeds payloadEmbeds, indent in
 	return b.String()
 }
 
-// payloadInitContainerYAML renders a single initContainer entry that decodes
-// one payload.Encode envelope into volumeName's emptyDir at targetDir. indent
-// is the indentation of the parent `initContainers:` key (matching
-// payloadInitContainersYAML's contract).
 func payloadInitContainerYAML(image, name, encoded, digest, targetDir, volumeName string, indent int) string {
-	item := strings.Repeat(" ", indent+2)     // "- name: ..." line
-	field := strings.Repeat(" ", indent+4)    // sibling keys under the list item
-	listItem := strings.Repeat(" ", indent+6) // entries within command:/env:/volumeMounts:/resources sub-lists
-	cont := strings.Repeat(" ", indent+8)     // continuation lines (env value:, literal block content)
+	item := strings.Repeat(" ", indent+2)
+	field := strings.Repeat(" ", indent+4)
+	listItem := strings.Repeat(" ", indent+6)
+	cont := strings.Repeat(" ", indent+8)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s- name: %s\n", item, name)
@@ -1171,19 +930,9 @@ func payloadInitContainerYAML(image, name, encoded, digest, targetDir, volumeNam
 	return b.String()
 }
 
-// yamlLiteralBlock re-indents text for embedding as a YAML literal block
-// scalar's content (following a "- |" indicator whose own line is indented
-// by indent-2). Every non-blank line must be indented by at least the
-// indicator's content indent for the block scalar to parse correctly; blank
-// lines are emitted perfectly empty (no trailing whitespace), since YAML
-// treats them as an empty content line regardless of indentation and
-// trailing whitespace would fail lint/formatting checks on the rendered
-// output.
 func yamlLiteralBlock(text string, indent int) string {
 	prefix := strings.Repeat(" ", indent)
 	lines := strings.Split(text, "\n")
-	// A trailing "\n" in text (InitContainerScript ends with one) produces
-	// a spurious empty trailing element from strings.Split; drop it.
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
@@ -1200,17 +949,6 @@ func yamlLiteralBlock(text string, indent int) string {
 	return b.String()
 }
 
-// enforceRenderedSizeLimit re-parses the rendered workload YAML and
-// re-serializes it as JSON to measure the actual size the API server (and
-// MultiKueue's admission mirroring) will see for this object — not an
-// estimate derived from the payloads' decoded byte counts, which would miss
-// YAML/JSON framing overhead, labels, annotations, and every other field the
-// workload carries. This is enforced in addition to, not instead of,
-// payload.MaxDecodedBytes (which independently bounds each payload's
-// decoded size before this check ever runs). It only ever sees the workload
-// document itself — an optional JobSecret or SecretProviderClass document is
-// rendered and measured separately, so neither can hide an oversized
-// workload from this check, nor can this check flag an unrelated document.
 func enforceRenderedSizeLimit(workloadYAML []byte) error {
 	var doc map[string]any
 	if err := yaml.Unmarshal(workloadYAML, &doc); err != nil {
@@ -1262,7 +1000,6 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	// stable order so test golden files don't churn.
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && out[j-1] > out[j]; j-- {
 			out[j-1], out[j] = out[j], out[j-1]
@@ -1363,9 +1100,6 @@ func hasHeadResourceOverride(m *Manifest) bool {
 		strings.TrimSpace(m.Compute.MemoryLimit) != ""
 }
 
-// buildJob renders the embedded Job template via text/template. The template
-// uses shell-style ${VAR} markers (so the same file works with envsubst from
-// the bash path); we translate to {{.Var}} before parsing.
 func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, spcName string, embeds payloadEmbeds, ttlSecondsAfterFinished int64) ([]byte, error) {
 	return renderWorkloadTemplate(workloadTemplateInput{
 		Asset:              "managed-workflow-job.yaml.tmpl",
@@ -1392,16 +1126,6 @@ func buildJob(name, resourceName, namespace, manifestName string, gpus, smokePai
 	})
 }
 
-// buildRayJob renders the embedded RayJob template. Same ${VAR} translation
-// as the Job path; the only differences are (1) the template asset and (2)
-// the indent depth at which the per-pod blocks (PodMetadata, NodeSelector,
-// PodPriorityClass) land — the RayJob nests pod template under
-// rayClusterSpec.headGroupSpec.template, two levels deeper than Job's
-// spec.template. We re-render those blocks at the deeper indents instead of
-// reusing the Job-indented strings.
-//
-// `workers` is the execution-worker count. A separate control-only head is
-// always rendered on the system node pool.
 func buildRayJob(name, resourceName, namespace, manifestName string, gpus, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runconfig.NormalizedRDMA, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffload)
 	if err != nil {
@@ -1432,8 +1156,6 @@ func buildRayJob(name, resourceName, namespace, manifestName string, gpus, worke
 	})
 }
 
-// buildRayJobCPU renders a CPU-only RayJob with a system head and `workers`
-// dedicated CPU execution workers.
 func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers int, image string, smokePairs int, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, resources workloadResourceSizing, rdma runconfig.NormalizedRDMA, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffloadRuntime{})
 	if err != nil {
@@ -1460,17 +1182,6 @@ func buildRayJobCPU(name, resourceName, namespace, manifestName string, workers 
 	})
 }
 
-// buildRayJobEval renders the eval RayJob template (system control head,
-// 1 GPU actor worker, and N CPU fanout workers). Used
-// by the tau-py @tau.eval decorator to spin up Ray actor + ray.remote
-// fanout patterns.
-//
-// `cpuWorkers` is the CPU worker pod count (must be ≥ 1; the dispatcher
-// in Render() rejects 0 with a clear error). `upstreamCheckpoint` is the
-// cluster-side path to an upstream training run's checkpoint; rendered
-// into the eval pod's TAU_UPSTREAM_CHECKPOINT env var (empty string if
-// the eval doesn't depend on a train job, in which case the cluster
-// wrapper exposes ctx.upstream_checkpoint as None).
 func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, cpuWorkers int, image string, smokePairs int, upstreamCheckpoint string, pip []string, runtimeEnv []envspec.Var, dataPVC string, storageMounts []StorageMount, scheduling schedulingMetadata, gpuResourceMode, migProfile string, resources workloadResourceSizing, rdma runconfig.NormalizedRDMA, metricsOffload metricsOffloadRuntime, spcName string, embeds payloadEmbeds) ([]byte, error) {
 	blocks, err := rayJobBlocks(scheduling, runtimeEnv, storageMounts, spcName, embeds, image, metricsOffload)
 	if err != nil {
@@ -1487,7 +1198,7 @@ func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, c
 		MIGProfile:         migProfile,
 		Resources:          resources,
 		Image:              image,
-		Workers:            1, // one dedicated GPU worker plus CPU eval workers
+		Workers:            1,
 		CPUWorkers:         cpuWorkers,
 		SmokePairs:         smokePairs,
 		UpstreamCheckpoint: upstreamCheckpoint,
@@ -1502,12 +1213,6 @@ func buildRayJobEval(name, resourceName, namespace, manifestName string, gpus, c
 	})
 }
 
-// workloadBlocks carries the indent-rendered per-template substitution
-// values that differ between Job and RayJob (everything else is shared).
-//
-// Worker* fields are RayJob-only and re-render the head's per-pod blocks
-// at the deeper indent the workerGroupSpec needs (template lives one
-// level deeper under the worker group than under headGroupSpec).
 type workloadBlocks struct {
 	JobLabels                      string
 	JobAnnotationsBlock            string
@@ -1534,14 +1239,8 @@ type workloadBlocks struct {
 	ExtraVolumesWorker             string
 	DriverLogOffloadSidecar        string
 	DriverLogCompletionSetup       string
-	// PayloadInitContainers is the rendered `initContainers:` block (script
-	// + manifest payload decode/verify) for the head/single pod only.
-	// WorkerPayloadInitContainers is the script-only variant (see
-	// workerScriptPayloadInitContainersYAML), always populated for RayJob
-	// callers — every RayJob worker pod template (Ray Train GPU/CPU
-	// workers and eval GPU/CPU workers alike) substitutes it in.
-	PayloadInitContainers       string
-	WorkerPayloadInitContainers string
+	PayloadInitContainers          string
+	WorkerPayloadInitContainers    string
 }
 
 func appendYAMLBlock(existing, extra string) string {
@@ -1570,10 +1269,6 @@ func jobBlocks(s schedulingMetadata, runtimeEnv []envspec.Var, mounts []StorageM
 		RuntimeEnvJob:         envspec.RenderYAML(runtimeEnv, 12),
 		ExtraVolumeMountsJob:  renderStorageMounts(mounts, 12),
 		ExtraVolumesJob:       renderStorageVolumes(mounts, 8),
-		// indent 6 matches managed-workflow-job.yaml.tmpl's `containers:`/`volumes:`
-		// key indent under spec.template.spec — the Job is single-pod, so
-		// this is the only PayloadInitContainers value the Job template
-		// needs (no separate worker block exists).
 		PayloadInitContainers: payloadInitContainersYAML(image, embeds, 6),
 	}
 	if spcName != "" {
@@ -1583,23 +1278,6 @@ func jobBlocks(s schedulingMetadata, runtimeEnv []envspec.Var, mounts []StorageM
 	return b
 }
 
-// rayJobBlocks re-renders the per-pod blocks at the RayJob's deeper
-// indents:
-//   - RayJob metadata.labels live at indent 4 (same as Job) — reuse.
-//   - RayJob metadata.annotations live at indent 2 (same as Job) — reuse.
-//   - headGroupSpec.template.metadata starts at indent 8 (Job: 4).
-//   - headGroupSpec.template.spec.nodeSelector starts at indent 10 (Job: 6).
-//   - headGroupSpec.template.spec.priorityClassName indents 10 (Job: 6).
-//   - workerGroupSpecs[].template.metadata starts at indent 10 (head: 8).
-//   - workerGroupSpecs[].template.spec.nodeSelector starts at indent 12.
-//   - workerGroupSpecs[].template.spec.priorityClassName indents 12.
-//
-// WorkerPayloadInitContainers is always populated (script-only, never
-// manifest) — every RayJob worker pod template (the two Ray Train
-// templates' GPU/CPU workers, and rayjob-eval's CPU workers alike) needs
-// the full script bundle on local disk; see the package doc on Render's
-// Design A comment for why this now applies uniformly to all three RayJob
-// templates rather than varying per template.
 func rayJobBlocks(s schedulingMetadata, runtimeEnv []envspec.Var, mounts []StorageMount, spcName string, embeds payloadEmbeds, image string, metricsOffload metricsOffloadRuntime) (workloadBlocks, error) {
 	prepareRayTmpBlock, err := renderYAMLBlock([]any{raylogoffload.PrepareInitContainer(image)}, 12)
 	if err != nil {
@@ -1652,14 +1330,8 @@ func rayJobBlocks(s schedulingMetadata, runtimeEnv []envspec.Var, mounts []Stora
 		ExtraVolumesWorker:             renderStorageVolumes(mounts, 14),
 		DriverLogOffloadSidecar:        driverSidecarBlock,
 		DriverLogCompletionSetup:       yamlLiteralBlock(raylogoffload.CompletionSetupScript, 4),
-		// indent 10 matches all three RayJob templates'
-		// headGroupSpec.template.spec.containers/volumes key indent.
-		PayloadInitContainers: initContainersBlock(10, prepareRayTmpBlock+payloadInitContainerItemsYAML(image, embeds, 10, true)+metricsOffloadInitBlock),
-		// indent 12 matches workerGroupSpecs[].template.spec's
-		// containers/volumes key indent — confirmed identical across all
-		// three RayJob templates (managed-workflow-rayjob.yaml.tmpl,
-		// managed-workflow-rayjob-cpu.yaml.tmpl, managed-workflow-rayjob-eval.yaml.tmpl).
-		WorkerPayloadInitContainers: workerScriptPayloadInitContainersYAML(image, embeds, 12),
+		PayloadInitContainers:          initContainersBlock(10, prepareRayTmpBlock+payloadInitContainerItemsYAML(image, embeds, 10, true)+metricsOffloadInitBlock),
+		WorkerPayloadInitContainers:    workerScriptPayloadInitContainersYAML(image, embeds, 12),
 	}
 	if spcName != "" {
 		b.ExtraVolumeMountsHead = appendYAMLBlock(b.ExtraVolumeMountsHead, kvspec.VolumeMountYAML(16))
@@ -1695,42 +1367,33 @@ func metricsOffloadSentinelInitContainer(image string, runtime metricsOffloadRun
 	}
 }
 
-// workloadTemplateInput aggregates the args renderWorkloadTemplate needs.
-// Using a struct avoids the 9-positional-args footgun the previous
-// signature had become — easy to mis-order workers/cpuWorkers/smokePairs.
 type workloadTemplateInput struct {
-	Asset              string
-	Name               string
-	ResourceName       string
-	Namespace          string
-	ManifestName       string
-	GPUs               int
-	GPUResourceMode    string
-	MIGProfile         string
-	Resources          workloadResourceSizing
-	Image              string
-	Workers            int
-	CPUWorkers         int
-	SmokePairs         int
-	UpstreamCheckpoint string
-	RuntimePip         []string
-	RuntimeEnv         []envspec.Var
-	DataPVC            string
-	StorageMounts      []StorageMount
-	Scheduling         schedulingMetadata
-	RDMA               runconfig.NormalizedRDMA
-	Blocks             workloadBlocks
-	MetricsOffload     metricsOffloadRuntime
-	CheckpointArtifact string
-	// TTLSecondsAfterFinished is honoured only by the batch Job template.
-	// Zero means "keep the template default".
+	Asset                   string
+	Name                    string
+	ResourceName            string
+	Namespace               string
+	ManifestName            string
+	GPUs                    int
+	GPUResourceMode         string
+	MIGProfile              string
+	Resources               workloadResourceSizing
+	Image                   string
+	Workers                 int
+	CPUWorkers              int
+	SmokePairs              int
+	UpstreamCheckpoint      string
+	RuntimePip              []string
+	RuntimeEnv              []envspec.Var
+	DataPVC                 string
+	StorageMounts           []StorageMount
+	Scheduling              schedulingMetadata
+	RDMA                    runconfig.NormalizedRDMA
+	Blocks                  workloadBlocks
+	MetricsOffload          metricsOffloadRuntime
+	CheckpointArtifact      string
 	TTLSecondsAfterFinished int64
 }
 
-// defaultManagedJobTTLSecondsAfterFinished is the retention the batch Job
-// template has always used. It stays the fallback so a workspace or run that
-// does not ask for a TTL renders byte-for-byte what it rendered before this
-// override existed.
 const defaultManagedJobTTLSecondsAfterFinished int64 = 86400
 
 func jobTTLSecondsAfterFinished(override int64) int64 {
@@ -1801,30 +1464,12 @@ func renderWorkloadTemplate(in workloadTemplateInput) ([]byte, error) {
 	src = strings.ReplaceAll(src, "${EXTRA_VOLUMES_WORKER}", "{{.ExtraVolumesWorker}}")
 	src = strings.ReplaceAll(src, "${DRIVER_LOG_OFFLOAD_SIDECAR}", "{{.DriverLogOffloadSidecar}}")
 	src = strings.ReplaceAll(src, "${DRIVER_LOG_COMPLETION_SETUP}", "{{.DriverLogCompletionSetup}}")
-	// PAYLOAD_INIT_CONTAINERS_JOB (managed-workflow-job.yaml.tmpl's single pod) and
-	// PAYLOAD_INIT_CONTAINERS_HEAD (the three RayJob templates' head pod)
-	// both resolve to the same Blocks.PayloadInitContainers value — each
-	// template asset only ever contains one of the two markers, so there is
-	// no ambiguity. PAYLOAD_INIT_CONTAINERS_WORKER resolves to the
-	// script-only WorkerPayloadInitContainers value; only
-	// managed-workflow-rayjob.yaml.tmpl and managed-workflow-rayjob-cpu.yaml.tmpl contain
-	// this marker (in their worker template, gated behind
-	// {{if gt .Workers 1}}) — managed-workflow-rayjob-eval.yaml.tmpl's CPU worker
-	// template has no such marker at all, and rayJobBlocks leaves the field
-	// empty for that caller regardless.
 	src = strings.ReplaceAll(src, "${PAYLOAD_INIT_CONTAINERS_JOB}", "{{.PayloadInitContainers}}")
 	src = strings.ReplaceAll(src, "${PAYLOAD_INIT_CONTAINERS_HEAD}", "{{.PayloadInitContainers}}")
 	src = strings.ReplaceAll(src, "${PAYLOAD_INIT_CONTAINERS_WORKER}", "{{.WorkerPayloadInitContainers}}")
 	src = strings.ReplaceAll(src, "${STORAGE_PREFLIGHT}", "{{.StoragePreflight}}")
 	src = strings.ReplaceAll(src, "${ARTIFACT_FINALIZE}", "{{.ArtifactFinalize}}")
-	// PIP_PACKAGES is the shell-quoted runtime pip list shipped to the head
-	// pod's entrypoint. The worker runtimeEnvYAML uses {{range .RuntimePip}}
-	// directly inside the template (multi-line YAML list).
 	src = strings.ReplaceAll(src, "${PIP_PACKAGES}", "{{.PipPackages}}")
-	// The templates carry ${NAMESPACE} rather than a literal so no namespace is
-	// ever baked into a rendered workload. Substituting here (vs a YAML
-	// round-trip) keeps the rendered shape byte-identical except for the
-	// namespace.
 	src = strings.ReplaceAll(src, "${NAMESPACE}", "{{.Namespace}}")
 	t, err := template.New("workload").Parse(src)
 	if err != nil {

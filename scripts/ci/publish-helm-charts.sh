@@ -2,7 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
 set -euo pipefail
 
 readonly ACR_NAME="${ACR_NAME:-}"
@@ -107,9 +106,6 @@ publish_charts() {
 
     tags=$(repository_tags "$repository")
     if grep -Fxq "$chart_version" <<<"$tags"; then
-      # The backing ACR is the source for MCR synchronization. A version can
-      # exist here before it becomes visible in public MCR, so never repush an
-      # existing tag.
       echo "Chart ${chart_name}:${chart_version} already exists in the publish registry; skipping."
       continue
     fi

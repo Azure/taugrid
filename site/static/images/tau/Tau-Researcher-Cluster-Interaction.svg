@@ -38,7 +38,6 @@
   <text x="102" y="124" class="box-title">Researcher boundary</text>
   <text x="102" y="143" class="body">No Azure provisioning, namespace or queue creation, cluster-admin credentials, or hand-authored Kubernetes YAML. The platform hands off a Ready workspace and a Tau-enabled repository.</text>
 
-  <!-- Researcher lane -->
   <rect x="40" y="185" width="1520" height="260" rx="16" fill="#F8FBFF" stroke="#0078D4" stroke-width="2"/>
   <text x="62" y="214" class="lane-title">1 · Researcher workstation</text>
   <text x="62" y="233" class="lane-note">Normal source control, Python/Ray code, Tau config, and lifecycle commands</text>
@@ -97,7 +96,6 @@
   <path d="M625 333 H670" stroke="#0078D4" stroke-width="3" fill="none" marker-end="url(#arrow-blue)"/>
   <path d="M1225 333 H1270" stroke="#107C10" stroke-width="3" fill="none" marker-end="url(#arrow-green)"/>
 
-  <!-- Control plane lane -->
   <rect x="40" y="475" width="1520" height="220" rx="16" fill="#FFFCF5" stroke="#D97706" stroke-width="2"/>
   <text x="62" y="504" class="lane-title">2 · Tau and cluster control plane</text>
   <text x="62" y="523" class="lane-note">Pre-existing platform policy resolves the command into an admitted Job or RayJob</text>
@@ -156,7 +154,6 @@
   <path d="M1398 548 V470 H1098 V405" stroke="#5C2D91" stroke-width="3" fill="none" marker-end="url(#arrow-gray)"/>
   <text x="1218" y="462" class="arrow-label">status / logs</text>
 
-  <!-- Execution lane -->
   <rect x="40" y="725" width="1520" height="215" rx="16" fill="#F7FFF8" stroke="#107C10" stroke-width="2"/>
   <text x="62" y="754" class="lane-title">3 · Workload execution, data, and experiment evidence</text>
   <text x="62" y="773" class="lane-note">A run is successful only when the intended GPU work progresses and durable evidence survives the workload</text>

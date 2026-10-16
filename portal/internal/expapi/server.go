@@ -51,18 +51,13 @@ var stellarAPIBasePaths = []string{stellarAPILegacyBase, stellarAPIV1Base, stell
 var stellarDeprecatedAPIBasePaths = []string{stellarAPILegacyBase, stellarAPIV1Base}
 
 type Options struct {
-	StorePath        string
-	DefaultTarget    string
-	DefaultMetric    string
-	Source           string
-	KustoMetricsFile string
-	KustoProject     string
-	// Workspace is the TauWorkspace this Stellar server serves. Stellar is
-	// single-workspace: every read is scoped to it, and an unset workspace no
-	// longer means "every workspace" -- it falls back to DefaultWorkspace.
-	Workspace string
-	// Deprecated: use Workspace. Retained because this used to be the
-	// Kusto-only spelling of the same idea.
+	StorePath              string
+	DefaultTarget          string
+	DefaultMetric          string
+	Source                 string
+	KustoMetricsFile       string
+	KustoProject           string
+	Workspace              string
 	KustoWorkspace         string
 	KustoAllowedProjects   []string
 	KustoFeaturedProjects  []string
@@ -74,29 +69,17 @@ type Options struct {
 	KustoMaxDiscoverySince string
 	KustoTargetSince       string
 	KustoQueryCommand      string
-	// KustoNativeQuery runs generated KQL against ADX through the azure-kusto-go
-	// SDK. When set, Stellar reaches Kusto without an external query command.
-	KustoNativeQuery  func(ctx context.Context, query string) (string, error)
-	KustoQueryArgs    []string
-	KustoTargetPoints int
-	MaxRuns           int
-	MaxMetricRows     int
-	RequestTimeout    time.Duration
-	// CursorSigningKey authenticates canonical v2 pagination cursors. Production
-	// deployments should provide the same secret to every Portal replica.
-	CursorSigningKey []byte
+	KustoNativeQuery       func(ctx context.Context, query string) (string, error)
+	KustoQueryArgs         []string
+	KustoTargetPoints      int
+	MaxRuns                int
+	MaxMetricRows          int
+	RequestTimeout         time.Duration
+	CursorSigningKey       []byte
 }
 
-// DefaultWorkspace is the workspace Stellar serves when none is configured.
-//
-// Stellar is single-workspace for this release, so the server always has a
-// workspace rather than treating "unset" as "every workspace". Deployments are
-// expected to name theirs: the taugrid-core chart requires stellar.workspace so
-// a real install never silently lands here.
 const DefaultWorkspace = "default"
 
-// defaultWorkspace resolves the server's workspace, preferring the current
-// option over the Kusto-only spelling it replaced.
 func defaultWorkspace(opts Options) string {
 	if workspace := strings.TrimSpace(opts.Workspace); workspace != "" {
 		return workspace
@@ -107,27 +90,11 @@ func defaultWorkspace(opts Options) string {
 	return DefaultWorkspace
 }
 
-// ErrWorkspaceForbidden is returned when a request names a workspace other than
-// the one this server serves.
 var ErrWorkspaceForbidden = errors.New("this Stellar server serves a single workspace; ?workspace= must match it")
 
-// resolveWorkspace returns the workspace a request is scoped to, which is
-// always the workspace this server was started with. It is fail-closed: it
-// never returns an empty workspace, because empty used to mean "every
-// workspace".
-//
-// A request may still pass ?workspace=, but only to name the same workspace;
-// anything else is refused rather than served. Stellar has no authenticating
-// proxy in front of it, so a query parameter is not a credential and honouring
-// an arbitrary one would be enforcement-shaped but spoofable. Scope therefore
-// comes from server configuration, and multi-workspace Stellar needs an
-// authenticated identity first -- see portalapi.WorkspaceDirectory, which the
-// Portal already uses.
 func (s *Server) resolveWorkspace(r *http.Request) (string, error) {
 	workspace := strings.TrimSpace(s.workspace)
 	if workspace == "" {
-		// Unreachable via NewServer, which always resolves a workspace; kept so a
-		// zero-value Server cannot fail open.
 		return "", fmt.Errorf("Stellar has no workspace configured")
 	}
 	if requested := strings.TrimSpace(r.URL.Query().Get("workspace")); requested != "" && requested != workspace {
@@ -806,8 +773,6 @@ func (s *Server) hasKustoSource() bool {
 	return strings.TrimSpace(s.kustoMetricsFile) != "" || s.hasKustoRemoteQuery()
 }
 
-// hasKustoRemoteQuery reports whether the server can issue live KQL — through
-// the external query command or the native azure-kusto-go transport.
 func (s *Server) hasKustoRemoteQuery() bool {
 	return strings.TrimSpace(s.kustoQueryCommand) != "" || s.kustoNativeQuery != nil
 }
@@ -869,11 +834,6 @@ func (s *Server) handleStellarCockpit(w http.ResponseWriter, r *http.Request) {
 	s.writeStellarCockpit(w, r)
 }
 
-// isIframeEmbed reports whether the request is a same-origin iframe navigation
-// (the unified portal's Experiments board loads /stellar in an iframe). Browsers
-// set Sec-Fetch-Dest: iframe on such subframe document requests; the portal
-// serves X-Frame-Options: SAMEORIGIN to permit the embed. The frontend uses this
-// to tighten the landing layout so it fills the narrower frame.
 func isIframeEmbed(r *http.Request) bool {
 	return strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "iframe")
 }
@@ -892,10 +852,6 @@ func (s *Server) writeStellarCockpit(w http.ResponseWriter, r *http.Request) {
 	if source == "" {
 		source = s.source
 	}
-	// This used to force source=kusto whenever a workspace was present, which
-	// silently switched local deployments to a source they had not configured.
-	// Workspace scoping is implemented for both sources, so the source stays as
-	// requested.
 	workspace, err := s.resolveWorkspace(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1159,8 +1115,6 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "target or run query parameter is required")
 		return
 	}
-	// Only a target-bound, workspace-filtered snapshot can authorize artifact
-	// access. A globally unique run ID is not proof of workspace ownership.
 	snapshot, err := s.buildArtifactSnapshot(ctx, r, target)
 	if err != nil {
 		writeError(w, statusCode(err), err.Error())

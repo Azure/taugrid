@@ -2,8 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks GPU throttling
-
 readonly OK=0
 readonly NONOK=1
 
@@ -18,10 +16,7 @@ readonly GPU_CLOCKS_THROTTLE_REASON_SW_POWER_CAP=0x0000000000000004
 readonly GPU_CLOCKS_THROTTLE_REASON_SW_THERMAL_SLOWDOWN=0x0000000000000020
 readonly GPU_CLOCKS_THROTTLE_REASON_SYNC_BOOST=0x0000000000000010
 
-
 function collect_gpu_clock_throttle_data() {
-  # build proper command based on nvidia-smi version
-  # GPU_DRIVER_VERSIONS format: ("ver1" "ver2") — strip bash array syntax
   desired_versions=$(echo "${GPU_DRIVER_VERSIONS:-}" | tr -d '()"')
   GPU_THROTTLE_QUERY="clocks_event_reasons.active"
   if [[ -n "$desired_versions" ]]; then
@@ -44,7 +39,6 @@ function collect_gpu_clock_throttle_data() {
       echo "GPU throttle check failed to query active reasons. The reported return code is $gpu_clock_throttle_query_rc."
       exit $NONOK
   fi
-#  echo "gpu_clock_throttle_query_out=$gpu_clock_throttle_query_out"
   IFS=$'\n'
   gpu_clock_throttle_out_lines=( $gpu_clock_throttle_query_out )
   IFS=$' \t\n'

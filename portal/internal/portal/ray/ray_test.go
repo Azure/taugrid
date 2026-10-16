@@ -11,8 +11,6 @@ import (
 	"github.com/Azure/taugrid/core/runs"
 )
 
-// fakeReader returns canned Services JSON (and records the namespace it was
-// asked for) so the board can be tested without a Kubernetes API.
 type fakeReader struct {
 	json     string
 	err      error
@@ -29,8 +27,6 @@ func (f *fakeReader) ListServices(_ context.Context, namespace string) ([]byte, 
 	return []byte(f.json), nil
 }
 
-// ListPods returns canned Pods JSON. When podsJSON is empty it returns an empty
-// list so tests that don't care about readiness degrade cleanly.
 func (f *fakeReader) ListPods(_ context.Context, _ string) ([]byte, error) {
 	if f.podsErr != nil {
 		return nil, f.podsErr
@@ -41,11 +37,6 @@ func (f *fakeReader) ListPods(_ context.Context, _ string) ([]byte, error) {
 	return []byte(f.podsJSON), nil
 }
 
-// servicesJSON is a mixed Services list: three KubeRay head Services (carrying
-// ray.io/cluster + ray.io/node-type=head + correct <cluster>-head-svc name), one
-// worker Service, one mislabeled Service (head label but wrong name convention),
-// and one plain Service. Only the three correctly-named head Services should be
-// discovered.
 const servicesJSON = `{"items":[
   {"metadata":{"name":"alpha-head-svc","namespace":"ray",
     "labels":{"ray.io/cluster":"alpha","ray.io/node-type":"head"}},
@@ -73,7 +64,6 @@ func TestBoardDiscoversHeadServices(t *testing.T) {
 		t.Fatalf("Board: %v", err)
 	}
 
-	// Only the three head Services survive; worker and unrelated drop out.
 	if snap.Total != 3 || len(snap.Clusters) != 3 {
 		t.Fatalf("total = %d, clusters = %d, want 3/3: %+v", snap.Total, len(snap.Clusters), snap.Clusters)
 	}
@@ -96,7 +86,7 @@ func TestBoardSortOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
-	want := []string{"alpha", "bravo", "charlie"} // ns-then-name ordering
+	want := []string{"alpha", "bravo", "charlie"}
 	for i, w := range want {
 		if snap.Clusters[i].Name != w {
 			t.Fatalf("clusters[%d] = %q, want %q (order %v)", i, snap.Clusters[i].Name, w, want)
@@ -105,7 +95,6 @@ func TestBoardSortOrder(t *testing.T) {
 }
 
 func TestBoardEmptyIsNotError(t *testing.T) {
-	// No head Services → empty board, no error.
 	snap, err := Board(context.Background(), &fakeReader{json: `{"items":[]}`}, Options{})
 	if err != nil {
 		t.Fatalf("Board: %v", err)
@@ -143,8 +132,6 @@ func TestBoardRejectsBadJSON(t *testing.T) {
 	}
 }
 
-// podsJSON marks alpha's head pod Ready and bravo's head pod NotReady; charlie
-// has no pod at all. Only alpha should be reported Available.
 const podsJSON = `{"items":[
   {"metadata":{"namespace":"ray",
     "labels":{"ray.io/cluster":"alpha","ray.io/node-type":"head"}},
@@ -157,8 +144,6 @@ const podsJSON = `{"items":[
    "status":{"conditions":[{"type":"Ready","status":"True"}]}}
 ]}`
 
-// TestBoardAvailabilityFromHeadPodReadiness verifies each cluster's Available
-// flag tracks whether its Ray head pod is Ready.
 func TestBoardAvailabilityFromHeadPodReadiness(t *testing.T) {
 	snap, err := Board(context.Background(), &fakeReader{json: servicesJSON, podsJSON: podsJSON}, Options{})
 	if err != nil {
@@ -179,8 +164,6 @@ func TestBoardAvailabilityFromHeadPodReadiness(t *testing.T) {
 	}
 }
 
-// TestBoardDegradesToAvailableOnPodListError verifies a pod-list failure never
-// hides a healthy cluster's link: all clusters default to Available=true.
 func TestBoardDegradesToAvailableOnPodListError(t *testing.T) {
 	snap, err := Board(context.Background(), &fakeReader{json: servicesJSON, podsErr: errors.New("pods api down")}, Options{})
 	if err != nil {
@@ -193,8 +176,6 @@ func TestBoardDegradesToAvailableOnPodListError(t *testing.T) {
 	}
 }
 
-// TestIsHeadServiceRequiresHeadNodeType verifies the discovery filter: a
-// Service must carry both ray.io/cluster and ray.io/node-type=head.
 func TestIsHeadServiceRequiresHeadNodeType(t *testing.T) {
 	head := serviceObj{}
 	head.Metadata.Name = "alpha-head-svc"
@@ -203,7 +184,6 @@ func TestIsHeadServiceRequiresHeadNodeType(t *testing.T) {
 		t.Fatal("head Service with ray.io/node-type=head should match")
 	}
 
-	// Correct labels but wrong service name (mislabeled).
 	mislabeled := serviceObj{}
 	mislabeled.Metadata.Name = "wrong-name"
 	mislabeled.Metadata.Labels = map[string]string{clusterLabel: "alpha", nodeTypeLabel: nodeTypeHead}

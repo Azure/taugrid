@@ -10,7 +10,6 @@ for when ``execution.launcher: ray-tune``.
 
 import ray.train
 
-
 def train_func(config):
     """One-epoch dummy training loop that reports a loss derived from config."""
     lr = config.get("lr", 0.01)

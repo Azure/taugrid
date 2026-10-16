@@ -60,8 +60,6 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].image
           value: registry.example.com/oauth2-proxy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      # Exact args guard against added auth skips, wildcard cookies, token
-      # forwarding, request-query logging and accidental health bypasses.
       - equal:
           path: spec.template.spec.containers[0].args
           value:

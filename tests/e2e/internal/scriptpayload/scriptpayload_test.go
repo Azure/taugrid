@@ -12,14 +12,6 @@ import (
 	"testing"
 )
 
-// TestGoldenVectorSingleFileMatchesPR1Format pins this package's Encode
-// output against a fixed input whose expected encoded envelope and digest
-// were generated once from the real cli/internal/payload
-// package (go test -run TestZZZPrintGoldenVectors, cli module,
-// deleted after use -- see the PR3 session notes). This is a behavioral
-// golden vector, not a source-text comparison: it proves this independent
-// re-implementation produces byte-identical wire output to PR1's payload
-// package for a known input, without diffing source files across modules.
 func TestGoldenVectorSingleFileMatchesPR1Format(t *testing.T) {
 	const (
 		wantEncoded = "eyJ2ZXJzaW9uIjoxLCJmaWxlcyI6W3sibmFtZSI6InRyYWluLnB5IiwiZGF0YSI6ImNISnBiblFvSjJkdmJHUmxiaTEyWldOMGIzSW5LUW89In1dfQ=="
@@ -40,18 +32,12 @@ func TestGoldenVectorSingleFileMatchesPR1Format(t *testing.T) {
 	}
 }
 
-// TestGoldenVectorMultiFileMatchesPR1FormatOrdering pins canonical
-// name-sorted multi-file ordering against the same PR1-generated golden
-// vector, proving files are serialized in sorted order (a.py before b.py)
-// regardless of the input map's iteration order.
 func TestGoldenVectorMultiFileMatchesPR1FormatOrdering(t *testing.T) {
 	const (
 		wantEncoded = "eyJ2ZXJzaW9uIjoxLCJmaWxlcyI6W3sibmFtZSI6ImEucHkiLCJkYXRhIjoiWVMxamIyNTBaVzUwQ2c9PSJ9LHsibmFtZSI6ImIucHkiLCJkYXRhIjoiWWkxamIyNTBaVzUwQ2c9PSJ9XX0="
 		wantDigest  = "e99e7829fa69c083a8be66b6f80abc0fd5bb51bb701a20f661d004e98961457b"
 	)
 
-	// Deliberately insert in reverse order; Encode must canonically sort by
-	// name regardless of map iteration order.
 	encoded, digest, err := Encode(map[string][]byte{
 		"b.py": []byte("b-content\n"),
 		"a.py": []byte("a-content\n"),
@@ -107,14 +93,8 @@ func TestEncodeAcceptsPayloadExactlyAtCap(t *testing.T) {
 	}
 }
 
-// TestEncodedEnvValueStaysUnderMaxArgStrlen mirrors
-// payload.TestEncodedEnvValueStaysUnderMaxArgStrlen: even at the payload cap,
-// the single TAU_PAYLOAD_B64=<encoded> environment variable entry exposed
-// to the tau-payload initContainer must stay under Linux's MAX_ARG_STRLEN
-// (131072 bytes) -- the kernel's per-argument/environment value size limit
-// enforced by execve(2).
 func TestEncodedEnvValueStaysUnderMaxArgStrlen(t *testing.T) {
-	const maxArgStrlen = 131072 // Linux MAX_ARG_STRLEN, bytes.
+	const maxArgStrlen = 131072
 	atCap := bytes.Repeat([]byte("x"), MaxDecodedBytes)
 	encoded, _, err := Encode(map[string][]byte{"train.py": atCap})
 	if err != nil {
@@ -182,11 +162,6 @@ func TestDecodeFailsIntegrityCheckOnTamperedEnvelope(t *testing.T) {
 	}
 }
 
-// TestInitContainerScriptDecodesAndVerifies executes the exact Python script
-// embedded into the fixtures (InitContainerScript) against a real python3
-// interpreter, proving the runtime integrity/decoding logic works
-// end-to-end, mirroring payload.TestInitContainerScriptDecodesAndVerifies.
-// It skips if python3 is not on PATH.
 func TestInitContainerScriptDecodesAndVerifies(t *testing.T) {
 	python3, err := exec.LookPath("python3")
 	if err != nil {
@@ -225,9 +200,6 @@ func TestInitContainerScriptDecodesAndVerifies(t *testing.T) {
 	}
 }
 
-// TestInitContainerScriptRejectsTamperedDigest proves the runtime script
-// fails closed (non-zero exit, no files written) when the digest does not
-// match, mirroring payload.TestInitContainerScriptRejectsTamperedDigest.
 func TestInitContainerScriptRejectsTamperedDigest(t *testing.T) {
 	python3, err := exec.LookPath("python3")
 	if err != nil {
@@ -265,8 +237,6 @@ func TestInitContainerScriptRejectsTamperedDigest(t *testing.T) {
 	}
 }
 
-// TestInitContainerScriptRejectsUnsafeFileNames proves the runtime script
-// refuses to decode a file whose name would escape the target directory.
 func TestInitContainerScriptRejectsUnsafeFileNames(t *testing.T) {
 	python3, err := exec.LookPath("python3")
 	if err != nil {

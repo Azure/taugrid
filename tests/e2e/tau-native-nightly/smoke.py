@@ -6,7 +6,6 @@ import socket
 
 import ray
 
-
 @ray.remote(num_cpus=1)
 class Worker:
     def identity(self) -> dict[str, str]:
@@ -14,7 +13,6 @@ class Worker:
             "hostname": socket.gethostname(),
             "node_id": ray.get_runtime_context().get_node_id(),
         }
-
 
 def main() -> None:
     ray.init(address="auto")
@@ -28,7 +26,6 @@ def main() -> None:
         + json.dumps({"workers": identities}, sort_keys=True),
         flush=True,
     )
-
 
 if __name__ == "__main__":
     main()

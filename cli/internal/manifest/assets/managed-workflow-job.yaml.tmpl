@@ -1,21 +1,3 @@
-# Sample 1.3B managed workflow Job template.
-#
-# Renders from a manifest YAML using simple env-var substitution.
-#
-# Required substitutions:
-#   ${NAME}              short kebab-case name (matches manifest.name)
-#   ${MANIFEST_NAME}     basename of manifest YAML (rendered into
-#                        /manifest via the embedded manifest payload below)
-#   ${SMOKE_PAIRS}       int; 0 = use full dataset
-#   ${GPUS}              int; 0 = CPU-only; 1 = single-GPU; >=2 = DDP/FSDP
-#
-# Self-contained payload: the trainer script bundle and a redacted copy of
-# the manifest are base64-encoded and embedded directly in this Job's own
-# initContainers (tau-script-payload, tau-manifest-payload) — see
-# internal/payload. No ConfigMap is created or referenced; a single
-# `kubectl apply -f` (or `tau run`) is enough to run this Job standalone,
-# and MultiKueue can dispatch it without mirroring auxiliary objects.
-#   envsubst < cli/internal/manifest/assets/managed-workflow-job.yaml.tmpl | kubectl apply -f -
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -25,8 +7,6 @@ metadata:
     kueue.x-k8s.io/queue-name: ${QUEUE_NAME}
 ${JOB_LABELS}${JOB_ANNOTATIONS_BLOCK}
 spec:
-  # Kueue admits the Job by flipping suspend=false once training capacity is
-  # reserved in the LocalQueue above.
   suspend: true
   backoffLimit: 0
   ttlSecondsAfterFinished: {{.JobTTLSecondsAfterFinished}}
@@ -45,7 +25,6 @@ ${PAYLOAD_INIT_CONTAINERS_JOB}      containers:
           env:
             - { name: HF_HOME, value: "/tmp/hf" }
             - { name: NCCL_DEBUG, value: "WARN" }
-            # Use IB if present (H100/H200 nodes); otherwise sockets.
             - { name: NCCL_SOCKET_IFNAME, value: "eth0" }
             - { name: GIT_PYTHON_REFRESH, value: "quiet" }
             - { name: TAU_DATA_DIR, value: "/data" }
@@ -60,27 +39,10 @@ ${RUNTIME_ENV_JOB}
             - |
               set -euo pipefail
 ${STORAGE_PREFLIGHT}
-              # pip list comes from manifest.runtime.pip. The canonical
-              # first-party MCR Ray workload image keeps the Job and RayJob
-              # paths on the same base image contract; torch comes from the
-              # manifest/runtime pin so both workload kinds install the same
-              # trainer runtime.
-              # A plain install fails with EACCES on the canonical Ray CUDA
-              # image this template defaults to: pip cannot write to the
-              # root-owned /usr/lib/python3.12/site-packages/nvidia. Observed
-              # on ray:py3.12-ray2.56.0-cuda13.0. Retry into the user site
-              # rather than requiring every researcher to set PIP_USER=1 by
-              # hand. The first form still wins on images that install
-              # cleanly, including the plain non-CUDA ray tags.
               pip install --quiet --no-cache-dir ${PIP_PACKAGES} \
                 || pip install --quiet --no-cache-dir --user ${PIP_PACKAGES}
-              # --user installs console scripts (torchrun, deepspeed, ...) into the user
-              # base bin dir, which is not on PATH for these images. Without this the
-              # fallback yields importable libraries but `torchrun: command not found`.
               PATH="$(python3 -m site --user-base)/bin:$PATH"
               export PATH
-              # Single-GPU runs go straight to python; multi-GPU uses torchrun
-              # with --standalone (single-node, intra-pod rendezvous).
               if [ "${GPUS}" -le "1" ]; then
                 python3 /script/train.py \
                   --manifest /manifest/${MANIFEST_NAME} \

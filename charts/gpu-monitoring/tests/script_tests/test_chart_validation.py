@@ -8,7 +8,6 @@ import unittest
 
 from helpers import CHART_DIR
 
-
 RESERVED_ENV_NAMES = [
     "NODE_NAME",
     "NPD_GPU_REQUIRED",
@@ -39,7 +38,6 @@ LEGACY_KEY_MIGRATION = (
     '"DCGM health sources" section)'
 )
 
-
 def render(values, *, daemonset_only=True):
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", encoding="utf-8"
@@ -57,7 +55,6 @@ def render(values, *, daemonset_only=True):
         if daemonset_only:
             command.extend(["--show-only", "templates/daemonset.yaml"])
         return subprocess.run(command, capture_output=True, text=True)
-
 
 class ChartValidationTests(unittest.TestCase):
     def test_reserved_environment_names_are_centralized_and_rejected(self):
@@ -515,7 +512,6 @@ gpuSkus:
             f"0.1.7; {LEGACY_KEY_MIGRATION}",
             result.stderr,
         )
-
 
 if __name__ == "__main__":
     unittest.main()

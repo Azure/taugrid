@@ -16,9 +16,6 @@ import (
 	"github.com/Azure/taugrid/core/kube"
 )
 
-// platformPreflightRunnerFactory builds a read-only kubectl runner for a
-// given worker kube context. Production wiring uses kube.New; tests inject
-// a fake so no live cluster is required.
 type platformPreflightRunnerFactory func(workerContext string) platform.Runner
 
 func newPlatformPreflightMultiKueueCmd() *cobra.Command {
@@ -82,8 +79,6 @@ func readPlatformPreflightManifest(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// runPlatformPreflightMultiKueue is the cobra-free core of the command so
-// tests can exercise it directly with a fake runner factory.
 func runPlatformPreflightMultiKueue(
 	ctx context.Context,
 	manifest []byte,
@@ -113,10 +108,6 @@ func runPlatformPreflightMultiKueue(
 	}
 
 	report, err := platform.CheckMultiKueuePreflight(ctx, workers, depcontract.Flatten(workloads), platform.Options{
-		// namespaceOverride is passed through as-is: empty means "use
-		// each dependency's own classified namespace", non-empty means
-		// "override every namespaced dependency's namespace", never a
-		// fallback derived from the manifest itself.
 		NamespaceOverride: namespaceOverride,
 	})
 	if err != nil {

@@ -5,11 +5,6 @@ package runconfig
 
 import "testing"
 
-// storage.checkpoint is joined onto <durable>/finetunes/<run>/artifacts/ by the
-// finalizer, on a PVC shared by every run in the namespace. An unvalidated
-// value is therefore a write primitive into another researcher's run, not a
-// local mistake. The manifest entry point already rejected these; the run-config
-// entry point reached the same finalizer without the check.
 func TestStorageValidateRejectsCheckpointEscape(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
@@ -33,9 +28,6 @@ func TestStorageValidateRejectsCheckpointEscape(t *testing.T) {
 	}
 }
 
-// Positive control: the guard must not be so broad that it rejects the value
-// the feature exists to carry. Without this, a validator that rejected
-// everything would pass the test above.
 func TestStorageValidateAcceptsOrdinaryCheckpoints(t *testing.T) {
 	for _, checkpoint := range []string{
 		"last.safetensors",

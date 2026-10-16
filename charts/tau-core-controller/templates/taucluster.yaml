@@ -8,9 +8,6 @@ metadata:
   labels:
     {{- include "tau-core-controller.labels" . | nindent 4 }}
 spec:
-  # Node events trigger reconciliation immediately, and a periodic resync repairs
-  # missed events or manual drift. Matching by Kubernetes' standard instance-type
-  # label works for both AKS-managed and AKS Flex nodes.
   managementMode: {{ .Values.tauCluster.managementMode }}
   deletionPolicy: {{ .Values.tauCluster.deletionPolicy }}
   nodes:

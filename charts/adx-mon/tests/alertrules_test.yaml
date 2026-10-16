@@ -9,7 +9,6 @@ templates:
 values:
   - ../values.yaml
 tests:
-  # --- gpu-xid-critical ---
   - it: renders gpu-xid-critical AlertRule when enabled
     template: alertrules/gpu-xid-critical.yaml
     asserts:
@@ -88,7 +87,6 @@ tests:
           path: spec.criteria.cloud[0]
           value: AzureCloud
 
-  # --- node-not-ready ---
   - it: renders node-not-ready AlertRule when enabled
     template: alertrules/node-not-ready.yaml
     asserts:
@@ -133,7 +131,6 @@ tests:
           path: spec.destination
           value: "oncall-queue"
 
-  # --- ecc-uncorrectable ---
   - it: renders ecc-uncorrectable AlertRule when enabled
     template: alertrules/ecc-uncorrectable.yaml
     asserts:
@@ -169,7 +166,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # --- nvlink-down ---
   - it: renders nvlink-down AlertRule when enabled
     template: alertrules/nvlink-down.yaml
     asserts:
@@ -211,7 +207,6 @@ tests:
           path: spec.interval
           value: "10m"
 
-  # --- job-failure-rate ---
   - it: renders job-failure-rate AlertRule when enabled
     template: alertrules/job-failure-rate.yaml
     asserts:
@@ -298,7 +293,6 @@ tests:
           path: spec.query
           pattern: "dcount"
 
-  # --- ray-pod-restart ---
   - it: does not render ray-pod-restart by default (disabled)
     template: alertrules/ray-pod-restart.yaml
     asserts:

@@ -2,8 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks for pending GPU ECC remap operations reported by nvidia-smi.
-
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2

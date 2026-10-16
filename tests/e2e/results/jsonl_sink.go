@@ -11,8 +11,6 @@ import (
 	"sync"
 )
 
-// JSONLSink writes one JSON object per line to a file.
-// Safe for concurrent use via an internal mutex.
 type JSONLSink struct {
 	mu     sync.Mutex
 	file   *os.File
@@ -20,10 +18,6 @@ type JSONLSink struct {
 	closed bool
 }
 
-// NewJSONLSink creates a JSONL sink that writes to path.
-// The file is created if it does not exist, or appended to if it does.
-// Append mode is required because `go test ./...` runs each package in a
-// separate process, so multiple processes write to the same file sequentially.
 func NewJSONLSink(path string) (*JSONLSink, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

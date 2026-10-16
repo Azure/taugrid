@@ -60,8 +60,6 @@ func CheckpointForChunk(chunk HistoryChunk) FileCheckpoint {
 	}
 }
 
-// CurrentFileCheckpoint snapshots the current end and identity of a JSONL file.
-// It is used to establish a fresh consumer baseline without reading old rows.
 func CurrentFileCheckpoint(path string) (FileCheckpoint, error) {
 	return currentFileCheckpoint(path, syncHistoryFile)
 }
@@ -99,8 +97,6 @@ func currentFileCheckpoint(path string, syncFile func(*os.File) error) (FileChec
 	}, nil
 }
 
-// ResolveFileCheckpoint returns the checkpoint for path, including a checkpoint
-// recorded before the same file was renamed to another matching history path.
 func ResolveFileCheckpoint(path string, checkpoints map[string]FileCheckpoint) (FileCheckpoint, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {

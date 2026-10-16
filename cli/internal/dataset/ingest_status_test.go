@@ -3,16 +3,11 @@
 
 package dataset
 
-// Tests for ingest_status.go and ingest_registry.go.
-// This file is in package dataset (not dataset_test) so it can reuse the
-// memBackend and testPaths helpers defined in registry_test.go.
-
 import (
 	"context"
 	"testing"
 )
 
-// ingestTestPaths extends testPaths with IngestStatusFile.
 func ingestTestPaths() Paths {
 	p := testPaths()
 	root := "/data/dataset-registry/datasets"
@@ -22,7 +17,6 @@ func ingestTestPaths() Paths {
 	return p
 }
 
-// makeIngestRec builds a minimal valid Record for ingest tests.
 func makeIngestRec(name, version string) Record {
 	return Record{
 		SchemaVersion: SchemaVersion,
@@ -41,14 +35,11 @@ func makeIngestRec(name, version string) Record {
 	}
 }
 
-// newIngestRegistry creates a Registry backed by memBackend with IngestStatusFile wired.
 func newIngestRegistry() (*Registry, *memBackend) {
 	b := newMemBackend()
 	reg := NewRegistry(b, ingestTestPaths(), nil)
 	return reg, b
 }
-
-// ---- ParseIngestStatus tests ----
 
 func TestParseIngestStatus_valid(t *testing.T) {
 	raw := []byte(`{
@@ -169,13 +160,10 @@ func TestIngestStatus_RejectsTraversalAndAbsoluteProofPaths(t *testing.T) {
 	}
 }
 
-// ---- EnsureRegister tests ----
-
 func TestEnsureRegister_noOp(t *testing.T) {
 	reg, _ := newIngestRegistry()
 	rec := makeIngestRec("ds", "v1")
 
-	// First call: registers.
 	_, created, err := reg.EnsureRegister(context.Background(), rec)
 	if err != nil {
 		t.Fatalf("EnsureRegister (first): %v", err)
@@ -184,7 +172,6 @@ func TestEnsureRegister_noOp(t *testing.T) {
 		t.Error("EnsureRegister (first): want created=true")
 	}
 
-	// Second call: no-op.
 	_, created2, err := reg.EnsureRegister(context.Background(), rec)
 	if err != nil {
 		t.Fatalf("EnsureRegister (second): %v", err)
@@ -202,7 +189,6 @@ func TestEnsureRegister_driftDetected(t *testing.T) {
 		t.Fatalf("EnsureRegister (first): %v", err)
 	}
 
-	// Same name@version but different file content.
 	rec2 := makeIngestRec("ds", "v1")
 	rec2.Files = append(rec2.Files, File{Path: "extra.jsonl", Bytes: 50, SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"})
 
@@ -211,8 +197,6 @@ func TestEnsureRegister_driftDetected(t *testing.T) {
 		t.Fatal("expected drift error, got nil")
 	}
 }
-
-// ---- GetIngestStatus / WriteIngestStatus / InitIngestStatus tests ----
 
 func TestInitIngestStatus_firstCall(t *testing.T) {
 	reg, _ := newIngestRegistry()
@@ -259,7 +243,6 @@ func TestInitIngestStatus_idempotent(t *testing.T) {
 
 func TestWriteIngestStatus_nilPathError(t *testing.T) {
 	b := newMemBackend()
-	// Registry with no IngestStatusFile path.
 	reg := NewRegistry(b, testPaths(), nil)
 	s := IngestStatus{
 		SchemaVersion: IngestStatusSchemaVersion,

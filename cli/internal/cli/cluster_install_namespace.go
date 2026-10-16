@@ -22,10 +22,6 @@ type namespacedObjectList struct {
 	} `json:"items"`
 }
 
-// ensureSystemNamespaceMigrationSafe prevents an upgrade from moving the
-// controller away from existing namespaced Tau system objects. Helm can
-// recreate Deployments and RBAC in the release namespace, but it cannot move
-// TauWorkspace or TauQuotaRequest objects between namespaces.
 func ensureSystemNamespaceMigrationSafe(ctx context.Context, runner installationcheck.Runner, targetNamespace string) error {
 	var outside []string
 	for _, resource := range []struct {

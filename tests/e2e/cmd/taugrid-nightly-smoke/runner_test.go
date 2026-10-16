@@ -253,9 +253,6 @@ func TestEnsureProfileDoesNotDuplicateExistingProfile(t *testing.T) {
 	}
 }
 
-// Regression: RayJob worker PodSets use generated *-w names and Kueue v1beta2
-// compresses topology assignments into slices. The verifier must match the
-// exact RayJob group and parse that schema instead of timing out after admission.
 func TestTopologyEvidenceFromWorkloadRequiresIntendedAdmission(t *testing.T) {
 	workload := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"name": "rayjob-test-123"},

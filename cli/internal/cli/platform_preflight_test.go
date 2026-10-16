@@ -69,9 +69,6 @@ func healthyPlatformPreflightRunner(namespace string) *fakeKubeRawRunner {
 	}}
 }
 
-// platformPreflightManifestWithNamespace renders the same Job shape as
-// platformPreflightJobManifest but with an explicit metadata.namespace, for
-// tests that need to prove a --namespace override wins over it.
 func platformPreflightManifestWithNamespace(namespace string) string {
 	return `
 apiVersion: batch/v1
@@ -141,9 +138,6 @@ func TestRunPlatformPreflightMultiKueue_MissingDependencyNamesWorker(t *testing.
 	runnerB := &fakeKubeRawRunner{responses: map[string]string{
 		"-n ray get serviceaccount tau-workload -o name": "serviceaccount/tau-workload",
 		"-n ray get secret acr-secret -o name":           "secret/acr-secret",
-		// hf-token and blob-training intentionally omitted from worker-b:
-		// fakeKubeRawRunner returns "unexpected kubectl args" for them,
-		// which the preflight package treats as a not-found failure.
 	}}
 	factory := func(workerContext string) platform.Runner {
 		switch workerContext {

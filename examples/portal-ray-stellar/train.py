@@ -41,7 +41,6 @@ import ray
 from ray.util.placement_group import placement_group, remove_placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-
 def _metrics_dir(output_dir: str | None = None) -> Path:
     """Resolve the directory containing immutable JSONL chunks.
 
@@ -53,7 +52,6 @@ def _metrics_dir(output_dir: str | None = None) -> Path:
     path = Path(root) / "metrics-history-attempt-0"
     path.mkdir(parents=True, exist_ok=True)
     return path
-
 
 def metrics_row(step: int, loss: float, accuracy: float) -> dict:
     """Build one online metrics row.
@@ -71,7 +69,6 @@ def metrics_row(step: int, loss: float, accuracy: float) -> dict:
         "accuracy": accuracy,
     }
 
-
 def publish_metrics_row(metrics_dir: Path, step: int, loss: float, accuracy: float) -> Path:
     """Publish one closed chunk without exposing a partial object-file write."""
     token = f"{step:06d}-{time.time_ns()}"
@@ -83,7 +80,6 @@ def publish_metrics_row(metrics_dir: Path, step: int, loss: float, accuracy: flo
         os.fsync(stream.fileno())
     os.replace(temporary, final)
     return final
-
 
 @ray.remote(num_cpus=1, num_gpus=1)
 def run_worker(worker_index: int, steps: int, output_dir: str) -> dict:
@@ -106,10 +102,7 @@ def run_worker(worker_index: int, steps: int, output_dir: str) -> dict:
         "steps": steps,
     }
 
-
 def main():
-    # tau.yaml pins compute.workers: 1 / gpus_per_worker: 1 so the acceptance
-    # run also exercises the GPU-only metrics offload path.
     num_workers = int(os.environ.get("TAU_NUM_WORKERS", "1"))
     steps = int(os.environ.get("PORTAL_DEMO_STEPS", "20"))
 
@@ -138,7 +131,6 @@ def main():
         print("worker_results", json.dumps(ray.get(futures), sort_keys=True), flush=True)
     finally:
         remove_placement_group(group)
-
 
 if __name__ == "__main__":
     main()

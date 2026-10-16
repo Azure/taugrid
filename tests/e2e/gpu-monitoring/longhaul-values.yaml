@@ -1,6 +1,3 @@
-# Values used only by the managed-gpu-longhaul workflow. The release is
-# installed in an isolated namespace and targets nodes that the workflow labels
-# with ai-runtime-longhaul.gpu-monitoring=true.
 serviceAccount:
   name: gpu-monitoring-longhaul
 
@@ -22,15 +19,10 @@ monitors:
   customPluginMonitor: false
 
 nodeExporter:
-  # The longhaul cluster already runs the full-stack hostNetwork node-exporter
-  # DaemonSet on :9100. A second hostNetwork pod declaring the same port cannot
-  # schedule on the same GPU node.
   enabled: false
 
 metricsCollector:
   scrapeInterval: "5s"
-  # Keep scraping the existing full-stack node-exporter on localhost:9100 even
-  # though this isolated gpu-monitoring overlay does not deploy its own sidecar.
   nodeExporterScrape: true
 
 gpuSkus:

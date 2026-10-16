@@ -14,13 +14,11 @@ from ray import train
 from ray.train import ScalingConfig
 from ray.train.torch import TorchTrainer, prepare_model
 
-
 NUM_TOPICS = 8
 NUM_ITEMS = 1024
 ITEMS_PER_TOPIC = NUM_ITEMS // NUM_TOPICS
 HISTORY_LEN = 32
 EXPLICIT_TOPICS = 2
-
 
 class DifferentiableClusteringModule(nn.Module):
     """Tiny DCM: learn interest queries that softly cluster a user's history."""
@@ -36,7 +34,6 @@ class DifferentiableClusteringModule(nn.Module):
         weights = logits.softmax(dim=-1)
         interests = torch.einsum("bkl,bld->bkd", weights, history_embeddings)
         return F.normalize(interests, dim=-1), weights
-
 
 class MultiInterestRetrievalModel(nn.Module):
     def __init__(self, dim: int = 256, num_implicit_interests: int = 4):
@@ -72,11 +69,9 @@ class MultiInterestRetrievalModel(nn.Module):
     def forward(self, history_items, followed_topics, target_items, target_topics, item_topics):
         return self.score(history_items, followed_topics, target_items, target_topics, item_topics)
 
-
 def items_for_topics(topic_ids: torch.Tensor, generator: torch.Generator):
     slots = torch.randint(0, ITEMS_PER_TOPIC, topic_ids.shape, generator=generator)
     return topic_ids + NUM_TOPICS * slots
-
 
 def sample_batch(batch_size: int, rank: int, step: int):
     generator = torch.Generator().manual_seed(10_000 + rank * 1_000 + step)
@@ -98,7 +93,6 @@ def sample_batch(batch_size: int, rank: int, step: int):
     negative_topics = (primary + negative_offsets) % NUM_TOPICS
     negative_items = items_for_topics(negative_topics, generator)
     return history_items, followed, positive_items, positive_topics, negative_items, negative_topics, item_topics
-
 
 def train_loop_per_worker(config):
     ctx = train.get_context()
@@ -171,13 +165,11 @@ def train_loop_per_worker(config):
         }
     )
 
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=None)
     parser.add_argument("--smoke-pairs", type=int, default=0)
     return parser.parse_args()
-
 
 def train_workers_from_manifest(path: Path | None) -> int:
     if path is None:
@@ -186,7 +178,6 @@ def train_workers_from_manifest(path: Path | None) -> int:
         manifest = yaml.safe_load(f) or {}
     compute = manifest.get("compute", {})
     return max(1, int(compute.get("workers", 5)) - 1)
-
 
 def main():
     args = parse_args()
@@ -208,7 +199,6 @@ def main():
     )
     result = trainer.fit()
     print("final_metrics", result.metrics, flush=True)
-
 
 if __name__ == "__main__":
     main()

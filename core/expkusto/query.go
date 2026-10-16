@@ -64,8 +64,6 @@ type RunLifecycleQueryResult struct {
 	StaleAfter string `json:"stale_after"`
 }
 
-// RunHistoryQueryOptions scopes durable lifecycle rows for Portal and CLI readers.
-// Empty scope fields intentionally do not filter that dimension.
 type RunHistoryQueryOptions struct {
 	Table       string
 	Cluster     string
@@ -138,9 +136,6 @@ func BuildMetricsQuery(opts MetricsQueryOptions) (string, error) {
 	return b.String(), nil
 }
 
-// BuildTypedMetricsQuery builds a bounded point query over the stable typed
-// metric-event Function. It intentionally bypasses legacy projection and
-// remote-write tables.
 func BuildTypedMetricsQuery(opts MetricsQueryOptions) (string, error) {
 	opts.WorkspaceID = strings.TrimSpace(opts.WorkspaceID)
 	opts.Project = strings.TrimSpace(opts.Project)
@@ -327,9 +322,6 @@ func BuildRunLifecycleQuery(opts RunLifecycleQueryOptions) (string, error) {
 	return b.String(), nil
 }
 
-// BuildRunHistoryQuery returns the latest durable lifecycle row for each
-// cluster/namespace/durable identity. Terminal states remain selected even if a
-// later non-terminal observation is appended.
 func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	table := strings.TrimSpace(opts.Table)
 	if table == "" {
@@ -388,10 +380,6 @@ func BuildRunHistoryQuery(opts RunHistoryQueryOptions) (string, error) {
 	return b.String(), nil
 }
 
-// BuildRunHistoryTimelineQuery returns every lifecycle observation for one
-// Kubernetes resource UID. It is deliberately separate from BuildRunHistoryQuery:
-// the latter collapses rows for a board, while this query backs a durable detail
-// page after the live RayJob and its Pods have disappeared.
 func BuildRunHistoryTimelineQuery(opts RunHistoryQueryOptions, resourceUID string) (string, error) {
 	resourceUID = strings.TrimSpace(resourceUID)
 	if resourceUID == "" {
@@ -627,12 +615,6 @@ func writeTargetFilter(b *strings.Builder, opts MetricsQueryOptions) {
 		return
 	}
 	target := kqlString(opts.Target)
-	// experiment_id is the durable ADX column. It replaced question_id, which
-	// earlier stores wrote for the same axis, so both are matched: filtering on
-	// only one spelling silently returns an empty result rather than an error.
-	// isfuzzy tolerates the column being absent on either side of the cutover.
-	// The question_id half can be dropped once no rows predating the rename
-	// remain inside the TauExpMetrics retention window.
 	experimentMatch := fmt.Sprintf(
 		"(column_ifexists('experiment_id', '') == %s or column_ifexists('question_id', '') == %s)",
 		target, target)

@@ -14,12 +14,8 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 )
 
-// fakeBlobOps is an in-memory sdkBlobOps that enforces the same conditional
-// semantics as the real Azure block-blob backend, so registry immutability can
-// be exercised without a network.
 type fakeBlobOps struct {
-	blobs map[string][]byte
-	// forceWriteErr, when non-nil, is returned by write regardless of state.
+	blobs         map[string][]byte
 	forceWriteErr error
 }
 
@@ -41,7 +37,6 @@ func (f *fakeBlobOps) write(_ context.Context, blobName string, data []byte, ove
 	}
 	if !overwrite {
 		if _, exists := f.blobs[blobName]; exists {
-			// Mirrors If-None-Match:* → 409/412 mapped to ErrExist.
 			return dataset.ErrExist
 		}
 	}
@@ -92,9 +87,6 @@ func sdkBackendWithFake() (*sdkAzBackend, *fakeBlobOps) {
 	return &sdkAzBackend{ops: ops, rootPrefix: storage.DatasetRegistryDir}, ops
 }
 
-// The SDK backend must satisfy the immutable-create contract: a second write of
-// the same path with overwrite=false returns ErrExist and does NOT clobber the
-// existing bytes.
 func TestSDKBackend_ImmutableWriteRejectsOverwrite(t *testing.T) {
 	b, _ := sdkBackendWithFake()
 	ctx := context.Background()
@@ -116,7 +108,6 @@ func TestSDKBackend_ImmutableWriteRejectsOverwrite(t *testing.T) {
 	}
 }
 
-// overwrite=true (mutable status companion) always wins.
 func TestSDKBackend_OverwriteReplaces(t *testing.T) {
 	b, _ := sdkBackendWithFake()
 	ctx := context.Background()
@@ -172,9 +163,6 @@ func TestSDKBackend_ListChildren(t *testing.T) {
 	}
 }
 
-// EnsureRegister over the SDK backend must be idempotent for an identical
-// digest and fail on drift — proving the conditional write path composes with
-// the registry immutability contract.
 func TestSDKBackend_EnsureRegisterIdempotenceAndDrift(t *testing.T) {
 	b, _ := sdkBackendWithFake()
 	reg := dataset.NewRegistry(b, datasetRegistryPaths(), nil)
@@ -196,7 +184,6 @@ func TestSDKBackend_EnsureRegisterIdempotenceAndDrift(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("first EnsureRegister: created=%v err=%v", created, err)
 	}
-	// Identical again → idempotent no-op.
 	_, created2, err := reg.EnsureRegister(ctx, rec)
 	if err != nil {
 		t.Fatalf("idempotent EnsureRegister: %v", err)
@@ -204,7 +191,6 @@ func TestSDKBackend_EnsureRegisterIdempotenceAndDrift(t *testing.T) {
 	if created2 {
 		t.Fatalf("second identical EnsureRegister should be a no-op (created=false)")
 	}
-	// Drift → must fail.
 	drift := rec
 	drift.Files = []dataset.File{{Path: "a.bin", Bytes: 8, SHA256: strings.Repeat("b", 64)}}
 	if _, _, err := reg.EnsureRegister(ctx, drift); err == nil {

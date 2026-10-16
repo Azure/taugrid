@@ -16,7 +16,6 @@ import tau
 
 stellar = tau.stellar
 
-
 def _write_jsonl_argv_recorder(path: Path, recorder: Path) -> None:
     path.write_text(
         "#!/usr/bin/env python3\n"
@@ -28,10 +27,8 @@ def _write_jsonl_argv_recorder(path: Path, recorder: Path) -> None:
     )
     path.chmod(0o755)
 
-
 def _track_call(calls: list[list[str]]) -> list[str]:
     return next(call for call in calls if call[3:4] == ["track"])
-
 
 class _FakeTensor:
     def __init__(self, value: float):
@@ -45,7 +42,6 @@ class _FakeTensor:
 
     def item(self) -> float:
         return self.value
-
 
 def test_stellar_log_writes_wandb_shaped_history_and_artifacts(tmp_path):
     image = tmp_path / "overlay.png"
@@ -79,7 +75,6 @@ def test_stellar_log_writes_wandb_shaped_history_and_artifacts(tmp_path):
     assert (run.artifacts_dir / "examples-grounding-step-3.png").read_bytes() == b"png"
     assert (run.artifacts_dir / "examples-report_diffs.html").read_text() == "<h1>diff</h1>"
 
-
 def test_stellar_preserves_same_media_key_at_multiple_steps(tmp_path):
     image1 = tmp_path / "step1.png"
     image2 = tmp_path / "step2.png"
@@ -97,7 +92,6 @@ def test_stellar_preserves_same_media_key_at_multiple_steps(tmp_path):
     assert [artifact["caption"] for artifact in artifacts] == ["first", "second"]
     assert (run.artifacts_dir / "examples-predictions-step-1.png").read_bytes() == b"one"
     assert (run.artifacts_dir / "examples-predictions-step-2.png").read_bytes() == b"two"
-
 
 def test_stellar_finish_sync_invokes_tau_contract(tmp_path):
     recorder = tmp_path / "argv.jsonl"
@@ -122,9 +116,6 @@ def test_stellar_finish_sync_invokes_tau_contract(tmp_path):
     run.finish(sync=True)
 
     calls = [json.loads(line) for line in recorder.read_text().splitlines()]
-    # Assert the full `init` argv rather than probing for individual flags:
-    # taugrid-portal rejects unknown flags outright, so the exact argv is the
-    # contract worth pinning.
     assert calls[0] == [
         "experiment", "--store", str(store), "init", "img-captioner-finetune-validation",
         "--project", "radiology-foundation-models",
@@ -138,8 +129,6 @@ def test_stellar_finish_sync_invokes_tau_contract(tmp_path):
     assert spec["type"] == "retrieval"
     assert spec["name"] == "retrieval-neighbors"
     assert spec["uri"] == "artifacts/vit-enc-lora-v1/retrieval-neighbors.png"
-    # Runs are attached to their experiment explicitly, since `track` carries
-    # no experiment flag of its own.
     assert calls[2] == [
         "experiment", "--store", str(store), "experiments", "tag-run",
         "vit-enc-lora-v1",
@@ -148,7 +137,6 @@ def test_stellar_finish_sync_invokes_tau_contract(tmp_path):
     ]
     assert calls[3][:6] == ["experiment", "--store", str(store), "import", "jsonl", "--run"]
     assert (store / "artifacts" / "vit-enc-lora-v1" / "retrieval-neighbors.png").read_bytes() == b"png"
-
 
 def test_stellar_sync_uses_json_artifact_spec_for_captioned_media(tmp_path):
     recorder = tmp_path / "argv.jsonl"
@@ -179,7 +167,6 @@ def test_stellar_sync_uses_json_artifact_spec_for_captioned_media(tmp_path):
         "uri": "artifacts/captioned/media-prediction-gallery-step-7.png",
     }
 
-
 def test_stellar_sync_tracks_config_without_artifacts(tmp_path):
     recorder = tmp_path / "argv.jsonl"
     fake = tmp_path / "tau"
@@ -204,7 +191,6 @@ def test_stellar_sync_tracks_config_without_artifacts(tmp_path):
     assert [c[:6] for c in imports] == [
         ["experiment", "--store", str(tmp_path / "store"), "import", "jsonl", "--run"]
     ]
-
 
 def test_stellar_sync_tracks_repro_context_for_metrics_only_run(tmp_path):
     recorder = tmp_path / "argv.jsonl"
@@ -231,7 +217,6 @@ def test_stellar_sync_tracks_repro_context_for_metrics_only_run(tmp_path):
     assert [c[:6] for c in imports] == [
         ["experiment", "--store", str(tmp_path / "store"), "import", "jsonl", "--run"]
     ]
-
 
 def test_stellar_use_artifact_downloads_prior_output_and_records_input_lineage(tmp_path):
     store = tmp_path / "store"
@@ -280,7 +265,6 @@ VALUES ('artifact-run-a-best', 'run-a', 'checkpoint', 'artifacts/run-a/model.ckp
     assert spec["source_artifact_id"] == "artifact-run-a-best"
     assert spec["source_run_id"] == "run-a"
 
-
 def test_stellar_run_context_manager_finishes(tmp_path):
     with stellar.init(project="p", run="ctx", dir=tmp_path) as run:
         stellar.log({"train/loss": 0.4}, step=1)
@@ -289,10 +273,8 @@ def test_stellar_run_context_manager_finishes(tmp_path):
     rows = [json.loads(line) for line in run.history_path.read_text().splitlines()]
     assert rows[0]["train/loss"] == 0.4
 
-
 def test_stellar_is_public_api():
     assert tau.stellar is stellar
-
 
 def test_stellar_logger_records_lightning_style_workflow(tmp_path):
     recorder = tmp_path / "argv.jsonl"
@@ -340,7 +322,6 @@ def test_stellar_logger_records_lightning_style_workflow(tmp_path):
     assert [c[:6] for c in imports] == [
         ["experiment", "--store", str(tmp_path / "store"), "import", "jsonl", "--run"]
     ]
-
 
 def test_stellar_logger_is_lightning_logger_when_lightning_is_installed(tmp_path):
     lightning_loggers = pytest.importorskip("lightning.pytorch.loggers")
@@ -402,7 +383,6 @@ def test_stellar_logger_is_lightning_logger_when_lightning_is_installed(tmp_path
     manifest = json.loads(logger.experiment.manifest_path.read_text())
     assert any(artifact["type"] == "checkpoint" for artifact in manifest["artifacts"])
 
-
 def test_stellar_group_defaults_to_env_var(tmp_path, monkeypatch):
     """When group is not provided, use TAU_GROUP env var if set."""
     monkeypatch.setenv("TAU_GROUP", "my-experiment-batch")
@@ -410,14 +390,12 @@ def test_stellar_group_defaults_to_env_var(tmp_path, monkeypatch):
     assert run.group == "my-experiment-batch"
     stellar.finish()
 
-
 def test_stellar_group_defaults_to_job_name_prefix(tmp_path, monkeypatch):
     """When group is not provided and no TAU_GROUP, use JOB_NAME prefix."""
     monkeypatch.setenv("JOB_NAME", "vision-training-20250616-abc123")
     run = stellar.init(project="p", name="r", dir=tmp_path)
     assert run.group == "vision"
     stellar.finish()
-
 
 def test_stellar_group_defaults_to_default_when_no_env(tmp_path, monkeypatch):
     """When group is not provided and no env vars, use 'default'."""
@@ -427,7 +405,6 @@ def test_stellar_group_defaults_to_default_when_no_env(tmp_path, monkeypatch):
     assert run.group == "default"
     stellar.finish()
 
-
 def test_stellar_explicit_group_overrides_env(tmp_path, monkeypatch):
     """Explicit group parameter overrides env vars."""
     monkeypatch.setenv("TAU_GROUP", "from-env")
@@ -436,14 +413,12 @@ def test_stellar_explicit_group_overrides_env(tmp_path, monkeypatch):
     assert run.group == "explicit-group"
     stellar.finish()
 
-
 def test_stellar_experiment_id_defaults_to_env_var(tmp_path, monkeypatch):
     """When experiment_id is not provided, use TAU_EXPERIMENT_ID env var if set."""
     monkeypatch.setenv("TAU_EXPERIMENT_ID", "img-captioner-validation")
     run = stellar.init(project="p", name="r", dir=tmp_path)
     assert run.experiment_id == "img-captioner-validation"
     stellar.finish()
-
 
 def test_stellar_experiment_id_defaults_to_tau_experiment(tmp_path, monkeypatch):
     """When experiment_id is not provided, fall back to TAU_EXPERIMENT env var."""
@@ -453,7 +428,6 @@ def test_stellar_experiment_id_defaults_to_tau_experiment(tmp_path, monkeypatch)
     assert run.experiment_id == "my-experiment"
     stellar.finish()
 
-
 def test_stellar_experiment_id_defaults_to_project_when_no_experiment(tmp_path, monkeypatch):
     """With no experiment and no env vars, the experiment id inherits the project."""
     monkeypatch.delenv("TAU_EXPERIMENT_ID", raising=False)
@@ -462,7 +436,6 @@ def test_stellar_experiment_id_defaults_to_project_when_no_experiment(tmp_path, 
     assert run.experiment_id == "my-project"
     stellar.finish()
 
-
 def test_stellar_explicit_experiment_id_overrides_env(tmp_path, monkeypatch):
     """Explicit experiment_id parameter overrides env vars."""
     monkeypatch.setenv("TAU_EXPERIMENT_ID", "from-env")
@@ -470,7 +443,6 @@ def test_stellar_explicit_experiment_id_overrides_env(tmp_path, monkeypatch):
     run = stellar.init(project="p", name="r", experiment_id="explicit-id", dir=tmp_path)
     assert run.experiment_id == "explicit-id"
     stellar.finish()
-
 
 def _write_verb_aware_binary(path: Path, recorder: Path, *, supports_experiment: bool) -> None:
     """Write a fake CLI that accepts or rejects `experiment` like a real binary."""
@@ -488,7 +460,6 @@ def _write_verb_aware_binary(path: Path, recorder: Path, *, supports_experiment:
         "    f.write(json.dumps(argv) + '\\n')\n"
     )
     path.chmod(0o755)
-
 
 def test_find_portal_binary_prefers_taugrid_portal(tmp_path, monkeypatch):
     """taugrid-portal on PATH wins outright; no legacy probe is needed."""
@@ -509,7 +480,6 @@ def test_find_portal_binary_prefers_taugrid_portal(tmp_path, monkeypatch):
 
     assert _find_portal_binary() == str(portal)
 
-
 def test_find_portal_binary_honors_env_override(tmp_path, monkeypatch):
     from tau.workloads import _find_portal_binary
 
@@ -518,7 +488,6 @@ def test_find_portal_binary_honors_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("TAUGRID_PORTAL_BINARY", str(explicit))
 
     assert _find_portal_binary() == str(explicit)
-
 
 def test_stellar_sync_resolves_portal_binary_lazily(tmp_path, monkeypatch):
     """Constructing a Run must not require any CLI; only sync() resolves one."""

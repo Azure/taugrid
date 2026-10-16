@@ -44,8 +44,6 @@ type ADXQueuedConfig struct {
 	StatusPollInterval time.Duration
 }
 
-// ADXQueuedSink durably delivers canonical MetricEvent NDJSON through ADX
-// queued ingestion and acknowledges only terminal successful ingestion.
 type ADXQueuedSink struct {
 	Config     ADXQueuedConfig
 	Credential azcore.TokenCredential

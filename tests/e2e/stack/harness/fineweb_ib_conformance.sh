@@ -4,15 +4,6 @@
 
 set -euo pipefail
 
-# FineWeb 16xH200 InfiniBand conformance harness. Sibling to
-# large_gpu_conformance.sh: it resolves the flex-h200-ib target, consumes an
-# explicit platform kubeconfig/context contract plus an explicit workload
-# kubeconfig/context contract, resolves the dataset contract, runs a
-# longhaul-friendly skip-if-busy guard (graceful no-op when the H200 GPUs are
-# already in use), optionally performs platform-only InfiniBand preparation,
-# asserts the RDMA resource is advertised, runs the Go conformance test,
-# collects diagnostics, and cleans up the workload namespace.
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 IB_SCRIPT="${IB_SCRIPT:-${REPO_ROOT}/scripts/infiniband/enable-infiniband.sh}"
@@ -136,9 +127,6 @@ diagnostic_argocd_workload_queue_available() {
   return 0
 }
 
-# FINEWEB_WORKLOAD_ACCESS_MODE is explicit so the current direct-worker route is
-# labeled honestly (`platform-direct`) rather than silently reusing a current
-# context. `manager` is reserved for a future scoped workload identity.
 require_workload_access_mode() {
   local mode
   mode="$(require_env FINEWEB_WORKLOAD_ACCESS_MODE)"
@@ -152,9 +140,6 @@ require_workload_access_mode() {
   printf '%s' "$mode"
 }
 
-# FINEWEB_PLATFORM_PREP_MODE keeps worker-infrastructure mutation explicit. The
-# workflow can choose today's direct platform prep or future assert-only mode for
-# pre-provisioned RDMA.
 require_platform_prep_mode() {
   local mode
   mode="$(require_env FINEWEB_PLATFORM_PREP_MODE)"
@@ -292,8 +277,6 @@ workload_kubectl() {
   kubectl --kubeconfig "$(workload_kubeconfig)" --context "$(workload_context)" "$@"
 }
 
-# count_available_gpus prints how many nvidia.com/gpu are free on the Ready,
-# schedulable nodes matching $1 (allocatable minus non-terminal pod requests).
 count_available_gpus() {
   local selector="$1"
   local nodes_json node_names_json allocatable_gpu requested_gpu
@@ -311,7 +294,6 @@ resolve_target_config() {
   event_name="${GITHUB_EVENT_NAME:-${EVENT_NAME:-}}"
 
   should_run="true"
-  # workflow_dispatch can request a one-off run regardless of schedule gating.
   if [ "$event_name" = "schedule" ] && [ "${FINEWEB_RUN_ON_SCHEDULE:-true}" != "true" ]; then
     should_run="false"
   fi
@@ -379,13 +361,6 @@ ensure_managed_flavor_labels() {
   printf '%s\n' "$matching_nodes"
 }
 
-# resolve_fineweb_from_registry: when explicitly configured, resolve the managed
-# `tau dataset` registry as the dataset source of truth. The flex conformance
-# workflow intentionally does not default to this path yet: the live flex cluster
-# has no blob-training PVC in the ray namespace, and `-o env --staged-root` emits
-# file:// paths that require a real staging/mount path before the Ray workers can
-# consume them. Until that staging path exists, the durable HTTP shard env contract
-# remains the default working path.
 resolve_fineweb_from_registry() {
   local dataset_ref registry namespace stage_root env_block wctx wkcfg
   registry="${FINEWEB_DATASET_REGISTRY:-}"
@@ -442,18 +417,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-
 def csv_values(name):
     values = [item.strip() for item in os.environ[name].split(",")]
     if any(value == "" for value in values):
         raise ValueError(f"{name} contains an empty item; remove blank CSV entries")
     return values
 
-
 def safe_uri(uri):
     parsed = urllib.parse.urlsplit(uri)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-
 
 def validate_shard_uri(index, uri):
     parsed = urllib.parse.urlsplit(uri)
@@ -481,7 +453,6 @@ def validate_shard_uri(index, uri):
             f"FINEWEB_DATASET_URIS item {index} must point to a .bin shard ({safe_uri(uri)})"
         )
 
-
 def validate_http_reachable(index, uri):
     parsed = urllib.parse.urlsplit(uri)
     if parsed.scheme not in {"http", "https"}:
@@ -504,7 +475,6 @@ def validate_http_reachable(index, uri):
             f"FINEWEB_DATASET_URIS item {index} is not reachable "
             f"({safe_uri(uri)}): {exc.reason}"
         ) from exc
-
 
 try:
     uris = csv_values("FINEWEB_DATASET_URIS")
@@ -588,9 +558,6 @@ delete_fineweb_rayjob() {
   echo "Deleted stale FineWeb RayJob ${FINEWEB_RAYJOB_NAME} from shared namespace ${namespace}"
 }
 
-# skip-if-busy: longhaul guard. It first removes the fixed-name FineWeb RayJob
-# from an interrupted prior run, then sets should_run=false (graceful no-op) when
-# fewer than REQUIRED_GPUS are available.
 skip_if_busy() {
   local selector available
   assert_platform_access_contract
@@ -610,12 +577,6 @@ skip_if_busy() {
   echo "Cluster idle enough: ${available} GPUs available; proceeding."
 }
 
-# export_ib_node_selector ensures GPU_NODE_SELECTOR_KEY/VALUE are exported so the IB
-# enablement script scopes its rdma-resource wait to the H200 nodes only. On the mixed
-# flex cluster (A100 + H200) the script's default selector (nvidia.com/gpu.present=true)
-# would otherwise wait for rdma on EVERY GPU node, and the A100 nodes never advertise it,
-# timing out install. When the caller did not set KEY/VALUE explicitly, derive them from
-# GPU_SELECTOR_EXPR (key=value) so manual harness runs scope correctly too.
 export_ib_node_selector() {
   if [ -n "${GPU_NODE_SELECTOR_KEY:-}" ] && [ -n "${GPU_NODE_SELECTOR_VALUE:-}" ]; then
     export GPU_NODE_SELECTOR_KEY GPU_NODE_SELECTOR_VALUE

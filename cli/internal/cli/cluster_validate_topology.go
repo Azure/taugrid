@@ -428,7 +428,6 @@ type topologyClusterQueueDoc struct {
 		Name string `json:"name"`
 	} `json:"metadata"`
 	Spec struct {
-		// Kueue v1beta1 uses cohort; v1beta2 uses cohortName.
 		Cohort         string `json:"cohort"`
 		CohortName     string `json:"cohortName"`
 		ResourceGroups []struct {
@@ -488,8 +487,6 @@ func quotaHasCapacity(nominal kueueapi.Quantity, borrowingLimit *kueueapi.Quanti
 	if borrowingLimit != nil {
 		return borrowingLimit.Int64() > 0
 	}
-	// In a cohort, an omitted borrowingLimit means unlimited borrowing. Without
-	// a cohort, Kueue requires borrowingLimit to be omitted and no borrowing is possible.
 	return hasCohort
 }
 

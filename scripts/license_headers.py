@@ -117,7 +117,6 @@ MIT_PATTERN = re.compile(
 PYTHON_ENCODING_PATTERN = re.compile(r"coding[:=]\s*[-\w.]+")
 UTF8_BOM = b"\xef\xbb\xbf"
 
-
 def repository_root() -> Path:
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -127,7 +126,6 @@ def repository_root() -> Path:
     )
     return Path(result.stdout.strip())
 
-
 def tracked_and_untracked_files(root: Path) -> list[str]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
@@ -136,7 +134,6 @@ def tracked_and_untracked_files(root: Path) -> list[str]:
         stdout=subprocess.PIPE,
     )
     return sorted(path.decode("utf-8") for path in result.stdout.split(b"\0") if path)
-
 
 def load_exclusions(root: Path) -> tuple[set[str], tuple[str, ...]]:
     exact: set[str] = set()
@@ -152,17 +149,14 @@ def load_exclusions(root: Path) -> tuple[set[str], tuple[str, ...]]:
             exact.add(line)
     return exact, tuple(prefixes)
 
-
 def is_excluded(path: str, exact: set[str], prefixes: tuple[str, ...]) -> bool:
     return path in exact or path.startswith(prefixes)
-
 
 def source_name(path: str) -> str:
     name = Path(path).name
     while name.lower().endswith(".tmpl"):
         name = name[:-5]
     return name
-
 
 def header_for(path: str) -> tuple[str, ...] | None:
     name = source_name(path)
@@ -174,7 +168,6 @@ def header_for(path: str) -> tuple[str, ...] | None:
     if lower_name == "dockerfile" or lower_name.startswith("dockerfile."):
         return HASH_HEADER
     return EXTENSION_HEADERS.get(Path(lower_name).suffix)
-
 
 def source_files(root: Path) -> list[tuple[str, tuple[str, ...]]]:
     exact, prefixes = load_exclusions(root)
@@ -188,19 +181,15 @@ def source_files(root: Path) -> list[tuple[str, tuple[str, ...]]]:
             files.append((relative_path, header))
     return files
 
-
 def leading_text(text: str) -> str:
     return "\n".join(text.splitlines()[:40])
-
 
 def has_complete_header(text: str) -> bool:
     prefix = leading_text(text)
     return bool(COPYRIGHT_PATTERN.search(prefix) and MIT_PATTERN.search(prefix))
 
-
 def has_copyright_notice(text: str) -> bool:
     return bool(COPYRIGHT_PATTERN.search(leading_text(text)))
-
 
 def insertion_index(path: str, lines: list[str]) -> int:
     if not lines:
@@ -228,7 +217,6 @@ def insertion_index(path: str, lines: list[str]) -> int:
         index += 1
     return index
 
-
 def add_header(path: str, text: str, header: tuple[str, ...]) -> str:
     newline = "\r\n" if "\r\n" in text else "\n"
     lines = text.splitlines(keepends=True)
@@ -240,7 +228,6 @@ def add_header(path: str, text: str, header: tuple[str, ...]) -> str:
     separator = newline * 2 if after else newline
     return before + newline.join(header) + separator + after
 
-
 def read_source(path: Path) -> tuple[bool, str]:
     data = path.read_bytes()
     has_bom = data.startswith(UTF8_BOM)
@@ -248,13 +235,11 @@ def read_source(path: Path) -> tuple[bool, str]:
         data = data[len(UTF8_BOM) :]
     return has_bom, data.decode("utf-8")
 
-
 def write_source(path: Path, has_bom: bool, text: str) -> None:
     data = text.encode("utf-8")
     if has_bom:
         data = UTF8_BOM + data
     path.write_bytes(data)
-
 
 def check_headers() -> int:
     root = repository_root()
@@ -278,7 +263,6 @@ def check_headers() -> int:
         "header; do not add a Microsoft copyright notice to third-party code."
     )
     return 1
-
 
 def add_headers() -> int:
     root = repository_root()

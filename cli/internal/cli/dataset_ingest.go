@@ -20,17 +20,10 @@ import (
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
-// ingestWorkerCmdName is the name of the hidden ingest-worker subcommand. It
-// is a constant so the ingest command and the worker command stay in sync.
 const ingestWorkerCmdName = "ingest-worker"
 
-// ConfigMap size guard: manifests over this limit cannot be transported via a
-// Kubernetes ConfigMap (the 1 MiB limit minus headroom for metadata).
-const configMapPayloadLimit = 500 * 1024 // 500 KiB
+const configMapPayloadLimit = 500 * 1024
 
-// newDatasetIngestRegistryClient is kept as a seam so command tests can prove
-// workspace mode never opens a caller-side registry. Only direct/file mode uses
-// it; workspace workers construct their registry under workload identity.
 var newDatasetIngestRegistryClient = func(rf registryFlags) (*dataset.Registry, error) {
 	return rf.inClusterRegistryClient()
 }
@@ -92,7 +85,6 @@ Security:
 			if sourceRoot == "" {
 				return fmt.Errorf("--source-root is required")
 			}
-			// Security: reject SAS/key/http URLs.
 			if err := datasetingest.ValidateAzureURL(sourceRoot); err != nil {
 				return fmt.Errorf("--source-root: %w", err)
 			}
@@ -105,7 +97,6 @@ Security:
 				}
 			}
 
-			// Validate workspace-mode security flags before any network/disk I/O.
 			isLocalSource := isFileIngestURI(sourceRoot)
 			if !isLocalSource {
 				if workspace == "" {
@@ -125,17 +116,12 @@ Security:
 				}
 			}
 
-			// Workspace mode intentionally does not construct or read a registry
-			// in the caller process. The Job's workload identity loads the
-			// immutable record, resolves the default destination, and validates an
-			// explicit destination before copying bytes.
 			if !isLocalSource {
 				return runIngestWorkspace(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(),
 					ref.Name, ref.Version, sourceRoot, destination, workerImage, workspace,
 					rf.registry, rf.kubeContext, rf.systemNamespace, wait, dryRun, output)
 			}
 
-			// Direct/file mode may read the caller-selected registry.
 			reg, err := newDatasetIngestRegistryClient(rf)
 			if err != nil {
 				return err
@@ -162,24 +148,14 @@ Security:
 	return cmd
 }
 
-// datasetIngestResultSchemaVersion is the schema version of the stable
-// datasetIngestResult emitted by a successful waited ingest.
 const datasetIngestResultSchemaVersion = 1
 
-// datasetIngestResult is the stable schema emitted by a successful waited
-// ingest (local or workspace mode). It combines the ingest status (readiness
-// evidence: state, per-file proofs, verified totals) with the immutable
-// resolved reference so callers get both the verification proof AND a pinned,
-// ready-to-consume dataset reference in one document.
 type datasetIngestResult struct {
 	SchemaVersion int                       `json:"schema_version"`
 	Status        dataset.IngestStatus      `json:"status"`
 	Reference     dataset.ResolvedReference `json:"reference"`
 }
 
-// buildDatasetIngestResult assembles the stable result from a record and its
-// terminal ingest status. The resolved reference is derived from the immutable
-// record, so it carries the pinned digest and every consumption mode.
 func buildDatasetIngestResult(rec dataset.Record, status dataset.IngestStatus) datasetIngestResult {
 	ref := dataset.BuildReference(rec, dataset.ReferenceOptions{
 		DurableDatasetsDir: storage.DurableDatasetsDir,
@@ -193,8 +169,6 @@ func buildDatasetIngestResult(rec dataset.Record, status dataset.IngestStatus) d
 	}
 }
 
-// printDatasetIngestResult renders the human-readable form: the ingest status
-// followed by the resolved reference's pinned digest and recommended mode.
 func printDatasetIngestResult(w io.Writer, res datasetIngestResult) error {
 	if err := printIngestStatus(w, res.Status); err != nil {
 		return err
@@ -207,8 +181,6 @@ func printDatasetIngestResult(w io.Writer, res datasetIngestResult) error {
 	return nil
 }
 
-// runIngestLocal runs the worker logic directly in-process for a local
-// file:// source root. This is the primary E2E-testable path.
 func runIngestLocal(ctx context.Context, out io.Writer, name, version string,
 	reg *dataset.Registry, rec dataset.Record,
 	sourceRoot, destination string, dryRun bool, output string,
@@ -231,8 +203,6 @@ func runIngestLocal(ctx context.Context, out io.Writer, name, version string,
 		return nil
 	}
 
-	// EnsureRegister is idempotent; here the record is already loaded so we
-	// just initialise the status if needed.
 	_, _, err = reg.InitIngestStatus(ctx, rec)
 	if err != nil {
 		return fmt.Errorf("init ingest status: %w", err)
@@ -268,8 +238,6 @@ func parseLocalSource(sourceRoot string) (string, error) {
 	return filepath.Clean(dir), nil
 }
 
-// parseLocalDestination extracts the filesystem directory from a destination
-// URI. Accepts "file:///path", "file://path", or a bare path. Rejects az://.
 func parseLocalDestination(destination string) (string, error) {
 	if strings.HasPrefix(destination, "az://") {
 		return "", fmt.Errorf(
@@ -291,10 +259,6 @@ func parseLocalDestination(destination string) (string, error) {
 	return filepath.Clean(dir), nil
 }
 
-// runIngestWorkspace renders and applies a hardened batch/v1 Job in the
-// TauWorkspace's target namespace that runs the ingest worker under the
-// workspace's workload identity. The worker reads the registered record and
-// writes ingest status itself, so no record ConfigMap is needed.
 func runIngestWorkspace(
 	ctx context.Context, out, errOut io.Writer,
 	name, version string,
@@ -302,7 +266,6 @@ func runIngestWorkspace(
 	registry, kubeContext, systemNamespace string,
 	wait, dryRun bool, output string,
 ) error {
-	// Fetch and validate the workspace identity (Ready, namespace, WI SA+client).
 	ws, err := datasetFetchWorkspace(ctx, kubeContext, firstNonEmpty(systemNamespace, defaultSystemNamespace()), wsName)
 	if err != nil {
 		return fmt.Errorf("fetch workspace %q: %w", wsName, err)
@@ -375,9 +338,6 @@ func runIngestWorkspace(
 		return fmt.Errorf("ingest Job %s/%s failed", ident.Namespace, jobName)
 	}
 
-	// Success: the worker emits the complete stable result, including its
-	// workspace-identity-derived immutable reference. The caller does not read
-	// the registry to reconstruct either field.
 	result, err := parseWorkerOutput(logs)
 	if err != nil {
 		return fmt.Errorf("read ingest result from worker logs: %w", err)
@@ -508,8 +468,6 @@ The exit code is non-zero when the state is 'failed'.`,
 	return cmd
 }
 
-// runStatusWorkspace renders a hidden status-worker Job under the workspace
-// workload identity, waits for it, and parses the IngestStatus from its logs.
 func runStatusWorkspace(
 	ctx context.Context, errOut io.Writer,
 	name, version string, rf registryFlags,
@@ -609,9 +567,6 @@ func printIngestStatus(w io.Writer, s dataset.IngestStatus) error {
 	return tw.Flush()
 }
 
-// validateDigestPinnedImage rejects a worker image that is not pinned by an
-// immutable digest. A moved tag is a supply-chain hole for a privileged copy
-// Job, so mutable references are refused.
 func validateDigestPinnedImage(image string) error {
 	if !strings.Contains(image, "@sha256:") {
 		return fmt.Errorf(

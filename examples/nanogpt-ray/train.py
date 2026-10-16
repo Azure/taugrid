@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
@@ -33,7 +32,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 @dataclass
 class GPTConfig:
     vocab_size: int = 50304
@@ -45,12 +43,10 @@ class GPTConfig:
     use_rmsnorm: bool = False
     activation: str = "gelu"
 
-
 def make_norm(cfg: GPTConfig) -> nn.Module:
     if cfg.use_rmsnorm:
         return nn.RMSNorm(cfg.n_embd)
     return nn.LayerNorm(cfg.n_embd)
-
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: GPTConfig):
@@ -72,7 +68,6 @@ class CausalSelfAttention(nn.Module):
         y = y.transpose(1, 2).contiguous().view(bsz, seq, channels)
         return self.c_proj(y)
 
-
 class MLP(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
@@ -88,7 +83,6 @@ class MLP(nn.Module):
             x = F.gelu(x, approximate="tanh")
         return self.c_proj(x)
 
-
 class Block(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
@@ -101,7 +95,6 @@ class Block(nn.Module):
         x = x + self.attn(self.ln_1(x))
         x = x + self.mlp(self.ln_2(x))
         return x
-
 
 class GPT(nn.Module):
     def __init__(self, cfg: GPTConfig):
@@ -136,14 +129,11 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.reshape(-1))
         return logits, loss
 
-
 def env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
-
 def env_float(name: str, default: float) -> float:
     return float(os.environ.get(name, str(default)))
-
 
 def candidate_token_files(root: Path) -> Iterable[Path]:
     bases = []
@@ -160,12 +150,10 @@ def candidate_token_files(root: Path) -> Iterable[Path]:
             for pattern in ("**/*.bin", "**/*.npy", "**/*.pt", "**/*.txt"):
                 yield from sorted(base.glob(pattern))
 
-
 def append_jsonl(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
-
 
 class AsyncJSONLLogger:
     def __init__(self, path: Path) -> None:
@@ -201,7 +189,6 @@ class AsyncJSONLLogger:
                 finally:
                     self._queue.task_done()
 
-
 def log_jsonl(sink: Path | AsyncJSONLLogger | None, row: dict) -> None:
     if sink is None:
         return
@@ -210,14 +197,12 @@ def log_jsonl(sink: Path | AsyncJSONLLogger | None, row: dict) -> None:
         return
     append_jsonl(sink, row)
 
-
 def initialize_history(config: dict) -> Path:
     history_path = Path(config["out_dir"]) / "stellar" / "history.jsonl"
     history_path.parent.mkdir(parents=True, exist_ok=True)
     history_path.unlink(missing_ok=True)
     config["history_initialized"] = True
     return history_path
-
 
 def prepare_fineweb_smoke_tokens(root: Path, target_tokens: int, history_path: Path | AsyncJSONLLogger | None = None) -> Path | None:
     if os.environ.get("NANOGPT_PREPARE_FINEWEB", "0") != "1":
@@ -345,15 +330,12 @@ def prepare_fineweb_smoke_tokens(root: Path, target_tokens: int, history_path: P
         print(f"warning: failed to prepare FineWeb smoke tokens: {exc}", flush=True)
         return None
 
-
 def csv_env(name: str) -> list[str]:
     return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
-
 
 def safe_uri(uri: str) -> str:
     parsed = urllib.parse.urlsplit(uri)
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -361,7 +343,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
 
 def download_token_shard(uri: str, expected_sha256: str | None, rank: int, kind: str) -> Path:
     cache_dir = Path(os.environ.get("NANOGPT_SHARD_CACHE_DIR", "/tmp/nanogpt-shards"))
@@ -393,7 +374,6 @@ def download_token_shard(uri: str, expected_sha256: str | None, rank: int, kind:
             time.sleep((2**attempt) + random.uniform(0, 3))
     raise AssertionError("unreachable")
 
-
 def load_uri_tokens(rank: int, *, kind: str) -> tuple[np.memmap | None, str]:
     prefix = "NANOGPT_VAL_DATASET" if kind == "validation" else "NANOGPT_DATASET"
     uris = csv_env(prefix + "_URIS")
@@ -405,7 +385,6 @@ def load_uri_tokens(rank: int, *, kind: str) -> tuple[np.memmap | None, str]:
     index = rank % len(uris)
     shard = download_token_shard(uris[index], sha256s[index] if sha256s else None, rank, kind)
     return np.memmap(shard, dtype=np.uint16, mode="r"), safe_uri(uris[index])
-
 
 def load_tokens(data_root: Path, vocab_size: int, fallback_tokens: int, *, attempted_prepare: bool = False, rank: int = 0) -> tuple[torch.Tensor | np.memmap, str]:
     uri_tokens, uri_source = load_uri_tokens(rank, kind="train")
@@ -419,14 +398,13 @@ def load_tokens(data_root: Path, vocab_size: int, fallback_tokens: int, *, attem
             elif path.suffix == ".npy":
                 tokens = np.load(path, mmap_mode="r")
             elif path.suffix == ".bin":
-                # llm.c/nanoGPT token dumps are commonly uint16 token ids.
                 tokens = np.memmap(path, dtype=np.uint16, mode="r")
             else:
                 data = path.read_bytes()
                 tokens = torch.tensor(list(data), dtype=torch.long)
             if token_count(tokens) > 2:
                 return tokens, str(path)
-        except Exception as exc:  # keep looking; one stale shard should not kill discovery
+        except Exception as exc:
             print(f"warning: failed to load token file {path}: {exc}", flush=True)
     prepared = None if attempted_prepare else prepare_fineweb_smoke_tokens(data_root, fallback_tokens)
     if prepared is not None:
@@ -439,13 +417,11 @@ def load_tokens(data_root: Path, vocab_size: int, fallback_tokens: int, *, attem
     repeat = max(1, math.ceil(fallback_tokens / encoded.numel()))
     return encoded.repeat(repeat)[:fallback_tokens], "fallback:synthetic-byte-corpus"
 
-
 def load_validation_tokens(data_root: Path, vocab_size: int, fallback_tokens: int, rank: int) -> tuple[torch.Tensor | np.memmap | None, str]:
     uri_tokens, uri_source = load_uri_tokens(rank, kind="validation")
     if uri_tokens is not None:
         return uri_tokens, uri_source
     return None, ""
-
 
 def load_hellaswag_examples(limit: int) -> tuple[list[dict], str]:
     if limit <= 0:
@@ -477,18 +453,15 @@ def load_hellaswag_examples(limit: int) -> tuple[list[dict], str]:
         print(f"warning: failed to load HellaSwag examples: {exc}", flush=True)
         return [], f"unavailable:{exc}"
 
-
 def token_count(tokens: torch.Tensor | np.ndarray | np.memmap) -> int:
     if isinstance(tokens, torch.Tensor):
         return int(tokens.numel())
     return int(tokens.size)
 
-
 def token_window(tokens: torch.Tensor | np.ndarray | np.memmap, start: int, stop: int) -> torch.Tensor:
     if isinstance(tokens, torch.Tensor):
         return tokens[start:stop].long()
     return torch.from_numpy(np.asarray(tokens[start:stop], dtype=np.int64))
-
 
 def sample_batch(
     tokens: torch.Tensor | np.ndarray | np.memmap,
@@ -509,7 +482,6 @@ def sample_batch(
     x = torch.stack([token_window(tokens, token_start + int(i), token_start + int(i) + block_size) for i in starts]).to(device) % vocab_size
     y = torch.stack([token_window(tokens, token_start + int(i) + 1, token_start + int(i) + 1 + block_size) for i in starts]).to(device) % vocab_size
     return x, y
-
 
 def eval_batch(
     tokens: torch.Tensor | np.ndarray | np.memmap,
@@ -542,7 +514,6 @@ def eval_batch(
     y = torch.stack([token_window(tokens, token_start + i + 1, token_start + i + 1 + block_size) for i in starts]).to(device) % vocab_size
     return x, y
 
-
 def gpt_config(model: nn.Module) -> GPTConfig:
     inner = model
     for _ in range(4):
@@ -555,12 +526,10 @@ def gpt_config(model: nn.Module) -> GPTConfig:
         break
     return inner.cfg
 
-
 def maybe_autocast(device: torch.device, enabled: bool):
     if enabled and device.type == "cuda":
         return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
     return nullcontext()
-
 
 @torch.no_grad()
 def estimate_loss(
@@ -600,7 +569,6 @@ def estimate_loss(
     model.train()
     return sum(losses) / len(losses)
 
-
 @torch.no_grad()
 def estimate_hellaswag(model: GPT, examples: list[dict], device: torch.device, *, use_bf16: bool = False) -> float | None:
     if not examples:
@@ -632,7 +600,6 @@ def estimate_hellaswag(model: GPT, examples: list[dict], device: torch.device, *
     model.train()
     return correct / len(examples)
 
-
 def configure_optimizer(model: nn.Module, lr: float, weight_decay: float) -> torch.optim.Optimizer:
     decay = []
     no_decay = []
@@ -653,7 +620,6 @@ def configure_optimizer(model: nn.Module, lr: float, weight_decay: float) -> tor
         eps=1e-8,
     )
 
-
 def learning_rate(step: int, total_steps: int, base_lr: float, min_lr: float, warmup_steps: int, cooldown_frac: float) -> float:
     if warmup_steps > 0 and step < warmup_steps:
         return base_lr * float(step + 1) / float(warmup_steps)
@@ -666,12 +632,10 @@ def learning_rate(step: int, total_steps: int, base_lr: float, min_lr: float, wa
     progress = min(1.0, float(step - cooldown_start) / float(max(1, total_steps - cooldown_start)))
     return min_lr + 0.5 * (base_lr - min_lr) * (1.0 + math.cos(math.pi * progress))
 
-
 def safe_perplexity(loss: float) -> float:
     if math.isnan(loss):
         return float("nan")
     return math.exp(min(50.0, loss))
-
 
 def should_stop_at_target(config: dict, best_val: float, device: torch.device) -> bool:
     consecutive = int(config.get("target_consecutive_evals", 1))
@@ -685,7 +649,6 @@ def should_stop_at_target(config: dict, best_val: float, device: torch.device) -
         torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MAX)
         return bool(flag.item())
     return bool(local_stop)
-
 
 def train_worker(config: dict) -> dict:
     if config.get("local_smoke"):
@@ -932,7 +895,6 @@ def train_worker(config: dict) -> dict:
         (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return {"train_loss": final_train, "val_loss": final_val, "best_val_loss": best_val}
 
-
 def build_config(args: argparse.Namespace) -> dict:
     run_name = args.run_name or os.environ.get("TAU_RUN_NAME") or os.environ.get("JOB_NAME") or "nanogpt-fineweb-ray"
     out_dir = Path(args.out_dir or os.environ.get("TAU_OUTPUT_DIR") or f"/data/checkpoints/workflows/{run_name}")
@@ -983,7 +945,6 @@ def build_config(args: argparse.Namespace) -> dict:
         },
     }
 
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--local-smoke", action="store_true", help="run without Ray for local syntax/smoke validation")
@@ -1018,7 +979,6 @@ def main() -> None:
     )
     result = trainer.fit()
     print(result.metrics)
-
 
 if __name__ == "__main__":
     main()

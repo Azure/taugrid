@@ -9,11 +9,8 @@ import (
 	"sort"
 )
 
-const maxJSONSize = 64 * 1024 // 64 KiB
+const maxJSONSize = 64 * 1024
 
-// SortedMarshal serializes v to JSON with map keys sorted alphabetically at
-// every nesting level. This guarantees deterministic output: identical input
-// always produces byte-identical JSON, regardless of Go map iteration order.
 func SortedMarshal(v any) ([]byte, error) {
 	sorted := sortKeys(v)
 	b, err := json.Marshal(sorted)

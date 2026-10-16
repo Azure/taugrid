@@ -1,8 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-// Package results turns eval/train JSON artifacts into the small, stable
-// researcher-facing summary/dashboard shape used by Tau read commands.
 package results
 
 import (
@@ -12,8 +10,6 @@ import (
 	"html/template"
 )
 
-// Summary is the normalized result shape for dashboards and machine-readable
-// run summaries. It is intentionally smaller than the source artifact.
 type Summary struct {
 	SchemaVersion int          `json:"schema_version"`
 	Kind          string       `json:"kind"`
@@ -28,7 +24,6 @@ type Summary struct {
 	Error         *ResultError `json:"error,omitempty"`
 }
 
-// Metric is one displayable scalar in a result summary.
 type Metric struct {
 	Name   string   `json:"name"`
 	Value  *float64 `json:"value,omitempty"`
@@ -37,7 +32,6 @@ type Metric struct {
 	Better string   `json:"better,omitempty"`
 }
 
-// Display returns a human-friendly value for HTML tables.
 func (m Metric) Display() string {
 	if m.Text != "" {
 		return m.Text
@@ -48,19 +42,16 @@ func (m Metric) Display() string {
 	return fmt.Sprintf("%.4g", *m.Value)
 }
 
-// Artifact is a path or command-visible file associated with the run.
 type Artifact struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 }
 
-// ResultError is the compact failure shape surfaced in dashboards.
 type ResultError struct {
 	Kind    string `json:"kind"`
 	Message string `json:"message"`
 }
 
-// Summarize normalizes known Tau result JSON contracts.
 func Summarize(raw []byte) (Summary, error) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -74,7 +65,6 @@ func Summarize(raw []byte) (Summary, error) {
 	}
 }
 
-// SummaryJSON returns the normalized summary as formatted JSON.
 func SummaryJSON(raw []byte) ([]byte, error) {
 	s, err := Summarize(raw)
 	if err != nil {
@@ -87,7 +77,6 @@ func SummaryJSON(raw []byte) ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
-// HTML returns a standalone dashboard document for a result artifact.
 func HTML(raw []byte) ([]byte, error) {
 	s, err := Summarize(raw)
 	if err != nil {

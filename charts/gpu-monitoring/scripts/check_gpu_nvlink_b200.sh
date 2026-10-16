@@ -2,8 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# This plugin checks if is the GPU NVlink is working correctly.
-
 readonly OK=0
 readonly NONOK=1
 readonly UNKNOWN=2
@@ -22,7 +20,6 @@ else
 fi
 readonly EXPECTED_NVLINK_COUNT=12
 
-# Detect GPU type — prefer env var, fallback to nvidia-smi
 if [ -z "${GPU_TYPE:-}" ]; then
   if gpu_name_output=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>&1); then
     GPU_TYPE=$(printf '%s\n' "$gpu_name_output" | head -1)
@@ -40,9 +37,6 @@ case "$GPU_TYPE" in
     ;;
 esac
 
-
-
-# Check if nvlink is enabled
 if nvlink_status=$(nvidia-smi nvlink --status 2>&1); then
   :
 else
@@ -55,8 +49,6 @@ if [ -z "$nvlink_status" ]; then
   exit $NONOK
 fi
 
-
-# Check the number of nvlinks
 if topo_output=$(nvidia-smi topo -m 2>&1); then
   NVL_COUNT=$(printf '%s\n' "$topo_output" | grep -o 'NV18' | wc -l | tr -d '[:space:]')
 else
@@ -69,7 +61,6 @@ if [[ $NVL_COUNT -ne $EXPECTED_NVLINK_COUNT ]]; then
   exit $NONOK
 fi
 
-# Check effective bandwidth of all nvlinks
 for ((gpu_id=0; gpu_id<_NUM_GPU; gpu_id++)); do
 
   if nvl_output=$(nvidia-smi nvlink --id="$gpu_id" --status 2>&1); then

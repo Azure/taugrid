@@ -12,7 +12,6 @@ release:
   name: adx-mon
   namespace: adx-mon
 tests:
-  # ── gpu-health ─────────────────────────────────────────────
   - it: should render gpu-health Function CR
     template: templates/functions/gpu-health.yaml
     asserts:
@@ -58,7 +57,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── node-health ────────────────────────────────────────────
   - it: should render node-health Function CR
     template: templates/functions/node-health.yaml
     asserts:
@@ -90,7 +88,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── container-metrics ──────────────────────────────────────
   - it: should render container-metrics Function CR
     template: templates/functions/container-metrics.yaml
     asserts:
@@ -122,7 +119,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── kueue-metrics ──────────────────────────────────────────
   - it: should render kueue-metrics Function CR
     template: templates/functions/kueue-metrics.yaml
     asserts:
@@ -160,7 +156,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── nccl-errors ────────────────────────────────────────────
   - it: should render nccl-errors Function CR
     template: templates/functions/nccl-errors.yaml
     asserts:
@@ -192,7 +187,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── xid-errors ─────────────────────────────────────────────
   - it: should render xid-errors Function CR
     template: templates/functions/xid-errors.yaml
     asserts:
@@ -224,7 +218,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── training-job-summary ───────────────────────────────────
   - it: should render training-job-summary Function CR
     template: templates/functions/training-job-summary.yaml
     asserts:
@@ -265,7 +258,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  # ── Cross-cutting ──────────────────────────────────────────
   - it: should set correct labels on all Function CRs
     template: templates/functions/gpu-health.yaml
     asserts:
@@ -295,7 +287,6 @@ tests:
           path: spec.database
           value: "CustomMetricsDB"
 
-  # ── AuditEvents function ────────────────────────────────────
   - it: audit-events function renders with default values
     template: templates/functions/audit-events.yaml
     asserts:

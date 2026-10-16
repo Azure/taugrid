@@ -2,9 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-
-# This plugin checks if nvme is accessible and has the expected size
-
 readonly OK=0
 readonly NONOK=1
 
@@ -14,7 +11,6 @@ readonly EXPECTED_NVME_SIZE="${NVME_SIZE:-0}"
 
 nvmes=$(lsblk --nodeps --noheadings --output NAME,TYPE,SIZE | awk '$2 == "disk" && $1 ~ /^nvme/ {print $1 " " $3}')
 
-# find total number of nvme devices
 nvme_total=$(echo "$nvmes" | wc -l)
 if [[ "$nvme_total" -lt $EXPECTED_NVME_TOTAL ]]; then
   echo "Expected at least $EXPECTED_NVME_TOTAL nvme devices, found $nvme_total"

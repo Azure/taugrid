@@ -38,7 +38,7 @@ extract_catalog() {
   awk '
     /BEGIN GENERATED WORKLOAD PROFILES/ { copy=1; next }
     /END GENERATED WORKLOAD PROFILES/ { copy=0 }
-    copy && $0 !~ /^  #/ { print }
+    copy && $0 !~ /^
   ' "$1"
 }
 

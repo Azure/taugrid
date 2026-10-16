@@ -38,10 +38,8 @@ GENERATOR_NAME = "tau-py"
 _WORKLOAD_NAME_RE = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
 _RESERVED_BUILD_FILENAMES = frozenset({"tau_py_wrapper.py", "tau.yaml"})
 
-
 class BuildArtifactError(RuntimeError):
     """A deterministic Tau build could not be created or replayed."""
-
 
 @dataclass(frozen=True)
 class BuildOverrides:
@@ -77,7 +75,6 @@ class BuildOverrides:
             "worker_cpu_limit": self.worker_cpu_limit,
             "worker_memory_limit": self.worker_memory_limit,
         }
-
 
 def build_artifact(
     *,
@@ -165,7 +162,6 @@ def build_artifact(
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
 
-
 def load_artifact(path: pathlib.Path) -> tuple[pathlib.Path, dict[str, Any]]:
     """Load and verify a build index, staged-file paths, sizes, and digests."""
 
@@ -236,7 +232,6 @@ def load_artifact(path: pathlib.Path) -> tuple[pathlib.Path, dict[str, Any]]:
             )
     return root.resolve(), dict(index)
 
-
 @contextmanager
 def execution_config(
     root: pathlib.Path,
@@ -275,7 +270,6 @@ def execution_config(
         execution_path = tmp_path / config_path.name
         _write_canonical_yaml(execution_path, raw_config)
         yield execution_path
-
 
 def _write_workload(
     root: pathlib.Path,
@@ -421,7 +415,6 @@ def _write_workload(
         record["secret_sources"] = _secret_source_records(secret_sources)
     return record
 
-
 def _resolve_build_upstream(
     train_handle: Any,
     eval_handle: Any,
@@ -465,7 +458,6 @@ def _resolve_build_upstream(
         )
     return {"checkpoint": explicit}
 
-
 def _validate_handle_counts(
     train_handles: Sequence[tuple[str, Any]],
     eval_handles: Sequence[tuple[str, Any]],
@@ -483,13 +475,11 @@ def _validate_handle_counts(
             "v1 supports at most one per file"
         )
 
-
 def _resource_name(handle: Any) -> str:
     extra_manifest = getattr(handle, "_extra_manifest", {}) or {}
     naming = extra_manifest.get("resource_naming")
     prefix = naming.get("prefix") if isinstance(naming, Mapping) else None
     return f"{prefix or 'tau'}-{handle._params.name}"
-
 
 def _secret_source_records(sources: Mapping[str, SecretSource]) -> list[dict[str, Any]]:
     records = []
@@ -508,7 +498,6 @@ def _secret_source_records(sources: Mapping[str, SecretSource]) -> list[dict[str
             }
         )
     return records
-
 
 def _secret_sources_from_records(records: Sequence[Mapping[str, Any]]) -> dict[str, SecretSource]:
     sources: dict[str, SecretSource] = {}
@@ -534,7 +523,6 @@ def _secret_sources_from_records(records: Sequence[Mapping[str, Any]]) -> dict[s
         sources[env_name] = source
     return sources
 
-
 def _write_canonical_yaml(path: pathlib.Path, value: Mapping[str, Any]) -> None:
     try:
         rendered = yaml.safe_dump(
@@ -548,7 +536,6 @@ def _write_canonical_yaml(path: pathlib.Path, value: Mapping[str, Any]) -> None:
         raise BuildArtifactError(f"cannot serialize deterministic Tau build YAML: {exc}") from exc
     path.write_text(rendered, newline="\n")
 
-
 def _check_output_destination(path: pathlib.Path, *, force: bool) -> None:
     if not path.exists() and not path.is_symlink():
         return
@@ -558,7 +545,6 @@ def _check_output_destination(path: pathlib.Path, *, force: bool) -> None:
         raise BuildArtifactError(
             f"tau python build: refusing to replace non-Tau-build output: {path}"
         )
-
 
 def _artifact_file(root: pathlib.Path, value: Any, *, subject: str) -> pathlib.Path:
     raw = str(value or "")
@@ -574,7 +560,6 @@ def _artifact_file(root: pathlib.Path, value: Any, *, subject: str) -> pathlib.P
     if not candidate.is_file():
         raise BuildArtifactError(f"{subject} not found in Tau build: {raw!r}")
     return candidate
-
 
 def _make_local_paths_absolute(config: dict[str, Any], base_dir: pathlib.Path) -> None:
     run = config.get("run")
@@ -595,7 +580,6 @@ def _make_local_paths_absolute(config: dict[str, Any], base_dir: pathlib.Path) -
         extra_scripts.append(resolved + (separator + destination if separator else ""))
     if extra_scripts:
         workflow["extra_scripts"] = extra_scripts
-
 
 def _absolute_local_path(base_dir: pathlib.Path, value: str) -> str:
     path = pathlib.Path(value)

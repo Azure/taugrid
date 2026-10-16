@@ -97,24 +97,17 @@ func TestWorkspaceCreatePreviewDoesNotMutate(t *testing.T) {
 	}
 }
 
-// The workspace is created either way, so a subject nobody asserts has to be
-// visible: an operator who never sees it would read the workspace as already
-// granting researchers access.
 func TestWorkspaceCreateReportsAnInertSubject(t *testing.T) {
 	rendered := executeWorkspaceCreate(t, newWorkspaceCreateCLIRunner(), "research")
 	if !strings.Contains(rendered, `RBAC subject defaulted to Group "research"`) {
 		t.Fatalf("inert subject was not reported:\n%s", rendered)
 	}
-	// Nothing exists before --apply, so the fix is a rerun; naming the edit
-	// here would send the operator at an object that returns NotFound.
 	if !strings.Contains(rendered, "rerun with --principal-name <group>") {
 		t.Fatalf("preview named a remediation that cannot work yet:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "kubectl edit") {
 		t.Fatalf("preview pointed at an object it never created:\n%s", rendered)
 	}
-	// The default has to reach both the external principal and the RBAC
-	// subject, or the rendered subject would be unbindable.
 	for _, want := range []string{
 		"kubernetesSubject:\n    kind: Group\n    name: research",
 		"principalRef:\n    name: research\n    provider: entra",
@@ -125,8 +118,6 @@ func TestWorkspaceCreateReportsAnInertSubject(t *testing.T) {
 	}
 }
 
-// After --apply the object exists and v0 refuses a second create as
-// conflicting intent, so only an edit gets the operator to a real group.
 func TestWorkspaceCreateApplyNamesTheEditRemediation(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
 	createArgs := "-n tau-system create -f -"
@@ -139,9 +130,6 @@ func TestWorkspaceCreateApplyNamesTheEditRemediation(t *testing.T) {
 	}
 }
 
-// --subject-name alone binds a real group, so the workspace grants real
-// access. Claiming it is inert there would be the one wrong moment to be
-// wrong: the RoleBinding names kubernetesSubject, never principalRef.
 func TestWorkspaceCreateStaysSilentWhenOnlyTheSubjectIsNamed(t *testing.T) {
 	rendered := executeWorkspaceCreate(t, newWorkspaceCreateCLIRunner(),
 		"research", "--subject-name", "research-team")
@@ -153,8 +141,6 @@ func TestWorkspaceCreateStaysSilentWhenOnlyTheSubjectIsNamed(t *testing.T) {
 	}
 }
 
-// Naming the group is the normal path and must stay silent, or the notice
-// becomes noise operators learn to skip past.
 func TestWorkspaceCreateStaysSilentWhenPrincipalIsNamed(t *testing.T) {
 	rendered := executeWorkspaceCreate(t, newWorkspaceCreateCLIRunner(),
 		"research", "--principal-name", "researchers")
@@ -163,8 +149,6 @@ func TestWorkspaceCreateStaysSilentWhenPrincipalIsNamed(t *testing.T) {
 	}
 }
 
-// An explicitly-empty --system-namespace still resolves for the manifest, so
-// the notice has to resolve it too or it prints a command ending in a bare -n.
 func TestWorkspaceCreateNoticeResolvesTheDefaultSystemNamespace(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
 	createArgs := "-n tau-system create -f -"
@@ -177,8 +161,6 @@ func TestWorkspaceCreateNoticeResolvesTheDefaultSystemNamespace(t *testing.T) {
 	}
 }
 
-// executeWorkspaceCreateErr runs the command expecting failure, for the paths
-// where refusing is the behaviour under test.
 func executeWorkspaceCreateErr(t *testing.T, args ...string) error {
 	t.Helper()
 	withWorkspaceCreateCLIRunner(t, newWorkspaceCreateCLIRunner())
@@ -193,8 +175,6 @@ func executeWorkspaceCreateErr(t *testing.T, args ...string) error {
 	return err
 }
 
-// `--principal-name "$GROUP"` with GROUP unset used to fail loudly. It must not
-// now bind Group/<workspace-name> instead, so only an absent flag defaults.
 func TestWorkspaceCreateRejectsAnExplicitlyEmptyPrincipal(t *testing.T) {
 	err := executeWorkspaceCreateErr(t, "research", "--principal-name", "")
 	if !strings.Contains(err.Error(), "--principal-name must not be blank") {
@@ -202,9 +182,6 @@ func TestWorkspaceCreateRejectsAnExplicitlyEmptyPrincipal(t *testing.T) {
 	}
 }
 
-// The fallback is safe only because Entra asserts groups by object ID. A GitHub
-// team slug is shaped like a workspace name, so guessing one could grant a real
-// team researcher access.
 func TestWorkspaceCreateRefusesToGuessAGitHubTeam(t *testing.T) {
 	err := executeWorkspaceCreateErr(t, "research", "--principal-provider", "github")
 	if !strings.Contains(err.Error(), "--principal-name is required for --principal-provider github") {
@@ -212,10 +189,6 @@ func TestWorkspaceCreateRefusesToGuessAGitHubTeam(t *testing.T) {
 	}
 }
 
-// The notice hardcodes "Group", so the default must not survive a subject kind
-// it does not describe. Entra asserts Users by UPN and the controller can
-// create a ServiceAccount in the workspace namespace, so neither fallback is
-// provably inert.
 func TestWorkspaceCreateRefusesToGuessANonGroupSubject(t *testing.T) {
 	for _, kind := range []string{"User", "ServiceAccount"} {
 		t.Run(kind, func(t *testing.T) {
@@ -227,9 +200,6 @@ func TestWorkspaceCreateRefusesToGuessANonGroupSubject(t *testing.T) {
 	}
 }
 
-// An explicitly-empty --principal-provider still resolves to entra, so the
-// principal does default. Reading the raw flag would leave that workspace
-// created inert with nothing said about it.
 func TestWorkspaceCreateReportsAnInertSubjectWhenTheProviderIsDefaulted(t *testing.T) {
 	rendered := executeWorkspaceCreate(t, newWorkspaceCreateCLIRunner(),
 		"research", "--principal-provider", "")
@@ -238,9 +208,6 @@ func TestWorkspaceCreateReportsAnInertSubjectWhenTheProviderIsDefaulted(t *testi
 	}
 }
 
-// The notice asserts an absolute security property, so it must not survive the
-// one name shape that could make the defaulted subject real. Entra asserts
-// groups by object ID, and a UUID is a valid workspace name.
 func TestWorkspaceCreateRefusesAnObjectIDShapedName(t *testing.T) {
 	err := executeWorkspaceCreateErr(t, "f9a2b52f-f481-4ef7-917a-4d0fef04bba3")
 	if !strings.Contains(err.Error(), "object-ID-shaped") {
@@ -248,9 +215,6 @@ func TestWorkspaceCreateRefusesAnObjectIDShapedName(t *testing.T) {
 	}
 }
 
-// Previewing against a workspace that already exists must not recommend the
-// rerun: v0 permits one workspace, so `create --principal-name <group>` is
-// refused as conflicting intent and only an edit reaches a real group.
 func TestWorkspaceCreatePreviewNamesTheEditWhenTheWorkspaceExists(t *testing.T) {
 	runner := newWorkspaceCreateCLIRunner()
 	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = `{"items":[{
@@ -303,9 +267,6 @@ func TestWorkspaceCreateApplyCreatesOnlyTauWorkspace(t *testing.T) {
 	}
 }
 
-// A stock TauGrid install must look the same on every cluster, so `tau
-// workspace create` with no NAME has to produce the canonical workspace rather
-// than refusing. The name stays overridable; what must not vary is the default.
 func TestWorkspaceCreateDefaultsTheWorkspaceName(t *testing.T) {
 	rendered := executeWorkspaceCreate(t, newWorkspaceCreateCLIRunner(),
 		"--principal-provider", "entra",
@@ -365,9 +326,6 @@ func TestWorkspaceCreateRejectsConflictingSystemNamespaceAliases(t *testing.T) {
 	}
 }
 
-// The default must not become load-bearing: an operator naming the workspace
-// still wins, which is what keeps "clusters look the same" a default rather
-// than a constraint.
 func TestWorkspaceCreateExplicitNameOverridesDefault(t *testing.T) {
 	rendered := executeWorkspaceCreate(t, newWorkspaceCreateCLIRunner(),
 		"research",

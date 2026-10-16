@@ -9,14 +9,10 @@ import (
 	"strings"
 )
 
-// RawRunner is the kubectl seam. It matches core/kube.Runner's Raw method so
-// the CLI can pass the real runner and tests can pass a recorder.
 type RawRunner interface {
 	Raw(ctx context.Context, args []string, stdin []byte) (string, error)
 }
 
-// FetchOptions names the objects to read. ClusterQueue is required; LocalQueue
-// and Namespace are optional and only used for the workload census.
 type FetchOptions struct {
 	Workspace    string
 	Namespace    string
@@ -24,10 +20,6 @@ type FetchOptions struct {
 	ClusterQueue string
 }
 
-// Fetch reads the ClusterQueue, its ResourceFlavors, and the workspace's
-// LocalQueue. Only the ClusterQueue read is fatal: without it there is no quota
-// to report at all, whereas a missing flavor or LocalQueue degrades to a
-// warning so a researcher with partial RBAC still gets the numbers.
 func Fetch(ctx context.Context, r RawRunner, opts FetchOptions) (Report, error) {
 	cqName := strings.TrimSpace(opts.ClusterQueue)
 	if cqName == "" {

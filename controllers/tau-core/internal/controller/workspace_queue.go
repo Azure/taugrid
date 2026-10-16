@@ -26,10 +26,6 @@ var (
 	workloadPriorityClassGVK = schema.GroupVersionKind{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "WorkloadPriorityClass"}
 )
 
-// getDefaultWorkspaceQueue reads the cluster-wide workspace queue default from the
-// TauCluster singleton. It is the same name the TauGrid distribution gives its
-// baseline ClusterQueue, so a workspace that omits spec.queue still lands on a
-// reviewed queue instead of guessing.
 func (r *TauWorkspaceReconciler) getDefaultWorkspaceQueue(ctx context.Context) (string, error) {
 	var cluster tauv1alpha1.TauCluster
 	if err := r.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
@@ -42,8 +38,6 @@ func (r *TauWorkspaceReconciler) getDefaultWorkspaceQueue(ctx context.Context) (
 	return queue, nil
 }
 
-// reportUnresolvedQueue keeps an unresolvable workspace visible and Degraded
-// rather than reconciling namespace, RBAC, or identity against a guessed queue.
 func (r *TauWorkspaceReconciler) reportUnresolvedQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, message string) (ctrl.Result, error) {
 	conditions := []metav1.Condition{
 		boolCondition(tauv1alpha1.ConditionRBACReady, false, "QueueUnresolved", message, workspace.Generation),
@@ -66,10 +60,6 @@ func (r *TauWorkspaceReconciler) reportUnresolvedQueue(ctx context.Context, work
 	return ctrl.Result{RequeueAfter: notReadyRequeue}, nil
 }
 
-// reconcileQueue accepts an existing platform-owned LocalQueue or creates the
-// workspace LocalQueue when a same-named ClusterQueue exists. The latter is the
-// portable TauGrid bootstrap contract: Helm owns the ClusterQueue, while this
-// controller owns state that depends on a future workspace namespace.
 func (r *TauWorkspaceReconciler) reconcileQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (tauv1alpha1.WorkspaceQueueStatus, bool, string) {
 	localQueue := newQueueObject(localQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: workspace.Spec.Queue, Namespace: targetNamespace}, localQueue); err != nil {

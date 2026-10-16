@@ -12,15 +12,12 @@ import (
 	"github.com/Azure/taugrid/core/fileutil"
 )
 
-// FileCheckpointSet stores per-file offsets for newline-delimited JSON inputs.
 type FileCheckpointSet struct {
 	SchemaVersion string                    `json:"schema_version"`
 	Files         map[string]FileCheckpoint `json:"files"`
 	UpdatedAt     string                    `json:"updated_at"`
 }
 
-// ReadFileCheckpointSet reads a versioned JSONL checkpoint set. Missing files
-// initialize an empty checkpoint with the caller's schema version.
 func ReadFileCheckpointSet(path, schemaVersion string) (FileCheckpointSet, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -42,7 +39,6 @@ func ReadFileCheckpointSet(path, schemaVersion string) (FileCheckpointSet, error
 	return checkpoint, nil
 }
 
-// WriteFileCheckpointSet writes a versioned JSONL checkpoint set atomically.
 func WriteFileCheckpointSet(path, schemaVersion string, checkpoint FileCheckpointSet) error {
 	if schemaVersion == "" {
 		return fmt.Errorf("JSONL checkpoint schema version is required")
@@ -55,9 +51,6 @@ func WriteFileCheckpointSet(path, schemaVersion string, checkpoint FileCheckpoin
 	return fileutil.WriteJSONFileAtomic(path, checkpoint)
 }
 
-// InitializeFileCheckpointSetAtEnd creates a checkpoint set at the current end
-// of every matching file. Existing checkpoint sets are left unchanged so a
-// retry of the same consumer session resumes rather than re-baselining.
 func InitializeFileCheckpointSetAtEnd(path, schemaVersion string, inputs []string) (bool, error) {
 	if _, err := os.Stat(path); err == nil {
 		existing, err := ReadFileCheckpointSet(path, schemaVersion)

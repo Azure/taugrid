@@ -1,27 +1,3 @@
-# FineWeb 16xH200 InfiniBand conformance RayJob: Kueue admits a 16-worker Ray
-# Train job that shards a ~1.7B GPT across all 16 H200 GPUs with FSDP, talks NCCL
-# over InfiniBand (network-domain TAS + IPC_LOCK + a real /dev/shm), splits 8+8
-# across both H200 nodes, and persists its first checkpoint.
-#
-# The driver script is embedded directly (head-only initContainer + emptyDir at
-# /script) instead of mounted from a ConfigMap, matching PR1's
-# cli/internal/payload wire contract (issues #869/#871 PR3): the
-# FINEWEB_SCRIPT_PAYLOAD_B64 / FINEWEB_SCRIPT_PAYLOAD_DIGEST env values set
-# below are computed from the real fixtures/fineweb_ray_train.py file at test
-# time (see readFixture in tests/e2e/testcontext.go), so MultiKueue's
-# worker-cluster dispatch -- which does not replicate ConfigMaps -- has
-# everything the head pod needs inside the RayJob spec it copies over.
-#
-# NOTE: this comment intentionally does NOT spell the placeholder names in
-# {{DOUBLE_BRACE}} form -- readFixture's substitution is a blind text replace
-# of every "{{NAME}}" occurrence in the file, so writing the literal token
-# here would duplicate the (potentially large) base64 payload into this
-# comment on every substitution. The duplicate text is harmless to the
-# resulting Kubernetes object (YAML comments are dropped on parse, never
-# reach the API server), but it needlessly bloats the rendered fixture size
-# measured in tests -- see TestPayloadFixturesStayUnderSizeLimits in
-# tests/e2e/stack/payload_fixtures_test.go, which sizes the parsed+
-# JSON-marshaled object rather than raw YAML bytes for exactly this reason.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:
@@ -97,10 +73,6 @@ spec:
       template:
         metadata:
           annotations:
-            # Ray Job driver stdout lives in head-local /tmp/ray session logs,
-            # not the ray-head container stdout stream. This sidecar tails the
-            # driver log files into its own stdout so adx-mon can ship them via
-            # the existing Logs/ContainerLogs path without cluster credentials.
             adx-mon/log-destination: "Logs:ContainerLogs"
         spec:
           initContainers:
@@ -241,8 +213,6 @@ spec:
               discover_logs() {
                 local entry candidate real
                 local -a roots=("$ray_root/session_latest/logs")
-                # Default contract: tail /tmp/ray/session_latest/logs/job-driver-*.log,
-                # plus concrete session_* directories so session_latest flips do not drop logs.
                 shopt -s nullglob
                 for entry in "$ray_root"/session_*/logs; do
                   [[ -d "$entry" ]] && roots+=("$entry")
@@ -324,22 +294,10 @@ spec:
       template:
         metadata:
           labels:
-            # Dedicated, unique label: the 8+8 topology spread and the Go
-            # placement assertion both key on this so they never match unrelated
-            # Ray worker pods.
             e2e-test: fineweb-16xh200-ib
           {{FINEWEB_TAS_ANNOTATIONS}}
         spec:
           initContainers:
-          # The published Ray image is Azure Linux 3.0 and does NOT ship the RDMA
-          # userspace stack (libibverbs / the mlx5 verbs provider). Without it NCCL
-          # logs "Failed to open libibverbs.so[.1]" and silently falls back to the
-          # TCP socket transport ("Using network Socket"), so InfiniBand never
-          # engages even when placement selects the correct fabric. This
-          # initContainer stages a glibc/ABI-matched rdma-core (libibverbs,
-          # librdmacm, the mlx5 provider, libnl, and the /etc/libibverbs.d driver
-          # configs) into a shared volume that the worker then exposes to NCCL via
-          # LD_LIBRARY_PATH + the default provider/config mount points.
           - name: inject-ib-libs
             image: mcr.microsoft.com/azurelinux/base/core:3.0
             command:
@@ -353,10 +311,6 @@ spec:
               cp -aP /usr/lib/librdmacm.so* /ib/lib/
               cp -aP /usr/lib/libnl-3.so.200* /ib/lib/
               cp -aP /usr/lib/libnl-route-3.so.200* /ib/lib/
-              # Dereference (-L) the verbs providers: each provider (e.g.
-              # libmlx5-rdmav34.so) is a symlink to ../libmlx5.so.* in /usr/lib,
-              # which is OUTSIDE this copied dir. Following the symlink copies the
-              # real provider object so libibverbs can dlopen mlx5 in the worker.
               cp -aL /usr/lib/libibverbs/* /ib/providers/
               cp -aP /etc/libibverbs.d/* /ib/drivers/
               ls -la /ib/lib /ib/providers /ib/drivers
@@ -385,15 +339,6 @@ spec:
           - name: ray-worker
             image: {{RAY_IMAGE}}
             securityContext:
-              # Run as root so the added IPC_LOCK capability is EFFECTIVE: a
-              # non-root container gets the cap in its permitted set but the kernel
-              # clears it from the effective set on exec (Kubernetes does not set
-              # ambient capabilities), so mlock stays bound by the small default
-              # RLIMIT_MEMLOCK and InfiniBand's ibv_create_cq fails with
-              # "Cannot allocate memory". As root with CAP_IPC_LOCK, memory-region
-              # registration for IB/GPUDirect RDMA is unlimited. The proven
-              # nccl-tests IB job (scripts/infiniband) relies on the same root +
-              # IPC_LOCK combination.
               runAsUser: 0
               capabilities:
                 add:
@@ -403,16 +348,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            # Make the injected RDMA userspace stack discoverable: libibverbs and
-            # its deps live on LD_LIBRARY_PATH, the mlx5 verbs provider is mounted
-            # at the compiled-in provider dir (/usr/lib/libibverbs), and the driver
-            # configs at the default /etc/libibverbs.d so libibverbs auto-loads
-            # mlx5. This is what lets NCCL select NET/IB instead of NET/Socket.
             - name: LD_LIBRARY_PATH
               value: /opt/ib/lib
-            # Make libibverbs' provider search unambiguous: load the mlx5 verbs
-            # provider from the dir we bind-mount the providers into, regardless of
-            # the path libibverbs.so was compiled with.
             - name: IBV_DRIVERS_PATH
               value: /usr/lib/libibverbs
             resources:
@@ -443,10 +380,6 @@ spec:
               mountPath: /dev/shm
             - name: fineweb-ckpt
               mountPath: /mnt/fineweb-ckpt
-            # Injected RDMA userspace stack (see the inject-ib-libs initContainer):
-            # the .so libs on LD_LIBRARY_PATH, the mlx5 verbs provider at the
-            # libibverbs compiled-in provider dir, and the driver configs at the
-            # default search path so libibverbs auto-loads mlx5 for NCCL.
             - name: ib-libs
               mountPath: /opt/ib/lib
               subPath: lib
@@ -461,29 +394,18 @@ spec:
             hostPath:
               path: /mnt/taugrid-ray-tmp
               type: DirectoryOrCreate
-          # Default 64MB /dev/shm crashes NCCL's SHM transport; a real 16Gi tmpfs
-          # is required for both the IB and TCP NCCL paths.
           - name: dshm
             emptyDir:
               medium: Memory
               sizeLimit: 16Gi
-          # Checkpoint target that survives pod preStop cleanup (the ray-tmp
-          # preStop rm -rf does not touch this mount), so the first checkpoint
-          # genuinely persists on the node.
           - name: fineweb-ckpt
             hostPath:
               path: /mnt/taugrid-fineweb-ckpt
               type: DirectoryOrCreate
-          # Staged RDMA userspace stack (libibverbs/librdmacm/mlx5 provider/libnl
-          # + driver configs) populated by the inject-ib-libs initContainer, so
-          # NCCL can use InfiniBand even though the base Ray image omits rdma-core.
           - name: ib-libs
             emptyDir: {}
           nodeSelector:
             {{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}
-          # Force an even 8+8 split across the two H200 nodes. GPU capacity (8 per
-          # node) already caps pods per node at 8; this makes the split explicit
-          # and fails scheduling rather than silently packing >8 on one node.
           topologySpreadConstraints:
           - maxSkew: 1
             topologyKey: kubernetes.io/hostname

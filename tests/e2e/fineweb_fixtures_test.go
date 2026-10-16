@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// readFineWebFixture loads the FineWeb IB RayJob fixture once for the shape tests.
 func readFineWebFixture(t *testing.T) string {
 	t.Helper()
 	path, err := findRepoFile("tests/e2e/stack/fixtures/fineweb-rayjob-16xh200-ib.yaml")
@@ -23,8 +22,6 @@ func readFineWebFixture(t *testing.T) string {
 	return string(data)
 }
 
-// TestFineWebFixtureRequestsInfiniBand asserts the worker exposes the
-// configurable TAS block, adds IPC_LOCK, and provides a real 16Gi /dev/shm.
 func TestFineWebFixtureRequestsInfiniBand(t *testing.T) {
 	text := readFineWebFixture(t)
 
@@ -34,9 +31,6 @@ func TestFineWebFixtureRequestsInfiniBand(t *testing.T) {
 	if !strings.Contains(text, "IPC_LOCK") {
 		t.Fatal("expected worker securityContext to add the IPC_LOCK capability for RDMA")
 	}
-	// The worker must run as root so the added IPC_LOCK capability is effective;
-	// otherwise mlock is bound by RLIMIT_MEMLOCK and IB's ibv_create_cq fails with
-	// "Cannot allocate memory".
 	if !strings.Contains(text, "runAsUser: 0") {
 		t.Fatal("expected the worker to run as root (runAsUser: 0) so CAP_IPC_LOCK is effective for IB memory registration")
 	}
@@ -47,29 +41,23 @@ func TestFineWebFixtureRequestsInfiniBand(t *testing.T) {
 	}
 }
 
-// TestFineWebFixtureInjectsRDMAUserspace asserts the fixture stages the rdma-core
-// userspace stack into the worker. The base Ray image (Azure Linux) ships no
-// libibverbs, so without this injection NCCL logs "Failed to open libibverbs.so"
-// and falls back to the TCP socket transport — InfiniBand silently never engages.
 func TestFineWebFixtureInjectsRDMAUserspace(t *testing.T) {
 	text := readFineWebFixture(t)
 
 	for _, want := range []string{
-		"name: inject-ib-libs",       // the staging initContainer
-		"tdnf install -y libibverbs", // installs the RDMA userspace stack
-		"librdmacm",                  // rdmacm dependency
-		"libnl3",                     // provider transitive dependency
-		"/usr/lib/libibverbs/",       // the mlx5 verbs provider directory
-		"/etc/libibverbs.d",          // libibverbs driver config search path
-		"name: ib-libs",              // shared volume carrying the staged libs
+		"name: inject-ib-libs",
+		"tdnf install -y libibverbs",
+		"librdmacm",
+		"libnl3",
+		"/usr/lib/libibverbs/",
+		"/etc/libibverbs.d",
+		"name: ib-libs",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected the FineWeb fixture to stage rdma-core for NCCL IB (%q missing); without it NCCL falls back to NET/Socket", want)
 		}
 	}
 
-	// The worker must put the injected libs on LD_LIBRARY_PATH and mount the
-	// provider + driver configs at the paths libibverbs searches by default.
 	for _, want := range []string{
 		"name: LD_LIBRARY_PATH",
 		"value: /opt/ib/lib",
@@ -84,8 +72,6 @@ func TestFineWebFixtureInjectsRDMAUserspace(t *testing.T) {
 	}
 }
 
-// TestFineWebFixtureSplits8x8 asserts the workers spread evenly across the two
-// H200 nodes using a topology spread constraint keyed on a dedicated label.
 func TestFineWebFixtureSplits8x8(t *testing.T) {
 	text := readFineWebFixture(t)
 
@@ -100,15 +86,11 @@ func TestFineWebFixtureSplits8x8(t *testing.T) {
 			t.Fatalf("expected the 8+8 topology spread (%q) on the worker template", want)
 		}
 	}
-	// The dedicated label must appear at least twice: once on the worker template
-	// metadata and once in the topology spread labelSelector.
 	if got := strings.Count(text, "e2e-test: fineweb-16xh200-ib"); got < 2 {
 		t.Fatalf("expected the dedicated worker label on both the template and the spread selector, got %d", got)
 	}
 }
 
-// TestFineWebFixtureUsesInfiniBandNCCLEnv asserts IB NCCL env is wired and that
-// NCCL_IB_DISABLE is NOT set (which would force the socket transport).
 func TestFineWebFixtureUsesInfiniBandNCCLEnv(t *testing.T) {
 	text := readFineWebFixture(t)
 
@@ -122,8 +104,6 @@ func TestFineWebFixtureUsesInfiniBandNCCLEnv(t *testing.T) {
 	}
 }
 
-// TestFineWebFixturePinsSubmitterAndHeadToCPUPool asserts the submitter and head
-// stay on the CPU node pool and that the GPU workers carry a GPU request.
 func TestFineWebFixturePinsSubmitterAndHeadToCPUPool(t *testing.T) {
 	text := readFineWebFixture(t)
 
@@ -138,9 +118,6 @@ func TestFineWebFixturePinsSubmitterAndHeadToCPUPool(t *testing.T) {
 	}
 }
 
-// TestFineWebFixtureSetsStartupProbe asserts the head and worker carry the 10/90
-// startup probes used by the large-GPU path (slower image pulls than the smoke
-// fixtures, which use 5/60).
 func TestFineWebFixtureSetsStartupProbe(t *testing.T) {
 	text := readFineWebFixture(t)
 
@@ -159,9 +136,6 @@ func TestFineWebFixtureSetsStartupProbe(t *testing.T) {
 	}
 }
 
-// TestFineWebWorkloadEmitsCheckpointSentinel asserts the Python workload emits the
-// parseable first-checkpoint and success sentinels the Go test depends on, and
-// shards with FSDP rather than DDP.
 func TestFineWebWorkloadEmitsCheckpointSentinel(t *testing.T) {
 	path, err := findRepoFile("tests/e2e/stack/fixtures/fineweb_ray_train.py")
 	if err != nil {
@@ -190,10 +164,6 @@ func TestFineWebWorkloadEmitsCheckpointSentinel(t *testing.T) {
 	}
 }
 
-// TestFineWebDefaultsCoverUint16TokenShards guards the default/effective contract
-// for the tokenized FineWeb .bin shards. The shards are read as uint16 token IDs,
-// so the workload must cover the full uint16 range even when a caller still passes
-// the old GPT-2 padded vocab default.
 func TestFineWebDefaultsCoverUint16TokenShards(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -41,7 +41,6 @@ function retainJobSections(previous: JobDetail | undefined, next: JobDetail): Jo
       result = { ...result, diagnostics: { ...result.diagnostics, [key]: { ...diagnostic, stale: false, lastSuccessAt: Date.now() } } };
     } else if (diagnostic.state === 'unavailable' && prior?.lastSuccessAt &&
       (prior.state === 'ready' || prior.state === 'empty' || prior.stale)) {
-      // Previous data comes only from this authorized query cache; 4xx errors purge it.
       result = { ...result, [key]: previous?.[key], diagnostics: { ...result.diagnostics,
         [key]: { ...diagnostic, stale: true, lastSuccessAt: prior.lastSuccessAt } } };
     }

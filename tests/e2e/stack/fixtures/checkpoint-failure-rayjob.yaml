@@ -1,6 +1,3 @@
-# Checkpoint-aware failure recovery RayJob fixture.
-# Exercises TAU_RAY_TRAIN_CONFIG_JSON with failure_config.max_failures: 2.
-# The training script fails once at step 5, then resumes from checkpoint.
 apiVersion: ray.io/v1
 kind: RayJob
 metadata:

@@ -95,10 +95,6 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 		return batchLogOptionsError(name)
 	}
 
-	// A positively identified RayJob remains authoritative even when an
-	// ancillary Workload query made the snapshot partial. Never fall through to
-	// the batch/v1 path: it selects pods by job-name=<name>, which a RayJob's
-	// pods do not carry, so it matches nothing and reports empty success.
 	if snap.RayJob.Found && !snap.JobFound {
 		var logs string
 		var err error
@@ -126,8 +122,6 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 				}
 				return fmt.Errorf("read logs for terminal RayJob %s: local pod logs unavailable: %w; central log fallback failed: %v", name, err, centralErr)
 			}
-			// Distinguish "not ready yet" from "no logs". Terse on purpose:
-			// `tau run status` already renders the startup phases.
 			hint := ""
 			statusCommand := runRouteCommandHint(r, opts.Namespace, "run", "status", name)
 			if strings.TrimSpace(snap.RayJob.JobID) == "" {
@@ -144,10 +138,6 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 		return err
 	}
 
-	// A successful snapshot that located neither workload kind does NOT by itself
-	// prove the run is missing: the Job can be TTL-deleted while its pods linger,
-	// so the label selector below may still find output. Attempt both paths and
-	// decide on the OBSERVED result rather than on a prediction from the snapshot.
 	var logs string
 	var err error
 	var rayErr error
@@ -216,11 +206,6 @@ func runLogsCommandWithHooks(ctx context.Context, out io.Writer, r *kube.Runner,
 		if found {
 			return nil
 		}
-		// Both paths came back empty with no error. `kubectl logs -l
-		// job-name=<name>` matches nothing for an unknown name and reports
-		// success, so returning nil here would exit 0 in silence and a typo
-		// would read as "the run produced no output". Same empty-match hazard
-		// the RayJob guard above documents, reached when no object was found.
 		return missingRunLogsError(r, name, opts.Namespace, snapErr, rayErr)
 	}
 	return err
@@ -355,12 +340,6 @@ func batchLogOptionsError(name string) error {
 }
 
 func shouldUseManagerMultiKueueLogs(snap status.Snapshot) bool {
-	// Kueue's MultiKueue adapter clears spec.managedBy on the remote RayJob copy
-	// (v0.18.2 ray_multikueue_adapter.go SyncJob -> setManagedBy(remoteJob, nil)),
-	// so a worker-local snapshot with no manager Workload placement markers must
-	// stay on the local logs path instead of querying ADX. FetchRunLogs
-	// intentionally skips Pods to match the exact read-only manager viewer RBAC,
-	// so run-logs routing keys off manager-visible MultiKueue signals alone.
 	return snap.RayJob.Found && snap.IsMultiKueue()
 }
 

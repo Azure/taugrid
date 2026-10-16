@@ -20,9 +20,6 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portalapi"
 )
 
-// newPortalCmd builds the `taugrid-portal portal` command group. The portal is the
-// unified observability surface; `serve` runs the HTTP server that hosts the
-// portal shell plus the mounted Stellar experience.
 func newPortalCmd() *cobra.Command {
 	var storePath string
 	cmd := &cobra.Command{
@@ -40,12 +37,8 @@ The portal is read-only and hosts the Stellar experience unchanged under
 }
 
 func newPortalServeCmd(storePath *string) *cobra.Command {
-	// Reuse Stellar's serve options so the portal stays flag-compatible with
-	// `tau experiment serve` for everything Stellar needs (source, Kusto adapter,
-	// limits). The portal binds its own default addr.
 	opts := defaultExpServeOptions()
 	opts.addr = portalapi.DefaultAddr
-	// Portal-specific flags for the Jobs/Queue board's Kubernetes access.
 	var (
 		kubeconfig     string
 		namespace      string
@@ -96,10 +89,6 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				ScopeMode:      portalapi.JobsScopeMode(jobsScopeMode),
 				OperatorScopes: parsedOperatorScopes,
 			}
-			// The Jobs, Ray, Nodes, and Runs boards share one Kubernetes reader:
-			// a portal on a host without cluster access still serves the shell,
-			// Stellar, and the Kusto boards. /api/portal/{jobs,ray,nodes,runs}
-			// then return 503 until access is configured.
 			rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions(namespace)
 			var nodesOpts portalapi.NodesOptions
 			if client, err := kubeclient.New(kubeconfig); err != nil {
@@ -111,17 +100,9 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				nodesOpts.Reader = client
 				runsOpts.Reader = client
 			}
-			// The Kusto-backed boards (Cluster Health, Cost, Node Utilization)
-			// reuse Stellar's shell-out contract (--kusto-query-command). Without
-			// it they are disabled and their APIs return 503; the rest of the
-			// portal serves.
 			var clusterOpts portalapi.ClusterOptions
 			var costOpts portalapi.CostOptions
 			var nodeUtilOpts portalapi.NodeUtilOptions
-			// Kusto transport selection: an explicit --kusto-query-command keeps
-			// the Stellar shell-out adapter; otherwise a bare --kusto-endpoint
-			// selects the native azure-kusto-go SDK path (DefaultAzureCredential),
-			// which avoids the busybox/IMDS adapter entirely.
 			var querier kustoquery.Querier
 			if strings.TrimSpace(opts.kustoQueryCommand) != "" {
 				querier = kustoquery.Client{
@@ -152,11 +133,6 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			} else {
 				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Cluster Health, Cost, and Node Utilization boards disabled (set --kusto-endpoint, or --kusto-query-command for a custom adapter)")
 			}
-			// The Kueue (Live) board reverse-proxies the KueueViz dashboard's
-			// fixed backend/frontend Services. When --kueueviz is unset the board
-			// is disabled and /api/portal/kueueviz* returns 503; the rest of the
-			// portal serves. Reachability is over in-cluster DNS (default
-			// transport), same as the Ray/Jobs boards.
 			kueueVizOpts := portalapi.KueueVizOptions{
 				Enabled:         kueueVizEnabled,
 				Namespace:       kueueVizNamespace,
@@ -185,7 +161,6 @@ Kubernetes is unreachable the portal still serves every other board.`,
 			return servePortalServer(cmd, server, opts)
 		},
 	}
-	// includeOpen=false: the portal has no single browser target to auto-open.
 	addExpServeFlags(cmd, &opts, false)
 	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig for the Jobs board when running out-of-cluster (default: in-cluster ServiceAccount, then $KUBECONFIG)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "optional namespace for the Ray and Runs boards; empty reads cluster-wide and workspace directory entries override it")
@@ -232,8 +207,6 @@ func parseJobsOperatorScopes(values []string) ([]jobs.Scope, error) {
 }
 
 func servePortalServer(cmd *cobra.Command, server *portalapi.Server, opts expServeOptions) error {
-	// Scope cancellation to serving: metrics offload handles the same signals
-	// separately and needs its command context alive for the final flush.
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

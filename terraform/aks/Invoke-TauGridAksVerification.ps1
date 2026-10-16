@@ -1,9 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Maintainer-only integration verification. This script provisions billable
-# Azure resources and requires an Azure subscription with sufficient quota.
-
 [CmdletBinding()]
 param(
     [ValidatePattern("^[a-z0-9-]+$")]

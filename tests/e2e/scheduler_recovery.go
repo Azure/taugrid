@@ -12,8 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// SchedulerRecoveryObservation contains the verified scheduler and GPU
-// accounting state passed to a workload-specific recovery policy.
 type SchedulerRecoveryObservation struct {
 	TotalWorkers          int
 	RunningWorkers        int
@@ -26,9 +24,6 @@ type SchedulerRecoveryObservation struct {
 	HasInsufficientEvent  bool
 }
 
-// SchedulerRecoveryOptions configures the guarded direct-binding workaround.
-// Eligible must fail closed and return true only for the caller's exact,
-// previously verified scheduler defect.
 type SchedulerRecoveryOptions struct {
 	Namespace       string
 	WorkerSelector  string
@@ -40,8 +35,6 @@ type SchedulerRecoveryOptions struct {
 	Description     string
 }
 
-// RecoverSingleSchedulerBlockedGPUWorker binds one Pending GPU worker only
-// after shared accounting and scheduler evidence satisfy the caller's policy.
 func (tc *TestContext) RecoverSingleSchedulerBlockedGPUWorker(options SchedulerRecoveryOptions) error {
 	tc.Helper()
 	if options.Namespace == "" || options.WorkerSelector == "" || options.TargetNode == "" {

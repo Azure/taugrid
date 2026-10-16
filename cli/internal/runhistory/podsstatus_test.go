@@ -13,15 +13,6 @@ import (
 	"testing"
 )
 
-// pods_status is the operator's first diagnostic when batch Job failure
-// summaries look wrong: "available" means the pod read worked and found
-// nothing, anything else means the recorder could not see. The usual cause of
-// the latter is a Role without the pods read verb, which produces no other
-// symptom — the recorder stays healthy and quietly writes weaker records.
-//
-// That makes the field useless unless it escapes the process, which is what
-// these tests pin.
-
 func readyzBody(t *testing.T, health *Health) map[string]string {
 	t.Helper()
 	server := httptest.NewServer(health.Handler())
@@ -54,7 +45,6 @@ func TestReadyzExposesPodsStatus(t *testing.T) {
 	if got := body["pods_status"]; got != "unavailable" {
 		t.Errorf("pods_status = %q, want unavailable", got)
 	}
-	// The pre-existing fields must keep working.
 	if body["rayjobs_status"] != "available" || body["workloads_status"] != "available" {
 		t.Errorf("existing readyz fields changed: %+v", body)
 	}
@@ -72,8 +62,6 @@ func TestReadyzReportsPodsAvailable(t *testing.T) {
 	}
 }
 
-// Losing pod visibility must produce a log line, since an operator reading logs
-// is the other half of the diagnostic path.
 func TestPodsUnavailableIsLoggedOnce(t *testing.T) {
 	var log bytes.Buffer
 	source := failedJobSource(nil)
@@ -117,7 +105,6 @@ func TestPodsRecoveryIsLogged(t *testing.T) {
 	}
 }
 
-// A healthy recorder must not log on every poll.
 func TestSteadyStateDoesNotLog(t *testing.T) {
 	var log bytes.Buffer
 	reconciler := newTestReconciler(failedJobSource(nil), &fakeWriter{})

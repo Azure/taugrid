@@ -33,7 +33,6 @@ func TestComputeDeltas_NoChange(t *testing.T) {
 }
 
 func TestComputeDeltas_CounterWraparound(t *testing.T) {
-	// Simulates a driver reset: counter goes from 1000 down to 3.
 	samples := []store.Sample{
 		{Timestamp: 100, GPU: 0, Value: 1000},
 		{Timestamp: 110, GPU: 0, Value: 3},
@@ -45,7 +44,6 @@ func TestComputeDeltas_CounterWraparound(t *testing.T) {
 }
 
 func TestComputeDeltas_WraparoundToZero(t *testing.T) {
-	// Counter resets to 0: should not report a rate.
 	samples := []store.Sample{
 		{Timestamp: 100, GPU: 0, Value: 500},
 		{Timestamp: 110, GPU: 0, Value: 0},
@@ -73,7 +71,6 @@ func TestComputeDeltas_MultipleGPUs(t *testing.T) {
 }
 
 func TestComputeDeltas_OutOfOrderTimestamps(t *testing.T) {
-	// Samples arrive out of order; should still pick min/max correctly.
 	samples := []store.Sample{
 		{Timestamp: 120, GPU: 0, Value: 30},
 		{Timestamp: 100, GPU: 0, Value: 10},
