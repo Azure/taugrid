@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -46,6 +47,22 @@ type fakeVerifier struct {
 	err    error
 	paths  []string
 	modes  []os.FileMode
+}
+
+type compatibleFakeVerifier struct {
+	*fakeVerifier
+	queue string
+}
+
+func (f *compatibleFakeVerifier) VerifyCompatibleQueue(
+	_ context.Context,
+	_ Descriptor,
+	_, _, queue string,
+) error {
+	if queue != f.queue {
+		return fmt.Errorf("queue %q is unavailable", queue)
+	}
+	return nil
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, _ Descriptor, kubeconfigPath string) (Verification, error) {
@@ -1420,6 +1437,36 @@ func TestContractChangesAllowsVerifiedCompatibleQueueMigration(t *testing.T) {
 	}
 	if changes := state.contractChanges(verification); len(changes) != 0 {
 		t.Fatalf("compatible LocalQueue migration required interactive review: %v", changes)
+	}
+}
+
+func TestApplyVerificationPreservesVerifiedCompatibleQueue(t *testing.T) {
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{
+		Namespace:        "sample",
+		Queue:            "tau-ws-sample",
+		CompatibleQueues: []string{"jobqueue"},
+	}
+	state.applyVerification(Descriptor{}, verification, time.Now())
+	if state.Queue != "jobqueue" {
+		t.Fatalf("queue = %q, want verified compatible queue jobqueue", state.Queue)
+	}
+}
+
+func TestWithCompatibleQueueVerifiesPersistedQueueIndependentOfWorkspaceSpec(t *testing.T) {
+	manager := Manager{Verifier: &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{},
+		queue:        "inherited-default",
+	}}
+	verification := manager.withCompatibleQueue(
+		context.Background(),
+		Descriptor{},
+		"/tmp/kubeconfig",
+		"inherited-default",
+		Verification{Namespace: "sample", Queue: "tau-ws-sample"},
+	)
+	if !slices.Contains(verification.CompatibleQueues, "inherited-default") {
+		t.Fatalf("compatible queues = %#v, want persisted inherited default", verification.CompatibleQueues)
 	}
 }
 

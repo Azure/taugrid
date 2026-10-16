@@ -181,24 +181,13 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceCompatibilityLocalQueues(
 			}
 			continue
 		}
-		if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
-			return false, fmt.Sprintf("compatible LocalQueue %q is not owned by TauWorkspace %q", name, workspace.Name), nil
-		}
-		if err := r.ensureWorkspaceObjectUID(ctx, queue, workspace); err != nil {
-			return false, fmt.Sprintf("compatible LocalQueue %q ownership is not authoritative: %v", name, err), nil
-		}
 		currentClusterQueue, _, _ := unstructured.NestedString(queue.Object, "spec", "clusterQueue")
-		if currentClusterQueue != clusterQueue {
-			if err := r.deleteWithPreconditions(ctx, queue); err != nil {
-				return false, fmt.Sprintf("failed to replace compatible LocalQueue %q: %v", name, err), nil
-			}
-			replacement := newWorkspaceLocalQueue(workspace, namespace, name, clusterQueue, true)
-			if err := r.Create(ctx, replacement); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return false, fmt.Sprintf("waiting to replace compatible LocalQueue %q target %q with %q", name, currentClusterQueue, clusterQueue), nil
-				}
-				return false, fmt.Sprintf("failed to recreate compatible LocalQueue %q: %v", name, err), nil
-			}
+		if strings.TrimSpace(currentClusterQueue) == "" {
+			return false, fmt.Sprintf("compatible LocalQueue %q does not reference a ClusterQueue", name), nil
+		}
+		backingQueue := newQueueObject(clusterQueueGVK)
+		if err := r.Get(ctx, client.ObjectKey{Name: currentClusterQueue}, backingQueue); err != nil {
+			return false, fmt.Sprintf("compatible LocalQueue %q backing ClusterQueue %q is not ready: %v", name, currentClusterQueue, err), nil
 		}
 	}
 	return true, "compatible LocalQueues are reconciled", nil

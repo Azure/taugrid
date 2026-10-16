@@ -21,6 +21,19 @@ type KubectlVerifier struct {
 	NewRunner   func(contextName, kubeconfigPath string) rawRunner
 }
 
+func (v KubectlVerifier) VerifyCompatibleQueue(
+	ctx context.Context,
+	descriptor Descriptor,
+	kubeconfigPath, namespace, queue string,
+) error {
+	_, err := v.runner(descriptor.Cluster.ContextName, kubeconfigPath).Raw(
+		ctx,
+		[]string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "name"},
+		nil,
+	)
+	return err
+}
+
 func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kubeconfigPath string) (Verification, error) {
 	runner := v.runner(descriptor.Cluster.ContextName, kubeconfigPath)
 	raw, err := runner.Raw(ctx, []string{
