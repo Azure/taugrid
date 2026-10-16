@@ -2398,6 +2398,8 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	workspace.Spec.WorkloadIdentity = nil
 	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
 	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
 	team := testTeam("vision", "8")
 	team.UID = types.UID("team-uid")
 	team.Status.Phase = tauv1alpha1.TeamPhaseReady
@@ -2426,7 +2428,8 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+	result, err := reconciler.syncWorkspace(ctx, workspace)
+	if err != nil {
 		t.Fatalf("sync workspace before drain: %v", err)
 	}
 	var gotNamespace corev1.Namespace
@@ -2444,9 +2447,15 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 		t.Fatalf("Get waiting workspace: %v", err)
 	}
 	queueCondition := findCondition(waiting.Status.Conditions, tauv1alpha1.ConditionQueueReady)
-	if queueCondition == nil || queueCondition.Status != metav1.ConditionFalse ||
+	if queueCondition == nil || queueCondition.Status != metav1.ConditionTrue ||
 		!strings.Contains(queueCondition.Message, "waiting for Workload") {
-		t.Fatalf("QueueReady = %#v, want workload drain wait", queueCondition)
+		t.Fatalf("QueueReady = %#v, want ready managed queue with workload drain wait", queueCondition)
+	}
+	if waiting.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("phase = %q, want Ready during staged drain", waiting.Status.Phase)
+	}
+	if result.RequeueAfter != notReadyRequeue {
+		t.Fatalf("RequeueAfter = %v, want %v during staged drain", result.RequeueAfter, notReadyRequeue)
 	}
 
 	workload.Object["status"] = map[string]any{"conditions": []any{
@@ -2470,6 +2479,53 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	gotWorkload := newQueueObject(workload.GroupVersionKind())
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workload), gotWorkload); err != nil {
 		t.Fatalf("active workload using previous queue disappeared: %v", err)
+	}
+}
+
+func TestLegacyTeamWorkspaceMigratesStaleQueueUIDBeforeDrain(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = map[string]string{annotationResultScope: workspace.Spec.Defaults.OutputRoot}
+	legacyQueue := testLocalQueue(workspace.Name, workspace.Spec.Queue, workspace.Spec.Queue)
+	legacyQueue.SetLabels(workspaceLabels(workspace.Name))
+	legacyQueue.SetAnnotations(nil)
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, legacyQueue, team, flavor, testClusterQueue(workspace.Spec.Queue)).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
+		}
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(legacyQueue), newQueueObject(localQueueGVK)); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy LocalQueue remains after UID migration and cutover: %v", err)
+	}
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
+		t.Fatalf("Get namespace: %v", err)
+	}
+	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspaceLocalQueueName(workspace) {
+		t.Fatalf("namespace default queue = %q, want %q", got, workspaceLocalQueueName(workspace))
 	}
 }
 

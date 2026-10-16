@@ -96,6 +96,9 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	if workspace.Spec.WorkloadIdentity != nil {
 		currentTargetReady = currentTargetReady && workloadIdentityReady && workloadIdentityErr == nil
 	}
+	activationPending := false
+	canRemainReadyDuringDrain := workspace.Status.Phase == tauv1alpha1.WorkspacePhaseReady &&
+		workspace.Status.Target.ResolvedNamespace == targetNamespace
 	if currentTargetReady {
 		drained, drainMessage, drainErr := r.staleWorkspaceLocalQueuesDrained(
 			ctx,
@@ -105,10 +108,14 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 		)
 		if drainErr != nil || !drained {
 			currentTargetReady = false
-			queueReady = false
 			if drainErr != nil {
+				queueReady = false
 				queueMessage = drainErr.Error()
+			} else if canRemainReadyDuringDrain {
+				activationPending = true
+				queueMessage = "managed queue is ready; " + drainMessage
 			} else {
+				queueReady = false
 				queueMessage = drainMessage
 			}
 		}
@@ -170,7 +177,7 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			return ctrl.Result{}, err
 		}
 	}
-	if desired.Phase == tauv1alpha1.WorkspacePhaseReady {
+	if desired.Phase == tauv1alpha1.WorkspacePhaseReady && !activationPending {
 		return ctrl.Result{RequeueAfter: readyRequeue}, nil
 	}
 	return ctrl.Result{RequeueAfter: notReadyRequeue}, nil
