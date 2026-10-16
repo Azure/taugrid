@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
 	github.com/Azure/azure-kusto-go/azkustoingest v1.2.2
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity/cache v0.4.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.6.0
@@ -49,7 +49,7 @@ require (
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/data/aztables v1.4.1 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azqueue v1.0.1 // indirect
 	github.com/Azure/taugrid/core v0.0.0
 	github.com/AzureAD/microsoft-authentication-extensions-for-go/cache v0.1.1 // indirect
