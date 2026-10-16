@@ -101,8 +101,15 @@ func applySelectedWorkloadProfile(
 		if workspaceQueue == "" {
 			return o, fmt.Errorf("verified TauWorkspace routing has no LocalQueue")
 		}
+		profileClusterQueue, err := selection.Profile.ClusterQueueFor(o.namespace, profileQueue)
+		if err != nil {
+			return o, fmt.Errorf("resolve workload profile queue binding: %w", err)
+		}
 		workspaceClusterQueue := strings.TrimSpace(o.workspaceClusterQueue)
-		if workspaceClusterQueue == "" && workspaceQueue != profileQueue {
+		if workspaceQueue == profileQueue {
+			workspaceClusterQueue = strings.TrimSpace(profileClusterQueue)
+		}
+		if workspaceClusterQueue == "" {
 			return o, fmt.Errorf(
 				"verified TauWorkspace LocalQueue %q differs from workload profile %q queue %q but has no resolved ClusterQueue",
 				workspaceQueue,
@@ -110,23 +117,18 @@ func applySelectedWorkloadProfile(
 				profileQueue,
 			)
 		}
-		if workspaceClusterQueue != "" {
-			profileClusterQueue, err := selection.Profile.ClusterQueueFor(o.namespace, profileQueue)
-			if err != nil {
-				return o, fmt.Errorf("resolve workload profile queue binding: %w", err)
-			}
-			if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) {
-				return o, fmt.Errorf(
-					"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace %s workload profile %q queue %q bound to ClusterQueue %q",
-					workspaceQueue,
-					workspaceClusterQueue,
-					selection.Profile.ExecutionTarget,
-					selection.Profile.Name,
-					profileQueue,
-					profileClusterQueue,
-				)
-			}
+		if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) {
+			return o, fmt.Errorf(
+				"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace %s workload profile %q queue %q bound to ClusterQueue %q",
+				workspaceQueue,
+				workspaceClusterQueue,
+				selection.Profile.ExecutionTarget,
+				selection.Profile.Name,
+				profileQueue,
+				profileClusterQueue,
+			)
 		}
+		o.workspaceClusterQueue = workspaceClusterQueue
 		renderProfile.Queue = workspaceQueue
 	}
 	if strings.TrimSpace(o.priorityTier) != "" &&
