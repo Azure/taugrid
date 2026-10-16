@@ -820,18 +820,17 @@ while (( SECONDS < deadline )); do
   migration_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   managed_migration_queue="$(kubectl -n kind-migration get localqueue.kueue.x-k8s.io/tau-ws-kind-migration -o jsonpath='{.spec.clusterQueue}' 2>/dev/null || true)"
   namespace_migration_queue="$(kubectl get namespace kind-migration -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/default-local-queue}' 2>/dev/null || true)"
-  legacy_migration_queue_exists=0
-  kubectl -n kind-migration get localqueue.kueue.x-k8s.io/migration >/dev/null 2>&1 && legacy_migration_queue_exists=1
+  legacy_migration_queue="$(kubectl -n kind-migration get localqueue.kueue.x-k8s.io/migration -o jsonpath='{.spec.clusterQueue}' 2>/dev/null || true)"
   [[ "${migration_phase}" == "Ready" &&
     "${managed_migration_queue}" == "tau-ws-kind-migration" &&
     "${namespace_migration_queue}" == "tau-ws-kind-migration" &&
-    "${legacy_migration_queue_exists}" == "0" ]] && break
+    "${legacy_migration_queue}" == "migration" ]] && break
   sleep 1
 done
 if [[ "${migration_phase:-}" != "Ready" ||
   "${managed_migration_queue:-}" != "tau-ws-kind-migration" ||
   "${namespace_migration_queue:-}" != "tau-ws-kind-migration" ||
-  "${legacy_migration_queue_exists:-1}" != "0" ]]; then
+  "${legacy_migration_queue:-}" != "migration" ]]; then
   echo "existing workspace did not cut over cleanly to its managed queue" >&2
   kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o yaml >&2 || true
   kubectl -n kind-migration get localqueues.kueue.x-k8s.io -o yaml >&2 || true
