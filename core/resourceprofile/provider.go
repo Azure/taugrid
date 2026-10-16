@@ -47,6 +47,10 @@ type SelectionRequest struct {
 	Namespace string
 	Team      string
 	Lane      string
+	// GPUsPerWorker, when set, narrows implicit selection to profiles with the
+	// same per-worker GPU count. A named profile is never filtered: its
+	// cardinality conflicts remain the caller's error to report.
+	GPUsPerWorker *int32
 }
 
 // Selection is the common result returned by cluster and snapshot providers.
@@ -174,11 +178,16 @@ func ValidateApplicability(resolved ResolvedWorkloadProfile, request SelectionRe
 
 func selectUniqueProfile(set ProfileSet, request SelectionRequest) (Selection, error) {
 	var matches []ResolvedWorkloadProfile
+	var excluded []string
 	for _, candidate := range set.Profiles {
 		if err := requireProfileReady(candidate, set.Generation); err != nil {
 			continue
 		}
 		if err := authorizeProfile(candidate, request); err != nil {
+			continue
+		}
+		if request.GPUsPerWorker != nil && candidate.GPUsPerWorker != *request.GPUsPerWorker {
+			excluded = append(excluded, fmt.Sprintf("%s (gpusPerWorker=%d)", candidate.Name, candidate.GPUsPerWorker))
 			continue
 		}
 		matches = append(matches, candidate)
@@ -189,8 +198,19 @@ func selectUniqueProfile(set ProfileSet, request SelectionRequest) (Selection, e
 		normalizeLabel(request.Team),
 		normalizeLabel(request.Lane),
 	)
+	if request.GPUsPerWorker != nil {
+		scope += fmt.Sprintf(", gpusPerWorker=%d", *request.GPUsPerWorker)
+	}
 	switch len(matches) {
 	case 0:
+		if len(excluded) > 0 {
+			sort.Strings(excluded)
+			return Selection{}, fmt.Errorf(
+				"no ready workload profile matches %s; applicable profiles with a different GPU count: %s; set policy.profile explicitly",
+				scope,
+				strings.Join(excluded, ", "),
+			)
+		}
 		return Selection{}, fmt.Errorf(
 			"no ready workload profile matches %s; set policy.profile explicitly",
 			scope,

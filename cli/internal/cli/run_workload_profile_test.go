@@ -385,6 +385,40 @@ func TestRunSelectionAllowsUniqueImplicitProfiles(t *testing.T) {
 	}
 }
 
+func TestRunSelectionUsesExplicitGPUCountToDisambiguate(t *testing.T) {
+	cpu := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
+	cpu.Name = "cpu-profile"
+	gpu := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 11)
+	snapshot, err := profile.NewProfileSetSnapshot(11, []profile.ResolvedWorkloadProfile{cpu, gpu})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := profile.NewSnapshotProvider(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		gpus int
+		want string
+	}{{gpus: 0, want: "cpu-profile"}, {gpus: 1, want: "research-profile"}} {
+		options := defaultRunDispatchOptions()
+		options.engine = runconfig.EngineJob
+		options.namespace = "alpha"
+		options.team = "research"
+		options.lane = "training"
+		gpus := tc.gpus
+		options.jobGPUs = &gpus
+		options.jobGPUsExplicit = true
+		got, err := selectRunWorkloadProfile(context.Background(), options, provider)
+		if err != nil {
+			t.Fatalf("select with gpus=%d: %v", tc.gpus, err)
+		}
+		if got.profileName != tc.want {
+			t.Fatalf("select with gpus=%d = %q, want %q", tc.gpus, got.profileName, tc.want)
+		}
+	}
+}
+
 func TestRunSelectionAuthorizesReadyProfileForCustomWorkspaceNamespace(t *testing.T) {
 	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 11)
 	resolved.Name = "azure.research.training.l"
