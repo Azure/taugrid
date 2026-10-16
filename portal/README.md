@@ -132,6 +132,7 @@ The native UI uses only the narrow canonical reads:
 | Exact run detail | `GET /api/v2/stellar/runs/{run_id}` |
 | Exact run metric catalog | `GET /api/v2/stellar/runs/{run_id}/metrics` |
 | Exact bounded series | `GET /api/v2/stellar/runs/{run_id}/series?target=...&metric=...` |
+| Experiment node fault correlation | `GET /api/portal/experiments/{experiment_id}/fault-events` |
 
 List reads use bounded limits and opaque query-bound cursors. Responses carry
 freshness, provenance, availability, partial-result warnings, and typed errors.
@@ -140,6 +141,16 @@ call `TauExpSeriesCatalogRows()` and `TauExpRunCatalogRows()`; bounded series
 reads call `TauExpMetricEventRows()`. ADX and Function failures remain visible
 to clients. Raw `ExperimentMetrics` queries are retained only for explicit
 legacy CLI/report compatibility consumers and are not a Portal v2 fallback.
+
+The experiment fault-correlation read uses workspace-scoped local experiment
+run context to identify recorded node allocations, then returns only normalized
+GPU/InfiniBand conditions for those nodes. Its coverage and provenance fields
+separate exact/partial allocation and time bounds from current-only, stale,
+unknown, or unavailable Node-condition evidence. Kubernetes Node conditions are
+not an event log: for completed experiments the endpoint may show the allocated
+nodes' current conditions, but explicitly reports that historical fault evidence
+is unavailable. Non-local experiment sources currently report allocation
+evidence as unavailable rather than guessing from cluster-wide node state.
 
 Existing `/api/stellar`, `/api/v1/stellar`, broad v2 snapshot/search routes,
 `/stellar`, CLI HTML/TUI/JSON, and report/artifact consumers remain compatible.
