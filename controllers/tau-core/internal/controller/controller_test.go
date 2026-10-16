@@ -2467,6 +2467,10 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
 	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
 	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   workspace.Spec.Queue,
+		ClusterQueue: workspace.Spec.Queue,
+	}
 	team := testTeam("vision", "8")
 	team.UID = types.UID("team-uid")
 	team.Status.Phase = tauv1alpha1.TeamPhaseReady
@@ -2525,6 +2529,10 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	assertCondition(t, waiting.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
 	if waiting.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
 		t.Fatalf("phase = %q, want Ready after compatible cutover", waiting.Status.Phase)
+	}
+	if waiting.Status.Queue.LocalQueue != workspace.Spec.Queue ||
+		waiting.Status.Queue.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
+		t.Fatalf("status.queue = %#v, want legacy client route and managed ClusterQueue", waiting.Status.Queue)
 	}
 	if result.RequeueAfter != readyRequeue {
 		t.Fatalf("RequeueAfter = %v, want %v after compatible cutover", result.RequeueAfter, readyRequeue)
@@ -2609,6 +2617,26 @@ func TestLegacyTeamWorkspacePreservesExistingQueueContract(t *testing.T) {
 	}
 	if got := gotNamespace.Labels[labelKueueDefaultLocalQueue]; got != workspaceLocalQueueName(workspace) {
 		t.Fatalf("namespace default queue = %q, want %q", got, workspaceLocalQueueName(workspace))
+	}
+}
+
+func TestExistingTeamWorkspaceWithoutQueuePreservesClientRoute(t *testing.T) {
+	workspace := testWorkspace("aurora")
+	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   "jobqueue",
+		ClusterQueue: "jobqueue",
+	}
+	managed := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   workspaceClusterQueueName(workspace.Name),
+		ClusterQueue: workspaceClusterQueueName(workspace.Name),
+	}
+
+	got := workspaceClientQueueStatus(workspace, managed)
+	if got.LocalQueue != "jobqueue" || got.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
+		t.Fatalf("client queue status = %#v, want inherited legacy route and managed ClusterQueue", got)
 	}
 }
 

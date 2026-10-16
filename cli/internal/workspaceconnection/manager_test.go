@@ -1441,15 +1441,20 @@ func TestContractChangesAllowsVerifiedCompatibleQueueMigration(t *testing.T) {
 }
 
 func TestApplyVerificationPreservesVerifiedCompatibleQueue(t *testing.T) {
+	verifiedAt := time.Now()
 	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
 	verification := Verification{
 		Namespace:        "sample",
 		Queue:            "tau-ws-sample",
 		CompatibleQueues: []string{"jobqueue"},
 	}
-	state.applyVerification(Descriptor{}, verification, time.Now())
+	state.applyVerification(Descriptor{}, verification, verifiedAt)
 	if state.Queue != "jobqueue" {
 		t.Fatalf("queue = %q, want verified compatible queue jobqueue", state.Queue)
+	}
+	active := state.active()
+	if active.Queue != "jobqueue" || !active.QueueVerified {
+		t.Fatalf("active connection = %#v, want verified compatible queue", active)
 	}
 }
 

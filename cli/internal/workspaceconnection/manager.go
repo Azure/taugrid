@@ -70,6 +70,7 @@ type ActiveConnection struct {
 	KubeconfigPath    string
 	Namespace         string
 	Queue             string
+	QueueVerified     bool
 }
 
 type AssignableConnection struct {
@@ -955,6 +956,7 @@ func (s connectionState) active() ActiveConnection {
 		KubeconfigPath:    s.KubeconfigPath,
 		Namespace:         s.Namespace,
 		Queue:             s.Queue,
+		QueueVerified:     !s.VerifiedAt.IsZero(),
 	}
 }
 
