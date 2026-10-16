@@ -1253,6 +1253,23 @@ def test_python_submit_cli_parses_data_pvc_and_node_selector(monkeypatch, tmp_pa
     }
 
 
+def test_python_submit_cli_parses_priority_tier(monkeypatch, tmp_path):
+    module = tmp_path / "experiment.py"
+    module.write_text("import tau\n")
+    captured = {}
+
+    def fake_orchestrate(module_path, **kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(tau_cli, "_orchestrate_submit", fake_orchestrate)
+
+    rc = tau_cli.main(["submit", str(module), "--priority-tier", "priority"])
+
+    assert rc == 0
+    assert captured["priority_tier"] == "priority"
+
+
 def test_chained_submit_can_keep_train_rayjob(monkeypatch):
     events = []
 

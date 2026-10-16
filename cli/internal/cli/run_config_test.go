@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
@@ -65,8 +66,11 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 	// The example deliberately names policy.workspace. With no usable
 	// kubeconfig in this test, success guards that client dry-run retains the
 	// name for metrics metadata without fetching the live TauWorkspace.
-	const offloadImage = "registry.example.com/taugrid-portal@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	config := filepath.Clean("../../../examples/portal-ray-stellar/tau.yaml")
 	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
 	for _, want := range []string{
@@ -86,7 +90,11 @@ func TestPortalRayStellarExampleDryRun(t *testing.T) {
 }
 
 func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T) {
-	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", "")
+	const offloadImage = "registry.example.com/taugrid-metrics-collector@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Setenv("TAU_METRICS_OFFLOAD_IMAGE", offloadImage)
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLUSTER_URI", "https://example.kusto.windows.net")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_DATABASE", "TauGrid")
+	t.Setenv("TAU_METRICS_OFFLOAD_ADX_CLIENT_ID", "00000000-0000-0000-0000-000000000001")
 	t.Setenv("TAU_METRICS_OFFLOAD_OUT", "")
 	config := filepath.Clean("../../../examples/market-policy/tau.yaml")
 	options, _, err := loadRunConfig(config)
@@ -107,7 +115,7 @@ func TestMarketPolicyExampleResolvesCheckedInMetricsOffloadSettings(t *testing.T
 	if err != nil {
 		t.Fatalf("resolve market-policy metrics offload: %v", err)
 	}
-	if got, want := runtime.Image, "mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2"; got != want {
+	if got, want := runtime.Image, offloadImage; got != want {
 		t.Fatalf("metrics offload image = %q, want %q", got, want)
 	}
 	if got, want := runtime.Out, "/var/run/tau/metrics-offload"; got != want {
@@ -555,10 +563,12 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 		"kind: RayJob",
 		"name: tau-kind-ray",
 		"namespace: ray",
-		"image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0",
+		"image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0",
 		"kueue.x-k8s.io/queue-name: kind-cpu",
 		"kueue.x-k8s.io/priority-class: taugrid-default",
 		"priorityClassName: taugrid-default",
+		"GRPC_DNS_RESOLVER",
+		"value: native",
 		`num-gpus: "0"`,
 		"cpu: 5m",
 		"cpu: 10m",
@@ -1288,6 +1298,7 @@ func TestRunConfigExplainConfigCommand(t *testing.T) {
 		"`runtime.env_secret` | supported",
 		"`metrics.offload` | supported",
 		"`metrics.offload.enabled` | supported",
+		"`metrics.offload.runtime` | supported",
 		"`metrics.offload.image` | supported",
 		"`metrics.offload.out` | supported",
 		"`run.ttl_seconds_after_finished` | direct-only",
@@ -1691,11 +1702,14 @@ metrics:
   history: [metrics-history-attempt-*/*.jsonl]
   offload:
     enabled: true
+    runtime: collector-v1
     image: registry.example.com/taugrid-portal:20260903.1
     out: /var/run/tau/metrics-offload
 experiment:
   project: pretraining
   title: bounded run
+policy:
+  workspace: research-workspace
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1705,11 +1719,28 @@ experiment:
 		t.Fatalf("loadRunConfig: %v", err)
 	}
 	if !options.metricsOffloadEnabled ||
+		options.metricsOffloadRuntime != metricsoffload.RuntimeCollectorV1 ||
 		options.metricsOffloadImage != "registry.example.com/taugrid-portal:20260903.1" ||
 		options.metricsOffloadOut != "/var/run/tau/metrics-offload" ||
 		len(options.metricsHistory) != 1 ||
 		options.metricsHistory[0] != "metrics-history-attempt-*/*.jsonl" {
 		t.Fatalf("unexpected direct metrics dispatch options: %+v", options)
+	}
+	options.metricsSessionID = "yaml-runtime"
+	runtime, err := resolveMetricsOffload(
+		options,
+		"tracked",
+		"research-workspace",
+		"sample-gpu-cluster",
+		"/data/research-workspace/tracked",
+		true,
+		map[string]string{workloadmeta.AnnotationResultPVC: "research-workspace"},
+	)
+	if err != nil {
+		t.Fatalf("resolve YAML metrics offload: %v", err)
+	}
+	if got, want := runtime.Runtime, metricsoffload.RuntimeCollectorV1; got != want {
+		t.Fatalf("resolved YAML runtime = %q, want %q", got, want)
 	}
 }
 
@@ -2174,5 +2205,70 @@ func TestQuickstartPrivilegedPodsUseFixedDigestPinnedImage(t *testing.T) {
 	// Pending and its empty logs would be misread as "MIG disabled".
 	if strings.Contains(text, "nvidia.com/gpu\":1") {
 		t.Errorf("%s: the MIG probe must not request nvidia.com/gpu", path)
+	}
+}
+
+func TestRunConfigRDMACarriedThroughToRenderer(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "train.py")
+	if err := os.WriteFile(script, []byte("#!/usr/bin/env python3\nprint('train')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	profileDir := filepath.Join(dir, "profiles")
+	if err := os.Mkdir(profileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(profileDir, "test-submit.yaml"), []byte(`apiVersion: tau.azure.com/v1alpha1
+kind: Profile
+metadata:
+  name: test-submit
+spec:
+  queue: { localQueue: training-queue }
+  resources:
+    requests: { cpu: "1", memory: 1Gi }
+    gpu: { count: 8, size: l }
+  runtime:
+    image: busybox:1.36
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: rdma-e2e-config
+engine: job
+entrypoint: train.py
+execution:
+  launcher: torchrun
+  processes_per_node: 8
+compute:
+  gpus: 8
+runtime:
+  image: busybox:1.36
+  rdma:
+    enabled: true
+policy:
+  profile: test-submit
+  queue: training-queue
+  namespace: ray
+storage:
+  data_pvc: blob-training
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client", "--service-account", "tau-workload"})
+	for _, want := range []string{
+		"IPC_LOCK",
+		"SYS_RESOURCE",
+		"DAC_OVERRIDE",
+		"kueue.x-k8s.io/podset-required-topology: tau.azure.com/network-domain",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("RDMA config dry-run missing %q:\n%s", want, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "32Gi") {
+		t.Fatalf("RDMA config dry-run missing default shm 32Gi:\n%s", rendered)
 	}
 }

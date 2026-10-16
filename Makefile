@@ -3,8 +3,12 @@
 
 .PHONY: help build test lint check license-headers \
 	install-tau install-tau-cli install-tau-sdk \
-	install-taugrid-portal uninstall-tau uninstall-taugrid-portal \
-	tau-docs-build tau-docs-check tau-docs-serve
+	install-taugrid-portal install-taugrid-metrics-collector \
+	uninstall-tau uninstall-taugrid-portal uninstall-taugrid-metrics-collector \
+	tau-docs-build tau-docs-check tau-docs-serve \
+	kind-build-images kind-create kind-load-images kind-images \
+	kind-install kind-restart kind-up kind-down kind-status kind-test-workspace \
+	kind-sync
 
 REPO_ROOT := $(abspath $(dir $(firstword $(MAKEFILE_LIST))))
 TAU_GO_DIR := $(REPO_ROOT)/cli
@@ -13,6 +17,7 @@ TAUGRID_PORTAL_DIR := $(REPO_ROOT)/portal
 TAU_CORE_CONTROLLER_DIR := $(REPO_ROOT)/controllers/tau-core
 GPU_HEALTH_CHECKER_DIR := $(REPO_ROOT)/monitoring/gpu-health-checker
 GPU_METRICS_COLLECTOR_DIR := $(REPO_ROOT)/monitoring/gpu-metrics-collector
+TAUGRID_METRICS_COLLECTOR_DIR := $(REPO_ROOT)/metrics/experiment-metrics-collector
 E2E_DIR := $(REPO_ROOT)/tests/e2e
 TAU_SDK_DIR := $(REPO_ROOT)/sdk/python/python
 TAU_SITE_DIR := $(REPO_ROOT)/site
@@ -20,6 +25,35 @@ PYTHON ?= python3
 HOST_GOARCH := $(shell go env GOARCH)
 STATICCHECK_VERSION := v0.7.0
 GO_COMMAND_FLAGS := -mod=readonly -buildvcs=false
+KIND_CLUSTER_NAME ?= taugrid-dev
+KIND_NAMESPACE ?= tau-system
+KIND_RELEASE ?= taugrid-dev
+KIND_IMAGE_TAG ?= dev
+KIND_PLATFORM ?= linux/$(shell uname -m)
+KIND_ENGINE ?=
+KIND_EXECUTION ?= local
+KIND_REMOTE_HOST ?=
+KIND_REMOTE_DIR ?= .local/state/taugrid-kind-dev
+KIND_REMOTE_BIN_DIR ?=
+KIND_DEV_SCRIPT := $(REPO_ROOT)/scripts/dev/kind-local.sh
+KIND_DEV_ENV := \
+	TAUGRID_KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" \
+	TAUGRID_KIND_NAMESPACE="$(KIND_NAMESPACE)" \
+	TAUGRID_KIND_RELEASE="$(KIND_RELEASE)" \
+	TAUGRID_KIND_IMAGE_TAG="$(KIND_IMAGE_TAG)" \
+	TAUGRID_KIND_PLATFORM="$(KIND_PLATFORM)" \
+	TAUGRID_KIND_ENGINE="$(KIND_ENGINE)"
+KIND_REMOTE_OVERRIDES := \
+	KIND_EXECUTION=local \
+	KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" \
+	KIND_NAMESPACE="$(KIND_NAMESPACE)" \
+	KIND_RELEASE="$(KIND_RELEASE)" \
+	KIND_IMAGE_TAG="$(KIND_IMAGE_TAG)" \
+	KIND_ENGINE="$(KIND_ENGINE)"
+KIND_REMOTE_PLATFORM_OVERRIDE :=
+ifneq ($(filter command line environment override,$(origin KIND_PLATFORM)),)
+KIND_REMOTE_PLATFORM_OVERRIDE := KIND_PLATFORM="$(KIND_PLATFORM)"
+endif
 
 help:
 	@echo "TauGrid repository targets:"
@@ -32,13 +66,27 @@ help:
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
 	@echo "  make install-taugrid-portal  # install the TauGrid Portal CLI"
+	@echo "  make install-taugrid-metrics-collector # install the standalone metrics collector"
 	@echo "  make uninstall-tau           # remove Tau CLI binaries"
 	@echo "  make uninstall-taugrid-portal # remove the TauGrid Portal CLI"
+	@echo "  make uninstall-taugrid-metrics-collector # remove the standalone metrics collector"
 	@echo "  make tau-docs-build          # build the documentation site"
 	@echo "  make tau-docs-check          # build and validate the documentation site"
 	@echo "  make tau-docs-serve          # serve the documentation site locally"
+	@echo "  make kind-build-images       # build local controller and Portal images"
+	@echo "  make kind-create             # create or reuse the local Kind cluster"
+	@echo "  make kind-load-images        # load built images into the Kind cluster"
+	@echo "  make kind-images             # build, create, and load local images"
+	@echo "  make kind-install            # install/update TauGrid from the local chart"
+	@echo "  make kind-restart            # restart pods onto newly loaded local images"
+	@echo "  make kind-up                 # run the complete local development setup"
+	@echo "  make kind-test-workspace     # verify workspace and Kueue reconciliation"
+	@echo "  make kind-status             # show local Kind TauGrid resources"
+	@echo "  make kind-down               # delete the local Kind TauGrid cluster"
 	@echo ""
 	@echo "Override the Python SDK interpreter with PYTHON=/path/to/python."
+	@echo "Kind development prefers local Podman and falls back to Docker."
+	@echo "Override with KIND_ENGINE=docker or KIND_CLUSTER_NAME=name."
 
 build:
 	$(MAKE) -C $(TAU_GO_DIR) build
@@ -49,10 +97,14 @@ build:
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) build \
 		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) build GOFLAGS="$(GO_COMMAND_FLAGS)"
 	@echo "==> tests/e2e"
 	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go build ./...
 
 test:
+	bash scripts/ci/tests/kind-helpers_test.sh
+	bash scripts/ci/tests/kind-consumers-contract_test.sh
+	bash scripts/ci/tests/image-build-contract_test.sh
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"
 	@cd $(CORE_DIR) && go test ./...
@@ -60,6 +112,7 @@ test:
 	$(MAKE) -C $(TAU_CORE_CONTROLLER_DIR) test
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) test GOARCH=$(HOST_GOARCH)
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) test
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) test
 	@echo "==> tests/e2e (offline)"
 	@cd $(E2E_DIR) && AI_RUNTIME_E2E=0 GOFLAGS="$(GO_COMMAND_FLAGS)" \
 		go test -count=1 ./...
@@ -78,6 +131,7 @@ lint:
 	$(MAKE) -C $(GPU_HEALTH_CHECKER_DIR) lint \
 		GOARCH=$(HOST_GOARCH) GOFLAGS="$(GO_COMMAND_FLAGS) -trimpath"
 	$(MAKE) -C $(GPU_METRICS_COLLECTOR_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) lint GOFLAGS="$(GO_COMMAND_FLAGS)"
 	@echo "==> tests/e2e"
 	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go vet ./...
 	@cd $(E2E_DIR) && gofmt -l . | tee /dev/stderr | (! read -r _)
@@ -127,6 +181,10 @@ install-taugrid-portal:
 	$(MAKE) -C $(TAUGRID_PORTAL_DIR) install
 	$(call check_installed_on_path,taugrid-portal)
 
+install-taugrid-metrics-collector:
+	$(MAKE) -C $(TAUGRID_METRICS_COLLECTOR_DIR) install
+	$(call check_installed_on_path,taugrid-metrics-collector)
+
 uninstall-tau:
 	@bin_dir="$$(go env GOBIN)"; \
 	[ -n "$$bin_dir" ] || bin_dir="$$(go env GOPATH)/bin"; \
@@ -139,6 +197,12 @@ uninstall-taugrid-portal:
 	rm -f "$$bin_dir/taugrid-portal"; \
 	echo "Removed taugrid-portal from $$bin_dir."
 
+uninstall-taugrid-metrics-collector:
+	@bin_dir="$$(go env GOBIN)"; \
+	[ -n "$$bin_dir" ] || bin_dir="$$(go env GOPATH)/bin"; \
+	rm -f "$$bin_dir/taugrid-metrics-collector"; \
+	echo "Removed taugrid-metrics-collector from $$bin_dir."
+
 tau-docs-build:
 	$(MAKE) -C $(TAU_SITE_DIR) build
 
@@ -147,3 +211,66 @@ tau-docs-check:
 
 tau-docs-serve:
 	$(MAKE) -C $(TAU_SITE_DIR) serve
+
+ifeq ($(KIND_EXECUTION),remote)
+
+kind-sync:
+	@test -n "$(KIND_REMOTE_HOST)" || { echo "KIND_REMOTE_HOST is required for KIND_EXECUTION=remote" >&2; exit 2; }
+	@case "$(KIND_REMOTE_DIR)" in ""|"/"|".") echo "Refusing unsafe KIND_REMOTE_DIR=$(KIND_REMOTE_DIR)" >&2; exit 2 ;; esac
+	ssh $(KIND_REMOTE_HOST) 'rm -rf "$(KIND_REMOTE_DIR)" && mkdir -p "$(KIND_REMOTE_DIR)"'
+	COPYFILE_DISABLE=1 tar --no-xattrs \
+		--exclude='./.git' \
+		--exclude='./cli/bin' \
+		--exclude='./portal/frontend/node_modules' \
+		--exclude='./charts/taugrid/charts' \
+		--exclude='*/__pycache__' \
+		--exclude='*/.venv' \
+		-cf - . | ssh $(KIND_REMOTE_HOST) 'tar -xf - -C "$(KIND_REMOTE_DIR)"'
+
+kind-build-images kind-create kind-load-images kind-images kind-install kind-restart kind-up kind-status kind-test-workspace kind-down: kind-sync
+	ssh $(KIND_REMOTE_HOST) 'cd "$(KIND_REMOTE_DIR)" && bin_dir="$(KIND_REMOTE_BIN_DIR)"; if [ -n "$$bin_dir" ]; then PATH="$$bin_dir:$$PATH"; fi; make $@ $(KIND_REMOTE_OVERRIDES) $(KIND_REMOTE_PLATFORM_OVERRIDE)'
+
+else
+
+kind-sync:
+	@echo "KIND_EXECUTION=local: no remote sync required"
+
+kind-build-images:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) build
+
+kind-create:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) create
+
+kind-load-images:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) load
+
+kind-images:
+	$(MAKE) kind-build-images
+	$(MAKE) kind-create
+	$(MAKE) kind-load-images
+
+kind-install:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) install
+
+kind-restart:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) restart
+
+kind-up:
+	$(MAKE) kind-images
+	$(MAKE) kind-install
+	$(MAKE) kind-restart
+	$(MAKE) kind-status
+
+kind-status:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) status
+
+kind-test-workspace:
+	$(MAKE) -C $(TAU_GO_DIR) build
+	$(KIND_DEV_ENV) \
+		TAUGRID_KIND_TAU_BIN="$(TAU_GO_DIR)/bin/tau" \
+		$(KIND_DEV_SCRIPT) test-workspace
+
+kind-down:
+	$(KIND_DEV_ENV) $(KIND_DEV_SCRIPT) down
+
+endif

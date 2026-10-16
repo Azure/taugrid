@@ -4,10 +4,34 @@ templates:
 values:
   - mixed-dcgm-values.yaml
 tests:
-  - it: uses the GPU Operator Service only for the overridden H200 profile
+  - it: uses the GPU Operator Service for the overridden H200 profile
     documentSelector:
       path: metadata.name
       value: gpu-monitoring-gpu-metrics-collector-h200
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: "dcgm-exporter"\s+url: "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: '"http://localhost:19400/metrics"'
+
+  - it: uses the GPU Operator Service for the overridden one-GPU H100 NVL profile
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100-nvl-1g
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'name: "dcgm-exporter"\s+url: "http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics"'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: '"http://localhost:19400/metrics"'
+
+  - it: uses the GPU Operator Service for the overridden two-GPU H100 NVL profile
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100-nvl-2g
     asserts:
       - matchRegex:
           path: data["rules.yaml"]

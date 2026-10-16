@@ -55,10 +55,7 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 	changed := false
 
 	for _, r := range results {
-		status := corev1.ConditionFalse
-		if r.Firing {
-			status = corev1.ConditionTrue
-		}
+		status := resultStatus(r)
 
 		cond := corev1.NodeCondition{
 			Type:              corev1.NodeConditionType(r.ConditionType),
@@ -105,11 +102,7 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 
 	// Update last-known status after successful patch.
 	for _, r := range results {
-		status := corev1.ConditionFalse
-		if r.Firing {
-			status = corev1.ConditionTrue
-		}
-		w.lastStatus[r.ConditionType] = status
+		w.lastStatus[r.ConditionType] = resultStatus(r)
 	}
 
 	firingCount := 0
@@ -124,12 +117,49 @@ func (w *Writer) WriteConditions(ctx context.Context, results []rules.Result) er
 	return nil
 }
 
+func resultStatus(r rules.Result) corev1.ConditionStatus {
+	if r.Firing {
+		return corev1.ConditionTrue
+	}
+	if r.Unknown {
+		return corev1.ConditionUnknown
+	}
+	return corev1.ConditionFalse
+}
+
 type nodeConditionsPatch struct {
 	Status nodeStatusPatch `json:"status"`
 }
 
 type nodeStatusPatch struct {
 	Conditions []corev1.NodeCondition `json:"conditions"`
+}
+
+// Merge patches must clear empty diagnostics but omit unchanged transition times.
+func (p nodeStatusPatch) MarshalJSON() ([]byte, error) {
+	type conditionPatch struct {
+		Type               corev1.NodeConditionType `json:"type"`
+		Status             corev1.ConditionStatus   `json:"status"`
+		LastHeartbeatTime  metav1.Time              `json:"lastHeartbeatTime"`
+		LastTransitionTime *metav1.Time             `json:"lastTransitionTime,omitempty"`
+		Reason             string                   `json:"reason"`
+		Message            string                   `json:"message"`
+	}
+	conditions := make([]conditionPatch, 0, len(p.Conditions))
+	for _, condition := range p.Conditions {
+		patch := conditionPatch{
+			Type: condition.Type, Status: condition.Status,
+			LastHeartbeatTime: condition.LastHeartbeatTime,
+			Reason:            condition.Reason, Message: condition.Message,
+		}
+		if !condition.LastTransitionTime.IsZero() {
+			patch.LastTransitionTime = &condition.LastTransitionTime
+		}
+		conditions = append(conditions, patch)
+	}
+	return json.Marshal(struct {
+		Conditions []conditionPatch `json:"conditions"`
+	}{Conditions: conditions})
 }
 
 // ExportLastStatus returns the last-known condition statuses for persistence.

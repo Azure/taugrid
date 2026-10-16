@@ -36,6 +36,11 @@ func (s *Store) SearchRuns(ctx context.Context, opts RunSearchOptions) (RunSearc
 	opts.Project = strings.TrimSpace(opts.Project)
 	opts.RunGroupID = strings.TrimSpace(opts.RunGroupID)
 	opts.Workspace = strings.TrimSpace(opts.Workspace)
+	opts.Target = strings.TrimSpace(opts.Target)
+	opts.ExactExperimentID = strings.TrimSpace(opts.ExactExperimentID)
+	opts.ExactRunID = strings.TrimSpace(opts.ExactRunID)
+	opts.CursorAt = strings.TrimSpace(opts.CursorAt)
+	opts.CursorID = strings.TrimSpace(opts.CursorID)
 	opts.State = normalizeRunState(opts.State)
 	opts.Lifecycle = normalizeLifecycle(opts.Lifecycle)
 	if opts.Limit < 0 {
@@ -253,7 +258,18 @@ func ClassifyRun(run RunRecord, tags map[string]string, summaries []MetricSummar
 func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (string, []any, error) {
 	clauses := []string{}
 	args := []any{}
-	if target := strings.TrimSpace(opts.Target); target != "" {
+	if opts.ExactExperimentID != "" {
+		clauses = append(clauses, "r.experiment_id = ?")
+		args = append(args, opts.ExactExperimentID)
+	}
+	if opts.ExactRunID != "" {
+		clauses = append(clauses, "r.run_id = ?")
+		args = append(args, opts.ExactRunID)
+		if target := strings.TrimSpace(opts.Target); target != "" {
+			clauses = append(clauses, "(r.experiment_id = ? OR r.run_group_id = ? OR r.run_id = ?)")
+			args = append(args, target, target, target)
+		}
+	} else if target := strings.TrimSpace(opts.Target); opts.ExactExperimentID == "" && target != "" {
 		targetType, err := s.targetType(ctx, target)
 		if err != nil {
 			return "", nil, err
@@ -289,6 +305,14 @@ func (s *Store) runSearchWhere(ctx context.Context, opts RunSearchOptions) (stri
 		}
 		clauses = append(clauses, "r.created_at >= ?")
 		args = append(args, since)
+	}
+	if opts.CursorAt != "" || opts.CursorID != "" {
+		project, runID, err := searchCursorParts(opts.CursorAt, opts.CursorID)
+		if err != nil {
+			return "", nil, err
+		}
+		clauses = append(clauses, `(r.created_at COLLATE tau_rfc3339_nano < ? COLLATE tau_rfc3339_nano OR (r.created_at COLLATE tau_rfc3339_nano = ? COLLATE tau_rfc3339_nano AND (r.project > ? OR (r.project = ? AND r.run_id > ?))))`)
+		args = append(args, opts.CursorAt, opts.CursorAt, project, project, runID)
 	}
 	if opts.Query != "" {
 		like := "%" + strings.ToLower(opts.Query) + "%"
@@ -351,7 +375,7 @@ SELECT r.run_id, r.project, r.experiment_id, r.run_group_id,
 FROM runs r
 LEFT JOIN run_groups g ON g.run_group_id = r.run_group_id
 ` + where + `
-ORDER BY r.created_at DESC, r.run_id`
+ORDER BY r.created_at COLLATE tau_rfc3339_nano DESC, r.project ASC, r.run_id ASC`
 	if limit > 0 {
 		query += " LIMIT " + strconv.Itoa(limit)
 		if offset > 0 {
@@ -389,6 +413,19 @@ ORDER BY r.created_at DESC, r.run_id`
 		out = append(out, run)
 	}
 	return out, rows.Err()
+}
+
+func searchCursorParts(cursorAt, cursorID string) (string, string, error) {
+	if _, err := time.Parse(time.RFC3339Nano, cursorAt); err != nil {
+		return "", "", fmt.Errorf("%w: cursor timestamp is invalid", ErrInvalidArgument)
+	}
+	project, id, ok := strings.Cut(cursorID, "\x00")
+	project = strings.TrimSpace(project)
+	id = strings.TrimSpace(id)
+	if !ok || project == "" || id == "" || strings.Contains(id, "\x00") {
+		return "", "", fmt.Errorf("%w: cursor identity is invalid", ErrInvalidArgument)
+	}
+	return project, id, nil
 }
 
 func (s *Store) RunTags(ctx context.Context, runIDs []string) (map[string]map[string]string, error) {

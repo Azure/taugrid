@@ -49,15 +49,27 @@ tests:
       - equal:
           path: spec.queues.ownership
           value: External
+      - notExists:
+          path: spec.sites
       - lengthEqual:
           path: spec.workloadProfiles
-          count: 15
+          count: 16
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
       - equal:
           path: spec.workloadProfiles[0].applicability.namespaces[0]
           value: taugrid-default
+      - equal:
+          path: spec.workloadProfiles[0].name
+          value: azure.workspace.cpu
+      - equal:
+          path: spec.workloadProfiles[0].gpusPerWorker
+          value: 0
+      - notExists:
+          path: spec.workloadProfiles[0].applicability.teams
+      - notExists:
+          path: spec.workloadProfiles[0].applicability.lanes
 
   - it: renders built-in workload profiles for a custom workspace namespace
     set:
@@ -65,12 +77,12 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.workloadProfiles
-          count: 15
+          count: 16
       - equal:
           path: spec.workloadProfiles[0].applicability.namespaces[0]
           value: team-alpha
       - equal:
-          path: spec.workloadProfiles[14].applicability.namespaces[0]
+          path: spec.workloadProfiles[15].applicability.namespaces[0]
           value: team-alpha
 
   - it: replaces the catalog and appends a platform supplied mapping
@@ -109,7 +121,7 @@ tests:
           gpusPerWorker: 2
           workerCount: 1
           mode: fixed
-          placement: independent
+          placement: unconstrained
           defaultLocalQueue: site-queue
           executionTarget: singleCluster
           priorities:

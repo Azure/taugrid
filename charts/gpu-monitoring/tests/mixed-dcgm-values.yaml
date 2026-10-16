@@ -1,4 +1,12 @@
 gpuSkus:
+  h100-nvl-1g:
+    dcgmHealth:
+      source: exporter
+      exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
+  h100-nvl-2g:
+    dcgmHealth:
+      source: exporter
+      exporterUrl: http://nvidia-dcgm-exporter.gpu-operator.svc:9400/metrics
   h200:
     dcgmHealth:
       source: exporter

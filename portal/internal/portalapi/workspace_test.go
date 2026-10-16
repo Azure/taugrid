@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/Azure/taugrid/portal/internal/expapi"
 )
 
 func testWorkspaceDirectory(t *testing.T) WorkspaceDirectory {
@@ -132,6 +134,56 @@ func TestWorkspaceAwareStellarDelegatesLocalRouteWithScope(t *testing.T) {
 	}
 	if gotPath != "/api/stellar/experiments" || gotWorkspace != "alpha" || gotProject != "vision" || gotSource != "kusto" {
 		t.Fatalf("delegated route = path %q workspace %q project %q source %q", gotPath, gotWorkspace, gotProject, gotSource)
+	}
+}
+
+func TestSingleWorkspaceCanonicalStellarResolvesAutoSource(t *testing.T) {
+	native := func(context.Context, string) (string, error) { return "[]", nil }
+	tests := []struct {
+		name          string
+		opts          expapi.Options
+		wantCanonical string
+	}{
+		{name: "kusto available", opts: expapi.Options{Source: "auto", StorePath: t.TempDir(), KustoNativeQuery: native}, wantCanonical: "kusto"},
+		{name: "local only", opts: expapi.Options{Source: "auto", StorePath: t.TempDir()}, wantCanonical: "local"},
+		{name: "explicit source", opts: expapi.Options{Source: "kusto", KustoNativeQuery: native}, wantCanonical: "kusto"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, err := NewServer(Options{Stellar: test.opts})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if server.singleWorkspaceScope.Source != test.opts.Source {
+				t.Fatalf("single-workspace source=%q, want configured %q", server.singleWorkspaceScope.Source, test.opts.Source)
+			}
+			gotSources := map[string]string{}
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotSources[r.URL.Path] = r.URL.Query().Get("source")
+				w.WriteHeader(http.StatusNoContent)
+			})
+			for _, path := range []string{
+				"/api/v2/stellar/experiments/search",
+				"/api/stellar/experiments",
+				"/api/stellar/runs",
+				"/api/stellar/snapshot",
+			} {
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				server.workspaceAwareStellar(next).ServeHTTP(rec, req)
+				if rec.Code != http.StatusNoContent {
+					t.Fatalf("%s status=%d body=%s", path, rec.Code, rec.Body.String())
+				}
+			}
+			if gotSources["/api/v2/stellar/experiments/search"] != test.wantCanonical {
+				t.Fatalf("canonical source=%q, want %q", gotSources["/api/v2/stellar/experiments/search"], test.wantCanonical)
+			}
+			for _, path := range []string{"/api/stellar/experiments", "/api/stellar/runs", "/api/stellar/snapshot"} {
+				if gotSources[path] != test.opts.Source {
+					t.Fatalf("%s source=%q, want configured %q", path, gotSources[path], test.opts.Source)
+				}
+			}
+		})
 	}
 }
 
@@ -262,6 +314,69 @@ func TestWorkspaceDirectoryValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := NewWorkspaceDirectory(tt.cfg); err == nil {
 				t.Fatal("NewWorkspaceDirectory succeeded, want validation error")
+			}
+		})
+	}
+}
+
+func TestIsSafeLocalAbsolutePath(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "root", raw: "/", want: true},
+		{name: "local route", raw: "/stellar", want: true},
+		{name: "base path", raw: "/base/stellar", want: true},
+		{name: "query and fragment", raw: "/stellar?project=vision#runs", want: true},
+		{name: "URL in query", raw: "/stellar?next=https://example.com", want: true},
+		{name: "encoded slashes", raw: "/%2F%2Fexample.com/stellar", want: true},
+		{name: "encoded backslash", raw: "/%5Cexample.com/stellar", want: true},
+		{name: "Unicode path", raw: "/実験", want: true},
+		{name: "empty"},
+		{name: "relative path", raw: "stellar"},
+		{name: "absolute URL", raw: "https://stellar.example/stellar"},
+		{name: "double slash", raw: "//attacker.example/stellar"},
+		{name: "triple slash", raw: "///attacker.example/stellar"},
+		{name: "slash backslash", raw: `/\attacker.example/stellar`},
+		{name: "backslash slash", raw: `\/attacker.example/stellar`},
+		{name: "double backslash", raw: `\\attacker.example/stellar`},
+		{name: "backslash in path", raw: `/stellar\other`},
+		{name: "backslash in query", raw: `/stellar?project=\other`},
+		{name: "backslash in fragment", raw: `/stellar#\other`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSafeLocalAbsolutePath(tt.raw); got != tt.want {
+				t.Fatalf("isSafeLocalAbsolutePath(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateExperimentsURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		local   bool
+		wantErr bool
+	}{
+		{name: "local root", raw: "/", local: true},
+		{name: "local route", raw: "/stellar?project=vision#runs", local: true},
+		{name: "local encoded path", raw: "/%2F%5Cstellar", local: true},
+		{name: "local Unicode path", raw: "/実験", local: true},
+		{name: "local workspace HTTPS navigation", raw: "https://stellar.example/base/stellar?project=vision#runs", local: true},
+		{name: "remote workspace HTTPS navigation", raw: "https://stellar.example/base/stellar?project=vision#runs"},
+		{name: "remote workspace local path", raw: "/stellar", wantErr: true},
+		{name: "HTTP navigation", raw: "http://stellar.example/stellar", local: true, wantErr: true},
+		{name: "credentials", raw: "https://user:pass@stellar.example/stellar", local: true, wantErr: true},
+		{name: "malformed escape", raw: "/stellar%zz", local: true, wantErr: true},
+		{name: "control character", raw: "/\t/attacker.example", local: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := validateExperimentsURL(tt.raw, tt.local); (err != nil) != tt.wantErr {
+				t.Fatalf("validateExperimentsURL(%q, %v) = %v, wantErr %v", tt.raw, tt.local, err, tt.wantErr)
 			}
 		})
 	}

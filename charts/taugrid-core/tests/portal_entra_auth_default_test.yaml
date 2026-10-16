@@ -1,0 +1,17 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+suite: Standalone Portal authentication remains disabled by default
+templates:
+  - templates/portal-entra-auth.yaml
+tests:
+  - it: creates no resources without opt-in
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: creates no exposure when only Portal is enabled
+    set:
+      portal.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

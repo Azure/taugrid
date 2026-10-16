@@ -27,6 +27,26 @@ func TestPortalRunHistoryIsExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestPortalHasNoCatalogReadSourceMigrationSwitch(t *testing.T) {
+	cmd := newPortalCmd()
+	serve, _, err := cmd.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := serve.Flags().Lookup("kusto-experiment-catalog-read-source")
+	if flag != nil {
+		t.Fatal("portal serve unexpectedly exposes the retired catalog read-source switch")
+	}
+}
+
+func TestDefaultServeOptionsReadCursorSigningSecret(t *testing.T) {
+	t.Setenv("TAUGRID_STELLAR_CURSOR_SIGNING_KEY", "0123456789abcdef0123456789abcdef")
+	opts := defaultExpServeOptions()
+	if string(opts.cursorSigningKey) != "0123456789abcdef0123456789abcdef" {
+		t.Fatal("cursor signing key was not loaded from the deployment secret environment")
+	}
+}
+
 func TestPortalRunHistoryRequiresKustoSource(t *testing.T) {
 	cmd := newPortalCmd()
 	var stderr bytes.Buffer

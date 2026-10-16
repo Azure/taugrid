@@ -25,9 +25,3 @@ spec:
   - flavor: e2e-stack-large-gpu-flavor
     resource: nvidia.com/gpu
     capacity: "16"
-  # InfiniBand RDMA shared device advertised by the device plugin once
-  # enable-infiniband.sh has run. The plugin advertises rdmaHcaMax (63) per H200
-  # node; 2 nodes => 126 available. The FineWeb IB job reserves 32 (16 workers + headroom).
-  - flavor: e2e-stack-large-gpu-flavor
-    resource: rdma/rdma_shared_device_a
-    capacity: "126"

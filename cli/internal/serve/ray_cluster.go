@@ -26,9 +26,9 @@ func validateRayWorkerOptions(p profile.Profile, o Options) error {
 	}
 	if o.Workers > 1 {
 		if p.Resources.GPU.Count < 1 || p.Topology.Mode != profile.ModeFixed ||
-			p.Topology.Placement != profile.PlacementMultiNodeNCCL ||
+			p.Topology.Placement != profile.PlacementSameNetworkDomain ||
 			p.ExecutionTarget != profile.ExecutionTargetSingleCluster {
-			return fmt.Errorf("multi-node RayService requires a fixed, multi-node-nccl, singleCluster profile with at least one GPU per worker")
+			return fmt.Errorf("multi-node RayService requires a fixed, same-network-domain, singleCluster profile with at least one GPU per worker")
 		}
 		if len(o.Args) > 0 {
 			return fmt.Errorf("multi-node RayService cannot use legacy --args for Ray startup; configure the Ray Serve application with --import-path and --env")

@@ -91,6 +91,87 @@ func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
 	}
 }
 
+func TestRenderPriorityTierAppliesToRayJobAndEveryPod(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "priority-ray",
+		Namespace:     "tau",
+		ScriptName:    "train.py",
+		Script:        []byte("print('ok')\n"),
+		Workers:       1,
+		GPUsPerWorker: 1,
+		TopologyOptions: topology.Options{
+			QueueName:    "jobqueue",
+			PriorityTier: "priority",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rayJob := decodeDocs(t, out)[0]
+	labels := rayJob["metadata"].(map[string]any)["labels"].(map[string]any)
+	if labels["kueue.x-k8s.io/priority-class"] != "taugrid-priority" {
+		t.Fatalf("workload priority = %v", labels["kueue.x-k8s.io/priority-class"])
+	}
+	cluster := rayJob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	workers := cluster["workerGroupSpecs"].([]any)
+	worker := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	for name, pod := range map[string]map[string]any{"head": head, "worker": worker} {
+		if pod["priorityClassName"] != "taugrid-priority" {
+			t.Fatalf("%s pod priority = %v", name, pod["priorityClassName"])
+		}
+	}
+}
+
+func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
+	out, err := Render(Options{
+		Name:            "rdma-ray",
+		Namespace:       "tau",
+		ScriptName:      "train.py",
+		Script:          []byte("print('ok')\n"),
+		Workers:         2,
+		GPUsPerWorker:   8,
+		RDMA:            runconfig.NormalizedRDMA{Enabled: true},
+		TopologyOptions: topology.Options{QueueName: "jobqueue"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rayJob := decodeDocs(t, out)[0]
+	cluster := rayJob["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headPod := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	headContainer := headPod["containers"].([]any)[0].(map[string]any)
+	if _, exists := headContainer["securityContext"]; exists {
+		t.Fatalf("head must not receive RDMA securityContext: %v", headContainer["securityContext"])
+	}
+	headResources := headContainer["resources"].(map[string]any)
+	if got := len(headResources["requests"].(map[string]any)); got != 2 {
+		t.Fatalf("head resource requests=%v, want only cpu and memory", headResources)
+	}
+
+	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	workerContainer := workerPod["containers"].([]any)[0].(map[string]any)
+	securityContext := workerContainer["securityContext"].(map[string]any)
+	if fmt.Sprint(securityContext["runAsUser"]) != "0" {
+		t.Fatalf("worker runAsUser = %v, want 0", securityContext["runAsUser"])
+	}
+	capabilities := securityContext["capabilities"].(map[string]any)["add"].([]any)
+	if got := fmt.Sprint(capabilities); got != "[IPC_LOCK SYS_RESOURCE DAC_OVERRIDE]" {
+		t.Fatalf("worker RDMA capabilities = %s", got)
+	}
+	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Fatalf("worker RDMA topology=%v, want tau.azure.com/network-domain", got)
+	}
+	workerResources := workerContainer["resources"].(map[string]any)
+	for _, field := range []string{"requests", "limits"} {
+		if got := len(workerResources[field].(map[string]any)); got != 3 {
+			t.Fatalf("worker %s=%v, want cpu, memory, and GPU only", field, workerResources[field])
+		}
+	}
+}
+
 func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 	out, err := Render(Options{
 		Name:               "ray-smoke",
@@ -117,7 +198,7 @@ func TestRenderRayTrainScriptAsKueueRayJob(t *testing.T) {
 			Team:      "research",
 			Lane:      "training",
 			QueueName: "team-a",
-			Placement: "independent",
+			Placement: "unconstrained",
 			GPUClass:  "any",
 		},
 
@@ -313,7 +394,7 @@ func TestRenderSpecificGPUClassUsesCanonicalLabelAndSelector(t *testing.T) {
 		GPUsPerWorker: 1,
 		TopologyOptions: topology.Options{
 			QueueName: "jobqueue",
-			GPUClass:  "a100-nvlink-80gb",
+			GPUClass:  "a100-80gb",
 		},
 	})
 	if err != nil {
@@ -432,8 +513,8 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 			topology.ManagedGPUSeriesLabel: "nd-h200-v5",
 		},
 		TopologyOptions: topology.Options{
-			Placement: "single-node-nvlink",
-			GPUClass:  "h200-nvlink-141gb",
+			Placement: "same-host",
+			GPUClass:  "h200-141gb",
 			QueueName: "jobqueue",
 		},
 	})
@@ -485,7 +566,7 @@ func TestRenderGPUPlacementSeparatesHeadAndWorkers(t *testing.T) {
 
 }
 
-func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
+func TestRenderSameNetworkDomainTopologyOnlyOnGPUWorkers(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "managed-tas",
 		Namespace:     "taugrid-default",
@@ -494,8 +575,8 @@ func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
 		Workers:       1,
 		GPUsPerWorker: 1,
 		TopologyOptions: topology.Options{
-			QueueName:        "jobqueue",
-			RequiredTopology: "kubernetes.io/hostname",
+			QueueName: "jobqueue",
+			Placement: "same-network-domain",
 		},
 	})
 	if err != nil {
@@ -507,8 +588,35 @@ func TestRenderResourceFlavorRequiredTopologyOnlyOnGPUWorkers(t *testing.T) {
 		t.Fatalf("control head retained GPU topology requirement: %v", headAnnotations)
 	}
 	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "kubernetes.io/hostname" {
-		t.Fatalf("worker required topology=%v, want kubernetes.io/hostname", got)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "tau.azure.com/network-domain" {
+		t.Fatalf("worker required topology=%v, want tau.azure.com/network-domain", got)
+	}
+}
+
+func TestRenderSameAcceleratorDomainTopologyOnlyOnGPUWorkers(t *testing.T) {
+	out, err := Render(Options{
+		Name:          "accelerator-tas",
+		Namespace:     "taugrid-default",
+		ScriptName:    "train.py",
+		Script:        []byte("print('train')\n"),
+		Workers:       2,
+		GPUsPerWorker: 4,
+		TopologyOptions: topology.Options{
+			QueueName: "jobqueue",
+			Placement: "same-accelerator-domain",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headAnnotations := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if _, ok := headAnnotations[topology.RequiredTopologyAnnotation]; ok {
+		t.Fatalf("control head retained GPU topology requirement: %v", headAnnotations)
+	}
+	workerAnnotations := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if got := workerAnnotations[topology.RequiredTopologyAnnotation]; got != "tau.azure.com/accelerator-domain" {
+		t.Fatalf("worker required topology=%v, want tau.azure.com/accelerator-domain", got)
 	}
 }
 
@@ -522,7 +630,7 @@ func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 		GPUsPerWorker: 0,
 		NodeSelector:  map[string]string{"workload": "cpu"},
 		TopologyOptions: topology.Options{
-			Placement: "independent",
+			Placement: "unconstrained",
 			QueueName: "cpu-queue",
 		},
 	})
@@ -553,6 +661,7 @@ func TestRenderCPUOnlyPlacementSeparatesSystemHead(t *testing.T) {
 
 func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	runtime := metricsoffload.Runtime{
+		Runtime:                 metricsoffload.RuntimeCollectorV1,
 		Image:                   "registry.example.com/taugrid/tau@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		RunID:                   "modernbert-ray",
 		Project:                 "pretraining",
@@ -564,7 +673,9 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 		Out:                     "/data/research-workspace/runs/modernbert-ray/.tau/metrics/session/offload",
 		History:                 []string{"/data/research-workspace/runs/modernbert-ray/metrics-history-attempt-*/*.jsonl"},
 		CompletionFile:          "/var/run/tau/metrics-completion.json",
-		RemoteWriteEndpoint:     "http://${NODE_IP}:3100/receive",
+		ADXClusterURI:           "https://example.kusto.windows.net",
+		ADXDatabase:             "TauGrid",
+		ADXClientID:             "00000000-0000-0000-0000-000000000001",
 		Interval:                10 * time.Second,
 		ArtifactURI:             "/data/research-workspace/runs/modernbert-ray",
 		BaselineExistingHistory: true,
@@ -630,6 +741,19 @@ func TestRenderRayJobWithManagedMetricsAndStagedArtifacts(t *testing.T) {
 	pod := head["template"].(map[string]any)["spec"].(map[string]any)
 	if got := containerNames(t, pod["containers"].([]any)); !strings.Contains(got, "metrics-offload") {
 		t.Fatalf("head containers = %s", got)
+	}
+	headContainers := pod["containers"].([]any)
+	metricsContainer := headContainers[len(headContainers)-1].(map[string]any)
+	if got := fmt.Sprint(metricsContainer["command"]); got != fmt.Sprint([]any{metricsoffload.CollectorSidecarCommand}) {
+		t.Fatalf("collector command = %s", got)
+	}
+	if got := fmt.Sprint(metricsContainer["args"]); !strings.Contains(got, "collect --watch") {
+		t.Fatalf("collector args = %s", got)
+	}
+	workers := cluster["workerGroupSpecs"].([]any)
+	workerPod := workers[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := containerNames(t, workerPod["containers"].([]any)); strings.Contains(got, "metrics-offload") {
+		t.Fatalf("worker containers unexpectedly include metrics offload: %s", got)
 	}
 }
 
@@ -1210,6 +1334,34 @@ func TestRenderGracePeriodDefaultIs600(t *testing.T) {
 	gi64, _ = g.(int64)
 	if gi != 600 && gi64 != 600 {
 		t.Errorf("worker terminationGracePeriodSeconds=%v want 600", g)
+	}
+}
+
+func TestRenderGracePeriodCoversHeadMetricsShutdown(t *testing.T) {
+	runtime := metricsoffload.Runtime{
+		Image: "example.test/collector:v1", RunID: "run", Project: "project",
+		Experiment: "experiment", Group: "group", Store: "/data/store", Out: "/data/out",
+		History: []string{"/data/history.jsonl"}, CompletionFile: "/data/completion",
+		ADXClusterURI: "https://example.kusto.windows.net", ADXDatabase: "TauGrid",
+		ADXClientID: "00000000-0000-0000-0000-000000000001", Interval: time.Second,
+		DoneTimeout: 15 * time.Minute,
+	}
+	out, err := Render(Options{
+		Name: "gp-metrics", Namespace: "tau", ScriptName: "train.py",
+		Script: []byte("print('train')\n"), Workers: 1, GPUsPerWorker: 1,
+		DataPVC: "data", MetricsOffload: runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	headPod := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := headPod["terminationGracePeriodSeconds"]; got != 930 {
+		t.Fatalf("head terminationGracePeriodSeconds=%v, want 930", got)
+	}
+	workerPod := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	if got := workerPod["terminationGracePeriodSeconds"]; got != 600 {
+		t.Fatalf("worker terminationGracePeriodSeconds=%v, want 600", got)
 	}
 }
 
@@ -2143,7 +2295,7 @@ func TestRenderRejectsCheckpointArtifactWithoutDurablePVC(t *testing.T) {
 				Team:      "research",
 				Lane:      "training",
 				QueueName: "team-a",
-				Placement: "independent",
+				Placement: "unconstrained",
 				GPUClass:  "any",
 			},
 		}

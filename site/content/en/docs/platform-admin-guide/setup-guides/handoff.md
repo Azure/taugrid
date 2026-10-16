@@ -84,11 +84,25 @@ access:
 
 ## Repository placement
 
-Commit `tau/workspace.connection.yaml` at the repository root, alongside the target configs it governs (for example `tau/smoke.yaml`, `tau/train.yaml`). Two ways to produce it:
+For a portable team handoff, commit `tau/workspace.connection.yaml` at the
+repository root alongside the target configs it governs (for example
+`tau/smoke.yaml`, `tau/train.yaml`). Ways to produce it:
 
 - Author it directly from the table above.
 - Generate a provider-neutral descriptor with `tau workspace init-repo <name> --workspace <workspace> --kube-context <context> --image <build-tag>`.
 - For automatic AKS access, add `--azure-subscription-id <id> --azure-tenant-id <id> --aks-resource-group <group> --aks-cluster <cluster>`. `--kube-context` then defaults to the AKS cluster name.
+
+For a local checkout that should not commit one cluster target, the user can
+instead assign an already verified or visible workspace:
+
+```bash
+tau workspace connection assign <workspace> --context <context>
+tau workspace connection inspect
+```
+
+Tau writes the non-secret assignment under the user's Tau config directory,
+scoped to the exact worktree/project. It does not write repository YAML or
+credentials. A checked-in descriptor added later becomes authoritative.
 
 The generated targets are ready only after the project image is built and pushed, its immutable tag or digest is written back, and config validation succeeds:
 
@@ -103,11 +117,12 @@ tau run validate --config tau/train.yaml
 tau workspace connection
 ```
 
-This resolves credentials, contacts Kubernetes, and verifies the descriptor's
-workspace, LocalQueue, and authorization contract without submitting a
-workload. Use `tau workspace connection --offline` when only local descriptor
-validation is appropriate. Before handoff, platform operators can also inspect
-the named workspace directly:
+This resolves credentials, contacts Kubernetes, and verifies the effective
+descriptor or local assignment's workspace, LocalQueue, and authorization
+contract without submitting a workload. Use
+`tau workspace connection inspect --output json` for local routing inspection
+without cluster access. Before handoff, platform operators can also inspect the
+named workspace directly:
 
 ```bash
 tau workspace check <workspace> --context <context>

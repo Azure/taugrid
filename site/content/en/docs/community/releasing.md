@@ -13,9 +13,11 @@ TauGrid release preparation updates:
 - `cli/releases/vX.Y.Z.md`.
 - The reviewed source commit on `main`.
 
-Maintainers then create an annotated SemVer tag and manually dispatch the release
-workflow. The workflow builds twice, compares outputs, verifies checksums,
-publishes immutable assets, and proves clean bootstrap.
+Maintainers then create and push an annotated SemVer tag. The tag push does not
+publish a GitHub Release. After the coordinated Azure DevOps images and charts
+are published and verified, a maintainer manually dispatches the release
+workflow from that tag ref. The workflow builds twice, compares outputs,
+verifies checksums, publishes immutable assets, and proves clean bootstrap.
 
 Never overwrite an existing release or asset. Do not update downstream minimum
 versions until post-publication Ubuntu and macOS verification succeeds.

@@ -28,6 +28,9 @@ func TestKindSmokeExercisesRayServiceAndLegacyCRDUpgrade(t *testing.T) {
 	for _, want := range []string{
 		"crd/rayservices.ray.io",
 		"TestRenderKindRayServiceFixture",
+		`KIND_NODE_TASKS_MAX="${TAU_KIND_NODE_TASKS_MAX:-4096}"`,
+		`KIND_NODE_PIDS_LIMIT="${TAU_KIND_NODE_PIDS_LIMIT:-8192}"`,
+		`"$CONTAINER_ENGINE" update --pids-limit "$KIND_NODE_PIDS_LIMIT"`,
 		"wait_for_workload_admitted rayservice.ray.io",
 		`--for=condition=Ready --timeout="$RAY_WAIT_TIMEOUT"`,
 		`":9000/-/healthz"`,

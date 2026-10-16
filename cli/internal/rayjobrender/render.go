@@ -119,6 +119,7 @@ type Options struct {
 	EnvSecrets      []envspec.Var
 	RedactSecrets   bool
 	SecurityMode    string
+	RDMA            runconfig.NormalizedRDMA
 	DataPVC         string
 	Profile         profile.Profile
 	TopologyOptions topology.Options
@@ -184,7 +185,11 @@ func Render(o Options) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("script payload: %w", err)
 	}
-	plan, err := topology.Build(o.Profile, o.TopologyOptions)
+	topologyOptions := o.TopologyOptions
+	if o.RDMA.Enabled {
+		topologyOptions = topology.WithNetworkDomainRequirement(o.Profile, topologyOptions)
+	}
+	plan, err := topology.Build(o.Profile, topologyOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -526,6 +531,18 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		"resources":    resources(o, containerName),
 		"volumeMounts": volumeMounts(o, isHead),
 	}
+	if !isHead && o.RDMA.Enabled {
+		container["securityContext"] = map[string]any{
+			"runAsUser":                int64(0),
+			"runAsGroup":               int64(0),
+			"allowPrivilegeEscalation": false,
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+			"capabilities": map[string]any{
+				"drop": []any{"ALL"},
+				"add":  []any{"IPC_LOCK", "SYS_RESOURCE", "DAC_OVERRIDE"},
+			},
+		}
+	}
 	// Only set explicit probes on workers. Head probes are omitted so KubeRay
 	// injects its version-aware defaults (raylet + GCS health).
 	if containerName != "ray-head" {
@@ -544,9 +561,13 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		}
 	}
 
+	grace := int64(600)
+	if isHead && o.MetricsOffload.Enabled() {
+		grace = metricsoffload.ShutdownGracePeriodSeconds(o.MetricsOffload.DoneTimeout, grace)
+	}
 	pod := map[string]any{
 		"restartPolicy":                 "Never",
-		"terminationGracePeriodSeconds": int64(600),
+		"terminationGracePeriodSeconds": grace,
 		"containers":                    containers,
 		"volumes":                       volumes(o, isHead),
 	}

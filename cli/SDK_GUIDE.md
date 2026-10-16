@@ -150,7 +150,6 @@ For Tau metrics, keep the converged shape:
 
 - Prometheus remote-write metric: `experiment_metrics`
 - ADX database/table: `Metrics.ExperimentMetrics`
-- Remote-write dashboard function: `ExperimentMetricsDashboardRows()`
 - Local metrics spool: `TauExpMetrics.jsonl`
 - Projection dashboard function: `TauExpMetricsDashboardRows()`
 - Stellar run terminal marker: `metric_name="tau/run_status"` on
@@ -225,18 +224,62 @@ metrics:
     - metrics-history-attempt-*/*.jsonl
   offload:
     enabled: true
-    image: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.2
+    runtime: collector-v1
+    image: <platform-supplied-collector-image@sha256:digest>
     out: /var/run/tau/metrics-offload
 ```
 
+`metrics.offload.runtime` has one supported executable contract:
+`collector-v1`, which is also the default. The pinned image must contain the
+standalone `taugrid-metrics-collector`; Tau does not infer compatibility from
+the image name.
+This selection belongs to the run configuration and rendered workload sidecar;
+the TauGrid charts do not own a collector-sidecar selector.
 `metrics.offload.image` requires an explicit non-latest tag or `@sha256`
 digest. `metrics.offload.out` must be a clean absolute path under `/data` or
 `/var/run/tau`; when omitted, Tau uses a session-scoped directory beneath
 `storage.output`. Platform operators may override these values through
-`TAU_METRICS_OFFLOAD_IMAGE` and `TAU_METRICS_OFFLOAD_OUT`; endpoint, interval,
-and source remain available through the corresponding
-`TAU_METRICS_OFFLOAD_*` environment values. Researcher YAML cannot embed
-endpoint, credentials, or workspace policy.
+`TAU_METRICS_OFFLOAD_RUNTIME`, `TAU_METRICS_OFFLOAD_IMAGE`, and
+`TAU_METRICS_OFFLOAD_OUT`; ADX settings, interval, and source remain available through the corresponding
+`TAU_METRICS_OFFLOAD_*` environment values. Researcher YAML may declare the
+non-secret ADX endpoint and identity client ID for a platform-approved
+Workload Identity, but it cannot embed credentials or override workspace
+identity policy.
+
+The `collector-v1` runtime converts accepted history rows into canonical
+`tau.experiment.metric.v1` events. Its output directory is a typed,
+restart-safe spool containing immutable NDJSON chunks, transaction manifests,
+source checkpoints, and per-sink delivery receipts. The spool is authoritative for replay. Delivery is ADX-only through the
+required `adx-queued-v1` sink:
+
+```yaml
+metrics:
+  offload:
+    enabled: true
+    runtime: collector-v1
+    image: <platform-supplied-collector-image@sha256:digest>
+    delivery_mode: adx-required
+    adx_cluster_uri: https://<cluster>.<region>.kusto.windows.net
+    adx_database: Metrics
+    adx_client_id: <workload-identity-client-id>
+```
+
+`delivery_mode` has one supported value, `adx-required`, and defaults to it.
+Terminal completion is published only after `adx-queued-v1` has a durable
+success receipt. No Prometheus remote-write endpoint is configured or
+instantiated. The defaults are table `TauExpMetricEventsV1` and mapping
+`TauExpMetricEventsV1Json`; operators can override them with the corresponding
+`metrics.offload.adx_*` fields or `TAU_METRICS_OFFLOAD_ADX_*` environment
+values.
+
+The collector uses an Azure Identity token credential selected for Workload
+Identity (or managed identity outside Kubernetes). `adx_client_id` is not a
+secret: it must match the user-assigned identity
+annotated on the TauWorkspace ServiceAccount, and that principal needs only the
+ADX database/table ingestion role. Do not place client secrets, storage keys,
+or broad ADX permissions in run configuration. The workload keeps the
+workspace ServiceAccount and `azure.workload.identity/use: "true"` label that
+Tau already renders for identity-enabled workspaces.
 
 Tau gives each fresh Kubernetes submission a metrics session and stores its
 expstore and offload checkpoints beneath
@@ -255,12 +298,15 @@ drift because moving the same session would abandon its checkpoints. Retries
 add uniquely named chunks without mutating already published history. Completed
 scalar chunks are not replayed after sidecar restart.
 Scope tags `tau_workspace`, `tau_namespace`, and, when known, `tau_cluster`
-are protected and attached before remote write. `tau_retry_attempt` is
-propagated when a Tau retry sets it. Terminal observations are checkpointed:
+are protected and attached before delivery. Retry-attempt metadata is not part
+of the collector configuration because automatic retries reuse the same
+session spool and must retain a stable replay identity. Terminal observations are checkpointed:
 identical retries deduplicate, while a failed attempt followed by success emits
 a newer `tau/run_status` marker that Stellar selects as final.
 The wrapper emits succeeded/failed status on normal process exit and waits for
-the offloader to acknowledge successful terminal publication. Missing
+the offloader to acknowledge successful terminal publication. The deadline
+covers the configured ADX attempts, final-status waits, exponential backoff,
+and a bounded coordination grace period. Missing
 acknowledgement fails the workload instead of hiding a sidecar failure. Graceful
 sidecar shutdown emits cancelled after one final drain. SIGKILL or node loss
 remains best-effort and requires a future platform lifecycle recorder for a

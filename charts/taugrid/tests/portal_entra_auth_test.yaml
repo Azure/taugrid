@@ -1,0 +1,57 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+suite: Umbrella Portal authentication opt-in
+templates:
+  - charts/taugrid-core/templates/portal-entra-auth.yaml
+tests:
+  - it: installs no browser exposure or authentication by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: passes the full opt-in contract to the child with the release namespace
+    release:
+      namespace: custom-system
+    set:
+      taugrid-core.portal.resourceName: research-portal
+      taugrid-core.portal.serviceName: research-backend
+      taugrid-core.portal.service.port: 9090
+      taugrid-core.portal.access.mode: authenticated-proxy
+      taugrid-core.portal.access.externalURL: https://portal.example.com
+      taugrid-core.portal.entraAuth.enabled: true
+      taugrid-core.portal.entraAuth.tenantID: 11111111-1111-1111-1111-111111111111
+      taugrid-core.portal.entraAuth.clientID: 22222222-2222-2222-2222-222222222222
+      taugrid-core.portal.entraAuth.cookieSecret.name: portal-cookie
+      taugrid-core.portal.entraAuth.issuerRef.name: portal-issuer
+      taugrid-core.portal.entraAuth.image.repository: registry.example.com/oauth2-proxy
+      taugrid-core.portal.entraAuth.image.tag: ""
+      taugrid-core.portal.entraAuth.image.digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - hasDocuments:
+          count: 6
+      - equal:
+          path: metadata.namespace
+          value: custom-system
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --upstream=http://research-backend.custom-system.svc:9090/
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.rules[0].backendRefs
+          value: [{ name: research-portal-oauth2-proxy, port: 4180 }]
+        documentSelector:
+          path: kind
+          value: HTTPRoute
+
+  - it: rejects enabling browser authentication without Portal
+    set:
+      taugrid-core.portal.enabled: false
+      taugrid-core.portal.entraAuth.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.entraAuth.enabled=true requires portal.enabled=true

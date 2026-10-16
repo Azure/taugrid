@@ -43,6 +43,7 @@ metadata:
   name: ray
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
+    tau.azure.com/gpu-queue: enabled
     pod-security.kubernetes.io/enforce: baseline
     pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/warn: baseline
@@ -53,7 +54,7 @@ metadata:
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
 metadata:
-  name: tau-system
+  name: tau-system-v2
   labels:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
@@ -77,11 +78,10 @@ spec:
   # workload's spec.topology.placement + this flavor's spec.topologyName /
   # tau.azure.com/gpu-series-style node labels, not through gpu-class.
   nodeLabels:
-    tau.azure.com/provider: azure
     kueue.azure.com/gpu-series: ndm-a100-v4
     tau.azure.com/gpu-class: a100-80gb
-    tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
+  topologyName: taugrid-gpu-topology
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
@@ -96,6 +96,7 @@ spec:
     tau.azure.com/gpu-class: h100-95gb
     tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
+  topologyName: taugrid-gpu-topology
 ---
 apiVersion: kueue.x-k8s.io/v1beta2
 kind: ResourceFlavor
@@ -105,11 +106,10 @@ metadata:
     tau.azure.com/managed-by: tau-shared-gpu
 spec:
   nodeLabels:
-    tau.azure.com/provider: azure
     kueue.azure.com/gpu-series: nd-h200-v5
     tau.azure.com/gpu-class: h200-141gb
-    tau.azure.com/rentable: "true"
   nodeTaints: [{key: nvidia.com/gpu, effect: NoSchedule}]
+  topologyName: taugrid-gpu-topology
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
@@ -300,14 +300,14 @@ metadata:
 spec:
   namespaceSelector:
     matchLabels:
-      kubernetes.io/metadata.name: ray
+      tau.azure.com/gpu-queue: enabled
   queueingStrategy: BestEffortFIFO
   preemption:
     withinClusterQueue: LowerPriority
   resourceGroups:
     - coveredResources: [cpu, memory, gpu.nvidia.com, nvidia.com/gpu]
       flavors:
-        - name: tau-system
+        - name: tau-system-v2
           resources:
             - { name: cpu,    nominalQuota: "10000" }
             - { name: memory, nominalQuota: 100Ti   }

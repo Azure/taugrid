@@ -175,11 +175,42 @@ tests:
           path: rules
           content:
             apiGroups:
+             - ""
+            resources:
+             - pods/log
+            verbs:
+             - get
+      - contains:
+          path: rules
+          content:
+            apiGroups:
              - ray.io
             resources:
              - rayjobs
              - rayclusters
+             - rayservices
             verbs:
              - get
              - list
              - watch
+
+  - it: grants read-only access to current Node metrics
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - metrics.k8s.io
+            resources:
+              - nodes
+            verbs:
+              - get
+              - list

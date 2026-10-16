@@ -1,8 +1,15 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, type ReactNode } from 'react';
 import { QueryCache, QueryClient, useQuery, useQueryClient, type Query, type UseQueryResult } from '@tanstack/react-query';
 import type { Directory, WorkspaceScope } from './types';
+
+export const boardStaleTimeMs = 15_000;
+export const fleetBoardPaths = [
+  '/api/portal/nodes',
+  '/api/portal/cluster',
+  '/api/portal/nodeutil',
+] as const;
 
 export class APIError extends Error {
   constructor(public status: number, public state: string, detail: string) { super(`${status} ${detail}`); }
@@ -23,7 +30,7 @@ export function createPortalQueryClient() {
     // A later failure or cancellation must not restore a rejected payload.
     if (denied.has(query) && query.state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 });
   });
-  return new QueryClient({ queryCache: cache, defaultOptions: { queries: { retry: false, staleTime: 15_000 } } });
+  return new QueryClient({ queryCache: cache, defaultOptions: { queries: { retry: false, staleTime: boardStaleTimeMs } } });
 }
 
 export function readableQuery<T>(query: UseQueryResult<T, Error>) {
@@ -46,6 +53,11 @@ export async function fetchJSON<T>(url: string, signal: AbortSignal): Promise<T>
       const body: unknown = JSON.parse(raw);
       if (body && typeof body === 'object') {
         if ('error' in body && typeof body.error === 'string') detail = body.error;
+        if ('error' in body && body.error && typeof body.error === 'object') {
+          const nested = body.error as Record<string, unknown>;
+          if (typeof nested.message === 'string') detail = nested.message;
+          if (typeof nested.code === 'string') state = nested.code;
+        }
         if ('reason' in body && typeof body.reason === 'string') detail = body.reason;
         if ('detail' in body && typeof body.detail === 'string') detail = body.detail;
         if ('code' in body && typeof body.code === 'string') state = body.code;
@@ -130,7 +142,12 @@ export function useDirectory(workspace: string) {
     staleTime: 0,
   });
 }
-export function useBoard<T>(path: string, enabled = true, merge?: (previous: T | undefined, next: T) => T) {
+export function useBoard<T>(
+  path: string,
+  enabled = true,
+  merge?: (previous: T | undefined, next: T) => T,
+  refetchInterval?: number,
+) {
   const { scope, managed } = useWorkspace();
   const client = useQueryClient();
   const url = scopedURL(path, scope.workspace, managed, scope.source);
@@ -145,7 +162,33 @@ export function useBoard<T>(path: string, enabled = true, merge?: (previous: T |
     enabled,
     refetchOnWindowFocus: !path.startsWith('/api/v2/stellar/'),
     refetchOnReconnect: !path.startsWith('/api/v2/stellar/'),
+    refetchInterval,
   });
+}
+export function prefetchBoardPaths(
+  client: QueryClient,
+  scope: WorkspaceScope,
+  managed: boolean,
+  paths: readonly string[],
+) {
+  return Promise.all(paths.map(path => {
+    const url = scopedURL(path, scope.workspace, managed, scope.source);
+    return client.prefetchQuery({
+      queryKey: [...boardScopeKey(scope, managed), url],
+      queryFn: ({ signal }) => fetchJSON<unknown>(url, signal),
+    });
+  }));
+}
+export function useBoardPrefetch(paths: readonly string[]) {
+  const { scope, managed } = useWorkspace();
+  const client = useQueryClient();
+  return useCallback(() => {
+    void prefetchBoardPaths(client, scope, managed, paths);
+  }, [
+    client, managed, paths, scope.workspace, scope.cluster, scope.namespace, scope.localQueue,
+    scope.source, scope.resultScope, scope.authorizationMode, scope.experimentsUrl,
+    scope.experimentsNative?.state, scope.experimentsNative?.apiBasePath,
+  ]);
 }
 export function boardScopeKey(scope: WorkspaceScope, managed: boolean) {
   return ['board', scope.workspace, scope.cluster, scope.namespace, scope.localQueue,

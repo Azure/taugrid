@@ -202,7 +202,7 @@ For `--kind=rayservice`, a profile with `workerCount > 1` creates a CPU-only
 Ray head and that many GPU worker Pods. `workerCount` excludes the head, and
 `gpusPerWorker` is the GPU request for each worker. Optional `--nodes` and
 `--gpus` assert these values; neither overrides the profile. Distributed
-profiles require `mode: fixed`, `placement: multi-node-nccl`, and
+profiles require `mode: fixed`, `placement: same-network-domain`, and
 `executionTarget: singleCluster`.
 
 The worker pool has fixed `replicas`, `minReplicas`, and `maxReplicas`.

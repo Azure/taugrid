@@ -36,6 +36,10 @@ RUN tdnf install -y ca-certificates which gcc gcc-c++ binutils glibc-devel kerne
         ninja-build python3-devel \
         rdma-core libibverbs librdmacm && tdnf clean all
 
+# Pin Azure Linux's CA bundle for native TLS clients.
+ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
+ENV CURL_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
+
 # --- CUDA compiler toolkit from NVIDIA's RHEL9 RPM repository ---
 # vLLM >=0.14 depends on flashinfer which JIT-compiles CUDA kernels at runtime.
 # Install only the compiler toolchain needed for JIT (nvcc, ptxas, headers,
@@ -83,10 +87,17 @@ ENV LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
 
 # Ray 2.56.1 includes the upstream Serve fix for protobuf 7; no local
 # protobuf upper bound or Ray monkeypatch is needed.
+# Ray 2.57.0 and 2.58.0 omit Jinja2 from the serve extra even though Serve's
+# HAProxy support imports it, so pin only those releases to Ray's compiled
+# Jinja2 version.
 RUN pip install --no-cache-dir \
     "ray[default]==${RAY_VERSION}" \
     "ray[data]==${RAY_VERSION}" \
     "ray[serve]==${RAY_VERSION}" \
+    && case "${RAY_VERSION}" in \
+        2.57.0|2.58.0) pip install --no-cache-dir "jinja2==3.1.6" ;; \
+        *) : ;; \
+    esac \
     && pip check
 
 # Run as non-root for security (nonroot user is built into the base image)

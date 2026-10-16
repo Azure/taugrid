@@ -103,6 +103,19 @@ spec:
   # Generated from charts/tau-core-controller/values.yaml; do not edit.
   workloadProfiles:
     - applicability:
+        namespaces:
+        - 'taugrid-default'
+      defaultLocalQueue: jobqueue
+      description: CPU-only workspace jobs without GPUs.
+      executionTarget: singleCluster
+      gpusPerWorker: 0
+      mode: fixed
+      name: azure.workspace.cpu
+      placement: unconstrained
+      priorities:
+        disableDefaultPriorities: true
+      workerCount: 1
+    - applicability:
         lanes:
         - training
         namespaces:
@@ -115,7 +128,7 @@ spec:
       gpusPerWorker: 1
       mode: fixed
       name: azure.research.training.l
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -133,7 +146,7 @@ spec:
       gpusPerWorker: 2
       mode: fixed
       name: azure.research.training.2x
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -151,7 +164,7 @@ spec:
       gpusPerWorker: 4
       mode: fixed
       name: azure.research.training.4x
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -169,7 +182,7 @@ spec:
       gpusPerWorker: 8
       mode: fixed
       name: azure.research.training.xl
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -187,7 +200,7 @@ spec:
       gpusPerWorker: 1
       mode: fixed
       name: azure.research.eval.gpu
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -205,7 +218,7 @@ spec:
       gpusPerWorker: 1
       mode: elastic
       name: azure.research.elastic.gpu
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -223,7 +236,7 @@ spec:
       gpusPerWorker: 1
       mode: fixed
       name: azure.experimental.training.l
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -241,7 +254,7 @@ spec:
       gpusPerWorker: 2
       mode: fixed
       name: azure.experimental.training.2x
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -259,7 +272,7 @@ spec:
       gpusPerWorker: 4
       mode: fixed
       name: azure.experimental.training.4x
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -277,7 +290,7 @@ spec:
       gpusPerWorker: 1
       mode: fixed
       name: azure.experimental.eval.gpu
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -295,7 +308,7 @@ spec:
       gpusPerWorker: 1
       mode: elastic
       name: azure.experimental.elastic.gpu
-      placement: independent
+      placement: unconstrained
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -313,7 +326,7 @@ spec:
       gpusPerWorker: 2
       mode: fixed
       name: azure.research.large-memory.2x
-      placement: single-node-nvlink
+      placement: same-host
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -331,7 +344,7 @@ spec:
       gpusPerWorker: 4
       mode: fixed
       name: azure.research.large-memory.4x
-      placement: single-node-nvlink
+      placement: same-host
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -349,7 +362,7 @@ spec:
       gpusPerWorker: 8
       mode: fixed
       name: azure.research.large-memory.xl
-      placement: single-node-nvlink
+      placement: same-host
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default
@@ -367,7 +380,7 @@ spec:
       gpusPerWorker: 8
       mode: fixed
       name: azure.research.large-memory.2node
-      placement: multi-node-nccl
+      placement: same-network-domain
       priorities:
         podPriorityClassName: taugrid-default
         workloadPriorityClassName: taugrid-default

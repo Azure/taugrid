@@ -4,14 +4,18 @@
 package portalapi
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
 	"github.com/Azure/taugrid/core/queue"
@@ -130,7 +134,9 @@ func (runningJobsReader) ListWorkloads(context.Context, string) ([]byte, error) 
 	return []byte(`{"items":[
       {"metadata":{"name":"wl-run","namespace":"ray",
         "labels":{"` + workloadmeta.LabelRunID + `":"train-77","` + workloadmeta.LabelJob + `":"phi-finetune"}},
-       "spec":{"queueName":"jobqueue"},
+       "spec":{"queueName":"jobqueue","priority":1200,
+         "priorityClassRef":{"group":"kueue.x-k8s.io","kind":"WorkloadPriorityClass","name":"taugrid-priority"},
+         "podSets":[{"template":{"spec":{"priorityClassName":"taugrid-priority"}}}]},
        "status":{"admission":{"clusterQueue":"taugrid-cq"},
          "conditions":[{"type":"Admitted","status":"True"}]}},
       {"metadata":{"name":"wl-pending","namespace":"ray"},
@@ -142,10 +148,38 @@ func (runningJobsReader) ListWorkloads(context.Context, string) ([]byte, error) 
     ]}`), nil
 }
 
+type activeRunsReader struct{}
+
+func (activeRunsReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+      {"metadata":{"name":"active-job","namespace":"ray","creationTimestamp":"2026-09-22T20:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"active-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"active":1}},
+      {"metadata":{"name":"pending-job","namespace":"ray","creationTimestamp":"2026-09-22T20:01:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"pending-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{}},
+      {"metadata":{"name":"complete-job","namespace":"ray","creationTimestamp":"2026-09-22T19:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"complete-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"conditions":[{"type":"Complete","status":"True"}]}}
+    ]}`), nil
+}
+
+func (activeRunsReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+      {"metadata":{"name":"active-ray","namespace":"ray","creationTimestamp":"2026-09-22T21:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"active-ray-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"jobDeploymentStatus":"Running"}},
+      {"metadata":{"name":"complete-ray","namespace":"ray","creationTimestamp":"2026-09-22T18:00:00Z",
+        "labels":{"` + workloadmeta.LabelRunID + `":"complete-ray-77","kueue.x-k8s.io/queue-name":"jobqueue"}},
+       "status":{"jobDeploymentStatus":"Complete"}}
+    ]}`), nil
+}
+
 func TestOverviewResolvesRunningCrossLinks(t *testing.T) {
 	server, err := NewServer(Options{
 		Stellar: expapi.Options{Source: "kusto"},
 		Jobs:    testOperatorJobs(t, runningJobsReader{}),
+		Runs:    RunsOptions{Reader: activeRunsReader{}},
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -175,6 +209,31 @@ func TestOverviewResolvesRunningCrossLinks(t *testing.T) {
 	if run.ClusterQueue != "taugrid-cq" {
 		t.Fatalf("clusterQueue = %q, want taugrid-cq", run.ClusterQueue)
 	}
+	if run.AdmissionPriority == nil || *run.AdmissionPriority != 1200 ||
+		run.AdmissionPriorityClass != "taugrid-priority" {
+		t.Fatalf("running priority = %+v", run)
+	}
+	if len(run.PodPriorityClasses) != 1 || run.PodPriorityClasses[0] != "taugrid-priority" {
+		t.Fatalf("running pod priorities = %v", run.PodPriorityClasses)
+	}
+	if got.ActiveUnavailable != "" {
+		t.Fatalf("ActiveUnavailable = %q, want empty", got.ActiveUnavailable)
+	}
+	if len(got.Active) != 2 {
+		t.Fatalf("active = %+v, want running Job and RayJob only", got.Active)
+	}
+	if got.Active[0].Name != "active-ray" || got.Active[0].Kind != "RayJob" ||
+		got.Active[1].Name != "active-job" || got.Active[1].Kind != "Job" {
+		t.Fatalf("active ordering = %+v, want newest runtime first", got.Active)
+	}
+	for _, active := range got.Active {
+		if active.Status != "Running" {
+			t.Fatalf("active run status = %q, want Running", active.Status)
+		}
+		if active.ExperimentPath == "" {
+			t.Fatalf("active run missing experiment path: %+v", active)
+		}
+	}
 }
 
 func TestOverviewRunningUnavailableWithoutReader(t *testing.T) {
@@ -194,6 +253,12 @@ func TestOverviewRunningUnavailableWithoutReader(t *testing.T) {
 	}
 	if len(got.Running) != 0 {
 		t.Fatalf("running = %+v, want empty", got.Running)
+	}
+	if got.ActiveUnavailable == "" {
+		t.Fatal("ActiveUnavailable should explain the disabled active-jobs section")
+	}
+	if len(got.Active) != 0 {
+		t.Fatalf("active = %+v, want empty", got.Active)
 	}
 	// Boards must still be present so the shell renders every tab.
 	if len(got.Boards) == 0 {
@@ -460,7 +525,7 @@ func TestJobsAndOverviewExposeReadOnlyProfileRevisionAndMetadata(t *testing.T) {
 	resolved := profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{
 			Name: "federated", ExecutionTarget: profile.ExecutionTargetMultiKueue,
-			Placement: profile.PlacementMultiNodeNCCL, DefaultLocalQueue: "jobqueue",
+			Placement: profile.PlacementSameNetworkDomain, DefaultLocalQueue: "jobqueue",
 			GPUsPerWorker: 8, WorkerCount: 2,
 			Applicability: profile.ProfileApplicability{Namespaces: []string{"ray"}, Teams: []string{"research"}},
 		},
@@ -698,6 +763,164 @@ func TestClusterBoardServesSnapshot(t *testing.T) {
 	if !strings.Contains(q.lastKQL, "instance == @'node-0'") {
 		t.Fatalf("instance filter not applied to KQL:\n%s", q.lastKQL)
 	}
+}
+
+func TestClusterBoardSkipsCompressionForSmallJSON(t *testing.T) {
+	q := &stubClusterQuerier{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Querier: q},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil)
+	req.Header.Set("Accept-Encoding", "br, gzip")
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want identity below threshold", got)
+	}
+	var got struct {
+		TotalGPUs int `json:"totalGPUs"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if got.TotalGPUs != 1 {
+		t.Fatalf("TotalGPUs = %d, want 1", got.TotalGPUs)
+	}
+}
+
+func TestJSONCompressionAppliesAcrossLocalAPIs(t *testing.T) {
+	payload := strings.Repeat("x", minCompressedJSONBytes*2)
+	handler := compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"payload":%q}`, payload)
+	}))
+	for _, path := range []string{
+		"/api/portal/overview",
+		"/api/stellar/snapshot",
+		"/api/v1/stellar/snapshot",
+		"/api/v2/stellar/experiments",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.Header.Set("Accept-Encoding", "gzip")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+				t.Fatalf("Content-Encoding = %q, want gzip", got)
+			}
+			reader, err := gzip.NewReader(rec.Body)
+			if err != nil {
+				t.Fatalf("gzip.NewReader: %v", err)
+			}
+			body, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatalf("read gzip response: %v", err)
+			}
+			if !bytes.Contains(body, []byte(payload[:128])) {
+				t.Fatal("decompressed response lost payload")
+			}
+		})
+	}
+}
+
+func TestJSONCompressionBypassesProxyAndNonAPIPaths(t *testing.T) {
+	handler := compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), minCompressedJSONBytes*2))
+	}))
+	for _, path := range []string{
+		"/api/portal/ray/proxy/session",
+		"/api/portal/ray/workspaces/workspace/session",
+		"/api/portal/kueueviz/ws",
+		"/api/stellar/artifact",
+		"/api/v1/stellar/artifact/bundle/run/artifact/image.png",
+		"/api/v2/stellar/artifact",
+		"/portal/",
+		"/healthz",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if got := rec.Header().Get("Content-Encoding"); got != "" {
+			t.Fatalf("%s Content-Encoding = %q, want identity", path, got)
+		}
+	}
+}
+
+func TestJSONCompressionHonorsDisabledGzip(t *testing.T) {
+	handler := compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bytes.Repeat([]byte("x"), minCompressedJSONBytes*2))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil)
+	req.Header.Set("Accept-Encoding", "gzip;q=0")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if got := rec.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("Content-Encoding = %q, want identity", got)
+	}
+	if got := rec.Header().Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+		t.Fatalf("Vary = %q, want Accept-Encoding", got)
+	}
+}
+
+func TestClusterBoardGzipShrinksLargeSnapshot(t *testing.T) {
+	rows := make([]kustoquery.Row, 0, 2048)
+	for index := range 2048 {
+		rows = append(rows, kustoquery.Row{
+			"Cluster": "cluster-a", "instance": fmt.Sprintf("gpu-node-%04d", index/8),
+			"gpu": fmt.Sprint(index % 8), "modelName": "NVIDIA H200",
+			"namespace": "tau-default", "pod": fmt.Sprintf("training-%04d", index/8),
+			"gpu_utilization": 73.5, "gpu_temperature_celsius": 61.0, "gpu_power_watts": 480.0,
+			"fb_memory_used_mb": 72000.0, "fb_memory_free_mb": 7000.0,
+			"uncorrectable_remapped_rows": 0.0, "row_remap_failure": 0.0,
+		})
+	}
+	q := &stubRowsQuerier{rows: rows}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Cluster: ClusterOptions{Querier: q},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	request := func(encoding string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/portal/cluster", nil)
+		if encoding != "" {
+			req.Header.Set("Accept-Encoding", encoding)
+		}
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	plain := request("")
+	compressed := request("gzip")
+	if plain.Code != http.StatusOK || compressed.Code != http.StatusOK {
+		t.Fatalf("statuses = %d/%d", plain.Code, compressed.Code)
+	}
+	if compressed.Body.Len()*4 >= plain.Body.Len() {
+		t.Fatalf("gzip payload = %d bytes, plain = %d; want >75%% reduction",
+			compressed.Body.Len(), plain.Body.Len())
+	}
+	t.Logf("cluster JSON payload: %d -> %d bytes (%.2f%% reduction)",
+		plain.Body.Len(), compressed.Body.Len(),
+		100*(1-float64(compressed.Body.Len())/float64(plain.Body.Len())))
+}
+
+type stubRowsQuerier struct {
+	rows []kustoquery.Row
+}
+
+func (s *stubRowsQuerier) Query(context.Context, string) ([]kustoquery.Row, error) {
+	return s.rows, nil
 }
 
 func TestClusterBoardUnavailableWithoutQuerier(t *testing.T) {
@@ -1114,6 +1337,17 @@ func (stubNodesReader) ListNodes(_ context.Context) ([]byte, error) {
 func (stubNodesReader) ListDaemonSets(_ context.Context) ([]byte, error) {
 	return []byte(`{"items":[{"metadata":{"namespace":"gpu-monitoring","name":"dcgm-exporter"},"status":{"desiredNumberScheduled":2,"numberReady":1,"numberAvailable":1}}]}`), nil
 }
+func (stubNodesReader) ListPods(_ context.Context, _ string) ([]byte, error) {
+	return []byte(`{"items":[
+	  {"spec":{"nodeName":"aks-h100pool-1","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},"status":{"phase":"Running"}}
+	]}`), nil
+}
+func (stubNodesReader) ListNodeMetrics(_ context.Context) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[
+	  {"metadata":{"name":"aks-h100pool-1"},"timestamp":%q,"window":"15s",
+	   "usage":{"cpu":"4","memory":"164987136Ki"}}
+	]}`, time.Now().UTC().Format(time.RFC3339Nano))), nil
+}
 
 func TestNodesBoardServesSnapshot(t *testing.T) {
 	server, err := NewServer(Options{
@@ -1130,10 +1364,19 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var got struct {
-		TotalNodes int `json:"totalNodes"`
-		GPUNodes   int `json:"gpuNodes"`
-		TotalGPUs  int `json:"totalGPUs"`
-		SKUs       []struct {
+		TotalNodes         int   `json:"totalNodes"`
+		GPUNodes           int   `json:"gpuNodes"`
+		TotalGPUs          int   `json:"totalGPUs"`
+		GPUAllocationKnown bool  `json:"gpuAllocationKnown"`
+		GPUSchedulable     int64 `json:"gpuSchedulable"`
+		GPUAllocated       int64 `json:"gpuAllocated"`
+		GPUAvailable       int64 `json:"gpuAvailable"`
+		Nodes              []struct {
+			Name          string   `json:"name"`
+			CPUUtilPct    *float64 `json:"cpuUtilPct"`
+			MemoryUsedPct *float64 `json:"memUsedPct"`
+		} `json:"nodes"`
+		SKUs []struct {
 			SKU  string `json:"sku"`
 			GPUs int    `json:"gpus"`
 		} `json:"skus"`
@@ -1149,6 +1392,15 @@ func TestNodesBoardServesSnapshot(t *testing.T) {
 	}
 	if got.TotalNodes != 2 || got.GPUNodes != 1 || got.TotalGPUs != 1 {
 		t.Fatalf("snapshot = %+v, want 2 nodes / 1 gpu-node / 1 gpu", got)
+	}
+	if !got.GPUAllocationKnown || got.GPUSchedulable != 1 || got.GPUAllocated != 1 || got.GPUAvailable != 0 {
+		t.Fatalf("GPU allocation = known %t, schedulable %d, allocated %d, available %d; want true/1/1/0",
+			got.GPUAllocationKnown, got.GPUSchedulable, got.GPUAllocated, got.GPUAvailable)
+	}
+	if len(got.Nodes) != 2 || got.Nodes[0].Name != "aks-h100pool-1" ||
+		got.Nodes[0].CPUUtilPct == nil || *got.Nodes[0].CPUUtilPct != 10 ||
+		got.Nodes[0].MemoryUsedPct == nil || *got.Nodes[0].MemoryUsedPct != 50 {
+		t.Fatalf("current node metrics = %+v, want h100 node at 10%% CPU / 50%% memory", got.Nodes)
 	}
 	// GPU SKU sorts first in the rollup.
 	if len(got.SKUs) != 2 || got.SKUs[0].SKU != "Standard_NC40ads_H100_v5" || got.SKUs[0].GPUs != 1 {
@@ -1191,7 +1443,183 @@ func (s *stubRunsReader) ListRayJobs(_ context.Context, _ string) ([]byte, error
     ]}`), nil
 }
 
-type jobDetailAPIReader struct{ stubRunsReader }
+type jobDetailAPIReader struct {
+	lastLogPod       string
+	lastLogContainer string
+	lastLogPrevious  bool
+	lastLogTail      int64
+	lastLogLimit     int64
+}
+
+type ownerKindDetailReader struct {
+	jobDetailAPIReader
+}
+
+func (*ownerKindDetailReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[{"metadata":{"name":"jobqueue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}}]}`, namespace)), nil
+}
+
+func (*ownerKindDetailReader) ListClusterQueues(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"pod-owner","namespace":"ray","ownerReferences":[{"apiVersion":"v1","kind":"Pod","name":"standalone-train","uid":"pod-owner","controller":true}]},
+		 "spec":{"queueName":"jobqueue"},"status":{"admission":{"clusterQueue":"taugrid-cq"},"conditions":[{"type":"Admitted","status":"True"}]}},
+		{"metadata":{"name":"rayservice-owner","namespace":"ray","ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayService","name":"serve-model","uid":"rayservice-owner","controller":true}]},
+		 "spec":{"queueName":"jobqueue"},"status":{"admission":{"clusterQueue":"taugrid-cq"},"conditions":[{"type":"Admitted","status":"True"}]}}
+	]}`), nil
+}
+
+func (*ownerKindDetailReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"standalone-train","namespace":"ray","uid":"pod-owner","creationTimestamp":"2026-09-23T01:00:00Z",
+		 "labels":{"` + workloadmeta.LabelRunID + `":"pod-run"},"annotations":{}},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","startTime":"2026-09-23T01:00:30Z","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{"startedAt":"2026-09-23T01:00:30Z"}}}]}},
+		{"metadata":{"name":"serve-head","namespace":"ray","uid":"serve-head","labels":{"ray.io/cluster":"serve-cluster"},"ownerReferences":[{"kind":"RayCluster","uid":"serve-cluster-uid","controller":true}]},
+		 "spec":{"nodeName":"gpu-b","containers":[{"name":"ray-head"}]},
+		 "status":{"phase":"Running","startTime":"2026-09-23T01:01:00Z","containerStatuses":[{"name":"ray-head","ready":true,"state":{"running":{"startedAt":"2026-09-23T01:01:00Z"}}}]}}
+	]}`), nil
+}
+
+func (*ownerKindDetailReader) GetRayService(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"serve-model","namespace":"ray","uid":"rayservice-owner","creationTimestamp":"2026-09-23T01:00:00Z",
+		"labels":{"` + workloadmeta.LabelRunID + `":"serve-run"},"annotations":{}},
+		"status":{"serviceStatus":"Running","activeServiceStatus":{"rayClusterName":"serve-cluster"}}}`), nil
+}
+
+func (*ownerKindDetailReader) GetRayCluster(context.Context, string, string) ([]byte, error) {
+	return []byte(`{"metadata":{"name":"serve-cluster","uid":"serve-cluster-uid",
+		"ownerReferences":[{"kind":"RayService","uid":"rayservice-owner","controller":true}]}}`), nil
+}
+
+func (*ownerKindDetailReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*ownerKindDetailReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestOverviewOwnerKindLinksResolveWorkloadDetail(t *testing.T) {
+	reader := &ownerKindDetailReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Jobs:    testOperatorJobs(t, reader),
+		Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	overview := httptest.NewRecorder()
+	server.Handler().ServeHTTP(overview, httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil))
+	if overview.Code != http.StatusOK {
+		t.Fatalf("overview status = %d, body = %s", overview.Code, overview.Body.String())
+	}
+	var got overviewResponse
+	if err := json.Unmarshal(overview.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if len(got.Running) != 2 {
+		t.Fatalf("running = %+v, want admitted Pod and RayService", got.Running)
+	}
+	linked := map[string]bool{}
+	for _, item := range got.Running {
+		linked[item.ResourceUID] = true
+	}
+	if !linked["pod-owner"] || !linked["rayservice-owner"] {
+		t.Fatalf("overview resource UIDs = %+v, want Pod and RayService canonical links", linked)
+	}
+
+	for _, tc := range []struct {
+		uid  string
+		kind string
+	}{
+		{uid: "pod-owner", kind: "Pod"},
+		{uid: "rayservice-owner", kind: "RayService"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/"+tc.uid, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), `"resourceUid":"`+tc.uid+`"`) ||
+				!strings.Contains(rec.Body.String(), `"kind":"`+tc.kind+`"`) {
+				t.Fatalf("detail = %s", rec.Body.String())
+			}
+		})
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/workloads/pod-owner/logs?pod=serve-head&container=ray-head", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-workload pod status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/not-an-owner", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown UID status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestManagedOperatorModeWorkloadFallbackStaysWithinWorkspace(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{ID: "alpha", Team: "alpha", Cluster: "cluster-a", Namespace: "team-alpha", LocalQueue: "alpha-queue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+			{ID: "operator", Team: "operator", Cluster: "cluster-a", Namespace: "ray", LocalQueue: "jobqueue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"operators"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &ownerKindDetailReader{}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Jobs:               testOperatorJobs(t, reader),
+		Runs:               RunsOptions{Reader: reader},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := managedRequest(t, server, "/api/portal/workloads/pod-owner?workspace=alpha"); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign operator detail = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server,
+		"/api/portal/workloads/pod-owner/logs?workspace=alpha&pod=standalone-train&container=trainer"); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign operator logs = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogPod != "" {
+		t.Fatalf("foreign operator log request reached Kubernetes for pod %q", reader.lastLogPod)
+	}
+}
+
+func (*jobDetailAPIReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"ray","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
+		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil
+}
+
+func (*jobDetailAPIReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
 
 func (*jobDetailAPIReader) GetJob(context.Context, string, string) ([]byte, error) {
 	return []byte(`{"metadata":{"name":"train","namespace":"ray","uid":"job-current",
@@ -1208,7 +1636,9 @@ func (*jobDetailAPIReader) GetRayCluster(context.Context, string, string) ([]byt
 
 func (*jobDetailAPIReader) ListPods(context.Context, string) ([]byte, error) {
 	return []byte(`{"items":[
-		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},"status":{"phase":"Running"}},
+		{"metadata":{"name":"train-current","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","startTime":"2026-07-02T10:01:00Z","containerStatuses":[{"name":"trainer","ready":true,"restartCount":1,"state":{"running":{"startedAt":"2026-07-02T10:01:00Z"}},"lastState":{"terminated":{"reason":"Error","exitCode":1}}}]}},
 		{"metadata":{"name":"train-stale","uid":"pod-stale","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-stale","controller":true}]},"status":{"phase":"Failed"}}
 	]}`), nil
 }
@@ -1232,6 +1662,218 @@ func (*jobDetailAPIReader) ListServices(context.Context, string) ([]byte, error)
 	return []byte(`{"items":[]}`), nil
 }
 
+func (r *jobDetailAPIReader) GetPodLogs(_ context.Context, _, pod, container string, previous bool, tailLines, limitBytes int64) ([]byte, error) {
+	r.lastLogPod = pod
+	r.lastLogContainer = container
+	r.lastLogPrevious = previous
+	r.lastLogTail = tailLines
+	r.lastLogLimit = limitBytes
+	return []byte("step=1 Authorization: Bearer top-secret\nloss=0.2\n"), nil
+}
+
+type clusterWideDetailReader struct {
+	jobDetailAPIReader
+	lastDetailNamespace string
+	lastLogNamespace    string
+}
+
+func (*clusterWideDetailReader) ListJobs(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "" {
+		return nil, fmt.Errorf("list jobs namespace = %q, want cluster-wide", namespace)
+	}
+	return []byte(`{"items":[{"metadata":{"name":"train","namespace":"team-a","uid":"job-current","creationTimestamp":"2026-07-02T10:00:00Z",
+		"labels":{"` + workloadmeta.LabelJob + `":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}]}`), nil
+}
+
+func (*clusterWideDetailReader) ListRayJobs(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "" {
+		return nil, fmt.Errorf("list RayJobs namespace = %q, want cluster-wide", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *clusterWideDetailReader) GetJob(_ context.Context, namespace, _ string) ([]byte, error) {
+	r.lastDetailNamespace = namespace
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("get job namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"metadata":{"name":"train","namespace":"team-a","uid":"job-current",
+		"labels":{"batch.kubernetes.io/job-name":"train","` + workloadmeta.LabelRunID + `":"run-current"}},"status":{"active":1}}`), nil
+}
+
+func (*clusterWideDetailReader) ListPods(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list pods namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[
+		{"metadata":{"name":"train-current","namespace":"team-a","uid":"pod-current","labels":{"batch.kubernetes.io/job-name":"train"},"ownerReferences":[{"uid":"job-current","controller":true}]},
+		 "spec":{"nodeName":"gpu-a","containers":[{"name":"trainer"}]},
+		 "status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}}
+	]}`), nil
+}
+
+func (*clusterWideDetailReader) ListEvents(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list events namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*clusterWideDetailReader) ListWorkloads(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list workloads namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*clusterWideDetailReader) ListServices(_ context.Context, namespace string) ([]byte, error) {
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("list services namespace = %q, want team-a", namespace)
+	}
+	return []byte(`{"items":[]}`), nil
+}
+
+func (r *clusterWideDetailReader) GetPodLogs(_ context.Context, namespace, _, _ string, _ bool, _, _ int64) ([]byte, error) {
+	r.lastLogNamespace = namespace
+	if namespace != "team-a" {
+		return nil, fmt.Errorf("get pod logs namespace = %q, want team-a", namespace)
+	}
+	return []byte("training"), nil
+}
+
+func TestSingleWorkspaceClusterWideWorkloadDetailUsesRunNamespace(t *testing.T) {
+	reader := &clusterWideDetailReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Runs:    RunsOptions{Reader: reader},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/job-current", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail = %d %s", rec.Code, rec.Body.String())
+	}
+	if reader.lastDetailNamespace != "team-a" {
+		t.Fatalf("detail namespace = %q, want team-a", reader.lastDetailNamespace)
+	}
+
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/api/portal/workloads/job-current/logs?pod=train-current&container=trainer", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logs = %d %s", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogNamespace != "team-a" {
+		t.Fatalf("log namespace = %q, want team-a", reader.lastLogNamespace)
+	}
+}
+
+type queueScopedDetailReader struct {
+	jobDetailAPIReader
+}
+
+func (*queueScopedDetailReader) ListLocalQueues(_ context.Context, namespace string) ([]byte, error) {
+	return []byte(fmt.Sprintf(`{"items":[
+		{"metadata":{"name":"alpha-queue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}},
+		{"metadata":{"name":"beta-queue","namespace":%q},"spec":{"clusterQueue":"taugrid-cq"}}
+	]}`, namespace, namespace)), nil
+}
+
+func (*queueScopedDetailReader) ListClusterQueues(context.Context) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"alpha-train","namespace":"shared","uid":"alpha-uid","creationTimestamp":"2026-07-02T10:00:00Z",
+		 "labels":{"tau.azure.com/job":"alpha-train","tau.azure.com/run-id":"alpha-run","kueue.x-k8s.io/queue-name":"alpha-queue"}},"status":{"active":1}},
+		{"metadata":{"name":"beta-train","namespace":"shared","uid":"beta-uid","creationTimestamp":"2026-07-02T10:00:00Z",
+		 "labels":{"tau.azure.com/job":"beta-train","tau.azure.com/run-id":"beta-run","kueue.x-k8s.io/queue-name":"beta-queue"}},"status":{"active":1}}
+	]}`), nil
+}
+
+func (*queueScopedDetailReader) ListRayJobs(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) GetJob(_ context.Context, _, name string) ([]byte, error) {
+	switch name {
+	case "alpha-train":
+		return []byte(`{"metadata":{"name":"alpha-train","namespace":"shared","uid":"alpha-uid",
+			"labels":{"batch.kubernetes.io/job-name":"alpha-train","tau.azure.com/run-id":"alpha-run"}},"status":{"active":1}}`), nil
+	case "beta-train":
+		return []byte(`{"metadata":{"name":"beta-train","namespace":"shared","uid":"beta-uid",
+			"labels":{"batch.kubernetes.io/job-name":"beta-train","tau.azure.com/run-id":"beta-run"}},"status":{"active":1}}`), nil
+	default:
+		return nil, errors.New("job not found")
+	}
+}
+
+func (*queueScopedDetailReader) ListPods(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[
+		{"metadata":{"name":"alpha-pod","uid":"alpha-pod-uid","labels":{"batch.kubernetes.io/job-name":"alpha-train"},"ownerReferences":[{"uid":"alpha-uid","controller":true}]},
+		 "spec":{"containers":[{"name":"trainer"}]},"status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}},
+		{"metadata":{"name":"beta-pod","uid":"beta-pod-uid","labels":{"batch.kubernetes.io/job-name":"beta-train"},"ownerReferences":[{"uid":"beta-uid","controller":true}]},
+		 "spec":{"containers":[{"name":"trainer"}]},"status":{"phase":"Running","containerStatuses":[{"name":"trainer","ready":true,"state":{"running":{}}}]}}
+	]}`), nil
+}
+
+func (*queueScopedDetailReader) ListWorkloads(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListEvents(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func (*queueScopedDetailReader) ListServices(context.Context, string) ([]byte, error) {
+	return []byte(`{"items":[]}`), nil
+}
+
+func TestManagedWorkloadDetailAndLogsStayWithinLocalQueue(t *testing.T) {
+	directory, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster: "cluster-a",
+		Workspaces: []WorkspaceRecord{
+			{ID: "alpha", Team: "alpha", Cluster: "cluster-a", Namespace: "shared", LocalQueue: "alpha-queue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+			{ID: "beta", Team: "beta", Cluster: "cluster-a", Namespace: "shared", LocalQueue: "beta-queue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"researchers"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &queueScopedDetailReader{}
+	server, err := NewServer(Options{
+		Stellar:            expapi.Options{Source: "kusto"},
+		Jobs:               JobsOptions{Reader: reader, ScopeMode: JobsScopeWorkspace},
+		Runs:               RunsOptions{Reader: reader},
+		WorkspaceDirectory: directory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := managedRequest(t, server, "/api/portal/workloads/alpha-uid?workspace=alpha"); rec.Code != http.StatusOK {
+		t.Fatalf("alpha detail = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid?workspace=alpha"); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-queue detail = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid/logs?workspace=alpha&pod=beta-pod&container=trainer"); rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-queue logs = %d %s, want 404", rec.Code, rec.Body.String())
+	}
+	if reader.lastLogPod != "" {
+		t.Fatalf("cross-queue log request reached Kubernetes for pod %q", reader.lastLogPod)
+	}
+	if rec := managedRequest(t, server, "/api/portal/workloads/beta-uid?workspace=beta"); rec.Code != http.StatusOK {
+		t.Fatalf("beta detail in beta workspace = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	reader := &jobDetailAPIReader{}
 	server, err := NewServer(Options{
@@ -1241,6 +1883,99 @@ func TestJobDetailAPISerializesUIDFencedSectionsForReact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+
+	t.Run("workload detail resolves immutable UID", func(t *testing.T) {
+		reader := &jobDetailAPIReader{}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"},
+			Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/job-current", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"resourceUid":"job-current"`) ||
+			!strings.Contains(rec.Body.String(), `"objectState":"live"`) ||
+			!strings.Contains(rec.Body.String(), `"scheduling":"scheduled"`) {
+			t.Fatalf("workload detail missing UID lifecycle evidence: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("workload logs are UID fenced bounded and redacted", func(t *testing.T) {
+		reader := &jobDetailAPIReader{}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto"},
+			Runs:    RunsOptions{Reader: reader, Namespace: "ray"},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		rec := httptest.NewRecorder()
+		path := "/api/portal/workloads/job-current/logs?pod=train-current&container=trainer&previous=true&tailLines=25&limitBytes=128"
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("Cache-Control = %q, want no-store", rec.Header().Get("Cache-Control"))
+		}
+		if strings.Contains(rec.Body.String(), "top-secret") || !strings.Contains(rec.Body.String(), "[REDACTED]") {
+			t.Fatalf("log response was not redacted: %s", rec.Body.String())
+		}
+		if reader.lastLogPod != "train-current" || reader.lastLogContainer != "trainer" || !reader.lastLogPrevious ||
+			reader.lastLogTail != 25 || reader.lastLogLimit != 129 {
+			t.Fatalf("log request = pod %q container %q previous %v tail %d limit %d", reader.lastLogPod, reader.lastLogContainer, reader.lastLogPrevious, reader.lastLogTail, reader.lastLogLimit)
+		}
+
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/portal/workloads/job-current/logs?pod=train-stale&container=trainer", nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("stale pod status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+
+		rec = httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			"/api/portal/workloads/job-current/logs?pod=train-current&container=trainer&limitBytes=1048577", nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("oversized limit status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("workload detail falls back to deleted history", func(t *testing.T) {
+		history := &scopedHistoryReader{timeline: []runs.LifecycleEvent{{
+			ObservedAt: "2026-07-02T10:00:00Z", SubmitTime: "2026-07-02T09:59:00Z",
+			State: "failed", Reason: "TrainingError", ResourceUID: "deleted-uid",
+			Name: "deleted-run", Namespace: "ray", Cluster: "cluster-a", Kind: "RayJob", RunID: "run-deleted",
+		}}}
+		server, err := NewServer(Options{
+			Stellar: expapi.Options{Source: "kusto", Workspace: "taugrid-default"},
+			Cluster: ClusterOptions{Cluster: "cluster-a"},
+			Runs: RunsOptions{
+				Reader: &stubRunsReader{}, Namespace: "ray", History: history,
+				HistoryTable: "TauExpRunLifecycle", HistoryLimit: 25,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		server.singleWorkspaceScope.Cluster = "cluster-a"
+		server.singleWorkspaceScope.Namespace = "ray"
+		rec := httptest.NewRecorder()
+		server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/workloads/deleted-uid", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"objectState":"deleted"`) ||
+			!strings.Contains(rec.Body.String(), `"resourceUid":"deleted-uid"`) ||
+			!strings.Contains(rec.Body.String(), `"application":"failed"`) {
+			t.Fatalf("deleted workload response = %s", rec.Body.String())
+		}
+	})
 
 	rec := httptest.NewRecorder()
 	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/runs/ray/train", nil))
@@ -1737,8 +2472,9 @@ func TestSingleWorkspaceNamespaceOverridesPreserveConfiguredSemantics(t *testing
 }
 
 type scopedPortalReader struct {
-	namespaces     []string
-	daemonSetCalls int
+	namespaces      []string
+	daemonSetCalls  int
+	nodeMetricCalls int
 }
 
 func (r *scopedPortalReader) record(namespace string) {
@@ -1778,6 +2514,10 @@ func (r *scopedPortalReader) ListNodes(context.Context) ([]byte, error) {
 }
 func (r *scopedPortalReader) ListDaemonSets(context.Context) ([]byte, error) {
 	r.daemonSetCalls++
+	return []byte(`{"items":[]}`), nil
+}
+func (r *scopedPortalReader) ListNodeMetrics(context.Context) ([]byte, error) {
+	r.nodeMetricCalls++
 	return []byte(`{"items":[]}`), nil
 }
 
@@ -1885,6 +2625,10 @@ func TestManagedWorkspaceSwitchScopesEveryBoard(t *testing.T) {
 					}
 				}
 			}
+			if board == "nodes" && body["gpuAllocationKnown"] != false {
+				t.Fatalf("%s/nodes gpuAllocationKnown = %v, want false without cluster-wide Pod authorization",
+					workspace.id, body["gpuAllocationKnown"])
+			}
 			for _, kql := range querier.kqls[kqlStart:] {
 				if !strings.Contains(kql, "Cluster == @'cluster-a'") {
 					t.Fatalf("%s/%s KQL missing resolved cluster filter:\n%s", workspace.id, board, kql)
@@ -1910,6 +2654,9 @@ func TestManagedWorkspaceSwitchScopesEveryBoard(t *testing.T) {
 	}
 	if reader.daemonSetCalls != 0 {
 		t.Fatalf("workspace-rbac requests read cluster-wide DaemonSets %d times", reader.daemonSetCalls)
+	}
+	if reader.nodeMetricCalls != 0 {
+		t.Fatalf("workspace-rbac requests read cluster-wide Node metrics %d times", reader.nodeMetricCalls)
 	}
 }
 
@@ -2270,6 +3017,31 @@ func TestManagedWorkspaceAdversarialIsolationMatrix(t *testing.T) {
 	}
 }
 
+func TestManagedWorkspaceCanonicalV2AuthErrorsAreTyped(t *testing.T) {
+	server, _, _ := adversarialPortalServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/stellar/experiments/experiment-alpha/runs?workspace=alpha", nil)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Error struct {
+			Code           string `json:"code"`
+			Classification string `json:"classification"`
+			Retryable      bool   `json:"retryable"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "AUTHENTICATION_REQUIRED" ||
+		response.Error.Classification != "authorization" ||
+		response.Error.Retryable {
+		t.Fatalf("unexpected typed error: %+v", response.Error)
+	}
+}
+
 func TestClusterWideWorkspaceUsesClusterWideInfrastructureMetrics(t *testing.T) {
 	if got := workloadMetricsNamespace(WorkspaceScope{Managed: true, Namespace: "team-alpha"}); got != "team-alpha" {
 		t.Fatalf("managed scope without an authorization mode used namespace %q, want fail-closed team-alpha", got)
@@ -2364,6 +3136,19 @@ func TestClusterWideWorkspaceCanReadRuntimeDaemonSets(t *testing.T) {
 	if reader.daemonSetCalls != 1 {
 		t.Fatalf("cluster-wide workspace read DaemonSets %d times, want 1", reader.daemonSetCalls)
 	}
+	if reader.nodeMetricCalls != 1 {
+		t.Fatalf("cluster-wide workspace read Node metrics %d times, want 1", reader.nodeMetricCalls)
+	}
+	foundClusterWidePods := false
+	for _, namespace := range reader.namespaces {
+		if namespace == "" {
+			foundClusterWidePods = true
+			break
+		}
+	}
+	if !foundClusterWidePods {
+		t.Fatalf("cluster-wide workspace pod namespaces = %v, want an all-namespaces read", reader.namespaces)
+	}
 }
 
 func TestManagedWorkspaceStellarCannotCrossWorkspaceScopes(t *testing.T) {
@@ -2411,6 +3196,7 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWorkspaceDirectory: %v", err)
 	}
+
 	server, err := NewServer(Options{
 		Stellar:            expapi.Options{Source: "kusto"},
 		Jobs:               JobsOptions{Reader: runningJobsReader{}},
@@ -2431,6 +3217,41 @@ func TestManagedOverviewFiltersRunningByResolvedQueue(t *testing.T) {
 	}
 	if len(body.Running) != 0 {
 		t.Fatalf("running = %+v, want no workloads from another LocalQueue", body.Running)
+	}
+}
+
+func TestQueueLanesKeepLocalQueuesSeparate(t *testing.T) {
+	got := queueLanes([]queue.Group{
+		{Namespace: "tau-default", Queue: "cpu", ClusterQueue: "tau-cpu-cq", Admitted: 2},
+		{Namespace: "tau-default", Queue: "jobqueue", ClusterQueue: "tau-cq", Admitted: 8},
+		{Namespace: "tau-default", Queue: "jobqueue", ClusterQueue: "tau-cq", Admitted: 8, ResourceFlavor: "ndm-a100-v4"},
+		{Namespace: "aks-ai-runtime-e2e", Queue: "jobqueue", ClusterQueue: "tau-cq", Pending: 1},
+	})
+	if len(got) != 3 {
+		t.Fatalf("queue lanes = %#v, want three namespace/queue lanes", got)
+	}
+	if got[0].Queue != "cpu" || got[0].Admitted != 2 {
+		t.Fatalf("CPU lane = %#v, want 2 admitted", got[0])
+	}
+	if got[1].Queue != "jobqueue" || got[1].Admitted != 8 {
+		t.Fatalf("GPU lane = %#v, want deduplicated 8 admitted", got[1])
+	}
+	if got[2].Namespace != "aks-ai-runtime-e2e" || got[2].Pending != 1 {
+		t.Fatalf("E2E lane = %#v, want 1 pending", got[2])
+	}
+}
+
+func TestOverviewPendingWorkloadsOrdersPriorityBeforeFIFO(t *testing.T) {
+	high := int32(1200)
+	low := int32(1000)
+	got := overviewPendingWorkloads([]queue.Group{
+		{PendingWorkloads: []queue.PendingWorkload{
+			{Name: "low-older", Namespace: "ray", AdmissionPriority: &low, CreatedAt: time.Date(2026, 5, 3, 19, 0, 0, 0, time.UTC)},
+			{Name: "high-newer", Namespace: "ray", AdmissionPriority: &high, CreatedAt: time.Date(2026, 5, 3, 20, 0, 0, 0, time.UTC)},
+		}},
+	})
+	if len(got) != 2 || got[0].Name != "high-newer" || got[1].Name != "low-older" {
+		t.Fatalf("pending priority order = %#v", got)
 	}
 }
 

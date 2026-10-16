@@ -1,0 +1,69 @@
+{{- if and .Values.functions.enabled .Values.functions.items.tauExpSeriesCatalogRows.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-tau-exp-series-catalog-rows
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.tauExpSeriesCatalogRows.database | quote }}
+  body: |
+    .create-or-alter function with (folder = 'Tau/catalog', docstring = 'Stable v1 typed experiment metric-series catalog.', skipvalidation = 'true') TauExpSeriesCatalogRows()
+    {
+      let typed_rows =
+        TauExpTypedSeriesCatalogV1
+        | project
+            workspace_id = tostring(workspace_id),
+            cluster = tostring(cluster),
+            source_store_id = tostring(source_store_id),
+            ['project'] = tostring(['project']),
+            experiment_id = tostring(experiment_id),
+            run_group_id = tostring(run_group_id),
+            run_id = tostring(run_id),
+            metric_name = tostring(metric_name),
+            first_activity_at = todatetime(first_activity_at),
+            latest_activity_at = todatetime(latest_activity_at),
+            min_step = tolong(min_step),
+            max_step = tolong(max_step),
+            latest_step = tolong(step),
+            latest_value = todouble(value),
+            unit = tostring(unit),
+            source = tostring(source),
+            split = tostring(split),
+            latest_file_id = tostring(metric_file_id),
+            latest_file_path = tostring(metric_file_path);
+      typed_rows
+      | extend latest_rank = latest_activity_at
+      | summarize
+          first_activity_at = min(first_activity_at),
+          latest_activity_at = max(latest_activity_at),
+          min_step = min(min_step),
+          max_step = max(max_step),
+          arg_max(latest_rank, latest_step, latest_value, unit, source, split, latest_file_id, latest_file_path)
+        by workspace_id, cluster, source_store_id, ['project'], experiment_id,
+           run_group_id, run_id, metric_name
+      | project
+          catalog_version = 'v1',
+          workspace_id,
+          cluster,
+          source_store_id,
+          ['project'] = ['project'],
+          experiment_id,
+          run_group_id,
+          run_id,
+          metric_name,
+          first_activity_at,
+          latest_activity_at,
+          min_step,
+          max_step,
+          latest_step,
+          latest_value,
+          unit,
+          source,
+          split,
+          latest_file_id,
+          latest_file_path
+    }
+{{- end }}

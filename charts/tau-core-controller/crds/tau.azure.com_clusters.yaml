@@ -230,9 +230,11 @@ spec:
                       type: string
                     placement:
                       enum:
-                      - independent
-                      - single-node-nvlink
-                      - multi-node-nccl
+                      - unconstrained
+                      - same-host
+                      - same-accelerator-domain
+                      - same-network-domain
+                      - same-site
                       type: string
                     priorities:
                       properties:
@@ -269,9 +271,6 @@ spec:
                   - priorities
                   - workerCount
                   type: object
-                  x-kubernetes-validations:
-                  - message: workerCount greater than one requires placement=multi-node-nccl
-                    rule: self.workerCount == 1 || self.placement == 'multi-node-nccl'
                 type: array
                 x-kubernetes-list-map-keys:
                 - name
@@ -347,6 +346,29 @@ spec:
                 x-kubernetes-list-type: map
               desiredStateHash:
                 type: string
+              discoveredCapacity:
+                items:
+                  properties:
+                    capacity:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    flavor:
+                      type: string
+                    resource:
+                      type: string
+                  required:
+                  - capacity
+                  - flavor
+                  - resource
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - flavor
+                - resource
+                x-kubernetes-list-type: map
               managedResources:
                 items:
                   properties:
@@ -562,9 +584,11 @@ spec:
                           type: string
                         placement:
                           enum:
-                          - independent
-                          - single-node-nvlink
-                          - multi-node-nccl
+                          - unconstrained
+                          - same-host
+                          - same-accelerator-domain
+                          - same-network-domain
+                          - same-site
                           type: string
                         podPriorityClasses:
                           items:
@@ -621,9 +645,6 @@ spec:
                       - priorities
                       - workerCount
                       type: object
-                      x-kubernetes-validations:
-                      - message: workerCount greater than one requires placement=multi-node-nccl
-                        rule: self.workerCount == 1 || self.placement == 'multi-node-nccl'
                     type: array
                     x-kubernetes-list-map-keys:
                     - name

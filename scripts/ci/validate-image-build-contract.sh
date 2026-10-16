@@ -7,6 +7,10 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)"
 
+realpath_portable() {
+  python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
 usage() {
   cat <<'EOF'
 Usage: validate-image-build-contract.sh <make-directory> <image-name>
@@ -39,7 +43,7 @@ if [[ ! "$IMAGE_NAME" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
   exit 2
 fi
 
-readonly MAKE_DIRECTORY_ABS="$(realpath -m -- "${REPO_ROOT}/${MAKE_DIRECTORY}")"
+readonly MAKE_DIRECTORY_ABS="$(realpath_portable "${REPO_ROOT}/${MAKE_DIRECTORY}")"
 case "${MAKE_DIRECTORY_ABS}/" in
   "${REPO_ROOT}/"*) ;;
   *)
@@ -87,14 +91,14 @@ if [[ -z "$dockerfile" ]]; then
   printf '%s\n' "$build_command" >&2
   exit 1
 fi
-readonly DOCKERFILE_ABS="$(realpath -m -- "${MAKE_DIRECTORY_ABS}/${dockerfile}")"
+readonly DOCKERFILE_ABS="$(realpath_portable "${MAKE_DIRECTORY_ABS}/${dockerfile}")"
 if [[ "$DOCKERFILE_ABS" != "${MAKE_DIRECTORY_ABS}/Dockerfile" ]]; then
   echo "docker-push must use ${MAKE_DIRECTORY}/Dockerfile, got ${dockerfile}" >&2
   exit 1
 fi
 
 context="$(awk 'NF { value=$1 } END { print value }' <<<"$build_command")"
-readonly CONTEXT_ABS="$(realpath -m -- "${MAKE_DIRECTORY_ABS}/${context}")"
+readonly CONTEXT_ABS="$(realpath_portable "${MAKE_DIRECTORY_ABS}/${context}")"
 if [[ "$CONTEXT_ABS" != "$REPO_ROOT" ]]; then
   echo "docker-push context must resolve to the repository root, got ${context}" >&2
   exit 1

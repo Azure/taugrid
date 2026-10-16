@@ -160,6 +160,73 @@ spec:
                   The effective value is always reported in status.queue.localQueue.
                 minLength: 1
                 type: string
+              quota:
+                description: Quota is the workspace's guaranteed share of its team's
+                  allocation.
+                items:
+                  properties:
+                    borrowingLimit:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: |-
+                        BorrowingLimit is the maximum additional quota this scope may borrow.
+                        When omitted, TauGrid writes an explicit zero to Kueue.
+                      maxLength: 64
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      type: string
+                      x-kubernetes-int-or-string: true
+                      x-kubernetes-validations:
+                      - message: borrowingLimit must be non-negative
+                        rule: '!string(self).startsWith(''-'')'
+                    flavor:
+                      description: Flavor is the Kueue ResourceFlavor that provides
+                        this resource.
+                      minLength: 1
+                      type: string
+                    lendingLimit:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: |-
+                        LendingLimit is the maximum unused nominal quota this scope may lend.
+                        When omitted, TauGrid writes an explicit zero to Kueue.
+                      maxLength: 64
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      type: string
+                      x-kubernetes-int-or-string: true
+                      x-kubernetes-validations:
+                      - message: lendingLimit must be non-negative
+                        rule: '!string(self).startsWith(''-'')'
+                    nominalQuota:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: NominalQuota is the guaranteed quota assigned to
+                        this scope.
+                      maxLength: 64
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      type: string
+                      x-kubernetes-int-or-string: true
+                      x-kubernetes-validations:
+                      - message: nominalQuota must be non-negative
+                        rule: '!string(self).startsWith(''-'')'
+                    resource:
+                      description: Resource is the Kubernetes resource name, for example
+                        nvidia.com/gpu.
+                      minLength: 1
+                      type: string
+                  required:
+                  - flavor
+                  - nominalQuota
+                  - resource
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-map-keys:
+                - flavor
+                - resource
+                x-kubernetes-list-type: map
               role:
                 description: |-
                   Role is the logical researcher role. The legacy tau-researcher-v1 alias
@@ -181,6 +248,18 @@ spec:
                       the workspace object name.
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
+                type: object
+              teamRef:
+                description: |-
+                  TeamRef assigns this workspace to a team quota hierarchy. When omitted,
+                  the workspace keeps the legacy externally managed queue contract.
+                properties:
+                  name:
+                    description: Name is the name of a cluster-scoped object.
+                    minLength: 1
+                    type: string
+                required:
+                - name
                 type: object
               workloadIdentity:
                 properties:
@@ -280,6 +359,8 @@ spec:
               queue:
                 properties:
                   clusterQueue:
+                    type: string
+                  clusterQueueUID:
                     type: string
                   localQueue:
                     type: string

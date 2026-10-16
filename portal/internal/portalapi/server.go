@@ -12,17 +12,22 @@ package portalapi
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Azure/taugrid/core/kustoquery"
+	"github.com/Azure/taugrid/core/queue"
 	"github.com/Azure/taugrid/core/runs"
 	"github.com/Azure/taugrid/portal/internal/expapi"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
@@ -33,6 +38,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/nodes"
 	"github.com/Azure/taugrid/portal/internal/portal/nodeutil"
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
+	"github.com/Azure/taugrid/portal/internal/portal/workloadlogs"
 )
 
 // DefaultAddr is the portal's default listen address. It mirrors Stellar's
@@ -275,6 +281,17 @@ func kustoStellarAvailable(opts expapi.Options) bool {
 		opts.KustoNativeQuery != nil
 }
 
+func canonicalStellarSource(source string, kustoAvailable bool) string {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source != "" && source != "auto" {
+		return source
+	}
+	if source == "auto" && kustoAvailable {
+		return "kusto"
+	}
+	return "local"
+}
+
 func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceState {
 	if scope.experimentsBackend != nil {
 		return runs.ExperimentSurfaceAvailable
@@ -296,10 +313,188 @@ func (s *Server) experimentSurface(scope WorkspaceScope) runs.ExperimentSurfaceS
 
 // Handler returns the portal's root http.Handler with security headers applied.
 func (s *Server) Handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return compressJSONHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
 		s.mux.ServeHTTP(w, r)
+	}))
+}
+
+const minCompressedJSONBytes = 1024
+
+type compressJSONResponseWriter struct {
+	http.ResponseWriter
+	header      http.Header
+	body        bytes.Buffer
+	status      int
+	acceptsGzip bool
+	committed   bool
+	writer      io.Writer
+	compressed  *gzip.Writer
+}
+
+func newCompressJSONResponseWriter(w http.ResponseWriter, acceptsGzip bool) *compressJSONResponseWriter {
+	return &compressJSONResponseWriter{
+		ResponseWriter: w,
+		header:         make(http.Header),
+		acceptsGzip:    acceptsGzip,
+	}
+}
+
+func (w *compressJSONResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *compressJSONResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *compressJSONResponseWriter) Write(payload []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if w.committed {
+		return w.writer.Write(payload)
+	}
+	contentType := strings.ToLower(w.header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "application/json") ||
+		w.header.Get("Content-Encoding") != "" ||
+		w.status == http.StatusNoContent ||
+		w.status == http.StatusNotModified {
+		if err := w.commit(false); err != nil {
+			return 0, err
+		}
+		return w.writer.Write(payload)
+	}
+	if _, err := w.body.Write(payload); err != nil {
+		return 0, err
+	}
+	if w.body.Len() < minCompressedJSONBytes {
+		return len(payload), nil
+	}
+	if err := w.commit(w.acceptsGzip); err != nil {
+		return 0, err
+	}
+	return len(payload), nil
+}
+
+func (w *compressJSONResponseWriter) finish() {
+	if !w.committed {
+		_ = w.commit(false)
+	}
+	if w.compressed != nil {
+		_ = w.compressed.Close()
+	}
+}
+
+func (w *compressJSONResponseWriter) Flush() {
+	if !w.committed {
+		_ = w.commit(false)
+	}
+	if w.compressed != nil {
+		_ = w.compressed.Flush()
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *compressJSONResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *compressJSONResponseWriter) commit(compress bool) error {
+	if w.committed {
+		return nil
+	}
+	status := w.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	headers := w.ResponseWriter.Header()
+	for name, values := range w.header {
+		headers[name] = append([]string(nil), values...)
+	}
+	if w.body.Len() >= minCompressedJSONBytes {
+		addVary(headers, "Accept-Encoding")
+	}
+	if compress {
+		headers.Set("Content-Encoding", "gzip")
+		headers.Del("Content-Length")
+		w.compressed = gzip.NewWriter(w.ResponseWriter)
+		w.writer = w.compressed
+	} else {
+		w.writer = w.ResponseWriter
+	}
+	w.ResponseWriter.WriteHeader(status)
+	w.committed = true
+	if w.body.Len() == 0 {
+		return nil
+	}
+	_, err := w.writer.Write(w.body.Bytes())
+	w.body.Reset()
+	return err
+}
+
+func compressJSONHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !localJSONAPIPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		compressed := newCompressJSONResponseWriter(w, acceptsGzip(r.Header.Get("Accept-Encoding")))
+		next.ServeHTTP(compressed, r)
+		compressed.finish()
 	})
+}
+
+func localJSONAPIPath(path string) bool {
+	if strings.HasPrefix(path, "/api/portal/") {
+		return !strings.HasPrefix(path, rayProxyPrefix) &&
+			!strings.HasPrefix(path, rayWorkspaceProxyPrefix) &&
+			!strings.HasPrefix(path, kueueVizProxyPrefix)
+	}
+	for _, base := range []string{"/api/stellar", "/api/v1/stellar", "/api/v2/stellar"} {
+		if path == base+"/artifact" || strings.HasPrefix(path, base+"/artifact/") {
+			return false
+		}
+		if strings.HasPrefix(path, base+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func acceptsGzip(header string) bool {
+	for _, value := range strings.Split(header, ",") {
+		parts := strings.Split(strings.TrimSpace(value), ";")
+		if !strings.EqualFold(parts[0], "gzip") {
+			continue
+		}
+		quality := 1.0
+		for _, parameter := range parts[1:] {
+			name, raw, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+			if ok && strings.EqualFold(name, "q") {
+				if parsed, err := strconv.ParseFloat(raw, 64); err == nil {
+					quality = parsed
+				}
+			}
+		}
+		return quality > 0
+	}
+	return false
+}
+
+func addVary(header http.Header, value string) {
+	for _, current := range header.Values("Vary") {
+		for _, item := range strings.Split(current, ",") {
+			if strings.EqualFold(strings.TrimSpace(item), value) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", value)
 }
 
 // Serve runs the portal HTTP server on the listener until ctx is cancelled.
@@ -367,7 +562,7 @@ func (s *Server) routes() {
 	// Trailing slash keeps the per-job detail route
 	// ("/api/portal/runs/{namespace}/{name}") distinct from the runs list above.
 	s.mux.HandleFunc("/api/portal/runs/", s.handleJobDetail)
-
+	s.mux.HandleFunc("/api/portal/workloads/", s.handleWorkloadDetail)
 	// KueueViz "Kueue (Live)" board — reverse-proxied under
 	// /api/portal/kueueviz/. The frontend/env.js/asset routes are embedded in a
 	// same-origin iframe, so wrap them with framedSameOrigin to relax any DENY
@@ -453,7 +648,11 @@ type boardLink struct {
 type overviewResponse struct {
 	Boards             []boardLink              `json:"boards"`
 	Cards              overviewCards            `json:"cards"`
+	Pending            []queue.PendingWorkload  `json:"pending"`
+	Active             []runs.Run               `json:"active"`
+	ActiveUnavailable  string                   `json:"activeUnavailable,omitempty"`
 	Running            []runningItem            `json:"running"`
+	Waiting            []runningItem            `json:"waiting"`
 	RunningUnavailable string                   `json:"runningUnavailable,omitempty"`
 	WorkloadProfiles   jobs.ProfileAvailability `json:"workloadProfiles"`
 }
@@ -501,10 +700,19 @@ type healthCard struct {
 // queueCard is the Jobs/Queue headline: summed pending/admitted counts and GPU
 // pressure across all queue groups. Drills down to /portal/jobs.
 type queueCard struct {
-	Pending     int   `json:"pending"`
-	Admitted    int   `json:"admitted"`
-	GPUUsed     int64 `json:"gpuUsed"`
-	GPUHeadroom int64 `json:"gpuHeadroom"`
+	Pending     int         `json:"pending"`
+	Admitted    int         `json:"admitted"`
+	GPUUsed     int64       `json:"gpuUsed"`
+	GPUHeadroom int64       `json:"gpuHeadroom"`
+	Queues      []queueLane `json:"queues"`
+}
+
+type queueLane struct {
+	Namespace    string `json:"namespace"`
+	Queue        string `json:"queue"`
+	ClusterQueue string `json:"clusterQueue,omitempty"`
+	Pending      int    `json:"pending"`
+	Admitted     int    `json:"admitted"`
 }
 
 // costCard is the Cost headline: total GPU-hours over the window and the idle
@@ -528,6 +736,7 @@ type runningItem struct {
 	Job          string `json:"job,omitempty"`
 	Name         string `json:"name"`
 	Namespace    string `json:"namespace"`
+	ResourceUID  string `json:"resourceUid,omitempty"`
 	RunID        string `json:"runId,omitempty"`
 	Queue        string `json:"queue,omitempty"`
 	ClusterQueue string `json:"clusterQueue,omitempty"`
@@ -537,12 +746,18 @@ type runningItem struct {
 	// label-normalized (see links.Workload) and therefore display-only: they are
 	// deliberately not used to build ExperimentPath, because Stellar matches
 	// ?project= exactly and a folded value would deep-link to nothing.
-	Project            string `json:"project,omitempty"`
-	Experiment         string `json:"experiment,omitempty"`
-	Group              string `json:"group,omitempty"`
-	ExperimentPath     string `json:"experimentPath,omitempty"`
-	ExperimentTracking string `json:"experimentTracking"`
-	ExecutionTarget    string `json:"executionTarget,omitempty"`
+	Project                    string   `json:"project,omitempty"`
+	Experiment                 string   `json:"experiment,omitempty"`
+	Group                      string   `json:"group,omitempty"`
+	ExperimentPath             string   `json:"experimentPath,omitempty"`
+	ExperimentTracking         string   `json:"experimentTracking"`
+	ExecutionTarget            string   `json:"executionTarget,omitempty"`
+	AdmissionPriorityClass     string   `json:"admissionPriorityClass,omitempty"`
+	AdmissionPriorityClassKind string   `json:"admissionPriorityClassKind,omitempty"`
+	AdmissionPriority          *int32   `json:"admissionPriority,omitempty"`
+	PodPriorityClasses         []string `json:"podPriorityClasses,omitempty"`
+	PendingReason              string   `json:"pendingReason,omitempty"`
+	PendingMessage             string   `json:"pendingMessage,omitempty"`
 }
 
 // portalBoards is the canonical board list surfaced by the shell. Experiments
@@ -598,7 +813,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp := overviewResponse{Boards: s.boardsForScope(scope), Running: []runningItem{}}
+	resp := overviewResponse{
+		Boards: s.boardsForScope(scope), Pending: []queue.PendingWorkload{},
+		Active: []runs.Run{}, Running: []runningItem{}, Waiting: []runningItem{},
+	}
 	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
 	if view == "workloads" {
 		s.resolveQueueCard(r.Context(), &resp, scope)
@@ -606,6 +824,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		s.resolveCards(r.Context(), &resp, scope)
 	}
 	s.resolveRunning(r.Context(), &resp, scope)
+	s.resolveActiveRuns(r.Context(), &resp, scope)
 	writeScopedJSON(w, http.StatusOK, resp, scope, "ready")
 }
 
@@ -699,8 +918,44 @@ func (s *Server) resolveQueueCard(ctx context.Context, resp *overviewResponse, s
 		resp.Cards.Queue = &queueCard{
 			Pending: summary.Pending, Admitted: summary.Admitted,
 			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
+			Queues: queueLanes(snap.Groups),
+		}
+		resp.Pending = overviewPendingWorkloads(snap.Groups)
+	}
+}
+
+func overviewPendingWorkloads(groups []queue.Group) []queue.PendingWorkload {
+	seen := map[string]struct{}{}
+	out := make([]queue.PendingWorkload, 0)
+	for _, group := range groups {
+		for _, workload := range group.PendingWorkloads {
+			key := workload.Namespace + "\x00" + workload.Name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, workload)
 		}
 	}
+	queue.SortPendingWorkloads(out)
+	return out
+}
+
+func queueLanes(groups []queue.Group) []queueLane {
+	out := make([]queueLane, 0)
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		key := group.Namespace + "\x00" + group.Queue
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, queueLane{
+			Namespace: group.Namespace, Queue: group.Queue, ClusterQueue: group.ClusterQueue,
+			Pending: group.Pending, Admitted: group.Admitted,
+		})
+	}
+	return out
 }
 
 // resolveRunning pre-resolves the overview's "running now" cross-links from the
@@ -744,7 +999,7 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 		}
 	}
 	for _, wl := range workloads {
-		if !wl.Running() {
+		if wl.Finished {
 			continue
 		}
 		experimentPath := ""
@@ -758,21 +1013,97 @@ func (s *Server) resolveRunning(ctx context.Context, resp *overviewResponse, sco
 				experimentTracking = "legacy"
 			}
 		}
-		resp.Running = append(resp.Running, runningItem{
-			Job:                wl.Job,
-			Name:               wl.Name,
-			Namespace:          wl.Namespace,
-			RunID:              wl.RunID,
-			Queue:              wl.Queue,
-			ClusterQueue:       wl.ClusterQueue,
-			Project:            wl.Project,
-			Experiment:         wl.Experiment,
-			Group:              wl.Group,
-			ExperimentPath:     experimentPath,
-			ExperimentTracking: experimentTracking,
-			ExecutionTarget:    wl.ExecutionTarget,
-		})
+		resourceUID := ""
+		if reader, ok := s.runs.Reader.(jobdetail.Reader); ok && jobdetail.SupportsKind(reader, wl.ResourceKind) {
+			resourceUID = wl.ResourceUID
+		}
+		item := runningItem{
+			Job:                        wl.Job,
+			Name:                       wl.Name,
+			Namespace:                  wl.Namespace,
+			ResourceUID:                resourceUID,
+			RunID:                      wl.RunID,
+			Queue:                      wl.Queue,
+			ClusterQueue:               wl.ClusterQueue,
+			Project:                    wl.Project,
+			Experiment:                 wl.Experiment,
+			Group:                      wl.Group,
+			ExperimentPath:             experimentPath,
+			ExperimentTracking:         experimentTracking,
+			ExecutionTarget:            wl.ExecutionTarget,
+			AdmissionPriorityClass:     wl.AdmissionPriorityClass,
+			AdmissionPriorityClassKind: wl.AdmissionPriorityClassKind,
+			AdmissionPriority:          wl.AdmissionPriority,
+			PodPriorityClasses:         wl.PodPriorityClasses,
+			PendingReason:              wl.PendingReason,
+			PendingMessage:             wl.PendingMessage,
+		}
+		if wl.Running() {
+			resp.Running = append(resp.Running, item)
+		} else {
+			resp.Waiting = append(resp.Waiting, item)
+		}
 	}
+}
+
+// resolveActiveRuns lists Tau-managed Job and RayJob resources whose runtime
+// controller reports Running. This is deliberately separate from Kueue
+// admission because an admitted Workload can still be Pending.
+func (s *Server) resolveActiveRuns(ctx context.Context, resp *overviewResponse, scope WorkspaceScope) {
+	if s.runs.Reader == nil {
+		resp.ActiveUnavailable = "portal started without Kubernetes runtime access"
+		return
+	}
+	jobScopes, err := s.resolvedJobScopes(scope)
+	if err != nil {
+		resp.ActiveUnavailable = err.Error()
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, jobScope := range jobScopes {
+		snapshot, boardErr := runs.Board(ctx, s.runs.Reader, runs.Options{
+			Namespace:         jobScope.Namespace,
+			Queue:             jobScope.Queue,
+			ExperimentSurface: s.experimentSurface(scope),
+			HistoryScope: runs.HistoryScope{
+				Cluster: scope.Cluster, Namespace: jobScope.Namespace, LocalQueue: jobScope.Queue,
+			},
+		})
+		if boardErr != nil {
+			resp.ActiveUnavailable = boardErr.Error()
+			resp.Active = []runs.Run{}
+			return
+		}
+		for _, run := range snapshot.Runs {
+			if !strings.EqualFold(run.Status, "running") {
+				continue
+			}
+			key := run.Namespace + "\x00" + run.Kind + "\x00" + run.Name
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if !scope.Managed {
+				run.ExperimentPath = links.ExperimentPath(run.RunID)
+				if run.ExperimentPath != "" {
+					run.ExperimentTracking = "legacy"
+				}
+			}
+			resp.Active = append(resp.Active, run)
+		}
+	}
+	sort.Slice(resp.Active, func(i, j int) bool {
+		if !resp.Active[i].Created.Equal(resp.Active[j].Created) {
+			return resp.Active[i].Created.After(resp.Active[j].Created)
+		}
+		if resp.Active[i].Namespace != resp.Active[j].Namespace {
+			return resp.Active[i].Namespace < resp.Active[j].Namespace
+		}
+		if resp.Active[i].Kind != resp.Active[j].Kind {
+			return resp.Active[i].Kind < resp.Active[j].Kind
+		}
+		return resp.Active[i].Name < resp.Active[j].Name
+	})
 }
 
 func (s *Server) profileScopes(scope WorkspaceScope) []jobs.Scope {
@@ -801,6 +1132,17 @@ func (s *Server) resolvedJobScopes(scope WorkspaceScope) ([]jobs.Scope, error) {
 	default:
 		return nil, fmt.Errorf("computed Jobs board disabled")
 	}
+}
+
+func (s *Server) workloadDetailScopes(scope WorkspaceScope) ([]jobs.Scope, error) {
+	if !scope.Managed {
+		return s.resolvedJobScopes(scope)
+	}
+	jobScopes := []jobs.Scope{{Team: scope.Team, Namespace: scope.Namespace, Queue: scope.LocalQueue}}
+	if err := jobs.ValidateScopes(jobScopes); err != nil {
+		return nil, fmt.Errorf("workspace %q has an invalid workload detail scope: %w", scope.WorkspaceID, err)
+	}
+	return jobScopes, nil
 }
 
 // handleJobs serves the Jobs/Queue board: the same queue.Snapshot schema as
@@ -1079,8 +1421,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 		writeScopedError(w, http.StatusServiceUnavailable, scope, "nodes board unavailable: portal started without Kubernetes access")
 		return
 	}
-	includeDaemonSets := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
-	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{IncludeDaemonSets: includeDaemonSets})
+	includeClusterWide := !scope.Managed || scope.AuthorizationMode == workspaceAuthorizationClusterWide
+	snapshot, err := nodes.Board(r.Context(), s.nodes.Reader, nodes.Options{
+		IncludeDaemonSets:  includeClusterWide,
+		IncludeAllocations: includeClusterWide,
+		IncludeMetrics:     includeClusterWide,
+	})
 	if err != nil {
 		writeScopedError(w, http.StatusBadGateway, scope, err.Error())
 		return
@@ -1091,8 +1437,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 // handleNodeUtil serves the node resource-utilization board: per-node CPU
 // utilization (from the node_cpu_idle_seconds counter delta) and memory-used
 // percentage (from node_memory_total/available), from the Metrics ADX database
-// via NodeHealth(). It is the CPU/memory sibling of the Cluster Health board,
-// rendered beneath the per-GPU table on the Utilization page. Optional
+// via the raw node-exporter tables. It is the CPU/memory sibling of the Cluster
+// Health board, rendered beneath the per-GPU table on the Utilization page. Optional
 // ?window=&cluster=&instance= scope the query. When the board has no Kusto
 // querier (portal started without --kusto-query-command) it returns 503; a
 // query failure returns 502.
@@ -1276,6 +1622,299 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeScopedJSON(w, http.StatusOK, snapshot, scope, "ready")
+}
+
+// handleWorkloadDetail serves the canonical workload detail route by immutable
+// Kubernetes resource UID. Live objects reuse jobdetail.Detail; deleted objects
+// fall back to the durable lifecycle timeline within the same trusted scope.
+func (s *Server) handleWorkloadDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	scope, ok := s.localWorkspaceScope(w, r)
+	if !ok {
+		return
+	}
+	tail := strings.TrimPrefix(r.URL.Path, "/api/portal/workloads/")
+	parts := strings.Split(tail, "/")
+	if len(parts) == 2 && parts[1] == "logs" {
+		s.handleWorkloadLogs(w, r, scope, parts[0])
+		return
+	}
+	if len(parts) != 1 || parts[0] == "" {
+		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/workloads/{resourceUID}")
+		return
+	}
+	resourceUID := parts[0]
+
+	namespace := scope.Namespace
+	if !scope.Managed && namespace == "" {
+		namespace = s.runs.Namespace
+	}
+	snapshot, found, liveErr := s.resolveLiveWorkload(r.Context(), scope, resourceUID)
+	if found && liveErr == nil {
+		writeScopedJSON(w, http.StatusOK, snapshot, scope, "ready")
+		return
+	}
+	if liveErr != nil && s.runs.History == nil {
+		writeScopedError(w, http.StatusBadGateway, scope, liveErr.Error())
+		return
+	}
+
+	reader, ok := s.runs.History.(runs.HistoryDetailReader)
+	if !ok || reader == nil {
+		if s.runs.Reader == nil {
+			writeScopedError(w, http.StatusServiceUnavailable, scope, "workload detail unavailable: Kubernetes and durable history are not configured")
+			return
+		}
+		writeScopedError(w, http.StatusNotFound, scope, "workload not found")
+		return
+	}
+	historyScope := runs.HistoryScope{
+		Table: s.runs.HistoryTable, Cluster: scope.Cluster, Namespace: namespace,
+		LocalQueue: scope.LocalQueue, WorkspaceID: scope.WorkspaceID, Limit: s.runs.HistoryLimit,
+	}
+	if !scope.Managed {
+		historyScope.Cluster = s.singleWorkspaceScope.Cluster
+		historyScope.Namespace = s.singleWorkspaceScope.Namespace
+	}
+	events, err := reader.GetHistoryTimeline(r.Context(), historyScope, resourceUID)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "durable workload history query failed")
+		return
+	}
+	if len(events) == 0 || !historyEventInScope(events[0], historyScope, resourceUID) {
+		writeScopedError(w, http.StatusNotFound, scope, "workload not found")
+		return
+	}
+	writeScopedJSON(w, http.StatusOK, historicalWorkloadSnapshot(events), scope, "ready")
+}
+
+func (s *Server) resolveLiveWorkload(ctx context.Context, scope WorkspaceScope, resourceUID string) (jobdetail.Snapshot, bool, error) {
+	if s.runs.Reader == nil {
+		return jobdetail.Snapshot{}, false, nil
+	}
+	namespace := scope.Namespace
+	if !scope.Managed && namespace == "" {
+		namespace = s.runs.Namespace
+	}
+	live, err := runs.Board(ctx, s.runs.Reader, runs.Options{Namespace: namespace, Queue: scope.LocalQueue})
+	if err != nil {
+		return jobdetail.Snapshot{}, false, err
+	}
+	for _, run := range live.Runs {
+		if run.ResourceUID != resourceUID {
+			continue
+		}
+		reader, ok := s.runs.Reader.(jobdetail.Reader)
+		if !ok {
+			return jobdetail.Snapshot{}, false, errors.New("workload detail reader does not support single-object reads")
+		}
+		snapshot, detailErr := jobdetail.Detail(ctx, reader, s.cluster.Querier, jobdetail.Options{
+			Namespace: run.Namespace, Name: run.Name, WorkspaceID: scope.WorkspaceID, Cluster: scope.Cluster,
+		})
+		if detailErr != nil {
+			if errors.Is(detailErr, jobdetail.ErrNotFound) {
+				return jobdetail.Snapshot{}, false, nil
+			}
+			return jobdetail.Snapshot{}, false, detailErr
+		}
+		if snapshot.ResourceUID != resourceUID {
+			return jobdetail.Snapshot{}, false, nil
+		}
+		return snapshot, true, nil
+	}
+
+	reader, ok := s.runs.Reader.(jobdetail.Reader)
+	if !ok || s.jobs.Reader == nil {
+		return jobdetail.Snapshot{}, false, nil
+	}
+	jobScopes, err := s.workloadDetailScopes(scope)
+	if err != nil {
+		return jobdetail.Snapshot{}, false, err
+	}
+	for _, jobScope := range jobScopes {
+		workloads, listErr := links.ListWorkloads(ctx, s.jobs.Reader, jobScope.Namespace)
+		if listErr != nil {
+			return jobdetail.Snapshot{}, false, listErr
+		}
+		for _, workload := range workloads {
+			if workload.Queue != jobScope.Queue || workload.ResourceUID != resourceUID ||
+				!jobdetail.SupportsKind(reader, workload.ResourceKind) {
+				continue
+			}
+			snapshot, detailErr := jobdetail.DetailReference(ctx, reader, s.cluster.Querier, jobdetail.Options{
+				Namespace: workload.Namespace, Name: workload.ResourceName,
+				WorkspaceID: scope.WorkspaceID, Cluster: scope.Cluster,
+			}, jobdetail.WorkloadReference{
+				Kind: workload.ResourceKind, Name: workload.ResourceName, UID: workload.ResourceUID,
+			})
+			if detailErr != nil {
+				if errors.Is(detailErr, jobdetail.ErrNotFound) {
+					return jobdetail.Snapshot{}, false, nil
+				}
+				return jobdetail.Snapshot{}, false, detailErr
+			}
+			return snapshot, true, nil
+		}
+	}
+	return jobdetail.Snapshot{}, false, nil
+}
+
+type workloadLogReader interface {
+	GetPodLogs(ctx context.Context, namespace, pod, container string, previous bool, tailLines, limitBytes int64) ([]byte, error)
+}
+
+func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request, scope WorkspaceScope, resourceUID string) {
+	if resourceUID == "" || strings.Contains(resourceUID, "/") {
+		writeScopedError(w, http.StatusNotFound, scope, "not found: expected /api/portal/workloads/{resourceUID}/logs")
+		return
+	}
+	reader, ok := s.runs.Reader.(workloadLogReader)
+	if !ok || reader == nil {
+		writeScopedError(w, http.StatusServiceUnavailable, scope, "workload logs unavailable: Kubernetes log access is not configured")
+		return
+	}
+	snapshot, found, err := s.resolveLiveWorkload(r.Context(), scope, resourceUID)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "workload logs unavailable")
+		return
+	}
+	if !found {
+		writeScopedError(w, http.StatusNotFound, scope, "live workload not found; logs may have expired")
+		return
+	}
+	podName := strings.TrimSpace(r.URL.Query().Get("pod"))
+	containerName := strings.TrimSpace(r.URL.Query().Get("container"))
+	previous, err := strconv.ParseBool(firstNonEmpty(r.URL.Query().Get("previous"), "false"))
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, "previous must be true or false")
+		return
+	}
+	tailLines, err := boundedPositiveQuery(r, "tailLines", workloadlogs.DefaultTailLines, workloadlogs.MaxTailLines)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
+	limitBytes, err := boundedPositiveQuery(r, "limitBytes", workloadlogs.DefaultLimitBytes, workloadlogs.MaxLimitBytes)
+	if err != nil {
+		writeScopedError(w, http.StatusBadRequest, scope, err.Error())
+		return
+	}
+	container, ok := workloadContainer(snapshot.Pods, podName, containerName)
+	if !ok {
+		writeScopedError(w, http.StatusNotFound, scope, "pod or container does not belong to this workload")
+		return
+	}
+	if previous && !container.PreviousAvailable {
+		writeScopedError(w, http.StatusNotFound, scope, "previous container logs are not available")
+		return
+	}
+	data, err := reader.GetPodLogs(r.Context(), snapshot.Namespace, podName, containerName, previous, tailLines, limitBytes+1)
+	if err != nil {
+		writeScopedError(w, http.StatusBadGateway, scope, "container logs could not be read")
+		return
+	}
+	content, truncated, redacted := workloadlogs.Sanitize(data, limitBytes)
+	w.Header().Set("Cache-Control", "no-store")
+	writeScopedJSON(w, http.StatusOK, workloadlogs.Snapshot{
+		Pod: podName, Container: containerName, Previous: previous, Content: content,
+		TailLines: tailLines, LimitBytes: limitBytes, Truncated: truncated, RedactionApplied: redacted,
+	}, scope, "ready")
+}
+
+func boundedPositiveQuery(r *http.Request, name string, fallback, maximum int64) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 || value > maximum {
+		return 0, fmt.Errorf("%s must be between 1 and %d", name, maximum)
+	}
+	return value, nil
+}
+
+func workloadContainer(pods []jobdetail.PodDetail, podName, containerName string) (jobdetail.ContainerDetail, bool) {
+	for _, pod := range pods {
+		if pod.Name != podName {
+			continue
+		}
+		for _, container := range pod.Containers {
+			if container.Name == containerName {
+				return container, true
+			}
+		}
+	}
+	return jobdetail.ContainerDetail{}, false
+}
+
+func historyEventInScope(event runs.LifecycleEvent, scope runs.HistoryScope, resourceUID string) bool {
+	return event.ResourceUID == resourceUID &&
+		(scope.Namespace == "" || strings.EqualFold(event.Namespace, scope.Namespace)) &&
+		(scope.Cluster == "" || strings.EqualFold(event.Cluster, scope.Cluster))
+}
+
+func historicalWorkloadSnapshot(events []runs.LifecycleEvent) jobdetail.Snapshot {
+	first := events[0]
+	last := events[len(events)-1]
+	created := firstNonEmptyTime(first.SubmitTime, first.ObservedAt)
+	status := historicalWorkloadStatus(last.State)
+	snapshot := jobdetail.Snapshot{
+		Namespace: first.Namespace, Name: first.Name, Kind: first.Kind,
+		ResourceUID: first.ResourceUID, ObjectState: "deleted", Status: status,
+		RunID: first.RunID, History: events,
+		Diagnostics: jobdetail.Diagnostics{
+			Workloads: jobdetail.SourceDiagnostic{State: "unavailable", Message: "The Kubernetes object was deleted; live Kueue evidence is no longer retained."},
+			Pods:      jobdetail.SourceDiagnostic{State: "unavailable", Message: "The Kubernetes object was deleted; pod state and logs are no longer retained."},
+			Events:    jobdetail.SourceDiagnostic{State: "unavailable", Message: "The Kubernetes object was deleted; Kubernetes events may have expired."},
+			Tracking:  jobdetail.SourceDiagnostic{State: "empty", Message: "No experiment identity is available in durable history."},
+			Telemetry: jobdetail.SourceDiagnostic{State: "unavailable", Message: "Historical GPU attribution is unavailable after pod placement data is deleted."},
+		},
+		Lifecycle: &jobdetail.LifecycleRow{
+			State: last.State, EffectiveState: last.State, Reason: last.Reason, Message: last.Message,
+			CompletionTime: last.CompletionTime, ArtifactURI: last.ArtifactURI, CheckpointURI: last.CheckpointURI,
+		},
+	}
+	if first.RunID != "" {
+		snapshot.Diagnostics.Tracking = jobdetail.SourceDiagnostic{State: "ready"}
+	}
+	if !created.IsZero() {
+		snapshot.Object.Created = &created
+		snapshot.Object.Age = runs.FormatAge(time.Now(), created)
+	}
+	snapshot.Stages = jobdetail.LifecycleStages{
+		Object: "deleted", Admission: "unavailable", Scheduling: "unavailable",
+		Application: strings.ToLower(status), Tracking: map[bool]string{true: "linked", false: "unlinked"}[first.RunID != ""],
+	}
+	return snapshot
+}
+
+func firstNonEmptyTime(values ...string) time.Time {
+	for _, value := range values {
+		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func historicalWorkloadStatus(state string) string {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "submitted", "queued", "admitted", "pending":
+		return "Pending"
+	case "running":
+		return "Running"
+	case "succeeded", "complete", "completed":
+		return "Succeeded"
+	case "failed":
+		return "Failed"
+	case "cancelled", "canceled":
+		return "Cancelled"
+	default:
+		return state
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

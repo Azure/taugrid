@@ -1,0 +1,27 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: __RUN_NAME__
+engine: rayjob
+run:
+  entrypoint: smoke.py
+  working_dir: .
+compute:
+  workers: 2
+  gpus_per_worker: 0
+  head_cpu_request: 500m
+  head_memory_request: 1Gi
+  head_cpu_limit: "1"
+  head_memory_limit: 2Gi
+  worker_cpu_request: "1"
+  worker_memory_request: 1Gi
+  worker_cpu_limit: "1"
+  worker_memory_limit: 2Gi
+runtime:
+  image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0@sha256:e9a329eef15e5a13d50c3186c2b8036cd3728c6e218da860de23e8494b99ddd3
+policy:
+  workspace: taugrid-default
+  profile: unbounded.cpu.topology-smoke
+  team: research
+  lane: training
+  queue: jobqueue

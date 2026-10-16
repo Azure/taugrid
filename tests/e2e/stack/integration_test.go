@@ -61,6 +61,7 @@ const (
 
 	defaultFineWebTrainWorkers = 16
 	defaultFineWebTrainSteps   = 60
+	fixtureCleanupTimeout      = 3 * time.Minute
 
 	// FineWeb conformance asserts the runtime param count lands in the ~1.7B band
 	// (1.716B at the default 32L/2048d config); the workload also self-checks this.
@@ -98,7 +99,9 @@ func runTests(m *testing.M) int {
 		return 1
 	}
 
-	if stackUsesArgoCDQueue() {
+	preserveKueueRecords := os.Getenv("E2E_PRESERVE_KUEUE_RECORDS") == "1"
+	usesArgoCDQueue := stackUsesArgoCDQueue()
+	if usesArgoCDQueue {
 		if !largeGPUUsesManagerWorkloadAccess() {
 			if err := requireArgoCDStackQueue(ctx, kubeClient, dynamicClient); err != nil {
 				fmt.Fprintf(os.Stderr, "ArgoCD stack queue is not ready: %v\n", err)
@@ -108,27 +111,36 @@ func runTests(m *testing.M) int {
 			}
 		}
 	} else {
+		if !preserveKueueRecords {
+			if err := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to remove stale stack Kueue resources: %v\n", err)
+				return 1
+			}
+		}
 		// Setup order matters: the Kueue fixture must create the namespace before
 		// any RayJob fixtures are applied into it.
 		if err := e2e.ApplyFixtureWithClient(ctx, dynamicClient, "stack-kueue-resources.yaml"); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to setup stack Kueue resources: %v\n", err)
 			e2e.DumpDeploymentDiagnostics(ctx, kubeClient, "kueue-system", "kueue-controller-manager")
 			e2e.DumpDeploymentDiagnostics(ctx, kubeClient, "kuberay-system", "kuberay-operator")
+			if !preserveKueueRecords {
+				if cleanupErr := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); cleanupErr != nil {
+					fmt.Fprintf(os.Stderr, "Failed to roll back partial stack Kueue setup: %v\n", cleanupErr)
+				}
+			}
 			return 1
 		}
-		if os.Getenv("E2E_PRESERVE_KUEUE_RECORDS") != "1" {
-			defer e2e.DeleteFixtureWithClient(ctx, dynamicClient, "stack-kueue-resources.yaml")
-		}
-	}
-
-	if os.Getenv("E2E_STACK_TAU_ENTRYPOINT_ONLY") == "1" {
-		defer results.FlushAll()
-		return m.Run()
 	}
 
 	defer results.FlushAll()
-
-	return m.Run()
+	code := m.Run()
+	if !usesArgoCDQueue && !preserveKueueRecords {
+		if err := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to clean up stack Kueue resources: %v\n", err)
+			code = 1
+		}
+	}
+	return code
 }
 
 func stackUsesArgoCDQueue() bool {
@@ -519,9 +531,8 @@ func largeGPUUsesManagerWorkloadAccess() bool {
 // TestFineWebRayTrain16xH200IB validates the live FineWeb InfiniBand conformance
 // path: Kueue admits a 16-GPU KubeRay RayJob whose workers shard a ~1.7B GPT with
 // FSDP across both H200 nodes (split 8+8), NCCL runs over InfiniBand
-// (rdma/rdma_shared_device_a + IPC_LOCK + a real /dev/shm), and Ray Train reaches
-// and persists its FIRST checkpoint. Gated by E2E_GPU=1 + E2E_FINEWEB=1 (and
-// requires enable-infiniband.sh to have advertised the RDMA resource first).
+// (network-domain TAS + IPC_LOCK + a real /dev/shm), and Ray Train reaches and
+// persists its FIRST checkpoint. Gated by E2E_GPU=1 + E2E_FINEWEB=1.
 //
 // The success contract is "reach + persist the first checkpoint", not
 // convergence. The job is bounded (default 60 steps, first checkpoint at 50) so it
@@ -563,7 +574,22 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	applyRayJobFixture(t, tc, "fineweb-rayjob-16xh200-ib.yaml", rayJobNameFineWeb)
 
 	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, 2*time.Minute)
-	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload (large-gpu queue must cover rdma/rdma_shared_device_a)")
+	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
+
+	if recoveryNode := strings.TrimSpace(os.Getenv("FINEWEB_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
+		err = tc.RecoverSingleSchedulerBlockedGPUWorker(e2e.SchedulerRecoveryOptions{
+			Namespace:       stackNamespace,
+			WorkerSelector:  "e2e-test=fineweb-16xh200-ib",
+			TargetNode:      recoveryNode,
+			ExpectedWorkers: workers,
+			Timeout:         15 * time.Minute,
+			Eligible: func(observation e2e.SchedulerRecoveryObservation) bool {
+				return eligibleForFineWebSchedulerRecovery(workers, observation)
+			},
+			Description: "FineWeb worker",
+		})
+		require.NoError(t, err, "recover the single scheduler-blocked FineWeb worker")
+	}
 
 	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running and ready")
@@ -679,6 +705,22 @@ func requireWorkersSplitEvenlyAcrossNodes(t *testing.T, tc *e2e.TestContext, pod
 	for node, count := range perNodeCount {
 		require.Equal(t, perNode, count, "node %s should run exactly %d FineWeb workers, got %d", node, perNode, count)
 	}
+}
+
+func eligibleForFineWebSchedulerRecovery(workers int, state e2e.SchedulerRecoveryObservation) bool {
+	if workers <= 0 || workers%2 != 0 {
+		return false
+	}
+	perNode := workers / 2
+	return state.TotalWorkers == workers &&
+		state.RunningWorkers == workers-1 &&
+		state.PendingWorkers == 1 &&
+		state.RunningOnTarget == perNode-1 &&
+		state.RunningOnOtherNodes == perNode &&
+		state.RequestedGPUsOnTarget == int64(perNode-1) &&
+		state.PendingGPURequest == 1 &&
+		state.TargetAllocatableGPUs == int64(perNode) &&
+		state.HasInsufficientEvent
 }
 
 // availableGPUsOnSelectedNodes computes how many nvidia.com/gpu are free on the

@@ -324,6 +324,30 @@ rules:
 	}
 }
 
+func TestLoadValidatesRequiredSampleValues(t *testing.T) {
+	t.Parallel()
+
+	path := writeConfig(t, `
+scrapeTargets:
+  - name: node-exporter
+    url: http://localhost:9100/metrics
+rules:
+  - name: ib-link-down
+    metricName: node_infiniband_link_downed_total
+    conditionType: IBLinkDown
+    mode: rate
+    threshold: 0
+    window: 1m
+    minSamples: 2
+    sampleLabel: device
+    requiredSampleValues: [mlx5_ib0]
+`)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "exactly minSamples distinct values") {
+		t.Fatalf("Load error = %v, want requiredSampleValues cardinality error", err)
+	}
+}
+
 func TestValidationErrorsNeverLeakCredentials(t *testing.T) {
 	t.Parallel()
 

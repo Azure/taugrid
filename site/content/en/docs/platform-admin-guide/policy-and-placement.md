@@ -26,6 +26,27 @@ LocalQueues are tenant-facing entry points. ClusterQueues own quota and fairness
 ResourceFlavors describe resource pools. Priority and preemption remain
 cluster-owned policy.
 
+## Priority and preemption
+
+TauGrid installs two workload and pod priority pairs: `taugrid-default` at
+1000 and `taugrid-priority` at 1200. Runs select them with
+`policy.priority_tier: default|priority`; consumers do not need to create
+their own classes. An explicit run tier overrides only the priority pair from
+the selected workload profile.
+
+The portable ClusterQueue uses Kueue `BestEffortFIFO`: higher resolved
+Workload priority is considered before FIFO order, and equal-priority work is
+ordered oldest first. `withinClusterQueue: LowerPriority` allows admitted
+lower-priority work to be reclaimed for eligible higher-priority work in the
+same ClusterQueue. Both pod classes use `PreemptLowerPriority`, which is a
+separate Kubernetes scheduler decision after Kueue admission.
+
+Portal queue views show the resolved Kueue priority class/value and the pod
+priority class separately. “Pending admission,” “quota admitted,” and
+“running” remain distinct states: quota, ResourceFlavor eligibility,
+admission checks, and node availability can still prevent the highest
+priority row from running immediately.
+
 ## GPU class contract
 
 `policy.gpu_class` is hardware-only and maps exactly to the node label
@@ -50,47 +71,59 @@ matching solely on that label: `ndm-a100-v4`, `nd-h200-v5`, and
 `taugrid-default` are platform identifiers, distinct from researcher API
 values.
 
-Placement stays in `policy.topology`: `independent`, `single-node-nvlink`,
-`multi-node-nccl`, or `elastic-workers`. GPU class values encode hardware
-only; NVLink, InfiniBand, NCCL, and same-host placement are expressed
-separately through `policy.topology`.
+Placement stays in `policy.topology`: `unconstrained`, `same-host`,
+`same-accelerator-domain`, `same-network-domain`, or `same-site`. GPU class
+values encode hardware only; NVLink, InfiniBand, NCCL, and same-host placement
+are expressed separately through `policy.topology`.
 
-The legacy inputs `a100-nvlink-80gb`, `h100-standalone-95gb`, and
-`h200-nvlink-141gb` are accepted for one compatibility window, normalized
-before validation/rendering, and produce a CLI deprecation warning. New
-configs and platform assets must use canonical values.
+`same-accelerator-domain` requires one `tau.azure.com/accelerator-domain`
+subtree. TauGrid assigns deterministic singleton domains unless the provider
+publishes an authoritative `net.unbounded-cloud.io/accelerator-domain` value,
+so matching GPU models alone never imply that Nodes share an NVL72 island.
+Provider-declared domains may span hosts. The placement does not add
+anti-affinity or guarantee distinct hosts, and insufficient capacity remains
+pending rather than falling back to a network domain or site.
 
-## Existing-cluster migration
+`same-network-domain` requires one shared fabric but does not require one worker
+per host. Full-node GPU requests naturally separate workers when a Node cannot
+fit two of them; smaller workers may co-locate.
 
-Update downstream run configs/examples to canonical values first. Before
-changing live queue or flavor objects, stop submitters, hold admission, and
-drain the queue. `HoldAndDrain` evicts admitted/reserving workloads while
-leaving already-pending workloads in place; inspect those workloads and
-delete or deactivate their owning Job, RayJob, or workflow before waiting for
-zero. Keep namespaces and PVCs in place throughout.
+Multi-node direct Job torchrun is the exception to that generic placement
+contract. Each rank requests one `tau.azure.com/torchrun-host-slot`; the
+controller advertises exactly one slot per GPU Node. Kueue therefore admits
+each rank to a distinct hostname while the profile's topology request still
+keeps every rank in one network domain. The slot is globally exclusive among
+multi-node torchrun ranks, so two such workloads cannot share one GPU Node even
+when GPU capacity remains.
 
-```bash
-export CLUSTER_QUEUE=jobqueue
-kubectl patch clusterqueue "$CLUSTER_QUEUE" --type=merge \
-  -p '{"spec":{"stopPolicy":"HoldAndDrain"}}'
-# Inspect pending owners and cancel them through their owning controller.
-kubectl get workloads -A -o \
-  custom-columns=NAMESPACE:.metadata.namespace,WORKLOAD:.metadata.name,OWNER_KIND:.metadata.ownerReferences[0].kind,OWNER:.metadata.ownerReferences[0].name,ADMITTED:.status.conditions[?(@.type==\"Admitted\")].status
-kubectl wait --for=jsonpath='{.status.reservingWorkloads}'=0 \
-  "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
-kubectl wait --for=jsonpath='{.status.admittedWorkloads}'=0 \
-  "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
-kubectl wait --for=jsonpath='{.status.pendingWorkloads}'=0 \
-  "clusterqueue/$CLUSTER_QUEUE" --timeout=10m
-```
+Tau emits a warning when this placement is selected. The request does not
+independently require `tau.azure.com/infiniband=true`: Nodes without
+authoritative shared-fabric metadata receive singleton network domains. A
+multi-host workload remains pending when no one domain has sufficient eligible
+capacity, while workers that all fit on one Node may still run in that Node's
+singleton domain. TauGrid never falls back automatically to `same-site` or
+`unconstrained`.
 
-After the queue is empty, upgrade the Tau controller chart so its reviewed
-VM-size catalog reconciles both labels. Add custom hardware through
-`extraNodeLabelRules`, which defines those labels directly rather than
-relying on labels a node might already carry:
+## Current cluster contract
 
-CPU-only clusters and GPU pools scaled to zero remain ready when no catalog
-entry currently matches.
+TauGrid creates one controller-owned Topology named `taugrid-gpu-topology`
+with the levels `tau.azure.com/site`, `tau.azure.com/network-domain`,
+`tau.azure.com/accelerator-domain`, and `kubernetes.io/hostname`.
+
+The baseline queue contains the non-TAS CPU flavor `taugrid-default-cpu` with
+zero GPU quota. `tau-core-controller` discovers GPU Nodes and creates one
+topology-aware ResourceFlavor per distinct `tau.azure.com/gpu-class`. Initial
+GPU quota is the summed allocatable `nvidia.com/gpu` capacity for that class.
+The controller also advertises one `tau.azure.com/torchrun-host-slot` per GPU
+Node and publishes the ready slot count on the same flavor. GPU quota increases
+when more capacity appears and is not automatically decreased or pruned; slot
+quota tracks ready slot capacity. Each discovered flavor declares
+`sku=gpu:NoSchedule` as an admission taint, keeping CPU-only workloads out of
+GPU quota. Node creation and later allocatable GPU or host-slot updates trigger
+reconciliation, so newly joining pools receive quota as soon as kubelet reports
+their devices and the slot.
+
+Add custom hardware through `extraNodeLabelRules`:
 
 ```yaml
 tau-core-controller:
@@ -103,71 +136,35 @@ tau-core-controller:
           tau.azure.com/gpu-class: h200-141gb
 ```
 
-Wait for the singleton `TauCluster` to report `NodesReady`, then create
-replacement ResourceFlavors with new names rather than patching referenced
-objects: Kueue may protect or reject changes to immutable/in-use flavor fields.
-
-Verify the exact contract before submitting specific-class work:
+Verify the active contract with:
 
 ```bash
+kubectl get topology taugrid-gpu-topology -o yaml
 kubectl get resourceflavor -o \
-  custom-columns=NAME:.metadata.name,GPU_CLASS:.spec.nodeLabels.tau\\.azure\\.com/gpu-class
-kubectl get nodes -L tau.azure.com/gpu-class
-tau cluster validate nodes --gpu-class a100-80gb --min-healthy 1
+  custom-columns=NAME:.metadata.name,GPU_CLASS:.spec.nodeLabels.tau\\.azure\\.com/gpu-class,TOPOLOGY:.spec.topologyName
+kubectl get nodes -L tau.azure.com/gpu-class,tau.azure.com/network-domain
 tau cluster validate nodes --gpu-class h200-141gb --min-healthy 1
 ```
 
-Fresh installs use a generic CPU flavor, `taugrid-default-cpu`, with zero GPU quota
-and a generic GPU flavor, `taugrid-default-gpu`, with CPU, memory, and GPU quota
-in the same node-resource group. The GPU flavor remains valid for
-`gpu_class: any` and must not be advertised as a specific hardware class.
-
-Keep the sole ResourceFlavor in a resource group that covers CPU, memory,
-and GPU free of any GPU class label. Kueue injects that flavor's node labels for every
-admitted workload, which pins CPU-only work to GPU nodes. Use a zero-GPU CPU
-flavor plus class-labeled GPU flavors in the same group. Upgrade older
-single-flavor installs by draining admission and splitting the flavor:
-
-1. Stop new submissions and set `stopPolicy: HoldAndDrain`. Kueue drains
-   reserving/admitted workloads, but pending workloads remain pending. Inspect
-   them with `kubectl get workloads -A`, then cancel or delete each pending
-   workload's owning Job, RayJob, or workflow before waiting for all three
-   counts to reach zero. Keep PVCs and namespaces in place.
-2. Create a generic non-TAS CPU ResourceFlavor that carries no GPU labels or GPU
-   admission taints. Create separate GPU ResourceFlavors with exact
-   `tau.azure.com/gpu-class` labels, GPU `nodeTaints`, `topologyName`, and the
-   managed resource annotation
-   `kueue.x-k8s.io/podset-required-topology=<level>`. Connected TauGrid submission
-   copies that platform requirement onto generated GPU pod templates when no
-   explicit placement policy is present. CPU-only jobs remain admissible through
-   the non-TAS CPU flavor and cannot consume GPU quota.
-3. Replace `spec.resourceGroups` with one group covering CPU, memory, and GPU.
-   Give the CPU flavor CPU/memory quota and zero GPU quota. Give each GPU flavor
-   CPU, memory, and GPU quota. Kueue then assigns one node flavor across every
-   resource requested by a pod set.
-4. Restore admission with
-   `kubectl patch clusterqueue "$CLUSTER_QUEUE" --type=merge -p
-   '{"spec":{"stopPolicy":"None"}}'`, submit CPU and GPU smoke targets, and
-   remove the old mixed flavor only after it is no longer referenced, keeping
-   namespaces, PVCs, and workspace data in place throughout this migration.
-
-For a one-GPU A100 cluster the resulting queue shape is:
+For a one-GPU A100 cluster the queue shape is:
 
 ```yaml
 spec:
   resourceGroups:
-    - coveredResources: [cpu, memory, nvidia.com/gpu]
+    - coveredResources: [cpu, memory, nvidia.com/gpu, tau.azure.com/torchrun-host-slot]
       flavors:
-        - name: taugrid-system
+        - name: taugrid-default-cpu
           resources:
             - {name: cpu, nominalQuota: "100000"}
             - {name: memory, nominalQuota: 100Ti}
             - {name: nvidia.com/gpu, nominalQuota: "0"}
+            - {name: tau.azure.com/torchrun-host-slot, nominalQuota: "0"}
         - name: taugrid-a100-80gb
           resources:
             - {name: cpu, nominalQuota: "100000"}
             - {name: memory, nominalQuota: 100Ti}
             - {name: nvidia.com/gpu, nominalQuota: "1"}
+            - {name: tau.azure.com/torchrun-host-slot, nominalQuota: "1"}
 ```
 
 A successful preflight confirms eligibility alone; actual capacity is

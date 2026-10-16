@@ -77,7 +77,7 @@ tests:
       - failedTemplate:
           errorMessage: 'gpuSkus.h200 effective dcgmHealth.source must be exactly one of "host-dcgmi" or "exporter"'
 
-  - it: every accepted profile always renders the dcgm-exporter target and keeps every DCGM_* rule
+  - it: every accepted profile always renders the dcgm-exporter target and baseline DCGM rules
     documentIndex: -1
     asserts:
       - matchRegex:
@@ -90,7 +90,7 @@ tests:
           path: data["rules.yaml"]
           pattern: 'rules:\s*\n\s*- '
 
-  - it: an exporter-source profile still renders the fixed dcgm-exporter target and every DCGM_* rule
+  - it: an exporter-source profile still renders the fixed target and baseline DCGM rules
     values:
       - mixed-dcgm-values.yaml
     documentSelector:
@@ -176,29 +176,85 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: rules section is non-empty (ECC/NVLink/XID etc. all render)
+  - it: default rules use only the normal exporter metric surface
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-a100
+    asserts:
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'ecc-dbe-retired'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_XID_ERRORS'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: DCGM_FI_DEV_PCIE_REPLAY_COUNTER'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_link_downed_total'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_symbol_error_total'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'metricName: node_infiniband_port_(link_downed|symbol_error)_total'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBLinkDown\s+for: 1m\s+maxSampleAge: 2m\s+metricName: node_infiniband_link_downed_total\s+minSamples: 8'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'requiredSampleValues:\s+- mlx5_0\s+- mlx5_1\s+- mlx5_2\s+- mlx5_3\s+- mlx5_4\s+- mlx5_5\s+- mlx5_6\s+- mlx5_7\s+sampleLabel: device'
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBSymbolError\s+for: 1m\s+maxSampleAge: 2m\s+metricName: node_infiniband_symbol_error_total\s+minSamples: 8'
+
+  - it: profiles without declared InfiniBand devices cannot claim metric coverage
+    set:
+      enabledGpuSkus[0]: h100-nvl-1g
+    documentSelector:
+      path: metadata.name
+      value: gpu-monitoring-gpu-metrics-collector-h100-nvl-1g
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBLinkDown'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'conditionType: IBLinkDown\s+maxSampleAge'
+
+  - it: extended rules render only behind the explicit opt-in
+    set:
+      metricsCollector.extendedHealthChecks: true
     documentSelector:
       path: metadata.name
       value: gpu-monitoring-gpu-metrics-collector-a100
     asserts:
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'ecc-dbe-retired'
+          pattern: 'metricName: DCGM_FI_DEV_RETIRED_DBE'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'DCGM_FI_DEV_XID_ERRORS'
+          pattern: 'metricName: DCGM_FI_DEV_NVLINK_REPLAY_ERROR_COUNT_TOTAL'
       - matchRegex:
           path: data["rules.yaml"]
-          pattern: 'DCGM_FI_DEV_NVLINK_CRC_FLIT_ERROR_COUNT_TOTAL'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_port_link_downed_total'
-      - matchRegex:
-          path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_port_symbol_error_total'
+          pattern: 'metricName: node_memory_ECC_uncorrectable_total'
       - notMatchRegex:
           path: data["rules.yaml"]
-          pattern: 'metricName: node_infiniband_(link_downed|symbol_error)_total'
+          pattern: 'DCGM_FI_DEV_NVLINK_CRC_(FLIT|DATA)_ERROR_COUNT'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'DCGM_FI_DEV_(POWER|THERMAL)_VIOLATION'
+
+  - it: fail-closed metric coverage requires the extended checks opt-in
+    set:
+      metricsCollector.requireMetricCoverage: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'metricsCollector.requireMetricCoverage requires metricsCollector.extendedHealthChecks=true'
 
   - it: all raw XID gauges use exporter err_code labels and instant thresholds
     documentSelector:

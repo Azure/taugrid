@@ -1,0 +1,39 @@
+{{- if and .Values.functions.enabled .Values.functions.items.tauExpMetricEventRows.enabled }}
+apiVersion: adx-mon.azure.com/v1
+kind: Function
+metadata:
+  name: {{ include "adx-mon.fullname" . }}-tau-exp-metric-event-rows
+  namespace: {{ include "adx-mon.namespace" . }}
+  labels:
+    {{- include "adx-mon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: function
+spec:
+  database: {{ .Values.functions.items.tauExpMetricEventRows.database | quote }}
+  body: |
+    .create-or-alter function with (folder = 'Tau/experiments', docstring = 'Stable deduplicated v1 typed experiment metric events.', skipvalidation = 'true') TauExpMetricEventRows()
+    {
+      TauExpMetricEventsV1Dedup
+      | project
+          schema_version = tostring(schema_version),
+          event_id = tostring(event_id),
+          exported_at = todatetime(exported_at),
+          workspace_id = tostring(workspace_id),
+          cluster = tostring(cluster),
+          namespace = tostring(namespace),
+          source_store_id = tostring(source_store_id),
+          ['project'] = tostring(['project']),
+          experiment_id = tostring(experiment_id),
+          run_group_id = tostring(run_group_id),
+          run_id = tostring(run_id),
+          metric_name = tostring(metric_name),
+          step = tolong(step),
+          wall_time = todatetime(wall_time),
+          value = todouble(value),
+          unit = tostring(unit),
+          source = tostring(source),
+          split = tostring(split),
+          metric_file_id = tostring(metric_file_id),
+          metric_file_path = tostring(metric_file_path),
+          tags = todynamic(tags)
+    }
+{{- end }}

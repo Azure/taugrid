@@ -48,6 +48,21 @@ def _write_config_recorder(path: Path, recorder: Path, copied_config: Path) -> N
     path.chmod(0o755)
 
 
+def test_generated_run_config_includes_priority_tier() -> None:
+    generated = _workloads._generated_run_config(
+        {},
+        wrapper_path="tau_py_wrapper.py",
+        workload_kind="ray-train",
+        extra_scripts=[],
+        namespace="ray",
+        team="research",
+        preset=None,
+        priority_tier="priority",
+    )
+
+    assert generated["policy"]["priority_tier"] == "priority"
+
+
 def test_decorator_returns_handle():
     captured = {}
 

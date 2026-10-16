@@ -94,7 +94,7 @@ func TestTopologyKnobsAreReachableFromConfig(t *testing.T) {
 			Team:                     "research",
 			Lane:                     "training",
 			Mode:                     "fixed",
-			Topology:                 "single-node-nvlink",
+			Topology:                 "same-host",
 			Shape:                    "8xa100-80gb",
 			GPUClass:                 "a100-80gb",
 			Queue:                    "research-training",

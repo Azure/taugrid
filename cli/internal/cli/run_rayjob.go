@@ -21,6 +21,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/storage"
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/kube"
+	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -128,7 +129,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	warnings = append(warnings, topoWarnings...)
 
 	p := selected.Render
-	topologyHolder.GPUClass, _ = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
+	topologyHolder.GPUClass = runtopology.ResolveGPUClass(p, topologyHolder.GPUClass)
 	var runner *kube.Runner
 	if o.dryRun != "client" {
 		runner = kube.New(kubeContext)
@@ -197,13 +198,11 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	}
 	var metricsRuntime metricsoffload.Runtime
 	if o.metricsOffloadEnabled {
-		offload := o
-		offload.checkpointPath = runDispatchEnvValue(o.env, "TAU_RESUME_FROM")
-		metricsRuntime, err = resolveResolvedMetricsOffload(offload.resolvedDirectRunOptions, name, namespace, kubeContext, outputDir, outputWritable, annotations)
+		metricsRuntime, err = resolveResolvedMetricsOffload(o.resolvedDirectRunOptions, name, namespace, kubeContext, outputDir, outputWritable, annotations)
 		if err != nil {
 			return err
 		}
-		metricsRuntime.Tags = addLaunchTag(metricsRuntime.Tags, capture)
+		metricsRuntime.Tags = addStableMetricsLaunchTag(metricsRuntime.Tags, capture)
 		annotations[experiment.AnnotationExperimentSource] = "stellar"
 		annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
@@ -236,6 +235,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 			EnvSecrets:         envSecrets,
 			RedactSecrets:      o.dryRun == "client",
 			SecurityMode:       o.securityMode,
+			RDMA:               runconfig.NormalizeRDMA(o.rdma),
 			DataPVC:            dataPVC,
 			Profile:            p,
 			TopologyOptions:    topologyOptionsFromSubmit(topologyHolder),

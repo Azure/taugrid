@@ -38,9 +38,15 @@ spec:
       app: {{ $dsName }}
   template:
     metadata:
-      {{- if $.Values.metricsCollector.enabled }}
+      {{- if or $.Values.metricsCollector.enabled $nodeExporterEnabled }}
       annotations:
+        {{- if $nodeExporterEnabled }}
+        adx-mon/scrape: "true"
+        adx-mon/port: "9100"
+        {{- end }}
+        {{- if $.Values.metricsCollector.enabled }}
         checksum/metrics-collector-config: {{ include "gpu-monitoring.metricsCollectorConfig" (dict "root" $ "skuName" $skuName "sku" $sku) | sha256sum | quote }}
+        {{- end }}
       {{- end }}
       labels:
         app: {{ $dsName }}
@@ -399,6 +405,9 @@ spec:
             - --config=/etc/npd-metrics-collector/rules.yaml
             - --scrape-interval={{ $.Values.metricsCollector.scrapeInterval }}
             - --state-dir=/var/lib/npd-metrics-collector
+            {{- if $.Values.metricsCollector.requireMetricCoverage }}
+            - --require-metric-coverage
+            {{- end }}
           securityContext:
             runAsUser: 65532
             runAsGroup: 65532

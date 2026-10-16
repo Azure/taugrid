@@ -1,0 +1,1195 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package controller
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+)
+
+func TestTauClusterDiscoversManagedAzureGPURegion(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	node := topologyTestNode("managed-h200", map[string]string{
+		labelRegion:       "centralus",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
+	}, "azure:///subscriptions/test/resourceGroups/nodes/providers/Microsoft.Compute/virtualMachines/managed-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	recording := &resourceMutationRecordingClient{Client: c}
+	reconciler := &TauClusterReconciler{Client: recording}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	var gotNode corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: node.Name}, &gotNode); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	wantLabels := map[string]string{
+		labelkeys.LabelSite:          "azure-centralus",
+		labelkeys.LabelRegion:        "centralus",
+		labelkeys.LabelNetworkDomain: "azure-ib-centralus-research-standard_nd96isr_h200_v5",
+		labelkeys.LabelInfiniband:    "true",
+	}
+	if !nodeHasLabels(&gotNode, wantLabels) {
+		t.Fatalf("topology labels = %#v, want %#v", gotNode.Labels, wantLabels)
+	}
+
+	topology := newQueueObject(topologyGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: tauGPUNodeTopologyName}, topology); err != nil {
+		t.Fatalf("Get Topology: %v", err)
+	}
+	levels, found, err := unstructured.NestedSlice(topology.Object, "spec", "levels")
+	if err != nil || !found {
+		t.Fatalf("Topology levels: found=%v err=%v", found, err)
+	}
+	wantLevels := []any{
+		map[string]any{"nodeLabel": labelkeys.LabelSite},
+		map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
+		map[string]any{"nodeLabel": labelkeys.LabelAcceleratorDomain},
+		map[string]any{"nodeLabel": labelHostname},
+	}
+	if !reflect.DeepEqual(levels, wantLevels) {
+		t.Fatalf("Topology levels = %#v, want %#v", levels, wantLevels)
+	}
+
+	var gotCluster tauv1alpha1.TauCluster
+	if err := c.Get(ctx, client.ObjectKey{Name: cluster.Name}, &gotCluster); err != nil {
+		t.Fatalf("Get TauCluster: %v", err)
+	}
+	assertCondition(t, gotCluster.Status.Conditions, tauv1alpha1.ConditionQueuesReady, metav1.ConditionTrue)
+	assertCondition(t, gotCluster.Status.Conditions, tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionFalse)
+	if len(gotCluster.Status.ManagedResources) != 1 ||
+		gotCluster.Status.ManagedResources[0].Name != tauGPUNodeTopologyName {
+		t.Fatalf("managed resources = %#v", gotCluster.Status.ManagedResources)
+	}
+
+	recording.mutations = nil
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("second Reconcile() error = %v", err)
+	}
+	if len(recording.mutations) != 0 {
+		t.Fatalf("idempotent reconcile mutations = %v", recording.mutations)
+	}
+}
+
+func TestTauClusterReconcilesTorchrunHostSlotCapacity(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	gpuNode := topologyTestNode("gpu-node", map[string]string{
+		labelRegion:       "centralus",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
+	}, "azure:///subscriptions/test/resourceGroups/nodes/providers/Microsoft.Compute/virtualMachines/gpu-node")
+	gpuNode.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName): resource.MustParse("8"),
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, gpuNode).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}, &corev1.Node{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	var got corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, &got); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	resourceName := corev1.ResourceName(torchrunHostSlotResource)
+	if quantity := got.Status.Capacity[resourceName]; quantity.Cmp(resource.MustParse("1")) != 0 {
+		t.Fatalf("host-slot capacity = %s, want 1", quantity.String())
+	}
+	if quantity := got.Status.Allocatable[resourceName]; !quantity.IsZero() {
+		t.Fatalf("host-slot allocatable = %s before kubelet update, want 0", quantity.String())
+	}
+
+	got.Status.Allocatable = corev1.ResourceList{
+		resourceName: resource.MustParse("1"),
+	}
+	if err := c.Status().Update(ctx, &got); err != nil {
+		t.Fatalf("remove GPU allocatable capacity: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after GPU removal error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: gpuNode.Name}, &got); err != nil {
+		t.Fatalf("Get Node after GPU removal: %v", err)
+	}
+	if quantity := got.Status.Capacity[resourceName]; !quantity.IsZero() {
+		t.Fatalf("host-slot capacity after GPU removal = %s, want 0", quantity.String())
+	}
+}
+
+func TestTauClusterDiscoversMinimalGPUFlavorsAndCapacity(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	cluster.Spec.Queues = tauv1alpha1.TauClusterQueuesSpec{
+		Ownership:     tauv1alpha1.ClusterOwnershipManage,
+		ClusterQueues: []tauv1alpha1.TauClusterObjectReference{{Name: "jobqueue"}},
+	}
+	firstH200 := topologyTestNode("h200-a", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-a")
+	secondH200 := topologyTestNode("h200-b", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-b")
+	a100 := topologyTestNode("a100-a", map[string]string{
+		labelkeys.LabelGPUClass: "a100-80gb",
+	}, "azure:///a100-a")
+	setNodeGPUCapacity(firstH200, "8")
+	setNodeGPUCapacity(secondH200, "8")
+	setNodeGPUCapacity(a100, "4")
+	queue := topologyTestClusterQueue("jobqueue")
+
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, firstH200, secondH200, a100, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	for gpuClass, wantCapacity := range map[string]string{
+		"a100-80gb":  "4",
+		"h200-141gb": "16",
+	} {
+		name := discoveredGPUFlavorName(gpuClass)
+		flavor := newQueueObject(resourceFlavorGVK)
+		if err := c.Get(ctx, client.ObjectKey{Name: name}, flavor); err != nil {
+			t.Fatalf("Get ResourceFlavor %q: %v", name, err)
+		}
+		if got := flavor.GetLabels()[labelkeys.LabelGPUClass]; got != gpuClass {
+			t.Fatalf("ResourceFlavor %q gpu-class = %q, want %q", name, got, gpuClass)
+		}
+		if got, _, _ := unstructured.NestedString(flavor.Object, "spec", "topologyName"); got != tauGPUNodeTopologyName {
+			t.Fatalf("ResourceFlavor %q topologyName = %q, want %q", name, got, tauGPUNodeTopologyName)
+		}
+		nodeTaints, found, err := unstructured.NestedSlice(flavor.Object, "spec", "nodeTaints")
+		if err != nil || !found {
+			t.Fatalf("ResourceFlavor %q nodeTaints: found=%v err=%v", name, found, err)
+		}
+		wantNodeTaints := []any{
+			map[string]any{
+				"key":    "sku",
+				"value":  "gpu",
+				"effect": string(corev1.TaintEffectNoSchedule),
+			},
+		}
+		if !reflect.DeepEqual(nodeTaints, wantNodeTaints) {
+			t.Fatalf("ResourceFlavor %q nodeTaints = %#v, want %#v", name, nodeTaints, wantNodeTaints)
+		}
+		if got := clusterQueueGPUQuota(t, c, "jobqueue", name); got != wantCapacity {
+			t.Fatalf("ClusterQueue flavor %q GPU quota = %q, want %q", name, got, wantCapacity)
+		}
+		wantSlots := map[string]string{"a100-80gb": "1", "h200-141gb": "2"}[gpuClass]
+		if got := clusterQueueResourceQuota(t, c, "jobqueue", name, torchrunHostSlotResource); got != wantSlots {
+			t.Fatalf("ClusterQueue flavor %q host-slot quota = %q, want %q", name, got, wantSlots)
+		}
+	}
+	if got := clusterQueueResourceQuota(t, c, "jobqueue", "taugrid-default-cpu", torchrunHostSlotResource); got != "0" {
+		t.Fatalf("CPU flavor host-slot quota = %q, want 0", got)
+	}
+
+	var flavors unstructured.UnstructuredList
+	flavors.SetGroupVersionKind(resourceFlavorGVK.GroupVersion().WithKind("ResourceFlavorList"))
+	if err := c.List(ctx, &flavors); err != nil {
+		t.Fatalf("List ResourceFlavors: %v", err)
+	}
+	if len(flavors.Items) != 2 {
+		t.Fatalf("ResourceFlavors = %d, want one per GPU class: %#v", len(flavors.Items), flavors.Items)
+	}
+}
+
+func TestTauClusterDiscoversGPUCapacityAsNodesJoin(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	queue := topologyTestClusterQueue("jobqueue")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}, &corev1.Node{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+	flavorName := discoveredGPUFlavorName("h200-141gb")
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() before GPU Nodes join error = %v", err)
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); !apierrors.IsNotFound(err) {
+		t.Fatalf("ResourceFlavor exists before GPU capacity is allocatable: %v", err)
+	}
+
+	firstNode := topologyTestNode("h200-a", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-a")
+	if err := c.Create(ctx, firstNode); err != nil {
+		t.Fatalf("Create joining Node: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() before Node GPU capacity is published error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); !apierrors.IsNotFound(err) {
+		t.Fatalf("ResourceFlavor exists for Node without allocatable GPU capacity: %v", err)
+	}
+
+	var currentFirstNode corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: firstNode.Name}, &currentFirstNode); err != nil {
+		t.Fatalf("Get joining Node before publishing capacity: %v", err)
+	}
+	setNodeGPUCapacity(&currentFirstNode, "8")
+	if err := c.Status().Update(ctx, &currentFirstNode); err != nil {
+		t.Fatalf("Publish joining Node GPU capacity: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after Node GPU capacity is published error = %v", err)
+	}
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
+		t.Fatalf("GPU quota after first Node joins = %q, want 8", got)
+	}
+
+	secondNode := topologyTestNode("h200-b", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-b")
+	setNodeGPUCapacity(secondNode, "8")
+	if err := c.Create(ctx, secondNode); err != nil {
+		t.Fatalf("Create second joining Node: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after second Node joins error = %v", err)
+	}
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "16" {
+		t.Fatalf("GPU quota after second Node joins = %q, want 16", got)
+	}
+}
+
+func TestTauClusterDiscoveredGPUQuotaIsMonotonicAndNotPruned(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	cluster.Spec.Queues = tauv1alpha1.TauClusterQueuesSpec{
+		Ownership:     tauv1alpha1.ClusterOwnershipManage,
+		ClusterQueues: []tauv1alpha1.TauClusterObjectReference{{Name: "jobqueue"}},
+	}
+	node := topologyTestNode("h200-a", map[string]string{
+		labelkeys.LabelGPUClass: "h200-141gb",
+	}, "azure:///h200-a")
+	setNodeGPUCapacity(node, "8")
+	queue := topologyTestClusterQueue("jobqueue")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("initial Reconcile() error = %v", err)
+	}
+	flavorName := discoveredGPUFlavorName("h200-141gb")
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
+		t.Fatalf("initial GPU quota = %q, want 8", got)
+	}
+
+	if err := c.Delete(ctx, node); err != nil {
+		t.Fatalf("Delete Node: %v", err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after scale-to-zero error = %v", err)
+	}
+	if got := clusterQueueGPUQuota(t, c, "jobqueue", flavorName); got != "8" {
+		t.Fatalf("GPU quota after scale-to-zero = %q, want persisted 8", got)
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: flavorName}, flavor); err != nil {
+		t.Fatalf("ResourceFlavor was pruned after scale-to-zero: %v", err)
+	}
+}
+
+func TestTauClusterIgnoresClusterQueueWithoutDiscoveryLabel(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	node := topologyTestNode("h200-a", nil, "azure:///h200-a")
+	setNodeGPUCapacity(node, "8")
+	queue := topologyTestClusterQueue("jobqueue")
+	queue.SetLabels(nil)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, queue).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	err := c.Get(ctx, client.ObjectKey{Name: discoveredGPUFlavorName("h200-141gb")}, flavor)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("unlabeled ClusterQueue triggered ResourceFlavor discovery: %v", err)
+	}
+}
+
+func TestTauClusterDiscoversAzureFlexInfiniBandDomain(t *testing.T) {
+	cluster := topologyTestCluster()
+	node := topologyTestNode("flex-h200", map[string]string{
+		labelAKSCloud:          "azure",
+		labelAKSRegion:         "eastus2",
+		labelAzureManaged:      "false",
+		labelFlexSite:          "research-site",
+		labelFlexNetworkDomain: "research-fabric",
+	}, "")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	var got corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	wantLabels := map[string]string{
+		labelkeys.LabelSite:          "azure-site-research-site",
+		labelkeys.LabelRegion:        "eastus2",
+		labelkeys.LabelNetworkDomain: "azure-fabric-research-fabric",
+		labelkeys.LabelInfiniband:    "true",
+	}
+	if !nodeHasLabels(&got, wantLabels) {
+		t.Fatalf("topology labels = %#v, want %#v", got.Labels, wantLabels)
+	}
+}
+
+func TestTauClusterIsolatesAzureFlexNodesWithoutInfiniBand(t *testing.T) {
+	cluster := topologyTestCluster()
+	first := topologyTestNode("flex-a", map[string]string{
+		labelAKSCloud:     "azure",
+		labelAKSRegion:    "westus3",
+		labelAzureManaged: "false",
+		labelFlexSite:     "batch-site",
+	}, "")
+	second := topologyTestNode("flex-b", map[string]string{
+		labelAKSCloud:     "azure",
+		labelAKSRegion:    "westus3",
+		labelAzureManaged: "false",
+		labelFlexSite:     "batch-site",
+	}, "")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, first, second).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	domains := map[string]string{}
+	for _, name := range []string{first.Name, second.Name} {
+		var got corev1.Node
+		if err := c.Get(context.Background(), client.ObjectKey{Name: name}, &got); err != nil {
+			t.Fatalf("Get Node %q: %v", name, err)
+		}
+		if got.Labels[labelkeys.LabelSite] != "azure-site-batch-site" ||
+			got.Labels[labelkeys.LabelRegion] != "westus3" ||
+			got.Labels[labelkeys.LabelInfiniband] != "false" {
+			t.Fatalf("Node %q topology labels = %#v", name, got.Labels)
+		}
+		domains[name] = got.Labels[labelkeys.LabelNetworkDomain]
+	}
+	if domains[first.Name] == domains[second.Name] ||
+		domains[first.Name] == "" || domains[second.Name] == "" {
+		t.Fatalf("non-IB network domains = %#v, want distinct singleton domains", domains)
+	}
+}
+
+func TestTauClusterAllowsAzureFlexSiteWithoutFabric(t *testing.T) {
+	cluster := topologyTestCluster()
+	flex := topologyTestNode("flex-h200", map[string]string{
+		labelAKSCloud:     "azure",
+		labelAKSRegion:    "eastus2",
+		labelAzureManaged: "false",
+		labelFlexSite:     "research-site",
+	}, "")
+	valid := topologyTestNode("aws-cpu", map[string]string{
+		labelAKSCloud:  "aws",
+		labelAKSRegion: "us-east-1",
+	}, "aws:///us-east-1/i-test")
+	delete(valid.Labels, labelkeys.LabelGPUClass)
+	topology := desiredTauGPUTopology()
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, flex, valid, topology).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	var gotValid corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: valid.Name}, &gotValid); err != nil {
+		t.Fatalf("Get valid Node: %v", err)
+	}
+	if gotValid.Labels[labelkeys.LabelSite] == "" ||
+		gotValid.Labels[labelkeys.LabelNetworkDomain] == "" {
+		t.Fatalf("Flex site reconciliation blocked valid Node reconciliation: %#v", gotValid.Labels)
+	}
+	var gotFlex corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: flex.Name}, &gotFlex); err != nil {
+		t.Fatalf("Get Flex Node: %v", err)
+	}
+	if gotFlex.Labels[labelkeys.LabelSite] != "azure-site-research-site" ||
+		gotFlex.Labels[labelkeys.LabelNetworkDomain] != isolatedTopologyLabel("isolated-domain", flex.Name) ||
+		gotFlex.Labels[labelkeys.LabelInfiniband] != "false" {
+		t.Fatalf("Flex Node without a fabric was not isolated within its site: %#v", gotFlex.Labels)
+	}
+}
+
+func TestTauClusterRewritesStaleTopologyLabelsOnNonAzureNode(t *testing.T) {
+	cluster := topologyTestCluster()
+	node := topologyTestNode("aws-h200", map[string]string{
+		labelAKSCloud:                "aws",
+		labelkeys.LabelSite:          "azure-eastus2",
+		labelkeys.LabelRegion:        "eastus2",
+		labelkeys.LabelNetworkDomain: "azure-eastus2",
+		labelkeys.LabelInfiniband:    "true",
+	}, "aws:///us-east-1/i-test")
+	topology := desiredTauGPUTopology()
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, topology).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+
+	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	var got corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	want := map[string]string{
+		labelkeys.LabelSite:          isolatedTopologyLabel("isolated-site", node.Name),
+		labelkeys.LabelRegion:        isolatedTopologyLabel("unplaced", node.Name),
+		labelkeys.LabelNetworkDomain: isolatedTopologyLabel("isolated-domain", node.Name),
+		labelkeys.LabelInfiniband:    "false",
+	}
+	if !nodeHasLabels(&got, want) {
+		t.Fatalf("topology labels = %#v, want %#v", got.Labels, want)
+	}
+}
+
+func TestTauClusterReportsForeignTopologyOwnership(t *testing.T) {
+	cluster := topologyTestCluster()
+	node := topologyTestNode("managed-h200", map[string]string{labelRegion: "eastus2"}, "azure:///managed-h200")
+	foreign := desiredTauGPUTopology()
+	foreign.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "gitops"})
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node, foreign).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	recording := &resourceMutationRecordingClient{Client: c}
+	reconciler := &TauClusterReconciler{Client: recording}
+
+	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	var got tauv1alpha1.TauCluster
+	if err := c.Get(context.Background(), client.ObjectKey{Name: cluster.Name}, &got); err != nil {
+		t.Fatalf("Get TauCluster: %v", err)
+	}
+	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionOwnershipConflict, metav1.ConditionTrue)
+	if got.Status.Phase != tauv1alpha1.ClusterPhaseDegraded {
+		t.Fatalf("phase = %q, want %q", got.Status.Phase, tauv1alpha1.ClusterPhaseDegraded)
+	}
+	var gotNode corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &gotNode); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	if hasManagedTopologyLabels(&gotNode) {
+		t.Fatalf("foreign Topology conflict mutated Node labels: %#v", gotNode.Labels)
+	}
+}
+
+func TestAzureFlexDomainUsesValidLabelForLongSiteName(t *testing.T) {
+	site := strings.Repeat("a", validation.DNS1123LabelMaxLength)
+	node := topologyTestNode("flex-h200", map[string]string{
+		labelAKSCloud:          "azure",
+		labelAKSRegion:         "eastus2",
+		labelAzureManaged:      "false",
+		labelFlexSite:          site,
+		labelFlexNetworkDomain: site,
+	}, "")
+	labels, err := desiredNodeTopologyLabels(node)
+	if err != nil {
+		t.Fatalf("desiredNodeTopologyLabels() error = %v", err)
+	}
+	domain := labels[labelkeys.LabelNetworkDomain]
+	if problems := validation.IsValidLabelValue(domain); len(problems) > 0 {
+		t.Fatalf("network domain %q is invalid: %v", domain, problems)
+	}
+	if domain != networkDomainLabel("azure-fabric", site) {
+		t.Fatalf("network domain = %q, want deterministic helper result", domain)
+	}
+}
+
+func TestTauClusterReconcilesSampleFlexCluster(t *testing.T) {
+	cluster := topologyTestCluster()
+	ibNodes := []*corev1.Node{
+		sampleFlexNode("flex-a100-a", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", "azure-a100"),
+		sampleFlexNode("flex-a100-b", "Standard_ND96amsr_A100_v4", "a100-80gb", "research-flex-eastus2", "azure-a100"),
+		sampleFlexNode("flex-h100-a", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", "azure-h100"),
+		sampleFlexNode("flex-h100-b", "Standard_ND96isr_H100_v5", "h100-80gb", "research-flex-eastus2", "azure-h100"),
+		sampleFlexNode("flex-h200-a", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", "azure-h200"),
+		sampleFlexNode("flex-h200-b", "Standard_ND96isr_H200_v5", "h200-141gb", "research-flex-eastus2", "azure-h200"),
+	}
+	secondSiteH200s := []*corev1.Node{
+		sampleNebiusFlexNode("flex-h200-nebius-a", "gpu-h200-sxm", "partner-flex-finland"),
+		sampleNebiusFlexNode("flex-h200-nebius-b", "gpu-h200-sxm", "partner-flex-finland"),
+	}
+	nonIB := sampleFlexNode("flex-a10", "Standard_NV36ads_A10_v5", "a10-24gb", "batch-flex-eastus2", "")
+
+	objects := []client.Object{cluster, nonIB}
+	for _, node := range ibNodes {
+		objects = append(objects, node)
+	}
+	for _, node := range secondSiteH200s {
+		objects = append(objects, node)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(objects...).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	recording := &resourceMutationRecordingClient{Client: c}
+	reconciler := &TauClusterReconciler{Client: recording}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	wantDomains := map[string]string{
+		"a100-80gb":  "azure-fabric-azure-a100",
+		"h100-80gb":  "azure-fabric-azure-h100",
+		"h200-141gb": "azure-fabric-azure-h200",
+	}
+	for _, node := range ibNodes {
+		var got corev1.Node
+		if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
+			t.Fatalf("Get Node %q: %v", node.Name, err)
+		}
+		want := map[string]string{
+			labelkeys.LabelSite:          "azure-site-research-flex-eastus2",
+			labelkeys.LabelRegion:        "eastus2",
+			labelkeys.LabelNetworkDomain: wantDomains[node.Labels[labelkeys.LabelGPUClass]],
+			labelkeys.LabelInfiniband:    "true",
+		}
+		if !nodeHasLabels(&got, want) {
+			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, want)
+		}
+		if got.Labels[labelkeys.LabelGPUClass] != node.Labels[labelkeys.LabelGPUClass] {
+			t.Fatalf("Node %q GPU class = %q, want %q", node.Name, got.Labels[labelkeys.LabelGPUClass], node.Labels[labelkeys.LabelGPUClass])
+		}
+	}
+	wantSecondSite := map[string]string{
+		labelkeys.LabelSite:          "nebius-site-partner-flex-finland",
+		labelkeys.LabelRegion:        "eu-north1",
+		labelkeys.LabelNetworkDomain: "nebius-fabric-nebius-h200",
+		labelkeys.LabelInfiniband:    "true",
+	}
+	for _, node := range secondSiteH200s {
+		var got corev1.Node
+		if err := c.Get(context.Background(), client.ObjectKey{Name: node.Name}, &got); err != nil {
+			t.Fatalf("Get Node %q: %v", node.Name, err)
+		}
+		if !nodeHasLabels(&got, wantSecondSite) {
+			t.Fatalf("Node %q labels = %#v, want %#v", node.Name, got.Labels, wantSecondSite)
+		}
+	}
+	if wantDomains["h200-141gb"] == wantSecondSite[labelkeys.LabelNetworkDomain] {
+		t.Fatal("H200 Nodes in different sites received the same network domain")
+	}
+	var gotNonIB corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: nonIB.Name}, &gotNonIB); err != nil {
+		t.Fatalf("Get Node %q: %v", nonIB.Name, err)
+	}
+	if gotNonIB.Labels[labelkeys.LabelSite] != "azure-site-batch-flex-eastus2" ||
+		gotNonIB.Labels[labelkeys.LabelInfiniband] != "false" ||
+		gotNonIB.Labels[labelkeys.LabelNetworkDomain] != isolatedTopologyLabel("isolated-domain", nonIB.Name) {
+		t.Fatalf("non-IB Flex labels = %#v", gotNonIB.Labels)
+	}
+	topology := newQueueObject(topologyGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Name: tauGPUNodeTopologyName}, topology); err != nil {
+		t.Fatalf("Get Topology: %v", err)
+	}
+	levels, found, err := unstructured.NestedSlice(topology.Object, "spec", "levels")
+	if err != nil || !found {
+		t.Fatalf("Topology levels: found=%v err=%v", found, err)
+	}
+	wantLevels := []any{
+		map[string]any{"nodeLabel": labelkeys.LabelSite},
+		map[string]any{"nodeLabel": labelkeys.LabelNetworkDomain},
+		map[string]any{"nodeLabel": labelkeys.LabelAcceleratorDomain},
+		map[string]any{"nodeLabel": labelHostname},
+	}
+	if !reflect.DeepEqual(levels, wantLevels) {
+		t.Fatalf("Topology levels = %#v, want %#v", levels, wantLevels)
+	}
+
+	recording.mutations = nil
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("second Reconcile() error = %v", err)
+	}
+	if len(recording.mutations) != 0 {
+		t.Fatalf("idempotent Flex cluster reconcile mutations = %v", recording.mutations)
+	}
+}
+
+func sampleFlexNode(name, sku, gpuClass, site, networkDomain string) *corev1.Node {
+	node := topologyTestNode(name, map[string]string{
+		labelAKSCloud:                           "azure",
+		labelAKSRegion:                          "eastus2",
+		labelAzureManaged:                       "false",
+		labelStretchManaged:                     "true",
+		"kubernetes.azure.com/cluster":          "flex-research",
+		"node.kubernetes.io/instance-type":      sku,
+		"aks.azure.com/instance-type":           sku,
+		labelFlexSite:                           site,
+		"kubernetes.azure.com/agentpool":        "research-gpu",
+		"kubernetes.azure.com/nodepool-type":    "FlexNodes",
+		"kubernetes.azure.com/mode":             "user",
+		"kubernetes.azure.com/os-sku":           "Ubuntu",
+		"kubernetes.azure.com/os-sku-effective": "Ubuntu2404",
+	}, "")
+	if networkDomain != "" {
+		node.Labels[labelFlexNetworkDomain] = networkDomain
+	}
+	node.Labels[labelkeys.LabelGPUClass] = gpuClass
+	return node
+}
+
+func sampleNebiusFlexNode(name, instanceType, site string) *corev1.Node {
+	node := topologyTestNode(name, map[string]string{
+		labelAKSCloud:                        "nebius",
+		labelAKSRegion:                       "eu-north1",
+		labelAzureManaged:                    "false",
+		labelStretchManaged:                  "true",
+		"kubernetes.azure.com/cluster":       "flex-research",
+		"node.kubernetes.io/instance-type":   instanceType,
+		"aks.azure.com/instance-type":        instanceType,
+		labelFlexSite:                        site,
+		labelFlexNetworkDomain:               "nebius-h200",
+		"kubernetes.azure.com/nodepool-type": "FlexNodes",
+	}, "")
+	node.Labels[labelkeys.LabelGPUClass] = "h200-141gb"
+	return node
+}
+
+func TestDesiredNodeTopologyLabelsEdgeCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		node      *corev1.Node
+		want      map[string]string
+		wantError bool
+	}{
+		{
+			name: "managed Azure ND pool derives shared fabric",
+			node: topologyTestNode("azure-nd-a", map[string]string{
+				labelRegion:       "eastus2",
+				azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+				labelAKSAgentPool: "research",
+			}, "azure:///azure-nd-a"),
+			want: map[string]string{
+				labelkeys.LabelSite:              "azure-eastus2",
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     "azure-ib-eastus2-research-standard_nd96isr_h200_v5",
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-nd-a"),
+				labelkeys.LabelInfiniband:        "true",
+			},
+		},
+		{
+			name: "managed Azure ND without agent pool is isolated",
+			node: topologyTestNode("azure-nd-no-pool", map[string]string{
+				labelRegion:      "eastus2",
+				azureVMSizeLabel: "Standard_ND96isr_H200_v5",
+			}, "azure:///azure-nd-no-pool"),
+			want: map[string]string{
+				labelkeys.LabelSite:              "azure-eastus2",
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "azure-nd-no-pool"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-nd-no-pool"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+		},
+		{
+			name: "managed Azure non-ND GPU is isolated",
+			node: topologyTestNode("azure-a10", map[string]string{
+				labelRegion:       "eastus2",
+				azureVMSizeLabel:  "Standard_NV36ads_A10_v5",
+				labelAKSAgentPool: "batch",
+			}, "azure:///azure-a10"),
+			want: map[string]string{
+				labelkeys.LabelSite:              "azure-eastus2",
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "azure-a10"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-a10"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+		},
+		{
+			name: "provider namespaces explicit site and fabric",
+			node: topologyTestNode("nebius-h200", map[string]string{
+				labelAKSCloud:          "nebius",
+				labelAKSRegion:         "eu-north1",
+				labelFlexSite:          "research",
+				labelFlexNetworkDomain: "h200-fabric",
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:              "nebius-site-research",
+				labelkeys.LabelRegion:            "eu-north1",
+				labelkeys.LabelNetworkDomain:     "nebius-fabric-h200-fabric",
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "nebius-h200"),
+				labelkeys.LabelInfiniband:        "true",
+			},
+		},
+		{
+			name: "same explicit names remain provider isolated",
+			node: topologyTestNode("aws-h200", map[string]string{
+				labelAKSCloud:          "aws",
+				labelAKSRegion:         "us-east-1",
+				labelFlexSite:          "research",
+				labelFlexNetworkDomain: "h200-fabric",
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:              "aws-site-research",
+				labelkeys.LabelRegion:            "us-east-1",
+				labelkeys.LabelNetworkDomain:     "aws-fabric-h200-fabric",
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "aws-h200"),
+				labelkeys.LabelInfiniband:        "true",
+			},
+		},
+		{
+			name: "external Azure without site fails closed",
+			node: topologyTestNode("azure-flex-missing-site", map[string]string{
+				labelAKSCloud:     "azure",
+				labelAKSRegion:    "eastus2",
+				labelAzureManaged: "false",
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "azure-flex-missing-site"),
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "azure-flex-missing-site"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "azure-flex-missing-site"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid explicit fabric fails closed",
+			node: topologyTestNode("invalid-fabric", map[string]string{
+				labelAKSCloud:          "nebius",
+				labelAKSRegion:         "eu-north1",
+				labelFlexSite:          "research",
+				labelFlexNetworkDomain: strings.Repeat("x", validation.LabelValueMaxLength+1),
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "invalid-fabric"),
+				labelkeys.LabelRegion:            "eu-north1",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "invalid-fabric"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "invalid-fabric"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid explicit accelerator domain fails closed",
+			node: topologyTestNode("invalid-accelerator", map[string]string{
+				labelAKSCloud:              "azure",
+				labelAKSRegion:             "eastus2",
+				labelFlexSite:              "research",
+				labelFlexAcceleratorDomain: strings.Repeat("x", validation.LabelValueMaxLength+1),
+			}, ""),
+			want: map[string]string{
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "invalid-accelerator"),
+				labelkeys.LabelRegion:            "eastus2",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "invalid-accelerator"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "invalid-accelerator"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+			wantError: true,
+		},
+		{
+			name: "unknown provider without topology is isolated",
+			node: topologyTestNode("unknown-provider", map[string]string{
+				labelRegion: "moon-1",
+			}, "custom:///unknown-provider"),
+			want: map[string]string{
+				labelkeys.LabelSite:              isolatedTopologyLabel("isolated-site", "unknown-provider"),
+				labelkeys.LabelRegion:            "moon-1",
+				labelkeys.LabelNetworkDomain:     isolatedTopologyLabel("isolated-domain", "unknown-provider"),
+				labelkeys.LabelAcceleratorDomain: isolatedTopologyLabel("isolated-accelerator", "unknown-provider"),
+				labelkeys.LabelInfiniband:        "false",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := desiredNodeTopologyLabels(tt.node)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("desiredNodeTopologyLabels() error = %v, wantError %v", err, tt.wantError)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("desiredNodeTopologyLabels() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAcceleratorDomainsRequireProviderAuthority(t *testing.T) {
+	managedA := topologyTestNode("managed-gb200-a", map[string]string{
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_GB200_v6",
+		labelAKSAgentPool: "nvl72",
+	}, "azure:///managed-gb200-a")
+	managedB := topologyTestNode("managed-gb200-b", map[string]string{
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_GB200_v6",
+		labelAKSAgentPool: "nvl72",
+	}, "azure:///managed-gb200-b")
+
+	labelsA, err := desiredNodeTopologyLabels(managedA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelsB, err := desiredNodeTopologyLabels(managedB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if labelsA[labelkeys.LabelAcceleratorDomain] == labelsB[labelkeys.LabelAcceleratorDomain] {
+		t.Fatalf("matching GPU models must not imply a shared accelerator domain: %#v %#v", labelsA, labelsB)
+	}
+
+	providerA := topologyTestNode("provider-gb200", map[string]string{
+		labelAKSCloud:              "azure",
+		labelAKSRegion:             "eastus2",
+		labelAzureManaged:          "false",
+		labelFlexSite:              "research",
+		labelFlexNetworkDomain:     "fabric-a",
+		labelFlexAcceleratorDomain: "nvl72-01",
+		azureVMSizeLabel:           "Standard_ND96isr_GB200_v6",
+	}, "")
+	providerB := topologyTestNode("provider-gb300", map[string]string{
+		labelAKSCloud:              "azure",
+		labelAKSRegion:             "eastus2",
+		labelAzureManaged:          "false",
+		labelFlexSite:              "research",
+		labelFlexNetworkDomain:     "fabric-a",
+		labelFlexAcceleratorDomain: "nvl72-01",
+		azureVMSizeLabel:           "Standard_ND96isr_GB300_v6",
+	}, "")
+
+	providerLabelsA, err := desiredNodeTopologyLabels(providerA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerLabelsB, err := desiredNodeTopologyLabels(providerB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "azure-accelerator-nvl72-01"
+	if providerLabelsA[labelkeys.LabelAcceleratorDomain] != want ||
+		providerLabelsB[labelkeys.LabelAcceleratorDomain] != want {
+		t.Fatalf("provider accelerator labels = %q, %q, want %q", providerLabelsA[labelkeys.LabelAcceleratorDomain], providerLabelsB[labelkeys.LabelAcceleratorDomain], want)
+	}
+}
+
+func TestManagedAzureFabricIdentityBoundaries(t *testing.T) {
+	node := func(name, region, pool, sku string) *corev1.Node {
+		return topologyTestNode(name, map[string]string{
+			labelRegion:       region,
+			labelAKSAgentPool: pool,
+			azureVMSizeLabel:  sku,
+		}, "azure:///"+name)
+	}
+	domain := func(t *testing.T, node *corev1.Node) string {
+		t.Helper()
+		labels, err := desiredNodeTopologyLabels(node)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if labels[labelkeys.LabelInfiniband] != "true" {
+			t.Fatalf("Node %q was not classified as InfiniBand: %#v", node.Name, labels)
+		}
+		return labels[labelkeys.LabelNetworkDomain]
+	}
+
+	base := domain(t, node("base", "eastus2", "research", "Standard_ND96isr_H200_v5"))
+	if got := domain(t, node("peer", "eastus2", "research", "Standard_ND96isr_H200_v5")); got != base {
+		t.Fatalf("identical region/pool/SKU domains differ: %q != %q", got, base)
+	}
+	for _, tt := range []struct {
+		name   string
+		region string
+		pool   string
+		sku    string
+	}{
+		{name: "different region", region: "centralus", pool: "research", sku: "Standard_ND96isr_H200_v5"},
+		{name: "different pool", region: "eastus2", pool: "training", sku: "Standard_ND96isr_H200_v5"},
+		{name: "different SKU", region: "eastus2", pool: "research", sku: "Standard_ND96isr_H100_v5"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := domain(t, node(tt.name, tt.region, tt.pool, tt.sku)); got == base {
+				t.Fatalf("changed fabric identity reused domain %q", got)
+			}
+		})
+	}
+}
+
+func TestTauClusterDowngradesManagedAzureNodeWhenSKUIsNotNDCapable(t *testing.T) {
+	ctx := context.Background()
+	cluster := topologyTestCluster()
+	node := topologyTestNode("managed-gpu", map[string]string{
+		labelRegion:       "eastus2",
+		azureVMSizeLabel:  "Standard_ND96isr_H200_v5",
+		labelAKSAgentPool: "research",
+	}, "azure:///managed-gpu")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(cluster, node).
+		WithStatusSubresource(&tauv1alpha1.TauCluster{}).
+		Build()
+	reconciler := &TauClusterReconciler{Client: c}
+	request := ctrl.Request{NamespacedName: types.NamespacedName{Name: cluster.Name}}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("initial Reconcile() error = %v", err)
+	}
+	var changed corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: node.Name}, &changed); err != nil {
+		t.Fatalf("Get Node: %v", err)
+	}
+	changed.Labels[azureVMSizeLabel] = "Standard_NV36ads_A10_v5"
+	if err := c.Update(ctx, &changed); err != nil {
+		t.Fatalf("change GPU SKU: %v", err)
+	}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("downgrade Reconcile() error = %v", err)
+	}
+	var got corev1.Node
+	if err := c.Get(ctx, client.ObjectKey{Name: node.Name}, &got); err != nil {
+		t.Fatalf("Get downgraded Node: %v", err)
+	}
+	if got.Labels[labelkeys.LabelSite] != "azure-eastus2" ||
+		got.Labels[labelkeys.LabelNetworkDomain] != isolatedTopologyLabel("isolated-domain", node.Name) ||
+		got.Labels[labelkeys.LabelInfiniband] != "false" {
+		t.Fatalf("downgraded topology labels = %#v", got.Labels)
+	}
+}
+
+func TestAzureNodeDetectionUsesAuthoritativeIdentityLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   map[string]string
+		provider string
+		azure    bool
+		external bool
+	}{
+		{
+			name:     "cloud label",
+			labels:   map[string]string{labelAKSCloud: "AZURE"},
+			azure:    true,
+			external: false,
+		},
+		{
+			name:     "provider ID",
+			provider: "AZURE:///subscriptions/test",
+			azure:    true,
+			external: false,
+		},
+		{
+			name:     "managed AKS marker",
+			labels:   map[string]string{labelAzureManagedCluster: "cluster"},
+			azure:    true,
+			external: false,
+		},
+		{
+			name:     "external managed marker",
+			labels:   map[string]string{labelAKSCloud: "azure", labelAzureManaged: "FALSE"},
+			azure:    true,
+			external: true,
+		},
+		{
+			name:     "stretch managed marker",
+			labels:   map[string]string{labelAKSCloud: "azure", labelStretchManaged: "TRUE"},
+			azure:    true,
+			external: true,
+		},
+		{
+			name:     "non Azure cloud overrides provider ID",
+			labels:   map[string]string{labelAKSCloud: "aws", labelAzureManagedCluster: "cluster"},
+			provider: "azure:///subscriptions/test",
+			azure:    false,
+			external: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Labels: tt.labels},
+				Spec:       corev1.NodeSpec{ProviderID: tt.provider},
+			}
+			if got := isAzureNode(node); got != tt.azure {
+				t.Fatalf("isAzureNode() = %v, want %v", got, tt.azure)
+			}
+			if got := isExternalAzureNode(node); got != tt.external {
+				t.Fatalf("isExternalAzureNode() = %v, want %v", got, tt.external)
+			}
+		})
+	}
+}
+
+func topologyTestCluster() *tauv1alpha1.TauCluster {
+	return &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			ManagementMode: tauv1alpha1.ClusterManagementModeReconcile,
+		},
+	}
+}
+
+func topologyTestNode(name string, labels map[string]string, providerID string) *corev1.Node {
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[labelHostname] = name
+	if labels[labelkeys.LabelGPUClass] == "" {
+		labels[labelkeys.LabelGPUClass] = "h200-141gb"
+	}
+	labels["kubernetes.io/os"] = "linux"
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		Spec:       corev1.NodeSpec{ProviderID: providerID},
+	}
+}
+
+func setNodeGPUCapacity(node *corev1.Node, count string) {
+	node.Status.Capacity = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName):    resource.MustParse(count),
+		corev1.ResourceName(torchrunHostSlotResource): resource.MustParse("1"),
+	}
+	node.Status.Allocatable = corev1.ResourceList{
+		corev1.ResourceName(nvidiaGPUResourceName):    resource.MustParse(count),
+		corev1.ResourceName(torchrunHostSlotResource): resource.MustParse("1"),
+	}
+}
+
+func topologyTestClusterQueue(name string) *unstructured.Unstructured {
+	queue := newQueueObject(clusterQueueGVK)
+	queue.SetName(name)
+	queue.SetLabels(map[string]string{labelDiscoverGPUFlavors: "true"})
+	queue.Object["spec"] = map[string]any{
+		"resourceGroups": []any{
+			map[string]any{
+				"coveredResources": []any{"cpu", "memory", nvidiaGPUResourceName},
+				"flavors": []any{
+					map[string]any{
+						"name": "taugrid-default-cpu",
+						"resources": []any{
+							map[string]any{"name": "cpu", "nominalQuota": "100000"},
+							map[string]any{"name": "memory", "nominalQuota": "100Ti"},
+							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "0"},
+						},
+					},
+				},
+			},
+		},
+	}
+	return queue
+}
+
+func clusterQueueGPUQuota(
+	t *testing.T,
+	c client.Client,
+	queueName string,
+	flavorName string,
+) string {
+	return clusterQueueResourceQuota(t, c, queueName, flavorName, nvidiaGPUResourceName)
+}
+
+func clusterQueueResourceQuota(
+	t *testing.T,
+	c client.Client,
+	queueName string,
+	flavorName string,
+	resourceName string,
+) string {
+	t.Helper()
+	queue := newQueueObject(clusterQueueGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Name: queueName}, queue); err != nil {
+		t.Fatalf("Get ClusterQueue %q: %v", queueName, err)
+	}
+	groups, _, _ := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
+	for _, rawGroup := range groups {
+		group, _ := rawGroup.(map[string]any)
+		flavors, _, _ := unstructured.NestedSlice(group, "flavors")
+		for _, rawFlavor := range flavors {
+			flavor, _ := rawFlavor.(map[string]any)
+			if flavor["name"] != flavorName {
+				continue
+			}
+			resources, _, _ := unstructured.NestedSlice(flavor, "resources")
+			for _, rawResource := range resources {
+				resourceQuota, _ := rawResource.(map[string]any)
+				if resourceQuota["name"] == resourceName {
+					return fmt.Sprint(resourceQuota["nominalQuota"])
+				}
+			}
+		}
+	}
+	t.Fatalf("ClusterQueue %q has no %s quota for flavor %q", queueName, resourceName, flavorName)
+	return ""
+}

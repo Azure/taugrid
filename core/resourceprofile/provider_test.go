@@ -305,6 +305,56 @@ func TestProviderImplicitSelectionRequiresUniqueReadyApplicableMatch(t *testing.
 		}
 	})
 
+	t.Run("GPU count narrows ambiguous matches to one", func(t *testing.T) {
+		cpu := readyProviderProfile("cpu", 7)
+		cpu.GPUsPerWorker = 0
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{cpu, normal}, nil))
+		for _, tc := range []struct {
+			gpus int32
+			want string
+		}{{gpus: 0, want: "cpu"}, {gpus: 1, want: "normal"}} {
+			gpus := tc.gpus
+			got, err := provider.Select(context.Background(), SelectionRequest{
+				Namespace: "alpha", Team: "research", Lane: "training", GPUsPerWorker: &gpus,
+			})
+			if err != nil {
+				t.Fatalf("Select(gpus=%d) error = %v", gpus, err)
+			}
+			if got.Profile.Name != tc.want {
+				t.Fatalf("Select(gpus=%d) = %q, want %q", gpus, got.Profile.Name, tc.want)
+			}
+		}
+	})
+
+	t.Run("GPU count mismatch names only applicable excluded profiles", func(t *testing.T) {
+		cpu := readyProviderProfile("cpu", 7)
+		cpu.GPUsPerWorker = 0
+		elsewhere := readyProviderProfile("elsewhere", 7)
+		elsewhere.Applicability.Namespaces = []string{"zeta"}
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{cpu, elsewhere}, nil))
+		gpus := int32(1)
+		_, err := provider.Select(context.Background(), SelectionRequest{
+			Namespace: "alpha", Team: "research", Lane: "training", GPUsPerWorker: &gpus,
+		})
+		if err == nil || !strings.Contains(err.Error(), "no ready workload profile matches") ||
+			!strings.Contains(err.Error(), "gpusPerWorker=1") ||
+			!strings.Contains(err.Error(), "cpu (gpusPerWorker=0)") ||
+			strings.Contains(err.Error(), "elsewhere") {
+			t.Fatalf("Select() error = %v", err)
+		}
+	})
+
+	t.Run("named profile ignores GPU count", func(t *testing.T) {
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{normal}, nil))
+		gpus := int32(0)
+		got, err := provider.Select(context.Background(), SelectionRequest{
+			Name: "normal", Namespace: "alpha", Team: "research", Lane: "training", GPUsPerWorker: &gpus,
+		})
+		if err != nil || got.Profile.Name != "normal" {
+			t.Fatalf("Select() = %#v, %v", got.Profile.Name, err)
+		}
+	})
+
 	t.Run("ambiguous normal profiles fail", func(t *testing.T) {
 		other := readyProviderProfile("other", 7)
 		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{other, normal}, nil))

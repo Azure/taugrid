@@ -37,3 +37,10 @@ charts/taugrid/charts
 # Portal frontend dependencies and local build metadata
 portal/frontend/node_modules/
 portal/frontend/*.tsbuildinfo
+
+# Impeccable local detector cache
+.impeccable/hook.cache.json
+
+# Standalone experiment metrics collector builds
+metrics/experiment-metrics-collector/bin/
+metrics/experiment-metrics-collector/taugrid-metrics-collector

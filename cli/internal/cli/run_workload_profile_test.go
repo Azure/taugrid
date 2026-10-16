@@ -220,7 +220,7 @@ func TestSelectedProfileRejectsAuthoritativeConflicts(t *testing.T) {
 	}{
 		{"queue", func(o *unresolvedRunOptions) { o.queue = "other" }, "policy.queue"},
 		{"mode", func(o *unresolvedRunOptions) { o.mode = "elastic" }, "policy.mode"},
-		{"placement", func(o *unresolvedRunOptions) { o.topology = profile.PlacementIndependent }, "policy.topology"},
+		{"placement", func(o *unresolvedRunOptions) { o.topology = profile.PlacementUnconstrained }, "policy.topology"},
 		{"workers", func(o *unresolvedRunOptions) { o.workers, o.workersExplicit = 4, true }, "compute.workers"},
 		{"gpus", func(o *unresolvedRunOptions) { o.gpusPerWorker, o.gpusPerWorkerExplicit = 1, true }, "compute.gpus_per_worker"},
 		{"priority", func(o *unresolvedRunOptions) { o.podPriorityClass = "other" }, "policy.pod_priority_class"},
@@ -236,6 +236,88 @@ func TestSelectedProfileRejectsAuthoritativeConflicts(t *testing.T) {
 			_, err := selectRunWorkloadProfile(context.Background(), options, provider)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSelectedProfileAllowsBuiltInPriorityTier(t *testing.T) {
+	provider := testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 2, 3)
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = "research-profile"
+	options.namespace = "alpha"
+	options.team = "research"
+	options.lane = "training"
+	options.priorityTier = "priority"
+	options.explicitPolicyFields = map[string]bool{"priority_tier": true}
+
+	selected, err := selectRunWorkloadProfile(context.Background(), options, provider)
+	if err != nil {
+		t.Fatalf("selectRunWorkloadProfile: %v", err)
+	}
+	if selected.priorityTier != "priority" {
+		t.Fatalf("priority tier = %q, want priority", selected.priorityTier)
+	}
+	if selected.workloadPriorityClass != "" || selected.podPriorityClass != "" {
+		t.Fatalf(
+			"explicit tier should defer class selection to topology: workload=%q pod=%q",
+			selected.workloadPriorityClass,
+			selected.podPriorityClass,
+		)
+	}
+}
+
+func TestSelectedProfilePriorityTierOverridesDisabledProfilePriorities(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 2, 3, 11)
+	resolved.Priorities = profile.ProfilePriorities{DisableDefaultPriorities: true}
+	resolved.WorkloadPriorityClasses = nil
+	resolved.PodPriorityClasses = nil
+	provider := testRunProviderForResolved(t, 11, resolved)
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = "research-profile"
+	options.namespace = "alpha"
+	options.team = "research"
+	options.lane = "training"
+	options.priorityTier = "priority"
+	options.explicitPolicyFields = map[string]bool{"priority_tier": true}
+
+	selected, err := selectRunWorkloadProfile(context.Background(), options, provider)
+	if err != nil {
+		t.Fatalf("selectRunWorkloadProfile: %v", err)
+	}
+	if selected.disableDefaultPriorities {
+		t.Fatal("explicit tier should enable TauGrid-managed priority classes")
+	}
+}
+
+func TestSelectedProfileRejectsAmbiguousPriorityTier(t *testing.T) {
+	provider := testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 2, 3)
+	for _, test := range []struct {
+		name   string
+		mutate func(*unresolvedRunOptions)
+	}{
+		{"exact class", func(o *unresolvedRunOptions) { o.podPriorityClass = "tau-default" }},
+		{"disabled priorities", func(o *unresolvedRunOptions) {
+			o.disableDefaultPriorities, o.disablePrioritiesExplicit = true, true
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := defaultRunDispatchOptions()
+			options.engine = runconfig.EngineRayJob
+			options.profileName = "research-profile"
+			options.namespace = "alpha"
+			options.team = "research"
+			options.lane = "training"
+			options.priorityTier = "priority"
+			options.explicitPolicyFields = map[string]bool{"priority_tier": true}
+			test.mutate(&options)
+
+			_, err := selectRunWorkloadProfile(context.Background(), options, provider)
+			if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+				t.Fatalf("error = %v, want ambiguous priority rejection", err)
 			}
 		})
 	}
@@ -300,6 +382,40 @@ func TestRunSelectionAllowsUniqueImplicitProfiles(t *testing.T) {
 	if got.selectedWorkloadProfile == nil ||
 		got.selectedWorkloadProfile.Selection.Profile.ExecutionTarget != profile.ExecutionTargetMultiKueue {
 		t.Fatalf("implicit multiKueue selection = %#v", got.selectedWorkloadProfile)
+	}
+}
+
+func TestRunSelectionUsesExplicitGPUCountToDisambiguate(t *testing.T) {
+	cpu := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
+	cpu.Name = "cpu-profile"
+	gpu := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 11)
+	snapshot, err := profile.NewProfileSetSnapshot(11, []profile.ResolvedWorkloadProfile{cpu, gpu})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := profile.NewSnapshotProvider(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		gpus int
+		want string
+	}{{gpus: 0, want: "cpu-profile"}, {gpus: 1, want: "research-profile"}} {
+		options := defaultRunDispatchOptions()
+		options.engine = runconfig.EngineJob
+		options.namespace = "alpha"
+		options.team = "research"
+		options.lane = "training"
+		gpus := tc.gpus
+		options.jobGPUs = &gpus
+		options.jobGPUsExplicit = true
+		got, err := selectRunWorkloadProfile(context.Background(), options, provider)
+		if err != nil {
+			t.Fatalf("select with gpus=%d: %v", tc.gpus, err)
+		}
+		if got.profileName != tc.want {
+			t.Fatalf("select with gpus=%d = %q, want %q", tc.gpus, got.profileName, tc.want)
+		}
 	}
 }
 
@@ -608,9 +724,9 @@ func testRunResolvedProfile(
 	gpus, workers int32,
 	generation int64,
 ) profile.ResolvedWorkloadProfile {
-	placement := profile.PlacementIndependent
+	placement := profile.PlacementUnconstrained
 	if workers > 1 {
-		placement = profile.PlacementMultiNodeNCCL
+		placement = profile.PlacementSameNetworkDomain
 	}
 	return profile.ResolvedWorkloadProfile{
 		WorkloadProfile: profile.WorkloadProfile{

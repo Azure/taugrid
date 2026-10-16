@@ -134,6 +134,10 @@ test:
 	@docker run --rm $(IMG) python3 -c "import ctypes.util; exit(0 if ctypes.util.find_library('nccl') else 1)" 2>&1 && \
 		echo "PASS: NCCL (libnccl) is loadable" || \
 		{ echo "FAIL: NCCL not found — multi-GPU collective communications will not work"; exit 1; }
+	@echo "=== Verifying CA bundle env vars for native (non-Python/Rust) TLS clients ==="
+	@docker run --rm $(IMG) python3 -c "import os, ssl; p=[os.environ.get('SSL_CERT_FILE'), os.environ.get('CURL_CA_BUNDLE')]; assert all(p), p; [ssl.create_default_context(cafile=x) for x in p]; print('OK', p)" 2>&1 && \
+		echo "PASS: SSL_CERT_FILE/CURL_CA_BUNDLE are set and resolve to a valid, loadable CA bundle" || \
+		{ echo "FAIL: SSL_CERT_FILE/CURL_CA_BUNDLE missing or bundle failed to load — native Azure Blob writers (e.g. pyarrow AzureFileSystem) may fail TLS validation"; exit 1; }
 
 clean:
 	docker rmi $(IMG) 2>/dev/null || true

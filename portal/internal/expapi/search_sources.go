@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Azure/taugrid/portal/internal/expstore"
@@ -98,18 +99,20 @@ func mergeRunSearchResults(local, kusto runSearchResponse, limit int) runSearchR
 	runs := append([]sourcedRun{}, local.Runs...)
 	seen := make(map[string]bool, len(runs))
 	for _, run := range runs {
-		seen[run.RunID] = true
+		seen[runSearchIdentity(run)] = true
 	}
 	added, duplicates := 0, 0
 	for _, run := range kusto.Runs {
-		if seen[run.RunID] {
+		key := runSearchIdentity(run)
+		if seen[key] {
 			duplicates++
 			continue
 		}
-		seen[run.RunID] = true
+		seen[key] = true
 		runs = append(runs, run)
 		added++
 	}
+
 	sort.SliceStable(runs, func(i, j int) bool {
 		if runs[i].CreatedAt != runs[j].CreatedAt {
 			return runs[i].CreatedAt > runs[j].CreatedAt
@@ -144,4 +147,8 @@ func mergeRunSearchResults(local, kusto runSearchResponse, limit int) runSearchR
 		},
 		Runs: runs,
 	}
+}
+
+func runSearchIdentity(run sourcedRun) string {
+	return strings.TrimSpace(run.Project) + "\x00" + strings.TrimSpace(run.RunID)
 }
