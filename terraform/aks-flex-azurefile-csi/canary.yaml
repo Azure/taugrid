@@ -1,0 +1,72 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: azurefile-flex-canary
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-flex
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: azurefile-flex-canary
+spec:
+  restartPolicy: Never
+  initContainers:
+    - name: verify-non-root-write
+      image: busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          sentinel=/data/.tau-csi-canary
+          printf 'taugrid-csi-canary\n' > "$sentinel"
+          test "$(cat "$sentinel")" = "taugrid-csi-canary"
+          rm "$sentinel"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  containers:
+    - name: result
+      image: busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      command:
+        - /bin/sh
+        - -c
+        - echo "non-root Azure Files mount canary passed"
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: azurefile-flex-canary

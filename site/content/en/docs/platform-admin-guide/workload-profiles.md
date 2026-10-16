@@ -90,6 +90,18 @@ TauGrid stamps successful output with
 `tau.azure.com/workload-profile`. These annotations identify the observed
 revision only; confirm quota or capacity availability with a separate check.
 
+Profile readiness is not storage readiness. When a workload using a profile
+mounts a PVC, the platform must provide an equivalent compatible StorageClass,
+claim, and CSI implementation across the profile's full eligible node set. The
+driver's node component must register on every eligible node; otherwise Kueue
+and Kubernetes can place an admitted pod on a node where it fails before
+container startup. Validate each node's `CSINode` registration and run a
+profile-constrained mount canary before advertising the profile for
+PVC-backed workloads. For AKS Flex or other external nodes, do not rely on
+AKS-managed Azure CSI addons; follow TauGrid's customer setup path for a
+compatible deployment-managed driver as described in
+[the AKS storage boundary](../aks-setup/#aks-storage-drivers-and-flex-nodes).
+
 ## Connected and offline rendering
 
 A normal run, server dry-run, or apply reads the connected cluster:

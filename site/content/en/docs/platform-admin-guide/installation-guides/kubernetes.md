@@ -98,11 +98,15 @@ Before TauGrid is installed, the cluster owner is responsible for:
 - container registry access;
 - GPU drivers and device plugins when workloads request GPUs;
 - CSI drivers, StorageClasses, and persistent volumes when workloads use
-  storage; and
+  persistent storage, including node components registered on every node
+  eligible for those workloads; and
 - cloud identities and permissions when workloads call provider services.
 
 TauGrid consumes these capabilities through Kubernetes APIs. See
 [Architecture](../../getting-started/architecture/) for component ownership.
+TauGrid can name and mount an existing PVC, but it does not install, configure,
+or validate a provider's CSI implementation. The cluster owner must ensure the
+selected driver supports the nodes targeted by the workload profile.
 
 ## 3. Install TauGrid
 
@@ -219,9 +223,16 @@ tau workspace check "$TAU_WORKSPACE" \
 ```
 
 A bound claim proves provisioning; application-level read/write access still
-needs a separate check. Test the mount with the same ServiceAccount and
-security settings the workload will use before handing the workspace to a
-researcher.
+needs a separate check. It also does not prove that the CSI node component is
+registered on every eligible node. Test the mount with the same workload
+profile, ServiceAccount, and security settings the workload will use before
+handing the workspace to a researcher. See
+[storage readiness](../../reference/workspace/#storage-readiness-is-platform-owned)
+for node-registration checks and startup symptoms.
+
+If the run does not need persistence, checkpoint recovery, or artifact
+offload, omit `storage.data_pvc` and use pod-local ephemeral storage such as
+TauGrid's `/mnt` `emptyDir` scratch space instead.
 
 ## 5. Run a project workload
 

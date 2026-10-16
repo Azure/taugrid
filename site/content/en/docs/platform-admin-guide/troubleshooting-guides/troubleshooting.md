@@ -165,6 +165,23 @@ claim directly instead of trusting the phase:
 kubectl get pvc blob-training -n <namespace> --context <context>
 ```
 
+If the claim is `Bound` but the pod remains in `ContainerCreating`, inspect its
+events and the scheduled node's CSI registration:
+
+```bash
+kubectl describe pod <pod> -n <namespace>
+kubectl get csinode <node> \
+  -o jsonpath='{range .spec.drivers[*]}{.name}{"\n"}{end}'
+```
+
+`driver name ... not found in the list of registered CSI drivers`, or a
+missing `file.csi.azure.com` entry, means the CSI node component is not
+registered there. Validate every node eligible for the workload profile. On
+AKS Flex or other external nodes, do not try to make TauGrid depend on the
+AKS-managed Azure CSI addon by reconciling AKS-only labels. Follow TauGrid's
+customer setup path to deploy and validate a compatible CSI implementation. See
+[AKS storage drivers and Flex nodes](../aks-setup/#aks-storage-drivers-and-flex-nodes).
+
 **What failure means:** `Pending` or `Degraded` phase means one or more
 platform-owned conditions are unmet -- namespace/RBAC, queue accessibility, or
 workload identity. This is an

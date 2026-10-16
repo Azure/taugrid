@@ -1,0 +1,24 @@
+# Copy to terraform.tfvars. Do not commit kubeconfig files, account keys, or
+# local tfvars.
+
+kube_context = "aks-ai-runtime-flex"
+
+# The safe default installs the isolated node plugin on all Linux nodes because
+# Ray heads and CPU workers may mount the same PVC as Flex GPU workers. Set
+# eligible_node_selector only if every possible head and worker node shares one
+# stable label.
+# eligible_node_selector = {
+#   "tau.azure.com/storage-domain" = "azurefile-flex"
+# }
+
+# Required after reviewing driver ownership and node targeting in README.md.
+ownership_reviewed = true
+
+# The optional StorageClass uses a pre-created Secret rather than putting a
+# storage account key in Terraform state.
+create_storage_class            = true
+storage_class_name              = "azurefile-flex"
+storage_account_name            = "replace-me"
+storage_account_resource_group  = "replace-me"
+storage_account_subscription_id = "00000000-0000-0000-0000-000000000000"
+storage_secret_name             = "azure-storage-account"

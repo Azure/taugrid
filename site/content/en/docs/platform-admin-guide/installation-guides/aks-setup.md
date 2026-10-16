@@ -106,8 +106,58 @@ kubectl --context "$TAU_CONTEXT" get nodes
 Confirm the cluster meets the
 [Kubernetes cluster prerequisites](../kubernetes/#2-prepare-a-kubernetes-cluster)
 (Kubernetes 1.30+, GPU drivers and device plugins if workloads need GPUs,
-storage classes if workloads need PVCs), then continue with
+and a compatible CSI driver registered on every eligible node if workloads
+need PVCs), then continue with
 [TauGrid installation](../kubernetes/#3-install-taugrid).
+
+## AKS storage drivers and Flex nodes
+
+Normal AKS agent pools receive AKS node metadata and bootstrap integration used
+by AKS-managed Azure CSI addon DaemonSets. TauGrid supports and expects those
+managed addons only on normal AKS-managed agent pools.
+
+Externally registered nodes, including AKS Flex nodes, do not inherit that
+contract by default. TauGrid does **not** support relying on AKS-managed Azure
+CSI addons on Flex or other external nodes. This is not a claim that Azure
+storage can never run there. TauGrid helps platform operators set up a
+compatible deployment-managed CSI driver for Flex/external nodes; the operator
+still owns the storage account or backend, credentials, capacity, data
+lifecycle, and driver upgrades.
+
+Use this setup path:
+
+1. Select a CSI implementation whose vendor supports the external node's
+   operating system, container runtime, Kubernetes version, and storage
+   backend.
+2. Install its controller and node components using the driver's documented
+   installation method. Configure node selectors, affinities, and tolerations
+   so the node component runs on every node eligible for the TauGrid workload;
+   do not spoof AKS-managed node labels to schedule an AKS addon.
+3. Create the driver's StorageClass and PVC, then verify the PVC reaches
+   `Bound`.
+4. Verify the driver appears in `CSIDriver` and in the `CSINode` object for
+   every eligible node.
+5. Run a workload-profile-constrained mount/read/write canary using the same
+   ServiceAccount and security settings as the customer workload.
+
+TauGrid's storage examples and validation commands provide the Kubernetes side
+of this setup. For Azure Files, start with the checked-in
+[`terraform/aks-flex-azurefile-csi`](https://github.com/Azure/taugrid/tree/main/terraform/aks-flex-azurefile-csi)
+root. It installs a distinctly named upstream driver on every Linux node by
+default and can be narrowed only to a label shared by every node eligible to
+mount the same PVC. It can also create a StorageClass that references a
+pre-created credential Secret without putting the account key in Terraform
+state. For managed RayJobs, eligibility includes head, CPU worker, and GPU
+worker node pools. Driver-specific identity, networking, and backend settings
+still require customer review.
+
+A PVC can be `Bound` while a pod still fails before container startup with an
+event such as `driver name file.csi.azure.com not found in the list of
+registered CSI drivers`, or with `file.csi.azure.com` absent from the node's
+`CSINode` object. See
+[storage readiness](../../reference/workspace/#storage-readiness-is-platform-owned)
+for validation commands. Workloads that do not need persistence or offload can
+avoid this dependency by using pod-local ephemeral storage.
 
 ## GPU software stack models
 

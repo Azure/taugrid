@@ -37,6 +37,26 @@ owners. They are not installed by TauGrid and neither backend is required:
 Review namespace, capacity, reclaim policy, identity, locality, cost, and CSI
 prerequisites before adopting either example. A platform may instead use Azure
 Files, NFS, an existing static PV/PVC, or another Kubernetes-compatible backend.
+Every PVC-backed TauGrid workload requires the selected driver's node component
+to register on every node eligible for that workload; a `Bound` PVC does not
+prove node registration or mountability.
+
+AKS-managed Azure CSI addons are the expected integration for normal
+AKS-managed agent pools. TauGrid does not support relying on those managed
+addons on Flex or other externally registered nodes, which do not inherit the
+normal AKS node metadata/bootstrap contract by default. This boundary does not
+exclude Azure storage implementations on external nodes. TauGrid helps
+platform operators deploy and validate a compatible CSI implementation using
+the setup path in the
+[AKS installation guide](../../../site/content/en/docs/platform-admin-guide/installation-guides/aks-setup.md#aks-storage-drivers-and-flex-nodes).
+For Azure Files, the checked-in
+[`terraform/aks-flex-azurefile-csi`](../../../terraform/aks-flex-azurefile-csi)
+root installs a distinctly named upstream driver on every Linux node eligible
+to mount the PVC, including Ray heads and Flex workers, and can create a
+matching StorageClass without storing the account key in Terraform state.
+The operator owns the selected backend, credentials, capacity, data lifecycle,
+and driver upgrades. Do not use temporary AKS-label reconciliation as a
+supported storage design.
 
 On current shared research clusters the live PVC names may differ from the
 generic `blob-training` default:
@@ -89,7 +109,13 @@ a cluster, or delete storage on uninstall.
   - Lustre → `azurelustre.csi.azure.com`.
   ```bash
   kubectl get csidrivers | grep -E 'blob.csi.azure.com|azurelustre.csi.azure.com'
+  kubectl get csinode <eligible-node> \
+    -o jsonpath='{range .spec.drivers[*]}{.name}{"\n"}{end}'
   ```
+  Repeat the `CSINode` check for every eligible node and run a workload-profile
+  constrained mount/read/write canary. A missing registration commonly appears
+  before container startup as `driver name ... not found`, including
+  `file.csi.azure.com` for Azure File.
 
 ## Beyond the defaults
 

@@ -47,3 +47,12 @@ jobs:
           pwsh -File terraform/aks/test-lifecycle-recorder-upgrade-plan.ps1
           bash terraform/aks/test-wait-for-adx-functions-ready.sh
           pwsh -File terraform/aks/test-wait-for-adx-functions-ready.ps1
+
+      - name: Validate AKS Flex Terraform roots
+        run: |
+          for root in terraform/aks-flex-gpu-operator terraform/aks-flex-azurefile-csi; do
+            terraform -chdir="$root" fmt -check -recursive
+            terraform -chdir="$root" init -backend=false -lockfile=readonly
+            terraform -chdir="$root" validate
+          done
+          terraform -chdir=terraform/aks-flex-azurefile-csi test
