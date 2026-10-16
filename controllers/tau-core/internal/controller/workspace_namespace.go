@@ -28,42 +28,43 @@ func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) error {
+) (bool, error) {
 	if workspace.UID == "" {
-		return fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)
+		return false, fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)
 	}
 	if ownerUID := workspace.Annotations[annotationOwnerUID]; ownerUID != "" {
 		if ownerUID != string(workspace.UID) {
-			return fmt.Errorf("TauWorkspace %q owner UID is %q, want %q", workspace.Name, ownerUID, workspace.UID)
+			return false, fmt.Errorf("TauWorkspace %q owner UID is %q, want %q", workspace.Name, ownerUID, workspace.UID)
 		}
-		return nil
+		return false, nil
 	}
 	if workspace.Annotations[annotationV0Primary] != "true" {
-		return nil
+		return false, nil
 	}
 
 	targetNamespace := resolvedNamespace(workspace)
 	var namespace corev1.Namespace
-	if err := r.Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
 		if apierrors.IsNotFound(err) {
 			if workspace.DeletionTimestamp.IsZero() {
-				return nil
+				return false, nil
 			}
 			return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
 		}
-		return fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
+		return false, fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
 	}
 	if !legacyNamespaceMatchesWorkspace(&namespace, workspace) {
-		return nil
+		return false, nil
 	}
 	if ownerUID := namespace.Annotations[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
-		return nil
+		return false, nil
 	}
 	if namespace.Annotations[annotationOwnerUID] == "" {
 		setOwnerUIDAnnotation(&namespace, workspace.UID)
 		if err := r.Update(ctx, &namespace); err != nil {
-			return fmt.Errorf("persist legacy Namespace owner UID: %w", err)
+			return false, fmt.Errorf("persist legacy Namespace owner UID: %w", err)
 		}
+		return true, nil
 	}
 
 	return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
@@ -88,13 +89,13 @@ func legacyNamespaceMatchesWorkspace(
 func (r *TauWorkspaceReconciler) persistLegacyWorkspaceOwnerUID(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) error {
+) (bool, error) {
 	before := workspace.DeepCopy()
 	setOwnerUIDAnnotation(workspace, workspace.UID)
 	if err := r.Patch(ctx, workspace, client.MergeFrom(before)); err != nil {
-		return fmt.Errorf("persist legacy TauWorkspace ownership migration: %w", err)
+		return false, fmt.Errorf("persist legacy TauWorkspace ownership migration: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, error) {

@@ -50,14 +50,27 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		logger.Info("ignoring workspace outside system namespace", "systemNamespace", systemNamespace(r.SystemNamespace))
 		return ctrl.Result{}, nil
 	}
+	storedQueue := workspace.Spec.Queue
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&workspace, workspaceFinalizer) {
-			if err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace); err != nil {
+			if strings.TrimSpace(workspace.Spec.Queue) == "" {
+				resolved, err := r.getDefaultWorkspaceQueue(ctx)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+				workspace.Spec.Queue = resolved
+			}
+			migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
+			if err != nil {
 				return ctrl.Result{}, err
+			}
+			if migrated {
+				return ctrl.Result{Requeue: true}, nil
 			}
 			if err := r.cleanupWorkspaceAccess(ctx, &workspace); err != nil {
 				return ctrl.Result{}, err
 			}
+			workspace.Spec.Queue = storedQueue
 			controllerutil.RemoveFinalizer(&workspace, workspaceFinalizer)
 			if err := r.Update(ctx, &workspace); err != nil {
 				return ctrl.Result{}, err
@@ -72,16 +85,19 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, nil
 	}
-	if err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	if strings.TrimSpace(workspace.Spec.Queue) == "" {
 		resolved, err := r.getDefaultWorkspaceQueue(ctx)
 		if err != nil {
 			return r.reportUnresolvedQueue(ctx, &workspace, err.Error())
 		}
 		workspace.Spec.Queue = resolved
+	}
+	migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if migrated {
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return r.syncWorkspace(ctx, &workspace)
 }

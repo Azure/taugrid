@@ -81,6 +81,21 @@ func TestKustomizeControllerRoleMatchesTopologyAndGPUFlavorPermissions(t *testin
 	}
 }
 
+func TestKustomizeControllerRoleAllowsLegacyRoleDeletionWithoutMutation(t *testing.T) {
+	role := kustomizeClusterRole(t, "tau-core-controller")
+	want := rbacv1.PolicyRule{
+		APIGroups: []string{rbacv1.GroupName},
+		Resources: []string{"roles"},
+		Verbs:     []string{"get", "list", "watch", "delete"},
+	}
+	for _, rule := range role.Rules {
+		if reflect.DeepEqual(rule, want) {
+			return
+		}
+	}
+	t.Fatalf("Kustomize controller role must permit identity-checked Role deletion without Role mutation: %#v", role.Rules)
+}
+
 func kustomizeClusterRole(t *testing.T, name string) rbacv1.ClusterRole {
 	t.Helper()
 	file, err := os.Open("../../../../charts/tau-core-controller/kustomize/rbac.yaml")

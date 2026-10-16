@@ -166,6 +166,12 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 			if keepNamespace != "" && obj.GetNamespace() == keepNamespace && candidate.keep(obj) {
 				continue
 			}
+			if role, ok := obj.(*rbacv1.Role); ok && canDeleteLegacyWorkspaceRole(role, workspace) {
+				if err := r.deleteWithPreconditions(ctx, role); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := r.ensureWorkspaceObjectUID(ctx, obj, workspace); err != nil {
 				return fmt.Errorf("refusing to delete stale workspace access: %w", err)
 			}
@@ -175,6 +181,14 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 		}
 	}
 	return nil
+}
+
+func canDeleteLegacyWorkspaceRole(role *rbacv1.Role, workspace *tauv1alpha1.TauWorkspace) bool {
+	return workspace.UID != "" &&
+		workspace.Annotations[annotationOwnerUID] == string(workspace.UID) &&
+		role.UID != "" &&
+		role.Annotations[annotationOwnerUID] == "" &&
+		ownedByWorkspace(role.Labels, workspace.Name)
 }
 
 func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
