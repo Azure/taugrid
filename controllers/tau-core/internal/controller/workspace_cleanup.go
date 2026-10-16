@@ -282,7 +282,7 @@ func (r *TauWorkspaceReconciler) staleWorkspaceLocalQueuesDrained(
 		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
 			continue
 		}
-		if err := validateWorkspaceObjectUID(localQueue, workspace); err != nil {
+		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
 			return false, "", fmt.Errorf("cannot verify stale LocalQueue %q: %w", localQueue.GetName(), err)
 		}
 		workloads := &unstructured.UnstructuredList{}
