@@ -404,9 +404,6 @@ func validateWorkspaceSelection(source runConnectionSource, policyWorkspace, fla
 			policyWorkspace,
 		)
 	}
-	if !source.Catalog || projectWorkspace == "" {
-		return nil
-	}
 	if policyWorkspace != "" && policyWorkspace != projectWorkspace {
 		return fmt.Errorf(
 			"run config policy.workspace %q conflicts with catalog workspace %q for project %q",
@@ -759,6 +756,18 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 	_ = namespace
 	source, err := discoverRunLifecycleConnectionSource("")
 	if err != nil {
+		if runContextExplicit(cmd) &&
+			strings.TrimSpace(kubeContext) != "" &&
+			strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
+			if err := checkDescriptorContextConflict(
+				kubeContext,
+				cmd.Flags().Changed("context"),
+				descriptorForStartDir(),
+			); err != nil {
+				return "", nil, err
+			}
+			return kubeContext, func() {}, nil
+		}
 		return "", nil, err
 	}
 	if runContextExplicit(cmd) && strings.TrimSpace(kubeContext) != "" {

@@ -849,6 +849,32 @@ func TestWorkspaceControlPlaneResolutionDoesNotFetchWorkloadPlacement(t *testing
 	}
 }
 
+func TestWorkspaceControlPlaneExplicitContextBypassesCatalogAmbiguity(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	withRunRoutingCWD(t, root)
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().String("context", "", "")
+	if err := command.Flags().Set("context", "explicit-context"); err != nil {
+		t.Fatal(err)
+	}
+	ensurer := &fakeRunConnectionEnsurer{}
+
+	gotContext, restore, err := resolveWorkspaceControlPlaneConnectionWithEnsurer(
+		command,
+		"explicit-context",
+		defaultSystemNamespace(),
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "explicit-context" || ensurer.calls != 0 {
+		t.Fatalf("context=%q calls=%d", gotContext, ensurer.calls)
+	}
+}
+
 func readyTestWorkspace(name, uid, namespace, queue string) tauworkspace.Workspace {
 	return tauworkspace.Workspace{
 		Metadata: tauworkspace.ObjectMeta{Name: name, UID: uid, Generation: 1},
