@@ -106,10 +106,11 @@ func (r *TauWorkspaceReconciler) apiReader() client.Reader {
 	return r.Client
 }
 
-func (r *TauWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&tauv1alpha1.TauWorkspace{}).
-		Watches(&tauv1alpha1.TauTeam{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+func (r *TauWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager, teamAPIAvailable bool) error {
+	controller := ctrl.NewControllerManagedBy(mgr).
+		For(&tauv1alpha1.TauWorkspace{})
+	for _, object := range workspaceWatchObjects(teamAPIAvailable) {
+		controller = controller.Watches(object, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 			team, ok := obj.(*tauv1alpha1.TauTeam)
 			if !ok {
 				return nil
@@ -126,6 +127,14 @@ func (r *TauWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}
 			}
 			return requests
-		})).
-		Complete(r)
+		}))
+	}
+	return controller.Complete(r)
+}
+
+func workspaceWatchObjects(teamAPIAvailable bool) []client.Object {
+	if !teamAPIAvailable {
+		return nil
+	}
+	return []client.Object{&tauv1alpha1.TauTeam{}}
 }

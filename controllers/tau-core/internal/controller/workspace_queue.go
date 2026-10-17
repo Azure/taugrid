@@ -176,7 +176,11 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceCompatibilityLocalQueues(
 			if !apierrors.IsNotFound(err) {
 				return false, err.Error(), err
 			}
-			queue = newWorkspaceLocalQueue(workspace, namespace, name, clusterQueue, true)
+			targetClusterQueue, err := r.compatibilityLocalQueueClusterQueue(ctx, workspace, namespace, name, clusterQueue)
+			if err != nil {
+				return false, err.Error(), err
+			}
+			queue = newWorkspaceLocalQueue(workspace, namespace, name, targetClusterQueue, true)
 			if err := r.Create(ctx, queue); err != nil {
 				return false, fmt.Sprintf("failed to reconcile compatible LocalQueue %q: %v", name, err), nil
 			}
@@ -192,6 +196,34 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceCompatibilityLocalQueues(
 		}
 	}
 	return true, "compatible LocalQueues are reconciled", nil
+}
+
+func (r *TauWorkspaceReconciler) compatibilityLocalQueueClusterQueue(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace, localQueueName, managedClusterQueue string,
+) (string, error) {
+	if namespace != workspace.Status.Target.ResolvedNamespace {
+		return managedClusterQueue, nil
+	}
+	candidate := ""
+	if localQueueName == strings.TrimSpace(workspace.Status.Queue.LocalQueue) {
+		candidate = strings.TrimSpace(workspace.Status.Queue.ClusterQueue)
+	}
+	if candidate == "" && localQueueName == strings.TrimSpace(workspace.Spec.Queue) {
+		candidate = strings.TrimSpace(workspace.Spec.Queue)
+	}
+	if candidate == "" || candidate == managedClusterQueue {
+		return managedClusterQueue, nil
+	}
+	queue := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: candidate}, queue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return managedClusterQueue, nil
+		}
+		return "", err
+	}
+	return candidate, nil
 }
 
 func workspaceCompatibilityLocalQueueNames(workspace *tauv1alpha1.TauWorkspace) []string {
@@ -299,6 +331,9 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		return "", err
 	}
 	queue := desiredWorkspaceClusterQueue(workspace)
+	if err := r.preserveEstablishedWorkspaceQueueContract(ctx, workspace, queue); err != nil {
+		return "", err
+	}
 	teamReady := team.Status.Phase == tauv1alpha1.TeamPhaseReady &&
 		team.Status.ObservedGeneration == team.Generation
 	reductionOnly, err := r.workspaceQueueReductionOnly(ctx, workspace, queue)
