@@ -48,7 +48,7 @@ func persistActiveWorkspaceCache(
 	cache := activeWorkspaceCache{
 		Schema:          activeWorkspaceCacheSchema,
 		Workspace:       placement.Workspace,
-		WorkspaceUID:    connection.WorkspaceUID,
+		WorkspaceUID:    placement.WorkspaceUID,
 		ContextName:     connection.ContextName,
 		SystemNamespace: connection.SystemNamespace,
 		Namespace:       placement.Namespace,
