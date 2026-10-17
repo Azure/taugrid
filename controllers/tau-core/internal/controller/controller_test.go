@@ -2844,7 +2844,7 @@ func TestExistingTeamWorkspacePreservesManagedQueueContract(t *testing.T) {
 	}
 }
 
-func TestTeamWorkspaceAccountsForSharedLegacyQueueBeforeCreatingManagedQueues(t *testing.T) {
+func TestTeamWorkspacePreservesSharedLegacyQueueBeforeCreatingManagedQueues(t *testing.T) {
 	ctx := context.Background()
 	team := testTeam("vision", "8")
 	team.Status.Phase = tauv1alpha1.TeamPhaseReady
@@ -2872,9 +2872,19 @@ func TestTeamWorkspaceAccountsForSharedLegacyQueueBeforeCreatingManagedQueues(t 
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 
-	if _, err := reconciler.reconcileWorkspaceClusterQueue(ctx, first); err == nil ||
-		!strings.Contains(err.Error(), "workspace guarantees exceed team quota") {
-		t.Fatalf("reconcileWorkspaceClusterQueue() error = %v, want shared legacy quota refusal", err)
+	remaining, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].NominalQuota.Cmp(resource.MustParse("0")) != 0 {
+		t.Fatalf("shared team quota = %#v, want shared legacy allocation charged once", remaining)
+	}
+	got, err := reconciler.reconcileWorkspaceClusterQueue(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != legacyQueue.GetName() {
+		t.Fatalf("reconcileWorkspaceClusterQueue() = %q, want shared legacy queue %q", got, legacyQueue.GetName())
 	}
 	for _, workspace := range []*tauv1alpha1.TauWorkspace{first, second} {
 		queue := newQueueObject(clusterQueueGVK)
@@ -2882,6 +2892,41 @@ func TestTeamWorkspaceAccountsForSharedLegacyQueueBeforeCreatingManagedQueues(t 
 		if !apierrors.IsNotFound(err) {
 			t.Fatalf("managed ClusterQueue %q was created before shared accounting: %v", queue.GetName(), err)
 		}
+	}
+}
+
+func TestWorkspaceRevokesAccessFromAdoptedNamespaceBeforeTargetReady(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Spec.Target.Namespace = "unavailable"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.KubernetesSubject = &tauv1alpha1.KubernetesSubject{Kind: rbacv1.GroupKind, Name: "current-researchers"}
+	workspace.Spec.WorkloadIdentity.ServiceAccountName = "current-workload"
+	adopted := testNamespace("adopted")
+	adopted.Labels = map[string]string{labelWorkspace: workspace.Name}
+	adopted.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	binding := testRoleBinding(adopted.Name, defaultRoleName, workspace.Name)
+	binding.Subjects = []rbacv1.Subject{{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "obsolete-researchers"}}
+	identity := testServiceAccount(adopted.Name, "obsolete-workload", workspace.Name)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, adopted, binding, identity).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	if _, err := newTestWorkspaceReconciler(c).syncWorkspace(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	var gotBinding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &gotBinding); err != nil {
+		t.Fatal(err)
+	}
+	want := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, adopted.Name)}
+	if !reflect.DeepEqual(gotBinding.Subjects, want) {
+		t.Fatalf("adopted namespace subjects = %#v, want %#v", gotBinding.Subjects, want)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(identity), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("obsolete adopted namespace identity survived: %v", err)
 	}
 }
 

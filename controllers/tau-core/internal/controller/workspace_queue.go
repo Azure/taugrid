@@ -331,6 +331,11 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if err := validateQuotaFlavors(ctx, r.Client, workspace.Spec.Quota); err != nil {
 		return "", err
 	}
+	if legacyQueue, shared, err := r.sharedEstablishedWorkspaceClusterQueue(ctx, workspace); err != nil {
+		return "", err
+	} else if shared {
+		return legacyQueue, nil
+	}
 	queue := desiredWorkspaceClusterQueue(workspace)
 	if err := r.preserveEstablishedWorkspaceQueueContract(ctx, workspace, queue); err != nil {
 		return "", err
@@ -361,6 +366,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		}
 		return queue.GetName(), nil
 	}
+
 	if err := teamReconciler.reconcileTeamCohort(ctx, &team, sharedQuota); err != nil {
 		return "", fmt.Errorf("reconcile team Cohort before workspace quota: %w", err)
 	}
@@ -375,6 +381,38 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		return "", fmt.Errorf("reconcile team Cohort after workspace quota: %w", err)
 	}
 	return queue.GetName(), nil
+}
+
+func (r *TauWorkspaceReconciler) sharedEstablishedWorkspaceClusterQueue(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) (string, bool, error) {
+	if len(workspace.Spec.Quota) != 0 || workspace.Spec.TeamRef == nil {
+		return "", false, nil
+	}
+	source, err := r.establishedWorkspaceClusterQueue(ctx, workspace, workspaceClusterQueueName(workspace.Name))
+	if err != nil || source == nil {
+		return "", false, err
+	}
+	var workspaces tauv1alpha1.TauWorkspaceList
+	if err := r.apiReader().List(ctx, &workspaces, client.InNamespace(workspace.Namespace)); err != nil {
+		return "", false, err
+	}
+	for i := range workspaces.Items {
+		candidate := &workspaces.Items[i]
+		if candidate.Name == workspace.Name ||
+			candidate.Spec.TeamRef == nil ||
+			candidate.Spec.TeamRef.Name != workspace.Spec.TeamRef.Name ||
+			len(candidate.Spec.Quota) != 0 {
+			continue
+		}
+		for _, queue := range []string{candidate.Status.Queue.ClusterQueue, candidate.Spec.Queue} {
+			if strings.TrimSpace(queue) == source.GetName() {
+				return source.GetName(), true, nil
+			}
+		}
+	}
+	return "", false, nil
 }
 
 func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(

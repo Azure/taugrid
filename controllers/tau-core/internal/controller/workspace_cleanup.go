@@ -231,7 +231,6 @@ func (r *TauWorkspaceReconciler) cleanupOwnedNamespaceAccess(
 ) error {
 	var namespaces corev1.NamespaceList
 	if err := r.List(ctx, &namespaces, client.MatchingLabels{
-		labelManagedBy: labelManagedByValue,
 		labelWorkspace: workspace.Name,
 	}); err != nil {
 		return err

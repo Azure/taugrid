@@ -431,6 +431,25 @@ func (r *TauTeamReconciler) establishedWorkspaceGuarantees(
 			}
 			return nil, err
 		}
+		var workspaces tauv1alpha1.TauWorkspaceList
+		if err := r.quotaReader().List(ctx, &workspaces, client.InNamespace(workspace.Namespace)); err != nil {
+			return nil, err
+		}
+		for i := range workspaces.Items {
+			candidate := &workspaces.Items[i]
+			if candidate.Name >= workspace.Name ||
+				candidate.Spec.TeamRef == nil ||
+				workspace.Spec.TeamRef == nil ||
+				candidate.Spec.TeamRef.Name != workspace.Spec.TeamRef.Name ||
+				len(candidate.Spec.Quota) != 0 {
+				continue
+			}
+			for _, candidateQueue := range []string{candidate.Status.Queue.ClusterQueue, candidate.Spec.Queue} {
+				if strings.TrimSpace(candidateQueue) == name {
+					return map[string]resource.Quantity{}, nil
+				}
+			}
+		}
 		return clusterQueueNominalQuota(queue)
 	}
 	return nil, nil
