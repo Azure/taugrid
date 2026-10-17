@@ -80,19 +80,19 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, nil
 	}
-	if strings.TrimSpace(workspace.Spec.Queue) == "" {
-		resolved, err := r.getDefaultWorkspaceQueue(ctx)
-		if err != nil {
-			return r.reportUnresolvedQueue(ctx, &workspace, err.Error())
-		}
-		workspace.Spec.Queue = resolved
-	}
 	migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if migrated {
 		return ctrl.Result{Requeue: true}, nil
+	}
+	if strings.TrimSpace(workspace.Spec.Queue) == "" {
+		resolved, err := r.getDefaultWorkspaceQueue(ctx)
+		if err != nil {
+			return r.reportUnresolvedQueue(ctx, &workspace, err.Error())
+		}
+		workspace.Spec.Queue = resolved
 	}
 	return r.syncWorkspace(ctx, &workspace)
 }

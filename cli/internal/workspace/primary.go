@@ -38,7 +38,7 @@ func ProvablyPrimary(item Workspace) bool {
 	if isAdditionalWorkspaceBlocked(item) {
 		return false
 	}
-	return item.Metadata.Annotations[AnnotationV0Primary] == "true" || hasPrimaryWorkspaceHistory(item)
+	return item.Metadata.Annotations[AnnotationV0Primary] == "true"
 }
 
 const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"

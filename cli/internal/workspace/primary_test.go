@@ -203,6 +203,14 @@ func TestProvablyPrimaryRejectsUnreconciledWorkspace(t *testing.T) {
 	}
 }
 
+func TestProvablyPrimaryRejectsReconciledUnmarkedWorkspace(t *testing.T) {
+	workspace := ws("active", "2026-01-01T00:00:00Z", "", false)
+	workspace.Status.Phase = "Ready"
+	if ProvablyPrimary(workspace) {
+		t.Fatal("a named get cannot prove an unmarked workspace is primary when another workspace may carry the v0 marker")
+	}
+}
+
 func TestProvablyPrimaryAcceptsMarkedWorkspace(t *testing.T) {
 	if !ProvablyPrimary(ws("marked", "2026-01-01T00:00:00Z", "", true)) {
 		t.Fatal("an explicit primary marker is self-evident from the object alone")
