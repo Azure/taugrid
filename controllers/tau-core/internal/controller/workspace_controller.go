@@ -54,13 +54,6 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&workspace, workspaceFinalizer) {
 			if workspace.UID == "" || workspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
-				if strings.TrimSpace(workspace.Spec.Queue) == "" {
-					resolved, err := r.getDefaultWorkspaceQueue(ctx)
-					if err != nil {
-						return ctrl.Result{}, err
-					}
-					workspace.Spec.Queue = resolved
-				}
 				migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
 				if err != nil {
 					return ctrl.Result{}, err

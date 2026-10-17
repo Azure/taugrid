@@ -72,6 +72,13 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 		}
 		return false, fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
 	}
+	if !workspace.Spec.Target.CreateNamespace && strings.TrimSpace(workspace.Spec.Queue) == "" {
+		resolved, err := r.getDefaultWorkspaceQueue(ctx)
+		if err != nil {
+			return false, err
+		}
+		workspace.Spec.Queue = resolved
+	}
 	if !legacyNamespaceMatchesWorkspace(&namespace, workspace) {
 		return false, nil
 	}
