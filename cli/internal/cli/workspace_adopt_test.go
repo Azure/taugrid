@@ -147,3 +147,40 @@ func TestWorkspaceAdoptApplyOnlyTauWorkspace(t *testing.T) {
 		t.Fatalf("mutating create calls = %d, want 1", mutations)
 	}
 }
+
+func TestWorkspaceAdoptApplyRepairsCompatibleWorkspaceEvidence(t *testing.T) {
+	runner := newWorkspaceAdoptCLIRunner()
+	existingWorkspace := `{
+		"apiVersion":"tau.azure.com/v1alpha1",
+		"kind":"TauWorkspace",
+		"metadata":{"name":"sample","namespace":"tau-system","uid":"workspace-uid","resourceVersion":"17"},
+		"spec":{
+			"authorization":{"mode":"cluster-wide"},
+			"target":{"namespace":"sample","createNamespace":false},
+			"queue":"jobqueue",
+			"defaults":{"outputRoot":"/data/projects/sample/runs"}
+		}
+	}`
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = `{"items":[` + existingWorkspace + `]}`
+	runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = existingWorkspace
+	patchArgs := `-n tau-system patch workspace.tau.azure.com sample --type=merge -p {"metadata":{"annotations":{"tau.azure.com/adoption-namespace-uid":"ns-uid"},"resourceVersion":"17"}}`
+	runner.responses[patchArgs] = "workspace.tau.azure.com/sample patched\n"
+
+	out := executeWorkspaceAdopt(t, runner, "sample", "--apply")
+	if !strings.Contains(out, "preflight passed:") || !strings.Contains(out, "patched") {
+		t.Fatalf("unexpected retry output:\n%s", out)
+	}
+	var patches int
+	for _, call := range runner.calls {
+		args := strings.Join(call.args, " ")
+		if args == patchArgs {
+			patches++
+		}
+		if strings.Contains(args, " create ") {
+			t.Fatalf("compatible workspace was recreated: %v", call.args)
+		}
+	}
+	if patches != 1 {
+		t.Fatalf("adoption evidence patch calls = %d, want 1", patches)
+	}
+}

@@ -69,7 +69,13 @@ type WorkspaceWorkloadIdentity struct {
 	TenantID           string `json:"tenantId,omitempty" yaml:"tenantId,omitempty"`
 }
 
+type ClusterObjectReference struct {
+	Name string `json:"name" yaml:"name"`
+}
+
 type WorkspaceSpec struct {
+	TeamRef           *ClusterObjectReference    `json:"teamRef,omitempty" yaml:"teamRef,omitempty"`
+	Quota             []json.RawMessage          `json:"quota,omitempty" yaml:"quota,omitempty"`
 	Authorization     *WorkspaceAuthorization    `json:"authorization,omitempty" yaml:"authorization,omitempty"`
 	PrincipalRef      PrincipalRef               `json:"principalRef,omitempty" yaml:"principalRef,omitempty"`
 	KubernetesSubject KubernetesSubject          `json:"kubernetesSubject,omitempty" yaml:"kubernetesSubject,omitempty"`

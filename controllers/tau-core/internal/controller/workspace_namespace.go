@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,9 +13,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+var errNamespaceOwnershipUnverified = errors.New("namespace ownership is not verified")
 
 func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 	if workspace.Spec.Target.Namespace != "" {
@@ -23,7 +26,123 @@ func resolvedNamespace(workspace *tauv1alpha1.TauWorkspace) string {
 	return workspace.Name
 }
 
+func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) (bool, error) {
+	if workspace.UID == "" {
+		return false, fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)
+	}
+	if ownerUID := workspace.Annotations[annotationOwnerUID]; ownerUID != "" {
+		if ownerUID != string(workspace.UID) {
+			return false, fmt.Errorf("TauWorkspace %q owner UID is %q, want %q", workspace.Name, ownerUID, workspace.UID)
+		}
+		if workspace.Annotations[annotationV0Primary] == "true" {
+			targetNamespace := resolvedNamespace(workspace)
+			var namespace corev1.Namespace
+			err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace)
+			if apierrors.IsNotFound(err) || err == nil && namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				return false, nil
+			}
+			if err != nil {
+				return false, fmt.Errorf("verify legacy Namespace ownership: %w", err)
+			}
+			visible, err := r.cachedNamespaceOwnershipVisible(ctx, targetNamespace, workspace.UID)
+			if err != nil {
+				return false, err
+			}
+			if !visible {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	if workspace.Annotations[annotationV0Primary] != "true" {
+		return false, nil
+	}
+
+	targetNamespace := resolvedNamespace(workspace)
+	previousNamespace := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace)
+	if previousNamespace != "" && previousNamespace != targetNamespace {
+		targetNamespace = previousNamespace
+	}
+	var namespace corev1.Namespace
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {
+		if apierrors.IsNotFound(err) {
+			if workspace.DeletionTimestamp.IsZero() {
+				return false, nil
+			}
+			return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
+		}
+		return false, fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
+	}
+	if !legacyNamespaceMatchesWorkspace(&namespace, workspace) {
+		return false, nil
+	}
+	if ownerUID := namespace.Annotations[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
+		return false, nil
+	}
+	if namespace.Annotations[annotationOwnerUID] == "" {
+		setOwnerUIDAnnotation(&namespace, workspace.UID)
+		if err := r.Update(ctx, &namespace); err != nil {
+			return false, fmt.Errorf("persist legacy Namespace owner UID: %w", err)
+		}
+		return true, nil
+	}
+	visible, err := r.cachedNamespaceOwnershipVisible(ctx, targetNamespace, workspace.UID)
+	if err != nil {
+		return false, err
+	}
+	if !visible {
+		return true, nil
+	}
+
+	return r.persistLegacyWorkspaceOwnerUID(ctx, workspace)
+}
+
+func (r *TauWorkspaceReconciler) cachedNamespaceOwnershipVisible(
+	ctx context.Context,
+	namespaceName string,
+	workspaceUID types.UID,
+) (bool, error) {
+	var namespace corev1.Namespace
+	if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, &namespace); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return namespace.Annotations[annotationOwnerUID] == string(workspaceUID), nil
+}
+
+func legacyNamespaceMatchesWorkspace(
+	namespace *corev1.Namespace,
+	workspace *tauv1alpha1.TauWorkspace,
+) bool {
+	if namespace.Labels[labelWorkspace] != workspace.Name {
+		return false
+	}
+	if namespace.Labels[labelManagedBy] == labelManagedByValue {
+		return true
+	}
+	localQueue := strings.TrimSpace(namespace.Labels[labelWorkspaceLocalQueue])
+	defaultLocalQueue := strings.TrimSpace(namespace.Labels[labelKueueDefaultLocalQueue])
+	return localQueue != "" && localQueue == defaultLocalQueue
+}
+
+func (r *TauWorkspaceReconciler) persistLegacyWorkspaceOwnerUID(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) (bool, error) {
+	before := workspace.DeepCopy()
+	setOwnerUIDAnnotation(workspace, workspace.UID)
+	if err := r.Patch(ctx, workspace, client.MergeFrom(before)); err != nil {
+		return false, fmt.Errorf("persist legacy TauWorkspace ownership migration: %w", err)
+	}
+	return true, nil
+}
+
 func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, error) {
+	if workspace.UID == "" {
+		return false, fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)
+	}
 	if reason := reservedNamespaceReason(targetNamespace, systemNamespace(r.SystemNamespace)); reason != "" {
 		return false, fmt.Errorf("refusing to manage namespace %q: %s", targetNamespace, reason)
 	}
@@ -34,7 +153,7 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        targetNamespace,
 				Labels:      workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue),
-				Annotations: workspaceNamespaceAnnotations(workspace.Spec.Defaults.OutputRoot),
+				Annotations: workspaceNamespaceAnnotations(workspace),
 			},
 		}
 		if err := r.Create(ctx, &namespace); err != nil {
@@ -48,16 +167,57 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	if namespace.Labels == nil {
 		namespace.Labels = map[string]string{}
 	}
-	if owner := namespace.Labels[labelWorkspace]; owner != "" && owner != workspace.Name {
-		orphaned, err := r.ownerWorkspaceAbsent(ctx, owner)
-		if err != nil {
-			return false, err
+	owner := namespace.Labels[labelWorkspace]
+	adoptionNamespaceUID := strings.TrimSpace(workspace.Annotations[annotationAdoptionNamespaceUID])
+	if adoptionNamespaceUID != "" && adoptionNamespaceUID != string(namespace.UID) {
+		return false, fmt.Errorf(
+			"target namespace %q UID is %q, but adoption evidence names %q",
+			targetNamespace,
+			namespace.UID,
+			adoptionNamespaceUID,
+		)
+	}
+	explicitAdoption := hasExplicitNamespaceAdoptionEvidence(workspace, &namespace)
+	if owner != "" && owner != workspace.Name {
+		if !explicitAdoption {
+			return false, fmt.Errorf(
+				"target namespace %q is assigned to TauWorkspace %q; explicit UID-bound adoption is required",
+				targetNamespace,
+				owner,
+			)
 		}
-		if !orphaned {
-			return false, fmt.Errorf("target namespace %q is already assigned to TauWorkspace %q", targetNamespace, owner)
+		var existingOwner tauv1alpha1.TauWorkspace
+		err := r.apiReader().Get(ctx, client.ObjectKey{Name: owner, Namespace: workspace.Namespace}, &existingOwner)
+		if err == nil {
+			return false, fmt.Errorf(
+				"target namespace %q is still assigned to existing TauWorkspace %q",
+				targetNamespace,
+				owner,
+			)
 		}
-		log.FromContext(ctx).Info("reclaiming namespace from deleted workspace",
-			"namespace", targetNamespace, "previousOwner", owner, "workspace", workspace.Name)
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("verify existing TauWorkspace %q: %w", owner, err)
+		}
+	}
+	ownerUID := namespace.Annotations[annotationOwnerUID]
+	if ownerUID != "" && ownerUID != string(workspace.UID) && !explicitAdoption {
+		return false, fmt.Errorf(
+			"target namespace %q belongs to a different TauWorkspace UID %q; explicit UID-bound adoption is required",
+			targetNamespace,
+			ownerUID,
+		)
+	}
+	if ownerUID == "" && workspace.UID != "" && !explicitAdoption {
+		ownership := "has no TauWorkspace ownership metadata"
+		if owner == workspace.Name {
+			ownership = "has a workspace label without an authoritative owner UID"
+		}
+		return false, fmt.Errorf(
+			"%w: target namespace %q %s; explicit UID-bound adoption is required",
+			errNamespaceOwnershipUnverified,
+			targetNamespace,
+			ownership,
+		)
 	}
 	changed := false
 	requiredLabels := map[string]string{
@@ -77,6 +237,10 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	if namespace.Annotations == nil {
 		namespace.Annotations = map[string]string{}
 	}
+	if workspace.UID != "" && namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		namespace.Annotations[annotationOwnerUID] = string(workspace.UID)
+		changed = true
+	}
 	resultScope := strings.TrimSpace(workspace.Spec.Defaults.OutputRoot)
 	if resultScope == "" {
 		if _, ok := namespace.Annotations[annotationResultScope]; ok {
@@ -93,6 +257,16 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 		}
 	}
 	return true, nil
+}
+
+func hasExplicitNamespaceAdoptionEvidence(
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+) bool {
+	expectedUID := strings.TrimSpace(workspace.Annotations[annotationAdoptionNamespaceUID])
+	return expectedUID != "" &&
+		namespace.UID != "" &&
+		expectedUID == string(namespace.UID)
 }
 
 func reservedNamespaceReason(name, systemNamespace string) string {
@@ -118,9 +292,16 @@ func workspaceNamespaceLabels(workspace, localQueue string) map[string]string {
 	return labels
 }
 
-func workspaceNamespaceAnnotations(resultScope string) map[string]string {
-	if strings.TrimSpace(resultScope) == "" {
+func workspaceNamespaceAnnotations(workspace *tauv1alpha1.TauWorkspace) map[string]string {
+	annotations := map[string]string{}
+	if workspace.UID != "" {
+		annotations[annotationOwnerUID] = string(workspace.UID)
+	}
+	if resultScope := strings.TrimSpace(workspace.Spec.Defaults.OutputRoot); resultScope != "" {
+		annotations[annotationResultScope] = resultScope
+	}
+	if len(annotations) == 0 {
 		return nil
 	}
-	return map[string]string{annotationResultScope: resultScope}
+	return annotations
 }

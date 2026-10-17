@@ -146,14 +146,24 @@ func TestPreflightAdoptionSuccess(t *testing.T) {
 	}
 }
 
-func TestPreflightAdoptionEnforcesSingleV0Workspace(t *testing.T) {
+func TestPreflightAdoptionAllowsUnrelatedWorkspace(t *testing.T) {
 	runner := successfulAdoptRunner()
 	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
-		out: `{"items":[{"metadata":{"name":"other"},"spec":{"queue":"jobqueue"}}]}`,
+		out: `{"items":[{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"},"queue":"jobqueue"},"status":{"target":{"resolvedNamespace":"sample"}}}]}`,
+	}}
+	if _, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions()); err != nil {
+		t.Fatalf("unrelated workspace with stale status should not block adoption: %v", err)
+	}
+}
+
+func TestPreflightAdoptionRejectsWorkspaceTargetingNamespace(t *testing.T) {
+	runner := successfulAdoptRunner()
+	runner.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+		out: `{"items":[{"metadata":{"name":"other"},"spec":{"target":{"namespace":"sample"},"queue":"jobqueue"}}]}`,
 	}}
 	_, err := PreflightAdoption(context.Background(), runner, defaultAdoptOptions())
-	if err == nil || !strings.Contains(err.Error(), `TauWorkspace "other" already exists with different intent`) {
-		t.Fatalf("expected singleton refusal, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), `TauWorkspace "other" already targets Namespace "sample"`) {
+		t.Fatalf("expected competing target refusal, got %v", err)
 	}
 }
 
@@ -181,6 +191,9 @@ func TestPreflightAdoptionRefusals(t *testing.T) {
 		{
 			name: "namespace assigned elsewhere",
 			change: func(r *adoptFakeRunner) {
+				r.responses["-n tau-system get workspace.tau.azure.com -o json"] = []adoptFakeResponse{{
+					out: `{"items":[{"metadata":{"name":"other"},"spec":{"target":{"namespace":"other"}}}]}`,
+				}}
 				r.responses["get namespace sample -o json"] = []adoptFakeResponse{{
 					out: fmt.Sprintf(`{"metadata":{"name":"sample","uid":"ns-uid","labels":{"%s":"other"}}}`, workloadmeta.LabelWorkspace),
 				}}
@@ -275,6 +288,15 @@ func TestPreflightAdoptionRefusals(t *testing.T) {
 			change: func(r *adoptFakeRunner) {
 				r.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
 					out: compatibleWorkspaceJSON("other-queue"),
+				}}
+			},
+			want: "has a conflicting spec",
+		},
+		{
+			name: "existing workspace Team intent is preserved",
+			change: func(r *adoptFakeRunner) {
+				r.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
+					out: strings.Replace(compatibleWorkspaceJSON("jobqueue"), `"authorization"`, `"teamRef":{"name":"research"},"quota":[{"resource":"cpu","nominal":"1"}],"authorization"`, 1),
 				}}
 			},
 			want: "has a conflicting spec",
@@ -401,6 +423,9 @@ func TestApplyAdoptionCreatesOnlyTauWorkspace(t *testing.T) {
 		if !strings.Contains(call.stdin, "kind: TauWorkspace") {
 			t.Fatalf("create input was not a TauWorkspace:\n%s", call.stdin)
 		}
+		if !strings.Contains(call.stdin, "tau.azure.com/adoption-namespace-uid: ns-uid") {
+			t.Fatalf("create input lacks Namespace UID adoption evidence:\n%s", call.stdin)
+		}
 		for _, forbidden := range []string{"kind: Namespace", "kind: LocalQueue", "kind: PersistentVolumeClaim", "kind: StorageClass", "kind: ClusterQueue", "kind: Secret"} {
 			if strings.Contains(call.stdin, forbidden) {
 				t.Fatalf("create input contains %s:\n%s", forbidden, call.stdin)
@@ -415,11 +440,13 @@ func TestApplyAdoptionCreatesOnlyTauWorkspace(t *testing.T) {
 	}
 }
 
-func TestApplyAdoptionIsIdempotentForCompatibleWorkspace(t *testing.T) {
+func TestApplyAdoptionRefreshesEvidenceForCompatibleWorkspace(t *testing.T) {
 	runner := successfulAdoptRunner()
 	runner.responses["-n tau-system get workspace.tau.azure.com sample --ignore-not-found -o json"] = []adoptFakeResponse{{
 		out: compatibleWorkspaceJSON("jobqueue"),
 	}}
+	patchArgs := `-n tau-system patch workspace.tau.azure.com sample --type=merge -p {"metadata":{"annotations":{"tau.azure.com/adoption-namespace-uid":"ns-uid"},"resourceVersion":"17"}}`
+	runner.responses[patchArgs] = []adoptFakeResponse{{out: "workspace.tau.azure.com/sample patched\n"}}
 	options := defaultAdoptOptions()
 	initial, err := PreflightAdoption(context.Background(), runner, options)
 	if err != nil {
@@ -429,14 +456,21 @@ func TestApplyAdoptionIsIdempotentForCompatibleWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, "already exists with compatible intent") {
-		t.Fatalf("unexpected compatible no-op output: %q", out)
+	if !strings.Contains(out, "patched") {
+		t.Fatalf("unexpected compatible patch output: %q", out)
 	}
+	var patched bool
 	for _, call := range runner.calls {
 		args := strings.Join(call.args, " ")
-		if strings.Contains(args, " apply ") || strings.Contains(args, " create ") {
-			t.Fatalf("compatible workspace should not be mutated: %v", call.args)
+		if args == patchArgs {
+			patched = true
 		}
+		if strings.Contains(args, " apply ") || strings.Contains(args, " create ") {
+			t.Fatalf("compatible workspace should only be patched: %v", call.args)
+		}
+	}
+	if !patched {
+		t.Fatal("compatible workspace was not patched with Namespace UID evidence")
 	}
 }
 

@@ -38,7 +38,13 @@ func ProvablyPrimary(item Workspace) bool {
 	if isAdditionalWorkspaceBlocked(item) {
 		return false
 	}
-	return item.Metadata.Annotations[AnnotationV0Primary] == "true" || hasPrimaryWorkspaceHistory(item)
+	return item.Metadata.Annotations[AnnotationV0Primary] == "true"
+}
+
+func NamedGetFallback(item Workspace) bool {
+	return strings.TrimSpace(item.Metadata.DeletionTimestamp) == "" &&
+		item.Status.Phase == "Ready" &&
+		hasPrimaryWorkspaceHistory(item)
 }
 
 const reasonAdditionalWorkspaceBlocked = "AdditionalWorkspaceBlocked"

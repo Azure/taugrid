@@ -35,9 +35,11 @@ readable ClusterQueue, and requires the optional data PVC to exist and be
 Bound. UID, StorageClass, and ClusterQueue guards can pin the exact resources
 being adopted.
 
-The default is a read-only preview. --apply repeats preflight, performs a
-server-side dry-run, and creates the TauWorkspace only when it is still absent.
-A compatible existing TauWorkspace is a no-op; conflicting intent is refused. The command
+The default is a read-only preview. --apply repeats preflight, records the exact
+validated Namespace UID on the TauWorkspace, performs a server-side dry-run,
+and creates the TauWorkspace when it is still absent. A compatible existing
+TauWorkspace receives the same identity-bound adoption evidence so interrupted
+adoption can be retried; conflicting intent is refused. The command
 does not create Namespace, RBAC, LocalQueue, PVC, StorageClass, ClusterQueue,
 Secret, or Azure resources.`,
 		Example: `  tau workspace adopt research-team
@@ -62,6 +64,7 @@ Secret, or Azure resources.`,
 				return err
 			}
 			if !apply {
+				options.NamespaceUID = report.NamespaceUID
 				manifest, err := tauworkspace.RenderAdoption(options)
 				if err != nil {
 					return err
@@ -99,6 +102,6 @@ Secret, or Azure resources.`,
 	cmd.Flags().StringVar(&options.ClusterQueue, "cluster-queue", "", "expected ClusterQueue referenced by the LocalQueue")
 	cmd.Flags().StringVar(&options.OutputRoot, "output-root", "", "workspace default output root (default: /data/projects/NAME/runs)")
 	cmd.Flags().StringVar(&options.Priority, "priority", "", "workspace default priority tier: default|priority|normal")
-	cmd.Flags().BoolVar(&apply, "apply", false, "create only the TauWorkspace after server-side preflight")
+	cmd.Flags().BoolVar(&apply, "apply", false, "create or refresh adoption evidence on the TauWorkspace after server-side preflight")
 	return cmd
 }
