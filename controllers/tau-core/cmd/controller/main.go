@@ -13,7 +13,9 @@ import (
 	corecontroller "github.com/Azure/taugrid/controllers/tau-core/internal/controller"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -85,13 +87,22 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "TauWorkspace")
 		os.Exit(1)
 	}
-	if err := (&corecontroller.TauTeamReconciler{
-		Client:          mgr.GetClient(),
-		APIReader:       mgr.GetAPIReader(),
-		SystemNamespace: systemNamespace,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "TauTeam")
+	teamAPIAvailable, err := apiKindAvailable(mgr.GetRESTMapper(), tauv1alpha1.GroupVersion.WithKind(tauv1alpha1.KindTauTeam).GroupKind())
+	if err != nil {
+		setupLog.Error(err, "unable to discover API", "controller", "TauTeam")
 		os.Exit(1)
+	}
+	if teamAPIAvailable {
+		if err := (&corecontroller.TauTeamReconciler{
+			Client:          mgr.GetClient(),
+			APIReader:       mgr.GetAPIReader(),
+			SystemNamespace: systemNamespace,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "TauTeam")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("skipping controller because API is unavailable", "controller", "TauTeam")
 	}
 	if err := (&corecontroller.TauQuotaRequestReconciler{
 		Client:          mgr.GetClient(),
@@ -115,6 +126,16 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+func apiKindAvailable(mapper meta.RESTMapper, groupKind schema.GroupKind) (bool, error) {
+	if _, err := mapper.RESTMapping(groupKind); err != nil {
+		if meta.IsNoMatchError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func resolveSystemNamespaceFlag(systemNamespace, legacyNamespace string) (string, error) {
