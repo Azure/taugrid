@@ -118,6 +118,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			ServiceAccount:   serviceAccount,
 			WorkspaceUID:     workspace.Metadata.UID,
 			WorkspacePhase:   workspace.Status.Phase,
+			TeamBacked:       workspace.Spec.TeamRef != nil,
 			CompatibleQueues: compatibleQueues,
 		}, nil
 	}
@@ -174,6 +175,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		ServiceAccount:   serviceAccount,
 		WorkspaceUID:     workspace.Metadata.UID,
 		WorkspacePhase:   workspace.Status.Phase,
+		TeamBacked:       workspace.Spec.TeamRef != nil,
 		CompatibleQueues: compatibleQueues,
 	}, nil
 }

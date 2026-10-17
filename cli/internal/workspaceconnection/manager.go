@@ -58,6 +58,7 @@ type Verification struct {
 	ServiceAccount   string
 	WorkspaceUID     string
 	WorkspacePhase   string
+	TeamBacked       bool
 	CompatibleQueues []string
 }
 
@@ -1133,6 +1134,9 @@ func (m Manager) withCompatibleQueue(
 	expectedQueue = strings.TrimSpace(expectedQueue)
 	if expectedQueue == "" || expectedQueue == verification.Queue ||
 		slices.Contains(verification.CompatibleQueues, expectedQueue) {
+		return verification
+	}
+	if !verification.TeamBacked {
 		return verification
 	}
 	verifier, ok := m.Verifier.(compatibleQueueVerifier)

@@ -1468,10 +1468,36 @@ func TestWithCompatibleQueueVerifiesPersistedQueueIndependentOfWorkspaceSpec(t *
 		Descriptor{},
 		"/tmp/kubeconfig",
 		"inherited-default",
-		Verification{Namespace: "sample", Queue: "tau-ws-sample"},
+		Verification{Namespace: "sample", Queue: "tau-ws-sample", TeamBacked: true},
 	)
 	if !slices.Contains(verification.CompatibleQueues, "inherited-default") {
 		t.Fatalf("compatible queues = %#v, want persisted inherited default", verification.CompatibleQueues)
+	}
+}
+
+func TestWithCompatibleQueueDoesNotPreserveOrdinaryWorkspaceQueue(t *testing.T) {
+	manager := Manager{Verifier: &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{},
+		queue:        "external-a",
+	}}
+	verification := manager.withCompatibleQueue(
+		context.Background(),
+		Descriptor{},
+		"/tmp/kubeconfig",
+		"external-a",
+		Verification{Namespace: "sample", Queue: "external-b"},
+	)
+	if len(verification.CompatibleQueues) != 0 {
+		t.Fatalf("compatible queues = %#v, want ordinary queue change preserved", verification.CompatibleQueues)
+	}
+	state := connectionState{Namespace: "sample", Queue: "external-a"}
+	changes := state.contractChanges(verification)
+	if len(changes) != 1 || !strings.Contains(changes[0], `LocalQueue "external-a" -> "external-b"`) {
+		t.Fatalf("contract changes = %v, want external queue change", changes)
+	}
+	state.applyVerification(Descriptor{}, verification, time.Now())
+	if state.Queue != "external-b" {
+		t.Fatalf("saved queue = %q, want external-b", state.Queue)
 	}
 }
 

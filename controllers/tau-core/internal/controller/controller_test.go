@@ -2876,8 +2876,8 @@ func TestTeamWorkspacePreservesSharedLegacyQueueBeforeCreatingManagedQueues(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(remaining) != 1 || remaining[0].NominalQuota.Cmp(resource.MustParse("0")) != 0 {
-		t.Fatalf("shared team quota = %#v, want shared legacy allocation charged once", remaining)
+	if len(remaining) != 1 || remaining[0].NominalQuota.Cmp(resource.MustParse("8")) != 0 {
+		t.Fatalf("shared team quota = %#v, want retained external allocation excluded", remaining)
 	}
 	got, err := reconciler.reconcileWorkspaceClusterQueue(ctx, first)
 	if err != nil {
@@ -2979,6 +2979,16 @@ func TestEmptyQuotaWorkspacesRetainPlatformQueueAcrossTeams(t *testing.T) {
 		if got != platformQueue.GetName() {
 			t.Fatalf("workspace %q queue = %q, want platform queue", item.workspace.Name, got)
 		}
+	}
+	if err := c.Delete(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := teamReconciler.sharedTeamQuotaForWorkspace(ctx, vision, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shared) != 1 || shared[0].NominalQuota.Cmp(resource.MustParse("4")) != 0 {
+		t.Fatalf("sole consumer shared quota = %#v, want retained external allocation excluded after peer deletion", shared)
 	}
 }
 
