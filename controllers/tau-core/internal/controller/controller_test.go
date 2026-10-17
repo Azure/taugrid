@@ -1115,9 +1115,12 @@ func TestWorkspaceRevokesObsoletePreviousNamespaceSubjectBeforeTargetReady(t *te
 		{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "obsolete-researchers"},
 		{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "current-researchers"},
 	}
+	oldNamespace := testNamespace("old-aurora")
+	oldNamespace.Labels = workspaceLabels(workspace.Name)
+	oldNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, oldBinding).
+		WithObjects(workspace, oldNamespace, oldBinding).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -1149,9 +1152,12 @@ func TestWorkspaceRevokesObsoletePreviousNamespaceIdentityBeforeTargetReady(t *t
 	current.Annotations[annotationAzureWIClientID] = workspace.Spec.WorkloadIdentity.ClientID
 	obsolete := testServiceAccount("old-aurora", "tau-workload", workspace.Name)
 	obsolete.Annotations[annotationOwnerUID] = string(workspace.UID)
+	oldNamespace := testNamespace("old-aurora")
+	oldNamespace.Labels = workspaceLabels(workspace.Name)
+	oldNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, current, obsolete).
+		WithObjects(workspace, oldNamespace, current, obsolete).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -1179,9 +1185,12 @@ func TestWorkspaceRevokesPreviousNamespaceIdentityWhenClientIDChanges(t *testing
 	obsolete := testServiceAccount("old-aurora", workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
 	obsolete.Annotations[annotationOwnerUID] = string(workspace.UID)
 	obsolete.Annotations[annotationAzureWIClientID] = "old-client-id"
+	oldNamespace := testNamespace("old-aurora")
+	oldNamespace.Labels = workspaceLabels(workspace.Name)
+	oldNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, obsolete).
+		WithObjects(workspace, oldNamespace, obsolete).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -2834,6 +2843,47 @@ func TestExistingTeamWorkspacePreservesManagedQueueContract(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspaceAccountsForSharedLegacyQueueBeforeCreatingManagedQueues(t *testing.T) {
+	ctx := context.Background()
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	first := testWorkspace("aurora")
+	first.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	first.Spec.Queue = "legacy"
+	first.Spec.Quota = nil
+	first.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{LocalQueue: "legacy", ClusterQueue: "legacy"}
+	second := testWorkspace("borealis")
+	second.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	second.Spec.Queue = "legacy"
+	second.Spec.Quota = nil
+	second.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{LocalQueue: "legacy", ClusterQueue: "legacy"}
+	legacyQueue := testClusterQueue("legacy")
+	legacyQueue.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
+			true,
+		),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(team, first, second, legacyQueue).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.reconcileWorkspaceClusterQueue(ctx, first); err == nil ||
+		!strings.Contains(err.Error(), "workspace guarantees exceed team quota") {
+		t.Fatalf("reconcileWorkspaceClusterQueue() error = %v, want shared legacy quota refusal", err)
+	}
+	for _, workspace := range []*tauv1alpha1.TauWorkspace{first, second} {
+		queue := newQueueObject(clusterQueueGVK)
+		err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue)
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("managed ClusterQueue %q was created before shared accounting: %v", queue.GetName(), err)
+		}
+	}
+}
+
 func TestExistingTeamWorkspaceRejectsEmptyManagedQueueWithoutEstablishedContract(t *testing.T) {
 	workspace := testWorkspace("aurora")
 	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
@@ -2853,6 +2903,104 @@ func TestExistingTeamWorkspaceRejectsEmptyManagedQueueWithoutEstablishedContract
 	)
 	if err == nil || !strings.Contains(err.Error(), "established workspace queue contract is unavailable") {
 		t.Fatalf("preserveEstablishedWorkspaceQueueContract() error = %v", err)
+	}
+}
+
+func TestWorkspaceRevokesAccessAcrossAbandonedOwnedNamespaces(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Target.Namespace = "unavailable-c"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.KubernetesSubject = &tauv1alpha1.KubernetesSubject{Kind: rbacv1.GroupKind, Name: "current-researchers"}
+	workspace.Spec.WorkloadIdentity.ServiceAccountName = "current-workload"
+	workspace.Status.Target.ResolvedNamespace = "active-a"
+	active := testNamespace("active-a")
+	active.Labels = workspaceLabels(workspace.Name)
+	active.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	staging := testNamespace("staging-b")
+	staging.Labels = workspaceLabels(workspace.Name)
+	staging.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	activeBinding := testRoleBinding(active.Name, defaultRoleName, workspace.Name)
+	stagingBinding := testRoleBinding(staging.Name, defaultRoleName, workspace.Name)
+	for _, binding := range []*rbacv1.RoleBinding{activeBinding, stagingBinding} {
+		binding.Subjects = []rbacv1.Subject{{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "obsolete-researchers"}}
+	}
+	activeIdentity := testServiceAccount(active.Name, "obsolete-workload", workspace.Name)
+	stagingIdentity := testServiceAccount(staging.Name, "obsolete-workload", workspace.Name)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, active, staging, activeBinding, stagingBinding, activeIdentity, stagingIdentity).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	if _, err := newTestWorkspaceReconciler(c).syncWorkspace(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	for _, namespace := range []string{active.Name, staging.Name} {
+		var binding rbacv1.RoleBinding
+		if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: namespace}, &binding); err != nil {
+			t.Fatal(err)
+		}
+		want := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, namespace)}
+		if !reflect.DeepEqual(binding.Subjects, want) {
+			t.Fatalf("namespace %q subjects = %#v, want %#v", namespace, binding.Subjects, want)
+		}
+		if err := c.Get(ctx, client.ObjectKey{Name: "obsolete-workload", Namespace: namespace}, &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+			t.Fatalf("namespace %q obsolete identity survived: %v", namespace, err)
+		}
+	}
+}
+
+func TestPreviousNamespaceResearcherAccessRejectsForeignBinding(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: "old-aurora"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.GroupKind, APIGroup: rbacv1.GroupName, Name: "foreign"}},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(binding).
+		Build()
+
+	err := newTestWorkspaceReconciler(c).reconcileExistingResearcherAccess(ctx, workspace, binding.Namespace)
+	if err == nil || !strings.Contains(err.Error(), "is not owned by workspace") {
+		t.Fatalf("reconcileExistingResearcherAccess() error = %v, want ownership refusal", err)
+	}
+	var got rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Annotations[annotationOwnerUID] != "" || got.Subjects[0].Name != "foreign" {
+		t.Fatalf("foreign RoleBinding mutated: %#v", got)
+	}
+}
+
+func TestWorkspaceRevokesOwnerlessLegacyIdentityBeforeTargetReady(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Target.Namespace = "unavailable"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.WorkloadIdentity.ServiceAccountName = "current-workload"
+	ownedNamespace := testNamespace("staging")
+	ownedNamespace.Labels = workspaceLabels(workspace.Name)
+	ownedNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	legacy := testServiceAccount(ownedNamespace.Name, "obsolete-workload", workspace.Name)
+	legacy.Annotations = map[string]string{annotationAzureWIClientID: "obsolete-client"}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, ownedNamespace, legacy).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	if _, err := newTestWorkspaceReconciler(c).syncWorkspace(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(legacy), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("ownerless legacy ServiceAccount survived cleanup: %v", err)
 	}
 }
 
