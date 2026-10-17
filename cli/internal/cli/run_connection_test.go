@@ -367,6 +367,7 @@ func TestLifecycleCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T)
 		"",
 		false,
 		false,
+		false,
 		runConnectionSource{
 			Git: true, Catalog: true, Project: "alpha", Workspace: "alpha-workspace",
 		},
@@ -408,6 +409,7 @@ func TestLifecycleCatalogProjectRoutesDegradedWorkspace(t *testing.T) {
 		command,
 		"",
 		"",
+		false,
 		false,
 		false,
 		runConnectionSource{
@@ -496,6 +498,7 @@ func TestRunLifecycleExplicitWorkspaceResolvesItsTargetNamespace(t *testing.T) {
 		namespace string,
 		_ bool,
 		namespaceExplicit bool,
+		_ bool,
 	) (string, string, func(), error) {
 		gotRoutingNamespace = namespace
 		gotRoutingNamespaceExplicit = namespaceExplicit
@@ -562,6 +565,7 @@ func TestRunLifecycleExplicitNamespaceMustMatchWorkspace(t *testing.T) {
 			namespace string,
 			_ bool,
 			namespaceExplicit bool,
+			_ bool,
 		) (string, string, func(), error) {
 			if namespace != "other" || !namespaceExplicit {
 				t.Fatalf("routing namespace = %q explicit=%v", namespace, namespaceExplicit)
@@ -640,7 +644,7 @@ func TestRunLifecycleWorkspacePlaceholderIsNotExplicitNamespace(t *testing.T) {
 				func(
 					cmd *cobra.Command,
 					kubeContext, namespace string,
-					contextExplicit, namespaceExplicit bool,
+					contextExplicit, namespaceExplicit, workspaceRouting bool,
 				) (string, string, func(), error) {
 					return resolveRunLifecycleConnectionUsing(
 						cmd,
@@ -648,6 +652,7 @@ func TestRunLifecycleWorkspacePlaceholderIsNotExplicitNamespace(t *testing.T) {
 						namespace,
 						contextExplicit,
 						namespaceExplicit,
+						workspaceRouting,
 						ensurer,
 					)
 				},
@@ -677,6 +682,66 @@ func TestRunLifecycleWorkspacePlaceholderIsNotExplicitNamespace(t *testing.T) {
 	}
 }
 
+func TestRunLifecycleExplicitWorkspaceRoutesOutsideGit(t *testing.T) {
+	withRunRoutingCWD(t, t.TempDir())
+	workspace := readyTestWorkspace("research", "research-uid", "research-runs", "research-queue")
+	fetch := func(
+		_ *cobra.Command,
+		_, _, name string,
+	) (tauworkspace.Workspace, error) {
+		if name != "research" {
+			t.Fatalf("workspace name = %q, want research", name)
+		}
+		return workspace, nil
+	}
+
+	for _, commandName := range []string{"cancel", "status", "logs"} {
+		t.Run(commandName, func(t *testing.T) {
+			command := &cobra.Command{Use: commandName}
+			command.SetContext(context.Background())
+			ensurer := &fakeRunConnectionEnsurer{}
+
+			gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithWorkspaceUsing(
+				command,
+				"ambient-context",
+				"",
+				"research",
+				false,
+				false,
+				true,
+				func(
+					cmd *cobra.Command,
+					kubeContext, namespace string,
+					contextExplicit, namespaceExplicit, workspaceRouting bool,
+				) (string, string, func(), error) {
+					return resolveRunLifecycleConnectionUsing(
+						cmd,
+						kubeContext,
+						namespace,
+						contextExplicit,
+						namespaceExplicit,
+						workspaceRouting,
+						ensurer,
+					)
+				},
+				fetch,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restore()
+			if gotContext != "ambient-context" || gotNamespace != "research-runs" || ensurer.calls != 0 {
+				t.Fatalf(
+					"context=%q namespace=%q calls=%d, want context=ambient-context namespace=research-runs calls=0",
+					gotContext,
+					gotNamespace,
+					ensurer.calls,
+				)
+			}
+		})
+	}
+}
+
 func TestAmbientContextDoesNotBypassEnabledRepository(t *testing.T) {
 	t.Setenv("TAU_CONTEXT", "ambient-admin-context")
 	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
@@ -688,6 +753,7 @@ func TestAmbientContextDoesNotBypassEnabledRepository(t *testing.T) {
 		command,
 		defaultKubeContext(),
 		"",
+		false,
 		false,
 		false,
 		"",
@@ -712,6 +778,7 @@ func TestExplicitContextBypassesDescriptor(t *testing.T) {
 		"custom",
 		true,
 		true,
+		false,
 		"",
 		ensurer,
 	)
@@ -758,6 +825,7 @@ func TestLifecycleCatalogRoutingRequiresProjectAtRoot(t *testing.T) {
 		"",
 		false,
 		false,
+		false,
 		"",
 		ensurer,
 	)
@@ -772,6 +840,7 @@ func TestLifecycleCatalogRoutingRequiresProjectAtRoot(t *testing.T) {
 		command,
 		"ambient-context",
 		"",
+		false,
 		false,
 		false,
 		"alpha",
@@ -816,6 +885,7 @@ func TestLifecycleExplicitContextBypassesCatalogAmbiguity(t *testing.T) {
 		"explicit-namespace",
 		true,
 		true,
+		false,
 		"",
 		ensurer,
 	)
@@ -858,6 +928,7 @@ func TestLifecycleExplicitContextStillResolvesProjectWorkspace(t *testing.T) {
 		"",
 		true,
 		false,
+		false,
 		"alpha",
 		&fakeRunConnectionEnsurer{},
 	)
@@ -899,6 +970,7 @@ func TestLifecycleExplicitContextResolvesImplicitCatalogWorkspace(t *testing.T) 
 		"explicit-context",
 		"",
 		true,
+		false,
 		false,
 		"",
 		&fakeRunConnectionEnsurer{},
@@ -1002,6 +1074,7 @@ func TestLifecycleOutsideRepositoryRequiresOperatorRouting(t *testing.T) {
 		"",
 		false,
 		false,
+		false,
 		"",
 		ensurer,
 	); err == nil || !strings.Contains(err.Error(), "outside a Git repository") {
@@ -1013,6 +1086,7 @@ func TestLifecycleOutsideRepositoryRequiresOperatorRouting(t *testing.T) {
 		"explicit-namespace",
 		false,
 		true,
+		false,
 		"",
 		ensurer,
 	)
