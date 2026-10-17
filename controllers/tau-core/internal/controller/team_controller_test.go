@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,9 +14,11 @@ import (
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -410,6 +413,62 @@ func TestTeamDeletionWaitsForAppliedWorkspaceCohort(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: cohort.GetName()}, remainingCohort); err != nil {
 		t.Fatalf("Team Cohort was deleted while still applied: %v", err)
 	}
+}
+
+func TestTeamDeletionRetainsFinalizerOnCohortPreconditionConflict(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Finalizers = []string{teamFinalizer}
+	now := metav1.Now()
+	team.DeletionTimestamp = &now
+
+	cohort := desiredTeamCohort(team, team.Spec.Quota)
+	cohort.SetUID(types.UID("cohort-uid"))
+	cohort.SetResourceVersion("7")
+	team.Status.CohortUID = string(cohort.GetUID())
+
+	baseClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(team, cohort).
+		WithStatusSubresource(&tauv1alpha1.TauTeam{}).
+		Build()
+	conflictClient := &preconditionConflictClient{Client: baseClient}
+	reconciler := &TauTeamReconciler{Client: conflictClient}
+
+	_, err := reconciler.finalizeTeam(ctx, team)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("finalizeTeam() error = %v, want conflict", err)
+	}
+	if !controllerutil.ContainsFinalizer(team, teamFinalizer) {
+		t.Fatal("Team finalizer was removed after Cohort precondition conflict")
+	}
+	if conflictClient.preconditions == nil ||
+		conflictClient.preconditions.UID == nil ||
+		*conflictClient.preconditions.UID != cohort.GetUID() ||
+		conflictClient.preconditions.ResourceVersion == nil ||
+		*conflictClient.preconditions.ResourceVersion != cohort.GetResourceVersion() {
+		t.Fatalf("delete preconditions = %#v, want UID %q and resourceVersion %q", conflictClient.preconditions, cohort.GetUID(), cohort.GetResourceVersion())
+	}
+}
+
+type preconditionConflictClient struct {
+	client.Client
+	preconditions *metav1.Preconditions
+}
+
+func (c *preconditionConflictClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	deleteOptions := &client.DeleteOptions{}
+	for _, option := range opts {
+		option.ApplyToDelete(deleteOptions)
+	}
+	c.preconditions = deleteOptions.Preconditions
+	return apierrors.NewConflict(
+		schema.GroupResource{Group: cohortGVK.Group, Resource: "cohorts"},
+		obj.GetName(),
+		errors.New("object changed"),
+	)
 }
 
 type blockingWorkspaceSnapshotReader struct {
