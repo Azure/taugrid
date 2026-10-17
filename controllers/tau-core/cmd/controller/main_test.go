@@ -3,7 +3,35 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+func TestAPIKindAvailable(t *testing.T) {
+	groupKind := tauv1alpha1.GroupVersion.WithKind(tauv1alpha1.KindTauTeam).GroupKind()
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{tauv1alpha1.GroupVersion})
+
+	available, err := apiKindAvailable(mapper, groupKind)
+	if err != nil {
+		t.Fatalf("apiKindAvailable() error = %v", err)
+	}
+	if available {
+		t.Fatal("apiKindAvailable() = true before registering mapping")
+	}
+
+	mapper.Add(tauv1alpha1.GroupVersion.WithKind(tauv1alpha1.KindTauTeam), meta.RESTScopeNamespace)
+	available, err = apiKindAvailable(mapper, groupKind)
+	if err != nil {
+		t.Fatalf("apiKindAvailable() error = %v", err)
+	}
+	if !available {
+		t.Fatal("apiKindAvailable() = false after registering mapping")
+	}
+}
 
 func TestResolveSystemNamespaceFlag(t *testing.T) {
 	for _, testCase := range []struct {
