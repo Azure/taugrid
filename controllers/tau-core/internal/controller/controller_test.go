@@ -1600,6 +1600,66 @@ func TestLegacyAdoptedWorkspaceMigratesBeforePendingQueueChange(t *testing.T) {
 	}
 }
 
+func TestLegacyAdoptedWorkspaceMigratesAfterCreateNamespaceChange(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	workspace.Spec.Target.CreateNamespace = true
+	namespace := testNamespace("aurora")
+	namespace.Labels = map[string]string{
+		labelWorkspace:              workspace.Name,
+		labelWorkspaceLocalQueue:    workspace.Spec.Queue,
+		labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+	}
+	namespace.Annotations = nil
+	binding := testRoleBinding("aurora", defaultRoleName, workspace.Name)
+	binding.Annotations = nil
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, binding, testClusterQueue(workspace.Spec.Queue)).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 4)
+
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, req.NamespacedName, &gotWorkspace); err != nil {
+		t.Fatalf("Get migrated workspace: %v", err)
+	}
+	if gotWorkspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("workspace owner UID = %q, want %q", gotWorkspace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(namespace), &gotNamespace); err != nil {
+		t.Fatalf("Get migrated Namespace: %v", err)
+	}
+	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("Namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+
+	now := metav1.Now()
+	gotWorkspace.DeletionTimestamp = &now
+	deletionClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(&gotWorkspace, &gotNamespace, binding).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	deletionReconciler := newTestWorkspaceReconciler(deletionClient)
+	if _, err := deletionReconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile migrated workspace deletion: %v", err)
+	}
+	if err := deletionClient.Get(ctx, client.ObjectKeyFromObject(binding), &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("UID-less legacy RoleBinding survived deletion: %v", err)
+	}
+	if err := deletionClient.Get(ctx, req.NamespacedName, &tauv1alpha1.TauWorkspace{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("workspace finalizer was not removed: %v", err)
+	}
+}
+
 func TestLegacyWorkspaceFinalizerMigratesHelpersWhenNamespaceIsGone(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

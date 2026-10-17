@@ -216,3 +216,19 @@ func TestProvablyPrimaryAcceptsMarkedWorkspace(t *testing.T) {
 		t.Fatal("an explicit primary marker is self-evident from the object alone")
 	}
 }
+
+func TestNamedGetFallbackAcceptsReadyUnmarkedWorkspace(t *testing.T) {
+	workspace := ws("active", "2026-01-01T00:00:00Z", "", false)
+	workspace.Status.Phase = "Ready"
+	if !NamedGetFallback(workspace) {
+		t.Fatal("a Ready unmarked workspace must remain usable when scoped RBAC forbids listing")
+	}
+}
+
+func TestNamedGetFallbackRejectsBlockedWorkspace(t *testing.T) {
+	workspace := blocked(ws("blocked", "2026-01-01T00:00:00Z", "", false))
+	workspace.Status.Phase = "Ready"
+	if NamedGetFallback(workspace) {
+		t.Fatal("a previously blocked workspace must not become a named-get fallback until its blocking condition is cleared")
+	}
+}
