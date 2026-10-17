@@ -367,10 +367,15 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 ) error {
 	effective := map[string]resource.Quantity{}
 	if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
-		for _, quota := range workspace.Spec.Quota {
-			effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+		_, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.quotaReader(), workspace)
+		if err != nil {
+			return err
 		}
-		if len(workspace.Spec.Quota) == 0 {
+		if !retained {
+			for _, quota := range workspace.Spec.Quota {
+				effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+			}
+		} else if len(workspace.Spec.Quota) == 0 {
 			legacy, err := r.establishedWorkspaceGuarantees(ctx, workspace)
 			if err != nil {
 				return err
@@ -418,7 +423,15 @@ func (r *TauTeamReconciler) establishedWorkspaceGuarantees(
 ) (map[string]resource.Quantity, error) {
 	managedQueue := workspaceClusterQueueName(workspace.Name)
 	seen := map[string]bool{managedQueue: true}
-	for _, name := range []string{workspace.Status.Queue.ClusterQueue, workspace.Spec.Queue} {
+	resolvedQueue := strings.TrimSpace(workspace.Spec.Queue)
+	if resolvedQueue == "" && strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == "" {
+		var err error
+		resolvedQueue, err = resolvedWorkspaceQueueName(ctx, r.quotaReader(), workspace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range []string{workspace.Status.Queue.ClusterQueue, resolvedQueue} {
 		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
 			continue
@@ -437,22 +450,45 @@ func (r *TauTeamReconciler) establishedWorkspaceGuarantees(
 		}
 		for i := range workspaces.Items {
 			candidate := &workspaces.Items[i]
-			if candidate.Name >= workspace.Name ||
-				candidate.Spec.TeamRef == nil ||
-				workspace.Spec.TeamRef == nil ||
-				candidate.Spec.TeamRef.Name != workspace.Spec.TeamRef.Name ||
-				len(candidate.Spec.Quota) != 0 {
+			if candidate.Name == workspace.Name || candidate.Spec.TeamRef == nil || len(candidate.Spec.Quota) != 0 {
 				continue
 			}
-			for _, candidateQueue := range []string{candidate.Status.Queue.ClusterQueue, candidate.Spec.Queue} {
+			candidateResolvedQueue := strings.TrimSpace(candidate.Spec.Queue)
+			if candidateResolvedQueue == "" && strings.TrimSpace(candidate.Status.Queue.ClusterQueue) == "" {
+				var err error
+				candidateResolvedQueue, err = resolvedWorkspaceQueueName(ctx, r.quotaReader(), candidate)
+				if err != nil {
+					return nil, err
+				}
+			}
+			for _, candidateQueue := range []string{candidate.Status.Queue.ClusterQueue, candidateResolvedQueue} {
 				if strings.TrimSpace(candidateQueue) == name {
-					return map[string]resource.Quantity{}, nil
+					if workspace.Spec.TeamRef == nil ||
+						candidate.Spec.TeamRef.Name != workspace.Spec.TeamRef.Name ||
+						candidate.Name < workspace.Name {
+						return map[string]resource.Quantity{}, nil
+					}
 				}
 			}
 		}
 		return clusterQueueNominalQuota(queue)
 	}
 	return nil, nil
+}
+
+func resolvedWorkspaceQueueName(
+	ctx context.Context,
+	reader client.Reader,
+	workspace *tauv1alpha1.TauWorkspace,
+) (string, error) {
+	if queue := strings.TrimSpace(workspace.Spec.Queue); queue != "" {
+		return queue, nil
+	}
+	var cluster tauv1alpha1.TauCluster
+	if err := reader.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
+		return "", fmt.Errorf("resolve workspace %q default queue: %w", workspace.Name, err)
+	}
+	return strings.TrimSpace(cluster.Spec.WorkspaceDefaults.DefaultQueue), nil
 }
 
 func (r *TauTeamReconciler) appliedWorkspaceGuarantees(

@@ -2894,6 +2894,93 @@ func TestTeamWorkspacePreservesSharedLegacyQueueBeforeCreatingManagedQueues(t *t
 	}
 }
 
+func TestTeamWorkspaceRetainsEstablishedQueueUntilQuotaCanTransfer(t *testing.T) {
+	ctx := context.Background()
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Queue = "legacy"
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{LocalQueue: "legacy", ClusterQueue: "legacy"}
+	legacyQueue := testClusterQueue("legacy")
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(team, workspace, legacyQueue, flavor, testLocalQueue(workspace.Name, "legacy", "legacy")).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	got, err := reconciler.reconcileWorkspaceClusterQueue(ctx, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != legacyQueue.GetName() {
+		t.Fatalf("reconcileWorkspaceClusterQueue() = %q, want established queue %q", got, legacyQueue.GetName())
+	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed); !apierrors.IsNotFound(err) {
+		t.Fatalf("managed ClusterQueue was created before route transfer: %v", err)
+	}
+}
+
+func TestEmptyQuotaWorkspacesRetainPlatformQueueAcrossTeams(t *testing.T) {
+	ctx := context.Background()
+	vision := testTeam("vision", "4")
+	language := testTeam("language", "4")
+	for _, team := range []*tauv1alpha1.TauTeam{vision, language} {
+		team.Status.Phase = tauv1alpha1.TeamPhaseReady
+		team.Status.ObservedGeneration = team.Generation
+	}
+	first := testWorkspace("aurora")
+	first.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: vision.Name}
+	first.Spec.Queue = "platform"
+	first.Spec.Quota = nil
+	second := testWorkspace("borealis")
+	second.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: language.Name}
+	second.Spec.Queue = "platform"
+	second.Spec.Quota = nil
+	platformQueue := testClusterQueue("platform")
+	platformQueue.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
+			true,
+		),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(vision, language, first, second, platformQueue).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	teamReconciler := &TauTeamReconciler{Client: c, APIReader: c}
+
+	for _, item := range []struct {
+		team      *tauv1alpha1.TauTeam
+		workspace *tauv1alpha1.TauWorkspace
+	}{
+		{vision, first},
+		{language, second},
+	} {
+		shared, err := teamReconciler.sharedTeamQuotaForWorkspace(ctx, item.team, item.workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(shared) != 1 || shared[0].NominalQuota.Cmp(resource.MustParse("4")) != 0 {
+			t.Fatalf("team %q shared quota = %#v, want unchanged platform-independent allocation", item.team.Name, shared)
+		}
+		got, err := reconciler.reconcileWorkspaceClusterQueue(ctx, item.workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != platformQueue.GetName() {
+			t.Fatalf("workspace %q queue = %q, want platform queue", item.workspace.Name, got)
+		}
+	}
+}
+
 func TestWorkspaceRevokesAccessFromAdoptedNamespaceBeforeTargetReady(t *testing.T) {
 	ctx := context.Background()
 	workspace := testWorkspace("aurora")
@@ -3491,6 +3578,56 @@ func TestTeamWorkspaceWithoutQueueResolvesTauClusterDefault(t *testing.T) {
 		t.Fatalf("status.queue = %#v, want Team-backed queue", got.Status.Queue)
 	}
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
+}
+
+func TestEmptyQuotaTeamWorkspaceWithoutQueueRetainsResolvedDefault(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = nil
+	team := testTeam("vision", "4")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "jobqueue"},
+		},
+	}
+	defaultQueue := testClusterQueue("jobqueue")
+	defaultQueue.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+			true,
+		),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, cluster, defaultQueue).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 5)
+
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Queue != "" {
+		t.Fatalf("spec.queue = %q, want stored spec unchanged", got.Spec.Queue)
+	}
+	if got.Status.Queue.ClusterQueue != defaultQueue.GetName() {
+		t.Fatalf("status.queue = %#v, want resolved default backing", got.Status.Queue)
+	}
+	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed); !apierrors.IsNotFound(err) {
+		t.Fatalf("managed ClusterQueue was created for inherited default: %v", err)
+	}
 }
 
 func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {

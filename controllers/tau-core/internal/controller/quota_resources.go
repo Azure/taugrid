@@ -299,7 +299,15 @@ func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
 	managedClusterQueue string,
 ) (*unstructured.Unstructured, error) {
 	seen := map[string]bool{managedClusterQueue: true}
-	for _, name := range []string{workspace.Status.Queue.ClusterQueue, workspace.Spec.Queue} {
+	resolvedQueue := strings.TrimSpace(workspace.Spec.Queue)
+	if resolvedQueue == "" && strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == "" {
+		var err error
+		resolvedQueue, err = resolvedWorkspaceQueueName(ctx, r.apiReader(), workspace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range []string{workspace.Status.Queue.ClusterQueue, resolvedQueue} {
 		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
 			continue
