@@ -7,6 +7,18 @@
       "type": "object",
       "additionalProperties": true
     },
+    "teams": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/customResource"
+      }
+    },
+    "workspaces": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/customResource"
+      }
+    },
     "tauCluster": {
       "type": "object",
       "additionalProperties": false,
@@ -102,6 +114,24 @@
     "tauCluster"
   ],
   "definitions": {
+    "customResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "spec"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "spec": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
     "ownership": {
       "type": "object",
       "additionalProperties": false,
