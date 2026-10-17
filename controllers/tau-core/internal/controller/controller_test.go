@@ -2767,6 +2767,130 @@ func TestExistingTeamWorkspaceResolvesMovedCompatibilityQueueBacking(t *testing.
 	}
 }
 
+func TestWorkspaceTeamWatchRequiresAvailableAPI(t *testing.T) {
+	if objects := workspaceWatchObjects(false); len(objects) != 0 {
+		t.Fatalf("workspace watches without Team API = %#v, want none", objects)
+	}
+	objects := workspaceWatchObjects(true)
+	if len(objects) != 1 {
+		t.Fatalf("workspace watches with Team API = %#v, want Team watch", objects)
+	}
+	if _, ok := objects[0].(*tauv1alpha1.TauTeam); !ok {
+		t.Fatalf("workspace watch object = %T, want *TauTeam", objects[0])
+	}
+}
+
+func TestExistingTeamWorkspacePreservesManagedQueueContract(t *testing.T) {
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = nil
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "legacy-cq",
+		ClusterQueueUID: "legacy-cq-uid",
+	}
+	legacyQueue := clusterQueueWithUID("legacy-cq", "legacy-cq-uid")
+	legacyQueue.Object["spec"] = map[string]any{
+		"admissionChecks": []any{"multikueue"},
+		"admissionChecksStrategy": map[string]any{
+			"admissionChecks": []any{map[string]any{"name": "policy"}},
+		},
+		"resourceGroups": []any{
+			map[string]any{
+				"coveredResources": []any{nvidiaGPUResourceName},
+				"flavors": []any{
+					map[string]any{
+						"name": "taugrid-gpu-h200",
+						"resources": []any{
+							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "8"},
+						},
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(legacyQueue).
+		Build()
+	desired := desiredWorkspaceClusterQueue(workspace)
+
+	if err := newTestWorkspaceReconciler(c).preserveEstablishedWorkspaceQueueContract(
+		context.Background(),
+		workspace,
+		desired,
+	); err != nil {
+		t.Fatal(err)
+	}
+	spec := desired.Object["spec"].(map[string]any)
+	if !reflect.DeepEqual(spec["admissionChecks"], legacyQueue.Object["spec"].(map[string]any)["admissionChecks"]) {
+		t.Fatalf("managed admissionChecks = %#v, want established checks", spec["admissionChecks"])
+	}
+	if !reflect.DeepEqual(spec["admissionChecksStrategy"], legacyQueue.Object["spec"].(map[string]any)["admissionChecksStrategy"]) {
+		t.Fatalf("managed admissionChecksStrategy = %#v, want established strategy", spec["admissionChecksStrategy"])
+	}
+	if !reflect.DeepEqual(spec["resourceGroups"], legacyQueue.Object["spec"].(map[string]any)["resourceGroups"]) {
+		t.Fatalf("managed resourceGroups = %#v, want established quota contract", spec["resourceGroups"])
+	}
+}
+
+func TestExistingTeamWorkspaceRejectsEmptyManagedQueueWithoutEstablishedContract(t *testing.T) {
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = nil
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   "jobqueue",
+		ClusterQueue: "missing-cq",
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		Build()
+
+	err := newTestWorkspaceReconciler(c).preserveEstablishedWorkspaceQueueContract(
+		context.Background(),
+		workspace,
+		desiredWorkspaceClusterQueue(workspace),
+	)
+	if err == nil || !strings.Contains(err.Error(), "established workspace queue contract is unavailable") {
+		t.Fatalf("preserveEstablishedWorkspaceQueueContract() error = %v", err)
+	}
+}
+
+func TestExistingTeamWorkspaceRecreatesCompatibilityQueueWithEstablishedBacking(t *testing.T) {
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "legacy-cq",
+		ClusterQueueUID: "legacy-cq-uid",
+	}
+	legacyQueue := clusterQueueWithUID("legacy-cq", "legacy-cq-uid")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(legacyQueue).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	ready, message, err := reconciler.reconcileWorkspaceCompatibilityLocalQueues(
+		context.Background(),
+		workspace,
+		workspace.Name,
+		workspaceClusterQueueName(workspace.Name),
+	)
+	if err != nil || !ready {
+		t.Fatalf("reconcile compatibility LocalQueue ready=%v message=%q error=%v", ready, message, err)
+	}
+	queue := newQueueObject(localQueueGVK)
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "jobqueue", Namespace: workspace.Name}, queue); err != nil {
+		t.Fatal(err)
+	}
+	if target, _, _ := unstructured.NestedString(queue.Object, "spec", "clusterQueue"); target != "legacy-cq" {
+		t.Fatalf("recreated compatibility LocalQueue target = %q, want legacy-cq", target)
+	}
+}
+
 func TestWorkspaceRejectsTeamRemovalBeforeSwitchingLocalQueue(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

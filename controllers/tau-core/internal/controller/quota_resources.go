@@ -258,6 +258,70 @@ func desiredWorkspaceClusterQueue(workspace *tauv1alpha1.TauWorkspace) *unstruct
 	return queue
 }
 
+func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	desired *unstructured.Unstructured,
+) error {
+	source, err := r.establishedWorkspaceClusterQueue(ctx, workspace, desired.GetName())
+	if err != nil || source == nil {
+		return err
+	}
+	for _, field := range []string{"admissionChecks", "admissionChecksStrategy"} {
+		value, found, err := unstructured.NestedFieldCopy(source.Object, "spec", field)
+		if err != nil {
+			return fmt.Errorf("read ClusterQueue %q %s: %w", source.GetName(), field, err)
+		}
+		if found {
+			if err := unstructured.SetNestedField(desired.Object, value, "spec", field); err != nil {
+				return fmt.Errorf("preserve ClusterQueue %q %s: %w", source.GetName(), field, err)
+			}
+		}
+	}
+	if len(workspace.Spec.Quota) == 0 {
+		groups, found, err := unstructured.NestedSlice(source.Object, "spec", "resourceGroups")
+		if err != nil {
+			return fmt.Errorf("read ClusterQueue %q resourceGroups: %w", source.GetName(), err)
+		}
+		if !found || len(groups) == 0 {
+			return fmt.Errorf("established ClusterQueue %q has no resourceGroups to migrate", source.GetName())
+		}
+		if err := unstructured.SetNestedSlice(desired.Object, groups, "spec", "resourceGroups"); err != nil {
+			return fmt.Errorf("preserve ClusterQueue %q resourceGroups: %w", source.GetName(), err)
+		}
+	}
+	return nil
+}
+
+func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	managedClusterQueue string,
+) (*unstructured.Unstructured, error) {
+	seen := map[string]bool{managedClusterQueue: true}
+	for _, name := range []string{workspace.Status.Queue.ClusterQueue, workspace.Spec.Queue} {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		queue := newQueueObject(clusterQueueGVK)
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name}, queue); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		return queue, nil
+	}
+	if len(workspace.Spec.Quota) == 0 &&
+		strings.TrimSpace(workspace.Status.Queue.LocalQueue) != "" &&
+		strings.TrimSpace(workspace.Status.Queue.LocalQueue) != workspaceLocalQueueName(workspace) {
+		return nil, fmt.Errorf("established workspace queue contract is unavailable")
+	}
+	return nil, nil
+}
+
 func reconcileManagedUnstructuredWithReader(
 	ctx context.Context,
 	kubeClient client.Client,

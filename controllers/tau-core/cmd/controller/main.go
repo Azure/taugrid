@@ -72,6 +72,11 @@ func main() {
 	multiKueuePrerequisites := &corecontroller.KubernetesMultiKueuePrerequisites{
 		Reader: mgr.GetAPIReader(),
 	}
+	teamAPIAvailable, err := apiKindAvailable(mgr.GetRESTMapper(), tauv1alpha1.GroupVersion.WithKind(tauv1alpha1.KindTauTeam).GroupKind())
+	if err != nil {
+		setupLog.Error(err, "unable to discover API", "controller", "TauTeam")
+		os.Exit(1)
+	}
 	if err := (&corecontroller.TauClusterReconciler{
 		Client:                  mgr.GetClient(),
 		MultiKueuePrerequisites: multiKueuePrerequisites,
@@ -83,13 +88,8 @@ func main() {
 		Client:          mgr.GetClient(),
 		APIReader:       mgr.GetAPIReader(),
 		SystemNamespace: systemNamespace,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr, teamAPIAvailable); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TauWorkspace")
-		os.Exit(1)
-	}
-	teamAPIAvailable, err := apiKindAvailable(mgr.GetRESTMapper(), tauv1alpha1.GroupVersion.WithKind(tauv1alpha1.KindTauTeam).GroupKind())
-	if err != nil {
-		setupLog.Error(err, "unable to discover API", "controller", "TauTeam")
 		os.Exit(1)
 	}
 	if teamAPIAvailable {
