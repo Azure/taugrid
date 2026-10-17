@@ -482,7 +482,7 @@ func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.
 		if expectedUID := team.Status.CohortUID; expectedUID != "" && string(cohort.GetUID()) != expectedUID {
 			return ctrl.Result{}, fmt.Errorf("refusing to delete Cohort %q: UID changed from %q to %q", cohort.GetName(), expectedUID, cohort.GetUID())
 		}
-		if err := r.Delete(ctx, cohort); err != nil && !apierrors.IsNotFound(err) {
+		if err := deleteObjectWithPreconditions(ctx, r.Client, cohort); err != nil {
 			return ctrl.Result{}, err
 		}
 	} else if !apierrors.IsNotFound(err) {
