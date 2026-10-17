@@ -21,6 +21,19 @@ type KubectlVerifier struct {
 	NewRunner   func(contextName, kubeconfigPath string) rawRunner
 }
 
+func (v KubectlVerifier) VerifyCompatibleQueue(
+	ctx context.Context,
+	descriptor Descriptor,
+	kubeconfigPath, namespace, queue string,
+) error {
+	_, err := v.runner(descriptor.Cluster.ContextName, kubeconfigPath).Raw(
+		ctx,
+		[]string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "name"},
+		nil,
+	)
+	return err
+}
+
 func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kubeconfigPath string) (Verification, error) {
 	runner := v.runner(descriptor.Cluster.ContextName, kubeconfigPath)
 	raw, err := runner.Raw(ctx, []string{
@@ -78,6 +91,15 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	if _, err := runner.Raw(ctx, []string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "name"}, nil); err != nil {
 		return Verification{}, fmt.Errorf("read workspace LocalQueue %s/%s: %w", namespace, queue, err)
 	}
+	var compatibleQueues []string
+	if workspace.Spec.TeamRef != nil {
+		previousQueue := strings.TrimSpace(workspace.Spec.Queue)
+		if previousQueue != "" && previousQueue != queue {
+			if _, err := runner.Raw(ctx, []string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", previousQueue, "-o", "name"}, nil); err == nil {
+				compatibleQueues = append(compatibleQueues, previousQueue)
+			}
+		}
+	}
 	if descriptor.Authorization.Mode == AuthorizationModeClusterWide {
 		output, err := runner.Raw(ctx, []string{"auth", "can-i", "*", "*", "--all-namespaces"}, nil)
 		if err != nil {
@@ -90,12 +112,13 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			)
 		}
 		return Verification{
-			ContextName:    descriptor.Cluster.ContextName,
-			Namespace:      namespace,
-			Queue:          queue,
-			ServiceAccount: serviceAccount,
-			WorkspaceUID:   workspace.Metadata.UID,
-			WorkspacePhase: workspace.Status.Phase,
+			ContextName:      descriptor.Cluster.ContextName,
+			Namespace:        namespace,
+			Queue:            queue,
+			ServiceAccount:   serviceAccount,
+			WorkspaceUID:     workspace.Metadata.UID,
+			WorkspacePhase:   workspace.Status.Phase,
+			CompatibleQueues: compatibleQueues,
 		}, nil
 	}
 	checks := []struct {
@@ -145,12 +168,13 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		}
 	}
 	return Verification{
-		ContextName:    descriptor.Cluster.ContextName,
-		Namespace:      namespace,
-		Queue:          queue,
-		ServiceAccount: serviceAccount,
-		WorkspaceUID:   workspace.Metadata.UID,
-		WorkspacePhase: workspace.Status.Phase,
+		ContextName:      descriptor.Cluster.ContextName,
+		Namespace:        namespace,
+		Queue:            queue,
+		ServiceAccount:   serviceAccount,
+		WorkspaceUID:     workspace.Metadata.UID,
+		WorkspacePhase:   workspace.Status.Phase,
+		CompatibleQueues: compatibleQueues,
 	}, nil
 }
 

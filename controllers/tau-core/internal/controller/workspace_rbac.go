@@ -5,11 +5,14 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
@@ -57,6 +60,61 @@ func authorizationMode(workspace *tauv1alpha1.TauWorkspace) string {
 		return tauv1alpha1.AuthorizationModeWorkspaceRBAC
 	}
 	return workspace.Spec.Authorization.Mode
+}
+
+func (r *TauWorkspaceReconciler) reconcileOwnedNamespaceResearcherAccess(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace string,
+) error {
+	var namespaces corev1.NamespaceList
+	if err := r.List(ctx, &namespaces, client.MatchingLabels{
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range namespaces.Items {
+		namespace := &namespaces.Items[i]
+		if namespace.Name == targetNamespace ||
+			workspace.UID == "" ||
+			namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+			continue
+		}
+		if err := r.reconcileExistingResearcherAccess(ctx, workspace, namespace.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *TauWorkspaceReconciler) reconcileExistingResearcherAccess(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace string,
+) error {
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: namespace}}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(binding), binding); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !ownedByWorkspace(binding.Labels, workspace.Name) {
+		return fmt.Errorf("RoleBinding %s is not owned by workspace %q", client.ObjectKeyFromObject(binding), workspace.Name)
+	}
+	if err := r.ensureWorkspaceObjectUID(ctx, binding, workspace); err != nil {
+		return err
+	}
+	if authorizationMode(workspace) == tauv1alpha1.AuthorizationModeClusterWide ||
+		workspace.Spec.KubernetesSubject == nil {
+		return r.deleteWithPreconditions(ctx, binding)
+	}
+	desiredSubjects := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, namespace)}
+	desiredRoleRef := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}
+	if apiequality.Semantic.DeepEqual(binding.Subjects, desiredSubjects) &&
+		apiequality.Semantic.DeepEqual(binding.RoleRef, desiredRoleRef) {
+		return nil
+	}
+	binding.Subjects = desiredSubjects
+	binding.RoleRef = desiredRoleRef
+	return r.Update(ctx, binding)
 }
 
 func (r *TauWorkspaceReconciler) cleanupResearcherRBAC(

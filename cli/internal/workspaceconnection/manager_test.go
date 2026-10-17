@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -46,6 +47,22 @@ type fakeVerifier struct {
 	err    error
 	paths  []string
 	modes  []os.FileMode
+}
+
+type compatibleFakeVerifier struct {
+	*fakeVerifier
+	queue string
+}
+
+func (f *compatibleFakeVerifier) VerifyCompatibleQueue(
+	_ context.Context,
+	_ Descriptor,
+	_, _, queue string,
+) error {
+	if queue != f.queue {
+		return fmt.Errorf("queue %q is unavailable", queue)
+	}
+	return nil
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, _ Descriptor, kubeconfigPath string) (Verification, error) {
@@ -1408,6 +1425,53 @@ func TestContractChangesTreatsEmptyServiceAccountAsDefault(t *testing.T) {
 	changes := state.contractChanges(verification)
 	if len(changes) != 1 || !strings.Contains(changes[0], `service account "default" -> "workspace-sa"`) {
 		t.Fatalf("workspace ServiceAccount drift = %v", changes)
+	}
+}
+
+func TestContractChangesAllowsVerifiedCompatibleQueueMigration(t *testing.T) {
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{
+		Namespace:        "sample",
+		Queue:            "tau-ws-sample",
+		CompatibleQueues: []string{"jobqueue"},
+	}
+	if changes := state.contractChanges(verification); len(changes) != 0 {
+		t.Fatalf("compatible LocalQueue migration required interactive review: %v", changes)
+	}
+}
+
+func TestApplyVerificationPreservesVerifiedCompatibleQueue(t *testing.T) {
+	verifiedAt := time.Now()
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{
+		Namespace:        "sample",
+		Queue:            "tau-ws-sample",
+		CompatibleQueues: []string{"jobqueue"},
+	}
+	state.applyVerification(Descriptor{}, verification, verifiedAt)
+	if state.Queue != "jobqueue" {
+		t.Fatalf("queue = %q, want verified compatible queue jobqueue", state.Queue)
+	}
+	active := state.active()
+	if active.Queue != "jobqueue" || !active.QueueVerified {
+		t.Fatalf("active connection = %#v, want verified compatible queue", active)
+	}
+}
+
+func TestWithCompatibleQueueVerifiesPersistedQueueIndependentOfWorkspaceSpec(t *testing.T) {
+	manager := Manager{Verifier: &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{},
+		queue:        "inherited-default",
+	}}
+	verification := manager.withCompatibleQueue(
+		context.Background(),
+		Descriptor{},
+		"/tmp/kubeconfig",
+		"inherited-default",
+		Verification{Namespace: "sample", Queue: "tau-ws-sample"},
+	)
+	if !slices.Contains(verification.CompatibleQueues, "inherited-default") {
+		t.Fatalf("compatible queues = %#v, want persisted inherited default", verification.CompatibleQueues)
 	}
 }
 

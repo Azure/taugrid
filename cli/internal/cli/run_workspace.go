@@ -41,6 +41,9 @@ func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspacecon
 		LocalQueue:   firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue),
 		ClusterQueue: strings.TrimSpace(w.Status.Queue.ClusterQueue),
 	}
+	if workspaceConnectionQueueCompatible(w, connection, placement) {
+		placement.LocalQueue = strings.TrimSpace(connection.Queue)
+	}
 	if placement.Namespace == "" {
 		return workspacePlacement{}, fmt.Errorf("workspace %q has no resolved target namespace", w.Metadata.Name)
 	}
@@ -67,6 +70,17 @@ func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspacecon
 		}
 	}
 	return placement, nil
+}
+
+func workspaceConnectionQueueCompatible(
+	w tauworkspace.Workspace,
+	connection workspaceconnection.ActiveConnection,
+	placement workspacePlacement,
+) bool {
+	return w.Spec.TeamRef != nil &&
+		connection.QueueVerified &&
+		strings.TrimSpace(connection.Namespace) == placement.Namespace &&
+		strings.TrimSpace(connection.Queue) != ""
 }
 
 func applyWorkspaceDefaults(o unresolvedRunOptions, w tauworkspace.Workspace, runName string) (unresolvedRunOptions, error) {

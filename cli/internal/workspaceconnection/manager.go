@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -46,13 +47,18 @@ type Verifier interface {
 	Verify(context.Context, Descriptor, string) (Verification, error)
 }
 
+type compatibleQueueVerifier interface {
+	VerifyCompatibleQueue(context.Context, Descriptor, string, string, string) error
+}
+
 type Verification struct {
-	ContextName    string
-	Namespace      string
-	Queue          string
-	ServiceAccount string
-	WorkspaceUID   string
-	WorkspacePhase string
+	ContextName      string
+	Namespace        string
+	Queue            string
+	ServiceAccount   string
+	WorkspaceUID     string
+	WorkspacePhase   string
+	CompatibleQueues []string
 }
 
 type ActiveConnection struct {
@@ -64,6 +70,7 @@ type ActiveConnection struct {
 	KubeconfigPath    string
 	Namespace         string
 	Queue             string
+	QueueVerified     bool
 }
 
 type AssignableConnection struct {
@@ -323,9 +330,12 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		var verification Verification
 		var verifyErr error
 		if len(sourceKubeconfig) > 0 {
-			verification, verifyErr = m.verifyCandidate(verifyCtx, configDir, discovery, sourceKubeconfig)
+			verification, verifyErr = m.verifyCandidate(verifyCtx, configDir, discovery, sourceKubeconfig, state.Queue)
 		} else {
 			verification, verifyErr = m.Verifier.Verify(verifyCtx, discovery.Descriptor, state.KubeconfigPath)
+			if verifyErr == nil {
+				verification = m.withCompatibleQueue(verifyCtx, discovery.Descriptor, state.KubeconfigPath, state.Queue, verification)
+			}
 		}
 		if verifyErr != nil {
 			if timeout := m.signInTimeout(verifyCtx, "revalidating the cached workspace connection"); timeout != nil {
@@ -377,7 +387,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			return ActiveConnection{}, fmt.Errorf("reacquire Kubernetes credentials: %w", err)
 		}
 		kubeconfigPath := expectedKubeconfigPath
-		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
+		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig, state.Queue)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("verify reacquired Tau workspace connection: %w", err)
 		}
@@ -457,7 +467,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		return ActiveConnection{}, fmt.Errorf("obtain Kubernetes credentials: %w", err)
 	}
 	kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
-	verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
+	verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig, state.Queue)
 	if err != nil {
 		return ActiveConnection{}, fmt.Errorf("verify Tau workspace connection: %w", err)
 	}
@@ -907,7 +917,7 @@ func (s connectionState) contractChanges(verification Verification) []string {
 	if s.Namespace != verification.Namespace {
 		changes = append(changes, fmt.Sprintf("namespace %q -> %q", s.Namespace, verification.Namespace))
 	}
-	if s.Queue != verification.Queue {
+	if s.Queue != verification.Queue && !slices.Contains(verification.CompatibleQueues, s.Queue) {
 		changes = append(changes, fmt.Sprintf("LocalQueue %q -> %q", s.Queue, verification.Queue))
 	}
 	storedServiceAccount := effectiveServiceAccount(s.ServiceAccount)
@@ -921,7 +931,9 @@ func (s connectionState) contractChanges(verification Verification) []string {
 func (s *connectionState) applyVerification(descriptor Descriptor, verification Verification, verifiedAt time.Time) {
 	s.ContextName = firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
 	s.Namespace = verification.Namespace
-	s.Queue = verification.Queue
+	if !slices.Contains(verification.CompatibleQueues, s.Queue) {
+		s.Queue = verification.Queue
+	}
 	s.ServiceAccount = verification.ServiceAccount
 	s.WorkspaceUID = verification.WorkspaceUID
 	s.VerifiedAt = verifiedAt
@@ -944,6 +956,7 @@ func (s connectionState) active() ActiveConnection {
 		KubeconfigPath:    s.KubeconfigPath,
 		Namespace:         s.Namespace,
 		Queue:             s.Queue,
+		QueueVerified:     !s.VerifiedAt.IsZero(),
 	}
 }
 
@@ -1086,6 +1099,7 @@ func (m Manager) verifyCandidate(
 	configDir string,
 	discovery Discovery,
 	rawKubeconfig []byte,
+	expectedQueue string,
 ) (Verification, error) {
 	candidatePath, err := writeKubeconfigCandidate(configDir, rawKubeconfig)
 	if err != nil {
@@ -1106,7 +1120,27 @@ func (m Manager) verifyCandidate(
 	if err := validateVerification(discovery.Descriptor, verification); err != nil {
 		return Verification{}, err
 	}
+	verification = m.withCompatibleQueue(verifyCtx, discovery.Descriptor, candidatePath, expectedQueue, verification)
 	return verification, nil
+}
+
+func (m Manager) withCompatibleQueue(
+	ctx context.Context,
+	descriptor Descriptor,
+	kubeconfigPath, expectedQueue string,
+	verification Verification,
+) Verification {
+	expectedQueue = strings.TrimSpace(expectedQueue)
+	if expectedQueue == "" || expectedQueue == verification.Queue ||
+		slices.Contains(verification.CompatibleQueues, expectedQueue) {
+		return verification
+	}
+	verifier, ok := m.Verifier.(compatibleQueueVerifier)
+	if !ok || verifier.VerifyCompatibleQueue(ctx, descriptor, kubeconfigPath, verification.Namespace, expectedQueue) != nil {
+		return verification
+	}
+	verification.CompatibleQueues = append(verification.CompatibleQueues, expectedQueue)
+	return verification
 }
 
 var candidateChmod = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
