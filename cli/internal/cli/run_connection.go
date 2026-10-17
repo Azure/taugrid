@@ -124,9 +124,7 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 	useWorkspace := workspaceExplicit && workspaceName != ""
 
 	routingNamespace := namespace
-	routingNamespaceExplicit := namespaceExplicit
 	if useWorkspace {
-		routingNamespaceExplicit = true
 		if strings.TrimSpace(routingNamespace) == "" {
 			routingNamespace = workspaceName
 		}
@@ -137,7 +135,7 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 		kubeContext,
 		routingNamespace,
 		contextExplicit,
-		routingNamespaceExplicit,
+		namespaceExplicit,
 	)
 	if err != nil {
 		return "", "", nil, err
