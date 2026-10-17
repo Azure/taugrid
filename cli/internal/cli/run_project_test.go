@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Azure/taugrid/cli/internal/projectcatalog"
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
 
@@ -288,6 +289,61 @@ policy:
 	}
 	if ensurer.calls != 0 {
 		t.Fatalf("workspace conflict activated connection %d times", ensurer.calls)
+	}
+}
+
+func TestNoCatalogExplicitWorkspaceOverridesConfigWorkspace(t *testing.T) {
+	root := t.TempDir()
+	configureRunRoutingProfile(t)
+	writeRunRoutingFile(t, filepath.Join(root, "train.sh"), "#!/bin/sh\necho train\n")
+	writeRunRoutingFile(t, filepath.Join(root, "tau", "train.yaml"), `name: explicit-workspace
+engine: job
+entrypoint: ../train.sh
+compute:
+  gpus: 0
+runtime:
+  image: busybox:1.36
+policy:
+  profile: test-routing
+  workspace: config-workspace
+  queue: jobqueue
+  namespace: default
+`)
+	withRunRoutingCWD(t, root)
+	originalWorkspaceFetcher := fetchRunWorkspace
+	fetchRunWorkspace = func(_ *cobra.Command, kubeContext, systemNamespace, name string) (tauworkspace.Workspace, error) {
+		if kubeContext != "explicit-context" || systemNamespace != defaultSystemNamespace() || name != "flag-workspace" {
+			t.Fatalf("workspace fetch context=%q systemNamespace=%q name=%q", kubeContext, systemNamespace, name)
+		}
+		workspace := readyWorkspace()
+		workspace.Metadata.Name = name
+		workspace.Spec.Target.Namespace = "default"
+		workspace.Spec.Queue = "jobqueue"
+		workspace.Status.Target.ResolvedNamespace = "default"
+		workspace.Status.Queue.LocalQueue = "jobqueue"
+		workspace.Status.Queue.ClusterQueue = "jobqueue"
+		return workspace, nil
+	}
+	t.Cleanup(func() { fetchRunWorkspace = originalWorkspaceFetcher })
+
+	cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer {
+		return &fakeRunConnectionEnsurer{}
+	})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{
+		"--config", filepath.Join(root, "tau", "train.yaml"),
+		"--workspace", "flag-workspace",
+		"--context", "explicit-context",
+		"--dry-run=client",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("explicit workspace override: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "kind: Job") {
+		t.Fatalf("render missing Job:\n%s", stdout.String())
 	}
 }
 
