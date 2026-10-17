@@ -134,7 +134,11 @@ metadata:
     {{- include "taugrid-core.labels" . | nindent 4 }}
 data:
   workspaces.json: |
-    {{- dict "localCluster" $workspaceDirectory.localCluster "endpoints" (default list $workspaceDirectory.endpoints) "workspaces" (default list $workspaceDirectory.workspaces) | toPrettyJson | nindent 4 }}
+    {{- $workspaceConfig := dict "localCluster" $workspaceDirectory.localCluster "endpoints" (default list $workspaceDirectory.endpoints) "workspaces" (default list $workspaceDirectory.workspaces) -}}
+    {{- if (default false $workspaceDirectory.allowUnauthenticatedClusterWide) -}}
+    {{- $_ := set $workspaceConfig "allowUnauthenticatedClusterWide" true -}}
+    {{- end -}}
+    {{- $workspaceConfig | toPrettyJson | nindent 4 }}
 ---
 {{ end }}
 {{- if $rbac.create }}
@@ -171,7 +175,7 @@ rules:
     resources: ["daemonsets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
-    resources: ["localqueues", "clusterqueues", "workloads"]
+    resources: ["localqueues", "clusterqueues", "cohorts", "workloads"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["tau.azure.com"]
     resources: ["clusters"]

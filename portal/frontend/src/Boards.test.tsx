@@ -57,6 +57,19 @@ describe('Platform overview', () => {
         { name: 'cpu-viewer', namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq',
           resourceUid: 'uid-cpu', admissionPriorityClass: 'taugrid-default', admissionPriority: 1000, podPriorityClasses: ['taugrid-default'] },
       ] }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        legacy: false,
+        workspace: {
+          name: 'tau-ws-flex', cohort: 'tau-team-research', pendingWorkloads: 1, reservingWorkloads: 1,
+          admittedWorkloads: 2, usageAvailable: true, reservationAvailable: true,
+          resources: [{ flavor: 'h200', resource: 'nvidia.com/gpu', nominal: '16', used: '8', reserved: '10' }],
+        },
+        team: {
+          name: 'tau-team-research', usageAvailable: false,
+          usageUnavailable: 'Kueue v1beta2 Cohort status does not report per-resource usage',
+          resources: [{ flavor: 'h200', resource: 'nvidia.com/gpu', nominal: '64' }],
+        },
+      }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
         nodes: [
@@ -81,6 +94,12 @@ describe('Platform overview', () => {
     expect(screen.queryByText('system')).not.toBeInTheDocument();
     expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
     expect(screen.getByText('Runtime and admission state')).toBeInTheDocument();
+    const quota = screen.getByLabelText('Workspace and team quota');
+    expect(quota).toHaveTextContent('tau-ws-flex');
+    expect(quota).toHaveTextContent('8used of 16');
+    expect(quota).toHaveTextContent('Team shared quota');
+    expect(quota).toHaveTextContent('64shared quota');
+    expect(quota).toHaveTextContent('Kueue v1beta2 Cohort status does not report per-resource usage');
     const active = screen.getByLabelText('Active jobs');
     expect(active).toHaveTextContent('live-ray-train');
     expect(active).toHaveTextContent('RayJob · 8m');
@@ -137,6 +156,10 @@ describe('Platform overview', () => {
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({
         cards: { queue: { admitted: 0, pending: 0, gpuUsed: 0, gpuHeadroom: 0, queues: [] } },
         running: [],
+      }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        legacy: true, workspace: { name: 'tau-cq', resources: [], pendingWorkloads: 0,
+          reservingWorkloads: 0, admittedWorkloads: 0, usageAvailable: false, reservationAvailable: false },
       }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 1, totalNodes: 1, totalGPUs: 8, gpuNodes: 1, gpuSchedulable: 8, gpuAvailable: 8,
