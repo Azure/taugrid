@@ -525,7 +525,7 @@ func TestRunLifecycleExplicitWorkspaceResolvesItsTargetNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotRoutingNamespace != "research" || !gotRoutingNamespaceExplicit {
+	if gotRoutingNamespace != "research" || gotRoutingNamespaceExplicit {
 		t.Fatalf("routing namespace = %q explicit=%v", gotRoutingNamespace, gotRoutingNamespaceExplicit)
 	}
 	if gotContext != "workspace-context" || gotNamespace != "research-runs" {
@@ -577,6 +577,103 @@ func TestRunLifecycleExplicitNamespaceMustMatchWorkspace(t *testing.T) {
 	}
 	if !restored {
 		t.Fatal("workspace namespace conflict did not restore the connection")
+	}
+}
+
+func TestRunLifecycleWorkspacePlaceholderIsNotExplicitNamespace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "research"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "other"},
+	})
+	withRunRoutingCWD(t, root)
+	workspace := readyTestWorkspace("research", "research-uid", "research-runs", "research-queue")
+	fetch := func(
+		_ *cobra.Command,
+		_, _, name string,
+	) (tauworkspace.Workspace, error) {
+		if name != "research" {
+			t.Fatalf("workspace name = %q, want research", name)
+		}
+		return workspace, nil
+	}
+	runLifecycleWorkspaceFetcherOverride = fetch
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	for _, test := range []struct {
+		command         string
+		explicitContext bool
+	}{
+		{command: "cancel"},
+		{command: "status"},
+		{command: "logs", explicitContext: true},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			command := &cobra.Command{Use: test.command}
+			command.SetContext(context.Background())
+			command.Flags().String("project", "", "")
+			command.Flags().String("context", "", "")
+			if err := command.Flags().Set("project", "alpha"); err != nil {
+				t.Fatal(err)
+			}
+			kubeContext := "ambient-context"
+			if test.explicitContext {
+				kubeContext = "explicit-context"
+				if err := command.Flags().Set("context", kubeContext); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+				Workspace:      "research",
+				ContextName:    "catalog-context",
+				KubeconfigPath: filepath.Join(t.TempDir(), "kubeconfig"),
+			}}
+
+			gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithWorkspaceUsing(
+				command,
+				kubeContext,
+				"",
+				"research",
+				test.explicitContext,
+				false,
+				true,
+				func(
+					cmd *cobra.Command,
+					kubeContext, namespace string,
+					contextExplicit, namespaceExplicit bool,
+				) (string, string, func(), error) {
+					return resolveRunLifecycleConnectionUsing(
+						cmd,
+						kubeContext,
+						namespace,
+						contextExplicit,
+						namespaceExplicit,
+						ensurer,
+					)
+				},
+				fetch,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restore()
+			wantContext := "catalog-context"
+			wantCalls := 1
+			if test.explicitContext {
+				wantContext = "explicit-context"
+				wantCalls = 0
+			}
+			if gotContext != wantContext || gotNamespace != "research-runs" || ensurer.calls != wantCalls {
+				t.Fatalf(
+					"context=%q namespace=%q calls=%d, want context=%q namespace=research-runs calls=%d",
+					gotContext,
+					gotNamespace,
+					ensurer.calls,
+					wantContext,
+					wantCalls,
+				)
+			}
+		})
 	}
 }
 
