@@ -91,19 +91,9 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	if workspace.Spec.WorkloadIdentity != nil {
 		keepServiceAccount = workspace.Spec.WorkloadIdentity.ServiceAccountName
 	}
-	if namespaceReady {
-		if err := r.cleanupStaleWorkloadIdentityServiceAccounts(ctx, workspace, targetNamespace, keepServiceAccount); err != nil {
-			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
-		}
-	}
 	previousNamespace := workspace.Status.Target.ResolvedNamespace
-	if previousNamespace != "" && previousNamespace != targetNamespace {
-		if err := r.cleanupStaleWorkloadIdentityServiceAccounts(ctx, workspace, previousNamespace, keepServiceAccount); err != nil {
-			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
-		}
-	}
 	previousAccessReady := true
-	if err := r.reconcilePreviousNamespaceResearcherAccess(ctx, workspace, targetNamespace); err != nil {
+	if err := r.cleanupOwnedNamespaceAccess(ctx, workspace, targetNamespace, keepServiceAccount); err != nil {
 		previousAccessReady = false
 		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 	}

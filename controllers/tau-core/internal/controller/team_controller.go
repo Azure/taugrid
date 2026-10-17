@@ -370,6 +370,15 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 		for _, quota := range workspace.Spec.Quota {
 			effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
 		}
+		if len(workspace.Spec.Quota) == 0 {
+			legacy, err := r.establishedWorkspaceGuarantees(ctx, workspace)
+			if err != nil {
+				return err
+			}
+			for key, quantity := range legacy {
+				effective[key] = quantity.DeepCopy()
+			}
+		}
 	}
 	appliedCohort, applied, err := r.appliedWorkspaceGuarantees(ctx, workspace)
 	if err != nil {
@@ -401,6 +410,30 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 		remaining[key] = available
 	}
 	return nil
+}
+
+func (r *TauTeamReconciler) establishedWorkspaceGuarantees(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) (map[string]resource.Quantity, error) {
+	managedQueue := workspaceClusterQueueName(workspace.Name)
+	seen := map[string]bool{managedQueue: true}
+	for _, name := range []string{workspace.Status.Queue.ClusterQueue, workspace.Spec.Queue} {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		queue := newQueueObject(clusterQueueGVK)
+		if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: name}, queue); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		return clusterQueueNominalQuota(queue)
+	}
+	return nil, nil
 }
 
 func (r *TauTeamReconciler) appliedWorkspaceGuarantees(

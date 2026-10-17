@@ -224,6 +224,36 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 	return nil
 }
 
+func (r *TauWorkspaceReconciler) cleanupOwnedNamespaceAccess(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace, keepServiceAccount string,
+) error {
+	var namespaces corev1.NamespaceList
+	if err := r.List(ctx, &namespaces, client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range namespaces.Items {
+		namespace := &namespaces.Items[i]
+		if workspace.UID == "" ||
+			namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+			continue
+		}
+		if err := r.cleanupStaleWorkloadIdentityServiceAccounts(
+			ctx,
+			workspace,
+			namespace.Name,
+			keepServiceAccount,
+		); err != nil {
+			return err
+		}
+	}
+	return r.reconcileOwnedNamespaceResearcherAccess(ctx, workspace, targetNamespace)
+}
+
 func canDeleteLegacyWorkspaceRole(role *rbacv1.Role, workspace *tauv1alpha1.TauWorkspace) bool {
 	return workspace.UID != "" &&
 		workspace.Annotations[annotationOwnerUID] == string(workspace.UID) &&
@@ -368,7 +398,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
 			strings.TrimSpace(account.Annotations[annotationAzureWIClientID]) == desiredClientID {
 			continue
 		}
-		if err := validateWorkspaceObjectUID(account, workspace); err != nil {
+		if err := r.ensureWorkspaceObjectUID(ctx, account, workspace); err != nil {
 			return fmt.Errorf("refusing to delete stale workload identity ServiceAccount: %w", err)
 		}
 		if err := r.deleteWithPreconditions(ctx, account); err != nil {
