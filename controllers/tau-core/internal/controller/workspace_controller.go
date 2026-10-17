@@ -80,6 +80,13 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, nil
 	}
+	compatibilityUpdated, err := r.ensureV0PrimaryDiscoveryCompatibility(ctx, &workspace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if compatibilityUpdated {
+		return ctrl.Result{Requeue: true}, nil
+	}
 	migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
 	if err != nil {
 		return ctrl.Result{}, err

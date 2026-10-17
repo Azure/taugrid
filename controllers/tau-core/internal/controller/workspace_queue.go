@@ -45,6 +45,7 @@ func (r *TauWorkspaceReconciler) reportUnresolvedQueue(ctx context.Context, work
 		condition(tauv1alpha1.ConditionWorkloadIdentityReady, metav1.ConditionUnknown, "QueueUnresolved", message, workspace.Generation),
 		boolCondition(tauv1alpha1.ConditionDriftDetected, false, "NoDrift", message, workspace.Generation),
 	}
+	conditions = preserveV0PrimaryDiscoveryCondition(workspace, conditions)
 	desired := tauv1alpha1.TauWorkspaceStatus{
 		Phase:              tauv1alpha1.WorkspacePhaseDegraded,
 		ObservedGeneration: workspace.Generation,

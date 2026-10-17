@@ -105,6 +105,7 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	if err := r.cleanupStaleTargetRBAC(ctx, workspace, keepNamespace, keepServiceAccount, keepResearcherBinding); err != nil {
 		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 	}
+	conditions = preserveV0PrimaryDiscoveryCondition(workspace, conditions)
 
 	desired := tauv1alpha1.TauWorkspaceStatus{
 		Phase:              workspacePhase(conditions),

@@ -13,6 +13,7 @@ import (
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -2902,6 +2903,102 @@ func TestWorkspaceStatusCannotAuthorizeUnownedNamespace(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: defaultRoleName, Namespace: retained.Name}, &binding); !apierrors.IsNotFound(err) {
 		t.Fatalf("workspace status authorized namespace RBAC: %v", err)
 	}
+}
+
+func TestAdditionalWorkspacePreservesLegacyPrimaryDiscovery(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	incumbent := testWorkspace("research-primary")
+	incumbent.Annotations = map[string]string{annotationV0Primary: "true"}
+	incumbent.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase:              tauv1alpha1.WorkspacePhaseReady,
+		ObservedGeneration: incumbent.Generation,
+		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: "research"},
+	}
+	additional := testWorkspace("taugrid-default")
+	additional.Finalizers = []string{workspaceFinalizer}
+	additional.Status = tauv1alpha1.TauWorkspaceStatus{
+		Phase: tauv1alpha1.WorkspacePhaseDegraded,
+		Conditions: []metav1.Condition{{
+			Type:   tauv1alpha1.ConditionRBACReady,
+			Status: metav1.ConditionFalse,
+			Reason: reasonAdditionalWorkspaceBlocked,
+		}},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(incumbent, additional, testClusterQueue(additional.Spec.Queue)).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, additional.Name, 4)
+
+	var gotAdditional tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(additional), &gotAdditional); err != nil {
+		t.Fatalf("Get additional workspace: %v", err)
+	}
+	if gotAdditional.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("additional workspace phase = %q, want Ready", gotAdditional.Status.Phase)
+	}
+	compatibility := findCondition(gotAdditional.Status.Conditions, conditionV0PrimaryDiscovery)
+	if compatibility == nil || compatibility.Reason != reasonAdditionalWorkspaceBlocked {
+		t.Fatalf("legacy discovery compatibility condition = %#v", compatibility)
+	}
+	if legacyWorkspaceHasPrimaryHistory(&gotAdditional) {
+		t.Fatal("old CLI would treat the active additional workspace as primary")
+	}
+
+	var gotIncumbent tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(incumbent), &gotIncumbent); err != nil {
+		t.Fatalf("Get incumbent workspace: %v", err)
+	}
+	selected := legacyPrimaryWorkspace(&gotAdditional, []tauv1alpha1.TauWorkspace{gotAdditional, gotIncumbent})
+	if selected.Name != incumbent.Name {
+		t.Fatalf("old CLI selected %q, want marked incumbent %q", selected.Name, incumbent.Name)
+	}
+
+	for _, job := range []*batchv1.Job{
+		{ObjectMeta: metav1.ObjectMeta{Name: "training", Namespace: "research", UID: types.UID("incumbent-job")}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "training", Namespace: additional.Name, UID: types.UID("additional-job")}},
+	} {
+		if err := c.Create(ctx, job); err != nil {
+			t.Fatalf("Create job %s/%s: %v", job.Namespace, job.Name, err)
+		}
+	}
+	var selectedJob batchv1.Job
+	if err := c.Get(ctx, client.ObjectKey{Name: "training", Namespace: selected.Status.Target.ResolvedNamespace}, &selectedJob); err != nil {
+		t.Fatalf("Get selected job: %v", err)
+	}
+	if selectedJob.UID != types.UID("incumbent-job") {
+		t.Fatalf("old context-only lifecycle routing selected job UID %q", selectedJob.UID)
+	}
+}
+
+func legacyWorkspaceHasPrimaryHistory(workspace *tauv1alpha1.TauWorkspace) bool {
+	if workspace.Status.Phase == "" &&
+		workspace.Status.ObservedGeneration == 0 &&
+		len(workspace.Status.Conditions) == 0 {
+		return false
+	}
+	for _, condition := range workspace.Status.Conditions {
+		if condition.Reason == reasonAdditionalWorkspaceBlocked {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyPrimaryWorkspace(named *tauv1alpha1.TauWorkspace, listed []tauv1alpha1.TauWorkspace) *tauv1alpha1.TauWorkspace {
+	if legacyWorkspaceHasPrimaryHistory(named) {
+		return named
+	}
+	for i := range listed {
+		if listed[i].Annotations[annotationV0Primary] == "true" {
+			return &listed[i]
+		}
+	}
+	return nil
 }
 
 func TestExplicitAdoptionEvidenceMustMatchNamespaceUID(t *testing.T) {
