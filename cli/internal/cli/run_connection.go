@@ -68,8 +68,16 @@ func (f *runLifecycleConnectionFlags) resolveWithEnsurer(cmd *cobra.Command, und
 		lifecycleFlagsContextExplicit(cmd),
 		cmd.Flags().Changed("namespace"),
 		cmd.Flags().Changed("workspace"),
-		func(cmd *cobra.Command, kubeContext, namespace string, contextExplicit, namespaceExplicit bool) (string, string, func(), error) {
-			return resolveRunLifecycleConnectionUsing(cmd, kubeContext, namespace, contextExplicit, namespaceExplicit, ensurer)
+		func(cmd *cobra.Command, kubeContext, namespace string, contextExplicit, namespaceExplicit, workspaceRouting bool) (string, string, func(), error) {
+			return resolveRunLifecycleConnectionUsing(
+				cmd,
+				kubeContext,
+				namespace,
+				contextExplicit,
+				namespaceExplicit,
+				workspaceRouting,
+				ensurer,
+			)
 		},
 		func(cmd *cobra.Command, kubeContext, _ string, name string) (tauworkspace.Workspace, error) {
 			return fetchWorkspace(cmd, kubeContext, f.systemNamespace, name)
@@ -104,6 +112,7 @@ type runLifecycleBaseResolver func(
 	string,
 	bool,
 	bool,
+	bool,
 ) (string, string, func(), error)
 
 type runLifecycleWorkspaceFetcher func(
@@ -136,6 +145,7 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 		routingNamespace,
 		contextExplicit,
 		namespaceExplicit,
+		useWorkspace,
 	)
 	if err != nil {
 		return "", "", nil, err
@@ -489,6 +499,7 @@ func resolveRunLifecycleConnection(
 		namespace,
 		contextExplicit,
 		namespaceExplicit,
+		false,
 		defaultRunLifecycleConnectionManager(cmd),
 	)
 }
@@ -496,7 +507,7 @@ func resolveRunLifecycleConnection(
 func resolveRunLifecycleConnectionUsing(
 	cmd *cobra.Command,
 	kubeContext, namespace string,
-	contextExplicit, namespaceExplicit bool,
+	contextExplicit, namespaceExplicit, workspaceRouting bool,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	projectName := ""
@@ -513,6 +524,7 @@ func resolveRunLifecycleConnectionUsing(
 		namespace,
 		contextExplicit,
 		namespaceExplicit,
+		workspaceRouting,
 		projectName,
 		ensurer,
 	)
@@ -523,6 +535,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	kubeContext, namespace string,
 	contextExplicit bool,
 	namespaceExplicit bool,
+	workspaceRouting bool,
 	projectName string,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
@@ -535,6 +548,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 				namespace,
 				contextExplicit,
 				namespaceExplicit,
+				workspaceRouting,
 				source,
 				ensurer,
 			)
@@ -561,6 +575,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 		namespace,
 		contextExplicit,
 		namespaceExplicit,
+		workspaceRouting,
 		source,
 		ensurer,
 	)
@@ -603,6 +618,7 @@ func resolveRunLifecycleConnectionFromSource(
 	kubeContext, namespace string,
 	contextExplicit bool,
 	namespaceExplicit bool,
+	workspaceRouting bool,
 	source runConnectionSource,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
@@ -640,7 +656,7 @@ func resolveRunLifecycleConnectionFromSource(
 		return kubeContext, ns, func() {}, nil
 	}
 	if !source.Git {
-		if namespaceExplicit {
+		if namespaceExplicit || workspaceRouting {
 			ns, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
 			if err != nil {
 				return "", "", nil, err
