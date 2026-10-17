@@ -63,12 +63,10 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 
 	targetNamespace := resolvedNamespace(workspace)
 	historicalTarget := false
-	if !workspace.DeletionTimestamp.IsZero() {
-		previousNamespace := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace)
-		if previousNamespace != "" && previousNamespace != targetNamespace {
-			targetNamespace = previousNamespace
-			historicalTarget = true
-		}
+	previousNamespace := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace)
+	if previousNamespace != "" && previousNamespace != targetNamespace {
+		targetNamespace = previousNamespace
+		historicalTarget = true
 	}
 	var namespace corev1.Namespace
 	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace); err != nil {

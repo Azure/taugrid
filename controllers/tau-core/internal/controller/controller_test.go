@@ -2008,6 +2008,77 @@ func TestUnmigratedWorkspaceDeletionDuringRetargetUsesPreviousNamespace(t *testi
 	}
 }
 
+func TestUnmigratedWorkspaceRetargetMigratesHistoryBeforeDeletion(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Spec.Target.Namespace = "new-target"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	workspace.Status.Target.ResolvedNamespace = "old-target"
+	oldNamespace := testNamespace("old-target")
+	oldNamespace.Labels = map[string]string{
+		labelWorkspace:              workspace.Name,
+		labelWorkspaceLocalQueue:    workspace.Spec.Queue,
+		labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+	}
+	oldNamespace.Annotations = nil
+	newNamespace := testNamespace("new-target")
+	newNamespace.Labels = nil
+	newNamespace.Annotations = nil
+	binding := testRoleBinding("old-target", defaultRoleName, workspace.Name)
+	binding.Annotations = nil
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, oldNamespace, newNamespace, binding).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, req); err != nil {
+			t.Fatalf("Reconcile normal retarget iteration %d: %v", i, err)
+		}
+	}
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get retargeted workspace: %v", err)
+	}
+	if gotWorkspace.Status.Target.ResolvedNamespace != "new-target" {
+		t.Fatalf("resolved namespace = %q, want new-target", gotWorkspace.Status.Target.ResolvedNamespace)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("legacy RoleBinding survived normal retarget reconciliation: %v", err)
+	}
+	var gotOld corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldNamespace), &gotOld); err != nil {
+		t.Fatalf("Get historical Namespace: %v", err)
+	}
+	var gotNew corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(newNamespace), &gotNew); err != nil {
+		t.Fatalf("Get new desired Namespace: %v", err)
+	}
+	now := metav1.Now()
+	gotWorkspace.DeletionTimestamp = &now
+	deletionClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(&gotWorkspace, &gotOld, &gotNew).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	deletionReconciler := newTestWorkspaceReconciler(deletionClient)
+	if _, err := deletionReconciler.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile retargeted workspace deletion: %v", err)
+	}
+	if err := deletionClient.Get(ctx, client.ObjectKeyFromObject(newNamespace), &gotNew); err != nil {
+		t.Fatalf("Get new desired Namespace: %v", err)
+	}
+	if gotNew.Annotations[annotationOwnerUID] != "" || gotNew.Labels[labelWorkspace] != "" {
+		t.Fatalf("normal retarget mutated new desired Namespace: labels=%#v annotations=%#v", gotNew.Labels, gotNew.Annotations)
+	}
+}
+
 func TestLegacyWorkspaceRoleCleanupDoesNotRequireRoleUpdate(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)
