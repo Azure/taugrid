@@ -1145,6 +1145,7 @@ func TestWorkspaceRevokesObsoletePreviousNamespaceIdentityBeforeTargetReady(t *t
 	workspace.Status.Target.ResolvedNamespace = "old-aurora"
 	current := testServiceAccount("old-aurora", "tau-workload-v2", workspace.Name)
 	current.Annotations[annotationOwnerUID] = string(workspace.UID)
+	current.Annotations[annotationAzureWIClientID] = workspace.Spec.WorkloadIdentity.ClientID
 	obsolete := testServiceAccount("old-aurora", "tau-workload", workspace.Name)
 	obsolete.Annotations[annotationOwnerUID] = string(workspace.UID)
 	c := fake.NewClientBuilder().
@@ -1162,6 +1163,33 @@ func TestWorkspaceRevokesObsoletePreviousNamespaceIdentityBeforeTargetReady(t *t
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(current), &corev1.ServiceAccount{}); err != nil {
 		t.Fatalf("current previous namespace ServiceAccount was removed: %v", err)
+	}
+}
+
+func TestWorkspaceRevokesPreviousNamespaceIdentityWhenClientIDChanges(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Target.Namespace = "new-aurora"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.WorkloadIdentity.ClientID = "new-client-id"
+	workspace.Status.Target.ResolvedNamespace = "old-aurora"
+	obsolete := testServiceAccount("old-aurora", workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
+	obsolete.Annotations[annotationOwnerUID] = string(workspace.UID)
+	obsolete.Annotations[annotationAzureWIClientID] = "old-client-id"
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, obsolete).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.syncWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("syncWorkspace() error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(obsolete), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("obsolete previous namespace identity binding survived: %v", err)
 	}
 }
 
@@ -2635,7 +2663,22 @@ func TestExistingTeamWorkspaceWithoutQueuePreservesClientRoute(t *testing.T) {
 		ClusterQueue: workspaceClusterQueueName(workspace.Name),
 	}
 
-	got := workspaceClientQueueStatus(workspace, managed)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(
+			testLocalQueue(workspace.Status.Target.ResolvedNamespace, "jobqueue", "jobqueue"),
+			testClusterQueue("jobqueue"),
+		).
+		Build()
+	got, err := newTestWorkspaceReconciler(c).workspaceClientQueueStatus(
+		context.Background(),
+		workspace,
+		workspace.Status.Target.ResolvedNamespace,
+		managed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.LocalQueue != "jobqueue" || got.ClusterQueue != "jobqueue" {
 		t.Fatalf("client queue status = %#v, want complete inherited legacy route", got)
 	}
@@ -2661,10 +2704,65 @@ func TestExistingTeamWorkspacePreservesClientRouteAcrossRecovery(t *testing.T) {
 		tauv1alpha1.WorkspacePhaseReady,
 	} {
 		workspace.Status.Phase = phase
-		got := workspaceClientQueueStatus(workspace, managed)
+		c := fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(
+				testLocalQueue(workspace.Status.Target.ResolvedNamespace, "jobqueue", "legacy-cq"),
+				clusterQueueWithUID("legacy-cq", "legacy-cq-uid"),
+			).
+			Build()
+		got, err := newTestWorkspaceReconciler(c).workspaceClientQueueStatus(
+			context.Background(),
+			workspace,
+			workspace.Status.Target.ResolvedNamespace,
+			managed,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !reflect.DeepEqual(got, workspace.Status.Queue) {
 			t.Fatalf("phase %q client queue status = %#v, want established route %#v", phase, got, workspace.Status.Queue)
 		}
+	}
+}
+
+func TestExistingTeamWorkspaceResolvesMovedCompatibilityQueueBacking(t *testing.T) {
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Status.Target.ResolvedNamespace = "old-aurora"
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "legacy-cq",
+		ClusterQueueUID: "legacy-cq-uid",
+	}
+	alias := testLocalQueue("new-aurora", "jobqueue", workspaceClusterQueueName(workspace.Name))
+	managedQueue := clusterQueueWithUID(workspaceClusterQueueName(workspace.Name), "managed-cq-uid")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(alias, managedQueue).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	got, err := reconciler.workspaceClientQueueStatus(
+		context.Background(),
+		workspace,
+		"new-aurora",
+		tauv1alpha1.WorkspaceQueueStatus{
+			LocalQueue:      workspaceClusterQueueName(workspace.Name),
+			ClusterQueue:    workspaceClusterQueueName(workspace.Name),
+			ClusterQueueUID: "managed-cq-uid",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    workspaceClusterQueueName(workspace.Name),
+		ClusterQueueUID: "managed-cq-uid",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("moved client queue status = %#v, want %#v", got, want)
 	}
 }
 
@@ -3082,9 +3180,22 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 	scheme := testScheme(t)
 	workspace := testWorkspace("aurora")
 	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "jobqueue",
+		ClusterQueueUID: "jobqueue-uid",
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+	namespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	legacyQueue := testLocalQueue(workspace.Name, "jobqueue", "jobqueue")
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace).
+		WithObjects(workspace, namespace, legacyQueue, clusterQueueWithUID("jobqueue", "jobqueue-uid")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	recordingClient := &resourceMutationRecordingClient{Client: c}
@@ -3115,6 +3226,38 @@ func TestWorkspaceWithoutQueueOrClusterDefaultIsDegraded(t *testing.T) {
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionFalse)
 	if queue := findCondition(got.Status.Conditions, tauv1alpha1.ConditionQueueReady); queue == nil || queue.Reason != "QueueUnresolved" {
 		t.Fatalf("QueueReady = %#v", queue)
+	}
+	if !reflect.DeepEqual(got.Status.Queue, workspace.Status.Queue) {
+		t.Fatalf("unresolved queue status = %#v, want preserved %#v", got.Status.Queue, workspace.Status.Queue)
+	}
+
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "jobqueue"},
+		},
+	}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	if err := c.Create(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Create(ctx, flavor); err != nil {
+		t.Fatal(err)
+	}
+	reconcileWorkspace(t, reconciler, ctx, workspace.Name)
+	if err := c.Get(ctx, req.NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Status.Queue, workspace.Status.Queue) {
+		t.Fatalf("recovered queue status = %#v, want preserved %#v", got.Status.Queue, workspace.Status.Queue)
 	}
 }
 

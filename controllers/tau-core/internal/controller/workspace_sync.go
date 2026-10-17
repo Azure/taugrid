@@ -6,11 +6,15 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) (ctrl.Result, error) {
@@ -175,11 +179,15 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	if currentTargetReady && cleanupReady {
 		resolvedTarget = targetNamespace
 	}
+	clientQueueStatus, err := r.workspaceClientQueueStatus(ctx, workspace, resolvedTarget, queueStatus)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	desired := tauv1alpha1.TauWorkspaceStatus{
 		Phase:              workspacePhase(conditions),
 		ObservedGeneration: workspace.Generation,
 		Target:             tauv1alpha1.WorkspaceTargetStatus{ResolvedNamespace: resolvedTarget},
-		Queue:              workspaceClientQueueStatus(workspace, queueStatus),
+		Queue:              clientQueueStatus,
 		Conditions:         mergeConditions(workspace.Status.Conditions, conditions),
 	}
 	if !equalWorkspaceStatus(workspace.Status, desired) {
@@ -194,17 +202,48 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	return ctrl.Result{RequeueAfter: notReadyRequeue}, nil
 }
 
-func workspaceClientQueueStatus(
+func (r *TauWorkspaceReconciler) workspaceClientQueueStatus(
+	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
+	namespace string,
 	queueStatus tauv1alpha1.WorkspaceQueueStatus,
-) tauv1alpha1.WorkspaceQueueStatus {
+) (tauv1alpha1.WorkspaceQueueStatus, error) {
 	if workspace.Spec.TeamRef == nil {
-		return queueStatus
+		return queueStatus, nil
 	}
 	canonical := workspaceLocalQueueName(workspace)
 	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
-	if previous != "" && previous != canonical {
-		return workspace.Status.Queue
+	if previous == "" || previous == canonical {
+		return queueStatus, nil
 	}
-	return queueStatus
+	localQueue := newQueueObject(localQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: previous, Namespace: namespace}, localQueue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return workspace.Status.Queue, nil
+		}
+		return tauv1alpha1.WorkspaceQueueStatus{}, err
+	}
+	clusterQueueName, _, _ := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+	clusterQueueName = strings.TrimSpace(clusterQueueName)
+	if clusterQueueName == "" {
+		return tauv1alpha1.WorkspaceQueueStatus{}, fmt.Errorf(
+			"compatible LocalQueue %q in namespace %q does not reference a ClusterQueue",
+			previous,
+			namespace,
+		)
+	}
+	clusterQueue := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
+		return tauv1alpha1.WorkspaceQueueStatus{}, fmt.Errorf(
+			"compatible LocalQueue %q backing ClusterQueue %q is not ready: %w",
+			previous,
+			clusterQueueName,
+			err,
+		)
+	}
+	return tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      previous,
+		ClusterQueue:    clusterQueueName,
+		ClusterQueueUID: string(clusterQueue.GetUID()),
+	}, nil
 }

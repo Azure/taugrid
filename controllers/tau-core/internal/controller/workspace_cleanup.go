@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -358,7 +359,13 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
 	}
 	for i := range accounts.Items {
 		account := &accounts.Items[i]
-		if keepServiceAccount != "" && account.Name == keepServiceAccount {
+		desiredClientID := ""
+		if workspace.Spec.WorkloadIdentity != nil {
+			desiredClientID = strings.TrimSpace(workspace.Spec.WorkloadIdentity.ClientID)
+		}
+		if keepServiceAccount != "" &&
+			account.Name == keepServiceAccount &&
+			strings.TrimSpace(account.Annotations[annotationAzureWIClientID]) == desiredClientID {
 			continue
 		}
 		if err := validateWorkspaceObjectUID(account, workspace); err != nil {
