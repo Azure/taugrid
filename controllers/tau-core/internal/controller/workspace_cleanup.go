@@ -257,6 +257,10 @@ func (r *TauWorkspaceReconciler) deleteOwnedObject(
 }
 
 func (r *TauWorkspaceReconciler) deleteWithPreconditions(ctx context.Context, obj client.Object) error {
+	return deleteObjectWithPreconditions(ctx, r.Client, obj)
+}
+
+func deleteObjectWithPreconditions(ctx context.Context, writer client.Client, obj client.Object) error {
 	deleteOptions := []client.DeleteOption{}
 	uid := obj.GetUID()
 	resourceVersion := obj.GetResourceVersion()
@@ -270,7 +274,7 @@ func (r *TauWorkspaceReconciler) deleteWithPreconditions(ctx context.Context, ob
 		}
 		deleteOptions = append(deleteOptions, preconditions)
 	}
-	if err := r.Delete(ctx, obj, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+	if err := writer.Delete(ctx, obj, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	return nil
