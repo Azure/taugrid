@@ -1527,8 +1527,8 @@ func TestLegacyAdoptedWorkspaceMigrationRejectsQueueMismatch(t *testing.T) {
 	namespace := testNamespace("aurora")
 	namespace.Labels = map[string]string{
 		labelWorkspace:              workspace.Name,
-		labelWorkspaceLocalQueue:    "different",
-		labelKueueDefaultLocalQueue: "different",
+		labelWorkspaceLocalQueue:    "old-queue",
+		labelKueueDefaultLocalQueue: "different-queue",
 	}
 	namespace.Annotations = nil
 	c := fake.NewClientBuilder().
@@ -1553,6 +1553,50 @@ func TestLegacyAdoptedWorkspaceMigrationRejectsQueueMismatch(t *testing.T) {
 	}
 	if _, exists := gotNamespace.Annotations[annotationOwnerUID]; exists {
 		t.Fatalf("queue-mismatched namespace was migrated: %#v", gotNamespace.Annotations)
+	}
+}
+
+func TestLegacyAdoptedWorkspaceMigratesBeforePendingQueueChange(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.Queue = "new-queue"
+	namespace := testNamespace("aurora")
+	namespace.Labels = map[string]string{
+		labelWorkspace:              workspace.Name,
+		labelWorkspaceLocalQueue:    "old-queue",
+		labelKueueDefaultLocalQueue: "old-queue",
+	}
+	namespace.Annotations = nil
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, namespace, testClusterQueue("new-queue")).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 5)
+
+	var gotWorkspace tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &gotWorkspace); err != nil {
+		t.Fatalf("Get migrated workspace: %v", err)
+	}
+	if gotWorkspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("workspace owner UID = %q, want %q", gotWorkspace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(namespace), &gotNamespace); err != nil {
+		t.Fatalf("Get migrated Namespace: %v", err)
+	}
+	if gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("Namespace owner UID = %q, want %q", gotNamespace.Annotations[annotationOwnerUID], workspace.UID)
+	}
+	if gotNamespace.Labels[labelWorkspaceLocalQueue] != "new-queue" ||
+		gotNamespace.Labels[labelKueueDefaultLocalQueue] != "new-queue" {
+		t.Fatalf("Namespace queue labels = %#v, want new-queue", gotNamespace.Labels)
 	}
 }
 
