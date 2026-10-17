@@ -2236,13 +2236,13 @@ func TestUnmigratedWorkspaceRetargetMigratesHistoryBeforeDeletion(t *testing.T) 
 	}
 	oldNamespace.Annotations = nil
 	newNamespace := testNamespace("new-target")
-	newNamespace.Labels = nil
-	newNamespace.Annotations = nil
+	newNamespace.Labels = map[string]string{labelWorkspace: workspace.Name}
+	newNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	binding := testRoleBinding("old-target", defaultRoleName, workspace.Name)
 	binding.Annotations = nil
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, oldNamespace, newNamespace, binding).
+		WithObjects(workspace, oldNamespace, newNamespace, binding, testClusterQueue(workspace.Spec.Queue)).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -2285,8 +2285,9 @@ func TestUnmigratedWorkspaceRetargetMigratesHistoryBeforeDeletion(t *testing.T) 
 	if err := deletionClient.Get(ctx, client.ObjectKeyFromObject(newNamespace), &gotNew); err != nil {
 		t.Fatalf("Get new desired Namespace: %v", err)
 	}
-	if gotNew.Annotations[annotationOwnerUID] != "" || gotNew.Labels[labelWorkspace] != "" {
-		t.Fatalf("normal retarget mutated new desired Namespace: labels=%#v annotations=%#v", gotNew.Labels, gotNew.Annotations)
+	if gotNew.Annotations[annotationOwnerUID] != string(workspace.UID) ||
+		gotNew.Labels[labelWorkspace] != workspace.Name {
+		t.Fatalf("normal retarget deletion did not preserve adopted Namespace ownership: labels=%#v annotations=%#v", gotNew.Labels, gotNew.Annotations)
 	}
 }
 
