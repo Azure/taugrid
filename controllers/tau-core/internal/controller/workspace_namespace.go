@@ -73,11 +73,13 @@ func (r *TauWorkspaceReconciler) migrateLegacyWorkspaceOwnership(
 		return false, fmt.Errorf("verify legacy TauWorkspace %q namespace ownership: %w", workspace.Name, err)
 	}
 	if !workspace.Spec.Target.CreateNamespace && strings.TrimSpace(workspace.Spec.Queue) == "" {
-		resolved, err := r.getDefaultWorkspaceQueue(ctx)
-		if err != nil {
-			return false, err
+		if workspace.DeletionTimestamp.IsZero() {
+			resolved, err := r.getDefaultWorkspaceQueue(ctx)
+			if err != nil {
+				return false, err
+			}
+			workspace.Spec.Queue = resolved
 		}
-		workspace.Spec.Queue = resolved
 	}
 	if !legacyNamespaceMatchesWorkspace(&namespace, workspace) {
 		return false, nil
@@ -126,6 +128,9 @@ func legacyNamespaceMatchesWorkspace(
 		return namespace.Labels[labelManagedBy] == labelManagedByValue
 	}
 	queue := strings.TrimSpace(workspace.Spec.Queue)
+	if queue == "" && !workspace.DeletionTimestamp.IsZero() {
+		queue = namespace.Labels[labelWorkspaceLocalQueue]
+	}
 	return queue != "" &&
 		namespace.Labels[labelWorkspaceLocalQueue] == queue &&
 		namespace.Labels[labelKueueDefaultLocalQueue] == queue
