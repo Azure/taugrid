@@ -198,13 +198,13 @@ func workspaceClientQueueStatus(
 	workspace *tauv1alpha1.TauWorkspace,
 	queueStatus tauv1alpha1.WorkspaceQueueStatus,
 ) tauv1alpha1.WorkspaceQueueStatus {
-	if workspace.Spec.TeamRef == nil || workspace.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+	if workspace.Spec.TeamRef == nil {
 		return queueStatus
 	}
 	canonical := workspaceLocalQueueName(workspace)
 	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
 	if previous != "" && previous != canonical {
-		queueStatus.LocalQueue = previous
+		return workspace.Status.Queue
 	}
 	return queueStatus
 }

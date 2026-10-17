@@ -2468,8 +2468,9 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
 	workspace.Status.Target.ResolvedNamespace = workspace.Name
 	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
-		LocalQueue:   workspace.Spec.Queue,
-		ClusterQueue: workspace.Spec.Queue,
+		LocalQueue:      workspace.Spec.Queue,
+		ClusterQueue:    workspace.Spec.Queue,
+		ClusterQueueUID: "legacy-cluster-queue-uid",
 	}
 	team := testTeam("vision", "8")
 	team.UID = types.UID("team-uid")
@@ -2499,7 +2500,7 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(workspace, team, flavor, namespace, previousQueue, workload, suspendedJob, testClusterQueue(workspace.Spec.Queue)).
+		WithObjects(workspace, team, flavor, namespace, previousQueue, workload, suspendedJob, clusterQueueWithUID(workspace.Spec.Queue, "legacy-cluster-queue-uid")).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -2531,8 +2532,9 @@ func TestTeamWorkspaceCutsOverToManagedQueue(t *testing.T) {
 		t.Fatalf("phase = %q, want Ready after compatible cutover", waiting.Status.Phase)
 	}
 	if waiting.Status.Queue.LocalQueue != workspace.Spec.Queue ||
-		waiting.Status.Queue.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
-		t.Fatalf("status.queue = %#v, want legacy client route and managed ClusterQueue", waiting.Status.Queue)
+		waiting.Status.Queue.ClusterQueue != workspace.Spec.Queue ||
+		waiting.Status.Queue.ClusterQueueUID != "legacy-cluster-queue-uid" {
+		t.Fatalf("status.queue = %#v, want complete legacy client route", waiting.Status.Queue)
 	}
 	if result.RequeueAfter != readyRequeue {
 		t.Fatalf("RequeueAfter = %v, want %v after compatible cutover", result.RequeueAfter, readyRequeue)
@@ -2635,8 +2637,35 @@ func TestExistingTeamWorkspaceWithoutQueuePreservesClientRoute(t *testing.T) {
 	}
 
 	got := workspaceClientQueueStatus(workspace, managed)
-	if got.LocalQueue != "jobqueue" || got.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
-		t.Fatalf("client queue status = %#v, want inherited legacy route and managed ClusterQueue", got)
+	if got.LocalQueue != "jobqueue" || got.ClusterQueue != "jobqueue" {
+		t.Fatalf("client queue status = %#v, want complete inherited legacy route", got)
+	}
+}
+
+func TestExistingTeamWorkspacePreservesClientRouteAcrossRecovery(t *testing.T) {
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "legacy-cq",
+		ClusterQueueUID: "legacy-cq-uid",
+	}
+	managed := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      workspaceClusterQueueName(workspace.Name),
+		ClusterQueue:    workspaceClusterQueueName(workspace.Name),
+		ClusterQueueUID: "managed-cq-uid",
+	}
+
+	for _, phase := range []string{
+		tauv1alpha1.WorkspacePhaseReady,
+		tauv1alpha1.WorkspacePhaseDegraded,
+		tauv1alpha1.WorkspacePhaseReady,
+	} {
+		workspace.Status.Phase = phase
+		got := workspaceClientQueueStatus(workspace, managed)
+		if !reflect.DeepEqual(got, workspace.Status.Queue) {
+			t.Fatalf("phase %q client queue status = %#v, want established route %#v", phase, got, workspace.Status.Queue)
+		}
 	}
 }
 
@@ -3201,6 +3230,12 @@ func testClusterQueue(name string) *unstructured.Unstructured {
 	}}
 	obj.SetGroupVersionKind(clusterQueueGVK)
 	return obj
+}
+
+func clusterQueueWithUID(name, uid string) *unstructured.Unstructured {
+	queue := testClusterQueue(name)
+	queue.SetUID(types.UID(uid))
+	return queue
 }
 
 func assertCondition(t *testing.T, conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus) {
