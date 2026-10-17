@@ -394,6 +394,9 @@ func validateWorkspaceSelection(source runConnectionSource, policyWorkspace, fla
 	policyWorkspace = strings.TrimSpace(policyWorkspace)
 	flagWorkspace = strings.TrimSpace(flagWorkspace)
 	projectWorkspace := strings.TrimSpace(source.Workspace)
+	if !source.Catalog || projectWorkspace == "" {
+		return nil
+	}
 	if policyWorkspace != "" && flagWorkspace != "" && policyWorkspace != flagWorkspace {
 		return fmt.Errorf(
 			"--workspace %q conflicts with run config policy.workspace %q",
