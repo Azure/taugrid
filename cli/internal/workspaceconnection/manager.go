@@ -48,7 +48,7 @@ type Verifier interface {
 }
 
 type compatibleQueueVerifier interface {
-	VerifyCompatibleQueue(context.Context, Descriptor, string, string, string) error
+	VerifyCompatibleQueue(context.Context, Descriptor, string, string, string) (string, error)
 }
 
 type Verification struct {
@@ -60,6 +60,7 @@ type Verification struct {
 	WorkspacePhase   string
 	TeamBacked       bool
 	CompatibleQueues []string
+	QueueBackings    map[string]string
 }
 
 type ActiveConnection struct {
@@ -71,6 +72,7 @@ type ActiveConnection struct {
 	KubeconfigPath    string
 	Namespace         string
 	Queue             string
+	ClusterQueue      string
 	QueueVerified     bool
 }
 
@@ -93,6 +95,7 @@ type connectionState struct {
 	KubeconfigPath    string       `json:"kubeconfig_path"`
 	Namespace         string       `json:"namespace"`
 	Queue             string       `json:"queue"`
+	ClusterQueue      string       `json:"cluster_queue,omitempty"`
 	ServiceAccount    string       `json:"service_account,omitempty"`
 	RequiredRole      string       `json:"required_role"`
 	RepositoryRoot    string       `json:"repository_root,omitempty"`
@@ -935,6 +938,7 @@ func (s *connectionState) applyVerification(descriptor Descriptor, verification 
 	if !slices.Contains(verification.CompatibleQueues, s.Queue) {
 		s.Queue = verification.Queue
 	}
+	s.ClusterQueue = verification.QueueBackings[s.Queue]
 	s.ServiceAccount = verification.ServiceAccount
 	s.WorkspaceUID = verification.WorkspaceUID
 	s.VerifiedAt = verifiedAt
@@ -957,6 +961,7 @@ func (s connectionState) active() ActiveConnection {
 		KubeconfigPath:    s.KubeconfigPath,
 		Namespace:         s.Namespace,
 		Queue:             s.Queue,
+		ClusterQueue:      s.ClusterQueue,
 		QueueVerified:     !s.VerifiedAt.IsZero(),
 	}
 }
@@ -1140,10 +1145,18 @@ func (m Manager) withCompatibleQueue(
 		return verification
 	}
 	verifier, ok := m.Verifier.(compatibleQueueVerifier)
-	if !ok || verifier.VerifyCompatibleQueue(ctx, descriptor, kubeconfigPath, verification.Namespace, expectedQueue) != nil {
+	if !ok {
+		return verification
+	}
+	clusterQueue, err := verifier.VerifyCompatibleQueue(ctx, descriptor, kubeconfigPath, verification.Namespace, expectedQueue)
+	if err != nil {
 		return verification
 	}
 	verification.CompatibleQueues = append(verification.CompatibleQueues, expectedQueue)
+	if verification.QueueBackings == nil {
+		verification.QueueBackings = map[string]string{}
+	}
+	verification.QueueBackings[expectedQueue] = clusterQueue
 	return verification
 }
 

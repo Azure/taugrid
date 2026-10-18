@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,6 +21,15 @@ import (
 func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) (ctrl.Result, error) {
 	targetNamespace := resolvedNamespace(workspace)
 	conditions := []metav1.Condition{}
+	establishedLocalQueue := ""
+	if workspace.Spec.TeamRef != nil && strings.TrimSpace(workspace.Status.Queue.LocalQueue) == "" {
+		var existing corev1.Namespace
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: targetNamespace}, &existing); err == nil {
+			establishedLocalQueue = strings.TrimSpace(existing.Labels[labelKueueDefaultLocalQueue])
+		} else if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	}
 
 	namespaceReady, namespaceErr := r.reconcileNamespace(ctx, workspace, targetNamespace, false)
 	if namespaceErr != nil {
@@ -169,9 +179,15 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	if currentTargetReady && cleanupReady {
 		resolvedTarget = targetNamespace
 	}
-	clientQueueStatus, err := r.workspaceClientQueueStatus(ctx, workspace, resolvedTarget, queueStatus)
+	clientQueueStatus, err := r.workspaceClientQueueStatusForRoute(
+		ctx,
+		workspace,
+		resolvedTarget,
+		establishedLocalQueue,
+		queueStatus,
+	)
 	if err != nil {
-		return ctrl.Result{}, err
+		clientQueueStatus = workspace.Status.Queue
 	}
 	desired := tauv1alpha1.TauWorkspaceStatus{
 		Phase:              workspacePhase(conditions),
@@ -186,6 +202,9 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			return ctrl.Result{}, err
 		}
 	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	if desired.Phase == tauv1alpha1.WorkspacePhaseReady && !activationPending {
 		return ctrl.Result{RequeueAfter: readyRequeue}, nil
 	}
@@ -198,13 +217,22 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatus(
 	namespace string,
 	queueStatus tauv1alpha1.WorkspaceQueueStatus,
 ) (tauv1alpha1.WorkspaceQueueStatus, error) {
+	return r.workspaceClientQueueStatusForRoute(ctx, workspace, namespace, "", queueStatus)
+}
+
+func (r *TauWorkspaceReconciler) workspaceClientQueueStatusForRoute(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace, establishedLocalQueue string,
+	queueStatus tauv1alpha1.WorkspaceQueueStatus,
+) (tauv1alpha1.WorkspaceQueueStatus, error) {
 	if workspace.Spec.TeamRef == nil {
 		return queueStatus, nil
 	}
 	canonical := workspaceLocalQueueName(workspace)
 	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
 	recovering := false
-	if previous == "" && len(workspace.Spec.Quota) > 0 {
+	if previous == "" {
 		var stored tauv1alpha1.TauWorkspace
 		if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err != nil {
 			return tauv1alpha1.WorkspaceQueueStatus{}, err
@@ -213,6 +241,9 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatus(
 	}
 	if recovering {
 		previous = strings.TrimSpace(workspace.Spec.Queue)
+		if establishedLocalQueue != previous {
+			return queueStatus, nil
+		}
 	}
 	if previous == "" || previous == canonical {
 		return queueStatus, nil
@@ -235,9 +266,6 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatus(
 			previous,
 			namespace,
 		)
-	}
-	if recovering && clusterQueueName == queueStatus.ClusterQueue {
-		return queueStatus, nil
 	}
 	clusterQueue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {

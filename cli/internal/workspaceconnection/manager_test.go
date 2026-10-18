@@ -58,11 +58,11 @@ func (f *compatibleFakeVerifier) VerifyCompatibleQueue(
 	_ context.Context,
 	_ Descriptor,
 	_, _, queue string,
-) error {
+) (string, error) {
 	if queue != f.queue {
-		return fmt.Errorf("queue %q is unavailable", queue)
+		return "", fmt.Errorf("queue %q is unavailable", queue)
 	}
-	return nil
+	return "legacy-cq", nil
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, _ Descriptor, kubeconfigPath string) (Verification, error) {
@@ -1447,13 +1447,14 @@ func TestApplyVerificationPreservesVerifiedCompatibleQueue(t *testing.T) {
 		Namespace:        "sample",
 		Queue:            "tau-ws-sample",
 		CompatibleQueues: []string{"jobqueue"},
+		QueueBackings:    map[string]string{"jobqueue": "legacy-cq"},
 	}
 	state.applyVerification(Descriptor{}, verification, verifiedAt)
 	if state.Queue != "jobqueue" {
 		t.Fatalf("queue = %q, want verified compatible queue jobqueue", state.Queue)
 	}
 	active := state.active()
-	if active.Queue != "jobqueue" || !active.QueueVerified {
+	if active.Queue != "jobqueue" || active.ClusterQueue != "legacy-cq" || !active.QueueVerified {
 		t.Fatalf("active connection = %#v, want verified compatible queue", active)
 	}
 }
@@ -1472,6 +1473,9 @@ func TestWithCompatibleQueueVerifiesPersistedQueueIndependentOfWorkspaceSpec(t *
 	)
 	if !slices.Contains(verification.CompatibleQueues, "inherited-default") {
 		t.Fatalf("compatible queues = %#v, want persisted inherited default", verification.CompatibleQueues)
+	}
+	if verification.QueueBackings["inherited-default"] != "legacy-cq" {
+		t.Fatalf("compatible queue backing = %#v, want inherited-default -> legacy-cq", verification.QueueBackings)
 	}
 }
 

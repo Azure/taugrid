@@ -25,13 +25,20 @@ func (v KubectlVerifier) VerifyCompatibleQueue(
 	ctx context.Context,
 	descriptor Descriptor,
 	kubeconfigPath, namespace, queue string,
-) error {
-	_, err := v.runner(descriptor.Cluster.ContextName, kubeconfigPath).Raw(
+) (string, error) {
+	output, err := v.runner(descriptor.Cluster.ContextName, kubeconfigPath).Raw(
 		ctx,
-		[]string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "name"},
+		[]string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "jsonpath={.spec.clusterQueue}"},
 		nil,
 	)
-	return err
+	if err != nil {
+		return "", err
+	}
+	clusterQueue := strings.TrimSpace(output)
+	if clusterQueue == "" {
+		return "", fmt.Errorf("LocalQueue %s/%s has no backing ClusterQueue", namespace, queue)
+	}
+	return clusterQueue, nil
 }
 
 func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kubeconfigPath string) (Verification, error) {
@@ -91,6 +98,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	if _, err := runner.Raw(ctx, []string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", queue, "-o", "name"}, nil); err != nil {
 		return Verification{}, fmt.Errorf("read workspace LocalQueue %s/%s: %w", namespace, queue, err)
 	}
+	clusterQueue := strings.TrimSpace(workspace.Status.Queue.ClusterQueue)
 	var compatibleQueues []string
 	if workspace.Spec.TeamRef != nil {
 		previousQueue := strings.TrimSpace(workspace.Spec.Queue)
@@ -120,6 +128,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			WorkspacePhase:   workspace.Status.Phase,
 			TeamBacked:       workspace.Spec.TeamRef != nil,
 			CompatibleQueues: compatibleQueues,
+			QueueBackings:    map[string]string{queue: clusterQueue},
 		}, nil
 	}
 	checks := []struct {
@@ -177,6 +186,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		WorkspacePhase:   workspace.Status.Phase,
 		TeamBacked:       workspace.Spec.TeamRef != nil,
 		CompatibleQueues: compatibleQueues,
+		QueueBackings:    map[string]string{queue: clusterQueue},
 	}, nil
 }
 

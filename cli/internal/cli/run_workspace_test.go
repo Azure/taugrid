@@ -104,6 +104,7 @@ func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *test
 		Workspace:     workspace.Metadata.Name,
 		Namespace:     workspace.Status.Target.ResolvedNamespace,
 		Queue:         "jobqueue",
+		ClusterQueue:  "legacy-cq",
 		QueueVerified: true,
 	}
 
@@ -113,6 +114,9 @@ func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *test
 	}
 	if placement.LocalQueue != "jobqueue" {
 		t.Fatalf("LocalQueue = %q, want compatible persisted queue", placement.LocalQueue)
+	}
+	if placement.ClusterQueue != "legacy-cq" {
+		t.Fatalf("ClusterQueue = %q, want compatible persisted backing", placement.ClusterQueue)
 	}
 }
 
@@ -128,6 +132,7 @@ func TestResolveWorkspacePlacementPreservesVerifiedTeamQueueWhenSpecQueueIsEmpty
 		Workspace:     workspace.Metadata.Name,
 		Namespace:     workspace.Status.Target.ResolvedNamespace,
 		Queue:         "inherited-default",
+		ClusterQueue:  "legacy-cq",
 		QueueVerified: true,
 	}
 
@@ -137,6 +142,9 @@ func TestResolveWorkspacePlacementPreservesVerifiedTeamQueueWhenSpecQueueIsEmpty
 	}
 	if placement.LocalQueue != "inherited-default" {
 		t.Fatalf("LocalQueue = %q, want verified inherited default", placement.LocalQueue)
+	}
+	if placement.ClusterQueue != "legacy-cq" {
+		t.Fatalf("ClusterQueue = %q, want verified inherited backing", placement.ClusterQueue)
 	}
 }
 

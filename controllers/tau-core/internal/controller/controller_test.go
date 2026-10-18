@@ -2801,6 +2801,104 @@ func TestTeamWorkspaceRecoversInheritedAliasFromEmptyQueueStatus(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspaceRecoversInheritedAliasWithoutQuota(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = nil
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseDegraded
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "jobqueue"},
+		},
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	managed := desiredWorkspaceClusterQueue(workspace)
+	managed.SetUID(types.UID("managed-cq-uid"))
+	alias := testLocalQueue(workspace.Name, "jobqueue", managed.GetName())
+	alias.SetAnnotations(nil)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, cluster, team, managed, alias).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	reconcileWorkspaceTimes(t, newTestWorkspaceReconciler(c), ctx, workspace.Name, 3)
+
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      alias.GetName(),
+		ClusterQueue:    managed.GetName(),
+		ClusterQueueUID: string(managed.GetUID()),
+	}
+	if !reflect.DeepEqual(got.Status.Queue, want) {
+		t.Fatalf("recovered queue status = %#v, want complete inherited alias %#v", got.Status.Queue, want)
+	}
+}
+
+func TestBrokenLegacyQueuePersistsDegradedStatusBeforeRetry(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "missing-cq",
+		ClusterQueueUID: "missing-cq-uid",
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	alias := testLocalQueue(workspace.Name, "jobqueue", "missing-cq")
+	alias.SetAnnotations(nil)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, team, flavor, alias).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	_, err := newTestWorkspaceReconciler(c).Reconcile(
+		ctx,
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)},
+	)
+	if err == nil || !strings.Contains(err.Error(), "backing ClusterQueue") {
+		t.Fatalf("Reconcile() error = %v, want missing backing retry", err)
+	}
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != tauv1alpha1.WorkspacePhaseDegraded {
+		t.Fatalf("phase = %q, want Degraded", got.Status.Phase)
+	}
+	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionFalse)
+}
+
 func TestExistingTeamWorkspaceResolvesMovedCompatibilityQueueBacking(t *testing.T) {
 	workspace := testWorkspace("aurora")
 	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
@@ -3262,6 +3360,39 @@ func TestWorkspaceDeletionPreservesSameNameExternalQueue(t *testing.T) {
 	preserved := newQueueObject(clusterQueueGVK)
 	if err := c.Get(ctx, client.ObjectKeyFromObject(external), preserved); err != nil {
 		t.Fatalf("same-name external ClusterQueue was deleted with Workspace: %v", err)
+	}
+}
+
+func TestWorkspaceDeletionIgnoresUnrelatedCanonicalQueue(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = "jobqueue"
+	now := metav1.Now()
+	workspace.DeletionTimestamp = &now
+	external := clusterQueueWithUID(workspaceClusterQueueName(workspace.Name), "unrelated-cq-uid")
+	localQueue := testLocalQueue(workspace.Name, workspace.Spec.Queue, "jobqueue-cq")
+	localQueue.SetAnnotations(nil)
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, localQueue, external).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, request.NamespacedName, &tauv1alpha1.TauWorkspace{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("workspace finalizer was not removed: %v", err)
+	}
+	preserved := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(external), preserved); err != nil {
+		t.Fatalf("unrelated canonical ClusterQueue was deleted: %v", err)
 	}
 }
 
