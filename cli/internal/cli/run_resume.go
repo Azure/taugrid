@@ -162,8 +162,10 @@ func resolveResumeRouting(
 	resolvedOptions := targetOptions
 	connection := workspaceconnection.ActiveConnection{}
 	if resolution.Connection.Catalog {
-		if err := checkCatalogWorkspaceConflict(targetOptions, resolution.Connection, resolution.Connection.Discovery); err != nil {
-			return resumeRouting{}, nil, err
+		if resolution.Project != nil && strings.TrimSpace(resolution.Project.Workspace) != "" {
+			if err := checkCatalogWorkspaceConflict(targetOptions, resolution.Connection, resolution.Connection.Discovery); err != nil {
+				return resumeRouting{}, nil, err
+			}
 		}
 		if resolvedOptions.workspace == "" {
 			resolvedOptions.workspace = strings.TrimSpace(resolution.Connection.Workspace)

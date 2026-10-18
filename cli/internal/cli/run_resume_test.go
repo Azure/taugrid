@@ -714,6 +714,45 @@ func TestResumeCatalogProjectWithExplicitContextPropagatesWorkspace(t *testing.T
 	}
 }
 
+func TestResumeUnboundCatalogProjectWithExplicitContextPreservesConfigWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	writeRunRoutingFile(t, config, `name: resume-job
+policy:
+  workspace: config-workspace
+`)
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{}
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"taugrid-flex",
+		"config-namespace",
+		true,
+		true,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if ensurer.calls != 0 {
+		t.Fatalf("explicit context activated connection %d times", ensurer.calls)
+	}
+	if routing.KubeContext != "taugrid-flex" ||
+		routing.Namespace != "config-namespace" ||
+		routing.TargetOptions.workspace != "config-workspace" {
+		t.Fatalf("routing = %#v", routing)
+	}
+}
+
 func TestResumeExternalSymlinkToNoCatalogRepoCannotUseAmbientCluster(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink setup requires elevated privileges on Windows")
