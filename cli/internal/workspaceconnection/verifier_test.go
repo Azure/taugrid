@@ -45,7 +45,7 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name": "localqueue.kueue.x-k8s.io/jobqueue\n",
 		"auth can-i * * --all-namespaces":                          "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 
 	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err != nil {
@@ -81,7 +81,7 @@ func TestKubectlVerifierReportsCompatibleTeamQueue(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name":      "localqueue.kueue.x-k8s.io/jobqueue\n",
 		"auth can-i * * --all-namespaces":                               "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 
 	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err != nil {
@@ -151,7 +151,7 @@ func TestKubectlVerifierUsesConfiguredSystemNamespace(t *testing.T) {
 		"auth can-i * * --all-namespaces":                          "yes\n",
 	}}
 
-	verifier := KubectlVerifier{NewRunner: func(_, _ string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(_, _ string) RawRunner { return runner }}
 	if _, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig"); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestKubectlVerifierRejectsStaleReadyGeneration(t *testing.T) {
 		  }
 		}`,
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 
 	_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err == nil ||
@@ -199,7 +199,7 @@ func TestKubectlVerifierAllowsDegradedWorkspaceForLifecycle(t *testing.T) {
 	)
 	verifier := KubectlVerifier{
 		AllowUnreadyWorkspace: true,
-		NewRunner:             func(string, string) rawRunner { return runner },
+		NewRunner:             func(string, string) RawRunner { return runner },
 	}
 	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err != nil {
@@ -267,7 +267,7 @@ func workspaceRBACVerifierFixture(t *testing.T) (Descriptor, *verifierFakeRunner
 
 func TestKubectlVerifierWorkspaceRBACChecksNamespacedWorkloadPermissions(t *testing.T) {
 	descriptor, runner := workspaceRBACVerifierFixture(t)
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 
 	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err != nil {
@@ -316,7 +316,7 @@ func TestKubectlVerifierRejectsMissingRayServicePermission(t *testing.T) {
 				descriptor, runner := workspaceRBACVerifierFixture(t)
 				descriptor.Authorization.RequiredRole = role
 				runner.responses["-n sample auth can-i "+verb+" rayservices.ray.io"] = "no\n"
-				verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+				verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 				_, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 				want := fmt.Sprintf("workspace %q is missing required permission: %s rayservices.ray.io in namespace %s (expected role %s)",
 					descriptor.Workspace, verb, "sample", role)
@@ -355,7 +355,7 @@ func TestKubectlVerifierReportsMissingPermission(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name": "localqueue.kueue.x-k8s.io/jobqueue\n",
 		"-n sample auth can-i create jobs.batch":                   "no\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 	_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err == nil || !strings.Contains(err.Error(), "create jobs.batch") || !strings.Contains(err.Error(), "tau-researcher-v1") {
 		t.Fatalf("expected actionable permission error, got %v", err)
@@ -408,7 +408,7 @@ func TestKubectlVerifierResearcherRoleCompatibility(t *testing.T) {
 					runner.responses["-n sample auth can-i "+verb+" "+resource] = tc.permission
 				}
 			}
-			verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+			verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 			_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
@@ -446,7 +446,7 @@ func TestKubectlVerifierRejectsNonBroadClusterWideCredential(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name": "localqueue.kueue.x-k8s.io/jobqueue\n",
 		"auth can-i * * --all-namespaces":                          "no\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 	_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err == nil || !strings.Contains(err.Error(), "not authorized across the cluster") {
 		t.Fatalf("expected cluster-wide authorization error, got %v", err)
@@ -474,7 +474,7 @@ func TestKubectlVerifierRejectsAuthorizationContractMismatch(t *testing.T) {
 		  }
 		}`,
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 
 	_, err = verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err == nil || !strings.Contains(err.Error(), "authorization mode") || !strings.Contains(err.Error(), "does not match") {

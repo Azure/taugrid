@@ -632,10 +632,6 @@ func runTauRoutingSubprocess(t *testing.T, cwd string, args ...string) tauRoutin
 }
 
 func installFakeRoutingKubectl(t *testing.T, namespace string) {
-	installFakeRoutingKubectlWithWorkspacePhase(t, namespace, "Ready")
-}
-
-func installFakeRoutingKubectlWithWorkspacePhase(t *testing.T, namespace, phase string) {
 	t.Helper()
 	binDir := t.TempDir()
 	path := filepath.Join(binDir, "kubectl")
@@ -651,7 +647,7 @@ case " $* " in
         fi
         ;;
     esac
-    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1","defaults":{"outputRoot":"/data/projects/sample/runs"}},"status":{"phase":%q,"observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"tau-cq"}}}'
+    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1","defaults":{"outputRoot":"/data/projects/sample/runs"}},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"tau-cq"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
     printf '%%s\n' 'localqueue.kueue.x-k8s.io/jobqueue'
@@ -663,7 +659,7 @@ case " $* " in
     printf '%%s\n' '{"items":[]}'
     ;;
 esac
-`, phase, namespace)
+`, namespace)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

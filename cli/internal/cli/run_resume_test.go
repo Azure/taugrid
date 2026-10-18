@@ -675,12 +675,32 @@ func TestResumeSelectedWorkspaceAllowsExpiredUnreadyDescriptorCache(t *testing.T
 		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
 	})
 	config := filepath.Join(root, "alpha", "tau", "train.yaml")
-	installFakeRoutingKubectlWithWorkspacePhase(t, "descriptor-namespace", "Degraded")
 	installCachedRoutingConnection(t, root, "descriptor-namespace")
 	command := &cobra.Command{}
 	command.SetContext(context.Background())
 	command.SetOut(&bytes.Buffer{})
 	command.SetErr(&bytes.Buffer{})
+	manager := defaultRunConnectionManager(command)
+	manager.Verifier = workspaceconnection.KubectlVerifier{
+		NewRunner: func(contextName, kubeconfigPath string) workspaceconnection.RawRunner {
+			if contextName != "taugrid-flex" || kubeconfigPath == "" {
+				t.Fatalf("verifier context=%q kubeconfig=%q", contextName, kubeconfigPath)
+			}
+			return rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+				joined := strings.Join(args, " ")
+				switch {
+				case joined == "-n tau-system get workspace.tau.azure.com sample -o json":
+					return `{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Degraded","observedGeneration":1,"target":{"resolvedNamespace":"descriptor-namespace"},"queue":{"localQueue":"jobqueue","clusterQueue":"tau-cq"}}}`, nil
+				case joined == "-n descriptor-namespace get localqueue.kueue.x-k8s.io jobqueue -o name":
+					return "localqueue.kueue.x-k8s.io/jobqueue\n", nil
+				case strings.Contains(joined, " auth can-i "):
+					return "yes\n", nil
+				default:
+					return "", fmt.Errorf("unexpected verifier args: %s", joined)
+				}
+			})
+		},
+	}
 	runLifecycleWorkspaceFetcherOverride = func(
 		_ *cobra.Command,
 		kubeContext, namespace, name string,
@@ -701,7 +721,7 @@ func TestResumeSelectedWorkspaceAllowsExpiredUnreadyDescriptorCache(t *testing.T
 		"",
 		false,
 		false,
-		defaultRunConnectionManager(command),
+		manager,
 	)
 	if err != nil {
 		t.Fatal(err)
