@@ -203,12 +203,26 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatus(
 	}
 	canonical := workspaceLocalQueueName(workspace)
 	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
+	recovering := false
+	if previous == "" && len(workspace.Spec.Quota) > 0 {
+		var stored tauv1alpha1.TauWorkspace
+		if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err != nil {
+			return tauv1alpha1.WorkspaceQueueStatus{}, err
+		}
+		recovering = strings.TrimSpace(stored.Spec.Queue) == ""
+	}
+	if recovering {
+		previous = strings.TrimSpace(workspace.Spec.Queue)
+	}
 	if previous == "" || previous == canonical {
 		return queueStatus, nil
 	}
 	localQueue := newQueueObject(localQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: previous, Namespace: namespace}, localQueue); err != nil {
 		if apierrors.IsNotFound(err) {
+			if recovering {
+				return queueStatus, nil
+			}
 			return workspace.Status.Queue, nil
 		}
 		return tauv1alpha1.WorkspaceQueueStatus{}, err
@@ -222,8 +236,14 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatus(
 			namespace,
 		)
 	}
+	if recovering && clusterQueueName == queueStatus.ClusterQueue {
+		return queueStatus, nil
+	}
 	clusterQueue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
+		if recovering && apierrors.IsNotFound(err) {
+			return queueStatus, nil
+		}
 		return tauv1alpha1.WorkspaceQueueStatus{}, fmt.Errorf(
 			"compatible LocalQueue %q backing ClusterQueue %q is not ready: %w",
 			previous,

@@ -2737,6 +2737,70 @@ func TestExistingTeamWorkspacePreservesClientRouteAcrossRecovery(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspaceRecoversInheritedAliasFromEmptyQueueStatus(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseDegraded
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "jobqueue"},
+		},
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	alias := testLocalQueue(workspace.Name, "jobqueue", "external-cq")
+	alias.SetAnnotations(nil)
+	external := clusterQueueWithUID("external-cq", "external-cq-uid")
+	external.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+			true,
+		),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, cluster, team, alias, external, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 3)
+
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      alias.GetName(),
+		ClusterQueue:    external.GetName(),
+		ClusterQueueUID: string(external.GetUID()),
+	}
+	if !reflect.DeepEqual(got.Status.Queue, want) {
+		t.Fatalf("recovered queue status = %#v, want complete cached route %#v", got.Status.Queue, want)
+	}
+	preserved := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(alias), preserved); err != nil {
+		t.Fatal(err)
+	}
+	if backing, _, _ := unstructured.NestedString(preserved.Object, "spec", "clusterQueue"); backing != external.GetName() {
+		t.Fatalf("cached LocalQueue backing = %q, want %q", backing, external.GetName())
+	}
+}
+
 func TestExistingTeamWorkspaceResolvesMovedCompatibilityQueueBacking(t *testing.T) {
 	workspace := testWorkspace("aurora")
 	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
