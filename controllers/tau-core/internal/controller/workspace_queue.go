@@ -398,6 +398,10 @@ func retainedEstablishedWorkspaceClusterQueue(
 		if err != nil {
 			return "", false, err
 		}
+		sourceName, err = workspaceQueueClusterQueueName(ctx, reader, workspace, sourceName)
+		if err != nil {
+			return "", false, err
+		}
 	}
 	if sourceName == "" || sourceName == workspaceClusterQueueName(workspace.Name) {
 		return "", false, nil
@@ -417,6 +421,32 @@ func retainedEstablishedWorkspaceClusterQueue(
 		return source.GetName(), true, nil
 	}
 	return "", false, nil
+}
+
+func workspaceQueueClusterQueueName(
+	ctx context.Context,
+	reader client.Reader,
+	workspace *tauv1alpha1.TauWorkspace,
+	queueName string,
+) (string, error) {
+	localQueue := newQueueObject(localQueueGVK)
+	if err := reader.Get(ctx, client.ObjectKey{
+		Name:      queueName,
+		Namespace: resolvedNamespace(workspace),
+	}, localQueue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return queueName, nil
+		}
+		return "", err
+	}
+	clusterQueue, _, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+	if err != nil {
+		return "", fmt.Errorf("read LocalQueue %q backing ClusterQueue: %w", localQueue.GetName(), err)
+	}
+	if strings.TrimSpace(clusterQueue) == "" {
+		return "", fmt.Errorf("LocalQueue %q has no backing ClusterQueue", localQueue.GetName())
+	}
+	return clusterQueue, nil
 }
 
 func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(

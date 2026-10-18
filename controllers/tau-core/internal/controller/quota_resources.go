@@ -307,20 +307,9 @@ func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
 		}
 	}
 	if resolvedQueue != "" && strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == "" {
-		localQueue := newQueueObject(localQueueGVK)
-		if err := r.apiReader().Get(ctx, client.ObjectKey{
-			Name:      resolvedQueue,
-			Namespace: resolvedNamespace(workspace),
-		}, localQueue); err == nil {
-			clusterQueue, _, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
-			if err != nil {
-				return nil, fmt.Errorf("read LocalQueue %q backing ClusterQueue: %w", localQueue.GetName(), err)
-			}
-			if strings.TrimSpace(clusterQueue) == "" {
-				return nil, fmt.Errorf("LocalQueue %q has no backing ClusterQueue", localQueue.GetName())
-			}
-			resolvedQueue = clusterQueue
-		} else if !apierrors.IsNotFound(err) {
+		var err error
+		resolvedQueue, err = workspaceQueueClusterQueueName(ctx, r.apiReader(), workspace, resolvedQueue)
+		if err != nil {
 			return nil, err
 		}
 	}
