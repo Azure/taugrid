@@ -1479,6 +1479,58 @@ func TestWithCompatibleQueueVerifiesPersistedQueueIndependentOfWorkspaceSpec(t *
 	}
 }
 
+func TestKubectlVerifierManagerPreservesAliasBackingForPlacement(t *testing.T) {
+	descriptor, err := Parse([]byte(validDescriptorYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &verifierFakeRunner{responses: map[string]string{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
+		  "apiVersion": "tau.azure.com/v1alpha1",
+		  "kind": "TauWorkspace",
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 7},
+		  "spec": {"authorization": {"mode": "cluster-wide"}, "queue": "jobqueue", "teamRef": {"name": "vision"}},
+		  "status": {
+		    "phase": "Ready",
+		    "observedGeneration": 7,
+		    "target": {"resolvedNamespace": "sample"},
+		    "queue": {"localQueue": "tau-ws-sample", "clusterQueue": "tau-ws-sample"}
+		  }
+		}`,
+		"-n sample get localqueue.kueue.x-k8s.io tau-ws-sample -o name":                     "localqueue.kueue.x-k8s.io/tau-ws-sample\n",
+		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name":                          "localqueue.kueue.x-k8s.io/jobqueue\n",
+		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o jsonpath={.spec.clusterQueue}": "legacy-cq\n",
+		"auth can-i * * --all-namespaces":                                                   "yes\n",
+	}}
+	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	manager := Manager{Verifier: verifier}
+
+	verification, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !slices.Contains(verification.CompatibleQueues, "jobqueue") {
+		t.Fatalf("compatible queues = %#v, want jobqueue", verification.CompatibleQueues)
+	}
+	if verification.QueueBackings["jobqueue"] != "" {
+		t.Fatalf("alias backing = %q before manager verification, want empty", verification.QueueBackings["jobqueue"])
+	}
+
+	verification = manager.withCompatibleQueue(
+		context.Background(),
+		descriptor,
+		"/tmp/kubeconfig",
+		"jobqueue",
+		verification,
+	)
+	state := connectionState{Workspace: "sample", Namespace: "sample", Queue: "jobqueue"}
+	state.applyVerification(descriptor, verification, time.Now())
+	active := state.active()
+	if active.Queue != "jobqueue" || active.ClusterQueue != "legacy-cq" || !active.QueueVerified {
+		t.Fatalf("placement connection = %#v, want verified jobqueue -> legacy-cq", active)
+	}
+}
+
 func TestWithCompatibleQueueDoesNotPreserveOrdinaryWorkspaceQueue(t *testing.T) {
 	manager := Manager{Verifier: &compatibleFakeVerifier{
 		fakeVerifier: &fakeVerifier{},

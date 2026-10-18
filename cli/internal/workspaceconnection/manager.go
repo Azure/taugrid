@@ -1137,8 +1137,11 @@ func (m Manager) withCompatibleQueue(
 	verification Verification,
 ) Verification {
 	expectedQueue = strings.TrimSpace(expectedQueue)
-	if expectedQueue == "" || expectedQueue == verification.Queue ||
-		slices.Contains(verification.CompatibleQueues, expectedQueue) {
+	if expectedQueue == "" || expectedQueue == verification.Queue {
+		return verification
+	}
+	if slices.Contains(verification.CompatibleQueues, expectedQueue) &&
+		strings.TrimSpace(verification.QueueBackings[expectedQueue]) != "" {
 		return verification
 	}
 	if !verification.TeamBacked {
@@ -1152,7 +1155,9 @@ func (m Manager) withCompatibleQueue(
 	if err != nil {
 		return verification
 	}
-	verification.CompatibleQueues = append(verification.CompatibleQueues, expectedQueue)
+	if !slices.Contains(verification.CompatibleQueues, expectedQueue) {
+		verification.CompatibleQueues = append(verification.CompatibleQueues, expectedQueue)
+	}
 	if verification.QueueBackings == nil {
 		verification.QueueBackings = map[string]string{}
 	}
