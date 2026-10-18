@@ -2928,6 +2928,63 @@ func TestTeamWorkspaceRetainsEstablishedQueueUntilQuotaCanTransfer(t *testing.T)
 	}
 }
 
+func TestTeamWorkspaceRetainedQueueSurvivesCapacityDropThroughReconcile(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "legacy"
+	workspace.Spec.Quota = nil
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.ObservedGeneration = workspace.Generation
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "legacy",
+		ClusterQueue:    "legacy",
+		ClusterQueueUID: "legacy-uid",
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Status: tauv1alpha1.TauClusterStatus{
+			DiscoveredCapacity: []tauv1alpha1.TauResourceCapacityStatus{{
+				Flavor:   "taugrid-gpu-h200",
+				Resource: nvidiaGPUResourceName,
+				Capacity: resource.MustParse("4"),
+			}},
+		},
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "legacy")
+	legacyQueue := clusterQueueWithUID("legacy", "legacy-uid")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, cluster, namespace, testLocalQueue(workspace.Name, "legacy", "legacy"), legacyQueue).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}); err != nil {
+		t.Fatal(err)
+	}
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("phase = %q, want Ready on retained external route; conditions=%#v", got.Status.Phase, got.Status.Conditions)
+	}
+	if !reflect.DeepEqual(got.Status.Queue, workspace.Status.Queue) {
+		t.Fatalf("status.queue = %#v, want retained route %#v", got.Status.Queue, workspace.Status.Queue)
+	}
+	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
+}
+
 func TestEmptyQuotaWorkspacesRetainPlatformQueueAcrossTeams(t *testing.T) {
 	ctx := context.Background()
 	vision := testTeam("vision", "4")

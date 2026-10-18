@@ -315,6 +315,11 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if !team.DeletionTimestamp.IsZero() {
 		return "", fmt.Errorf("team %q is deleting", workspace.Spec.TeamRef.Name)
 	}
+	if legacyQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace); err != nil {
+		return "", err
+	} else if retained {
+		return legacyQueue, nil
+	}
 	teamReconciler := &TauTeamReconciler{Client: r.Client, APIReader: r.apiReader(), SystemNamespace: r.SystemNamespace}
 	appliedCohort, _, incomingReservations, err := teamReconciler.appliedWorkspaceQueue(ctx, workspace)
 	if err != nil {
@@ -330,11 +335,6 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	}
 	if err := validateQuotaFlavors(ctx, r.Client, workspace.Spec.Quota); err != nil {
 		return "", err
-	}
-	if legacyQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace); err != nil {
-		return "", err
-	} else if retained {
-		return legacyQueue, nil
 	}
 	queue := desiredWorkspaceClusterQueue(workspace)
 	if err := r.preserveEstablishedWorkspaceQueueContract(ctx, workspace, queue); err != nil {
