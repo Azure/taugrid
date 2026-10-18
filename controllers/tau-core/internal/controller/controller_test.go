@@ -3092,6 +3092,65 @@ func TestTeamWorkspacePreservesCanonicalExternalLocalQueue(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspacePreservesSameNameExternalQueue(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = workspaceClusterQueueName(workspace.Name)
+	workspace.Spec.Quota = nil
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = map[string]string{
+		annotationOwnerUID:    string(workspace.UID),
+		annotationResultScope: workspace.Spec.Defaults.OutputRoot,
+	}
+	external := clusterQueueWithUID(workspace.Spec.Queue, "platform-cq-uid")
+	external.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
+			true,
+		),
+	}
+	localQueue := testLocalQueue(workspace.Name, workspace.Spec.Queue, external.GetName())
+	localQueue.SetAnnotations(nil)
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, team, localQueue, external).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}); err != nil {
+			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
+		}
+	}
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady ||
+		got.Status.Queue.LocalQueue != localQueue.GetName() ||
+		got.Status.Queue.ClusterQueue != external.GetName() {
+		t.Fatalf("workspace status = %#v, want Ready on same-name external route", got.Status)
+	}
+	preserved := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(external), preserved); err != nil {
+		t.Fatal(err)
+	}
+	if ownedByWorkspace(preserved.GetLabels(), workspace.Name) ||
+		preserved.GetAnnotations()[annotationOwnerUID] != "" {
+		t.Fatalf("same-name external ClusterQueue was adopted: labels=%#v annotations=%#v", preserved.GetLabels(), preserved.GetAnnotations())
+	}
+}
+
 func TestTeamWorkspacePreservesManagedAdmissionContractAfterSourceDeletion(t *testing.T) {
 	ctx := context.Background()
 	workspace := testWorkspace("aurora")
@@ -3295,6 +3354,75 @@ func TestTeamWorkspaceRetainedQueueSurvivesCapacityDropThroughReconcile(t *testi
 	}
 	if !reflect.DeepEqual(got.Status.Queue, workspace.Status.Queue) {
 		t.Fatalf("status.queue = %#v, want retained route %#v", got.Status.Queue, workspace.Status.Queue)
+	}
+	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
+}
+
+func TestTeamWorkspaceManagedQueueSurvivesCapacityDropThroughReconcile(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = workspaceClusterQueueName(workspace.Name)
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.ObservedGeneration = workspace.Generation
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      workspaceClusterQueueName(workspace.Name),
+		ClusterQueue:    workspaceClusterQueueName(workspace.Name),
+		ClusterQueueUID: "managed-cq-uid",
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Status: tauv1alpha1.TauClusterStatus{
+			DiscoveredCapacity: []tauv1alpha1.TauResourceCapacityStatus{{
+				Flavor:   "taugrid-gpu-h200",
+				Resource: nvidiaGPUResourceName,
+				Capacity: resource.MustParse("4"),
+			}},
+		},
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspaceLocalQueueName(workspace))
+	namespace.Annotations = map[string]string{
+		annotationOwnerUID:    string(workspace.UID),
+		annotationResultScope: workspace.Spec.Defaults.OutputRoot,
+	}
+	managed := desiredWorkspaceClusterQueue(workspace)
+	managed.SetUID(types.UID("managed-cq-uid"))
+	localQueue := testLocalQueue(workspace.Name, workspaceLocalQueueName(workspace), managed.GetName())
+	localQueue.SetLabels(workspaceLabels(workspace.Name))
+	setOwnerUIDAnnotation(localQueue, workspace.UID)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, cluster, namespace, managed, localQueue, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	if _, err := newTestWorkspaceReconciler(c).Reconcile(
+		ctx,
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("phase = %q, want Ready on unchanged managed allocation; conditions=%#v", got.Status.Phase, got.Status.Conditions)
+	}
+	if !reflect.DeepEqual(got.Status.Queue, workspace.Status.Queue) {
+		t.Fatalf("status.queue = %#v, want unchanged managed route %#v", got.Status.Queue, workspace.Status.Queue)
 	}
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
 }

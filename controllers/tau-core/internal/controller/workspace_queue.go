@@ -137,17 +137,23 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			"workspace LocalQueue is reconciled", nil
 	}
 	if workspace.Spec.TeamRef != nil {
-		if desiredClusterQueue != workspaceClusterQueueName(workspace.Name) &&
-			clusterQueueName == desiredClusterQueue {
+		if clusterQueueName == desiredClusterQueue {
 			clusterQueue := newQueueObject(clusterQueueGVK)
 			if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
 				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
 					fmt.Sprintf("backing ClusterQueue %q is not ready: %v", clusterQueueName, err), nil
 			}
-			return tauv1alpha1.WorkspaceQueueStatus{
-					LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
-				}, true,
-				"established external workspace queue is readable", nil
+			owned, err := authoritativeWorkspaceClusterQueue(clusterQueue, workspace)
+			if err != nil {
+				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
+					fmt.Sprintf("ClusterQueue %q ownership is not authoritative: %v", clusterQueueName, err), nil
+			}
+			if !owned {
+				return tauv1alpha1.WorkspaceQueueStatus{
+						LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
+					}, true,
+					"established external workspace queue is readable", nil
+			}
 		}
 		if clusterQueueName != desiredClusterQueue {
 			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
@@ -342,9 +348,6 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 			return "", fmt.Errorf("refusing workspace migration to team %q: %w", team.Name, err)
 		}
 	}
-	if err := teamReconciler.validateTeamCapacity(ctx, &team); err != nil {
-		return "", err
-	}
 	if err := validateQuotaFlavors(ctx, r.Client, workspace.Spec.Quota); err != nil {
 		return "", err
 	}
@@ -357,6 +360,11 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	reductionOnly, err := r.workspaceQueueReductionOnly(ctx, workspace, queue)
 	if err != nil {
 		return "", err
+	}
+	if !reductionOnly {
+		if err := teamReconciler.validateTeamCapacity(ctx, &team); err != nil {
+			return "", err
+		}
 	}
 	if !teamReady && !reductionOnly {
 		return "", fmt.Errorf("team %q is not Ready", workspace.Spec.TeamRef.Name)
@@ -416,7 +424,7 @@ func retainedEstablishedWorkspaceClusterQueue(
 			return "", false, err
 		}
 	}
-	if sourceName == "" || sourceName == workspaceClusterQueueName(workspace.Name) {
+	if sourceName == "" {
 		return "", false, nil
 	}
 	source := newQueueObject(clusterQueueGVK)
@@ -425,6 +433,15 @@ func retainedEstablishedWorkspaceClusterQueue(
 			return "", false, nil
 		}
 		return "", false, err
+	}
+	if sourceName == workspaceClusterQueueName(workspace.Name) {
+		owned, err := authoritativeWorkspaceClusterQueue(source, workspace)
+		if err != nil {
+			return "", false, err
+		}
+		if owned {
+			return "", false, nil
+		}
 	}
 	if len(workspace.Spec.Quota) == 0 {
 		return source.GetName(), true, nil
@@ -443,6 +460,23 @@ func retainedEstablishedWorkspaceClusterQueue(
 		return source.GetName(), true, nil
 	}
 	return "", false, nil
+}
+
+func authoritativeWorkspaceClusterQueue(
+	queue *unstructured.Unstructured,
+	workspace *tauv1alpha1.TauWorkspace,
+) (bool, error) {
+	labels := queue.GetLabels()
+	if labels[labelManagedBy] != labelManagedByValue {
+		return false, nil
+	}
+	if labels[labelWorkspace] != workspace.Name {
+		return false, fmt.Errorf("ClusterQueue %q is managed for workspace %q", queue.GetName(), labels[labelWorkspace])
+	}
+	if err := validateWorkspaceObjectUID(queue, workspace); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func workspaceQueueClusterQueueName(
