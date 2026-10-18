@@ -298,7 +298,6 @@ func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
 	workspace *tauv1alpha1.TauWorkspace,
 	managedClusterQueue string,
 ) (*unstructured.Unstructured, error) {
-	seen := map[string]bool{managedClusterQueue: true}
 	resolvedQueue := strings.TrimSpace(workspace.Spec.Queue)
 	if resolvedQueue == "" && strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == "" {
 		var err error
@@ -307,6 +306,25 @@ func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
 			return nil, err
 		}
 	}
+	if resolvedQueue != "" && strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == "" {
+		localQueue := newQueueObject(localQueueGVK)
+		if err := r.apiReader().Get(ctx, client.ObjectKey{
+			Name:      resolvedQueue,
+			Namespace: resolvedNamespace(workspace),
+		}, localQueue); err == nil {
+			clusterQueue, _, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+			if err != nil {
+				return nil, fmt.Errorf("read LocalQueue %q backing ClusterQueue: %w", localQueue.GetName(), err)
+			}
+			if strings.TrimSpace(clusterQueue) == "" {
+				return nil, fmt.Errorf("LocalQueue %q has no backing ClusterQueue", localQueue.GetName())
+			}
+			resolvedQueue = clusterQueue
+		} else if !apierrors.IsNotFound(err) {
+			return nil, err
+		}
+	}
+	seen := map[string]bool{managedClusterQueue: true}
 	for _, name := range []string{workspace.Status.Queue.ClusterQueue, resolvedQueue} {
 		name = strings.TrimSpace(name)
 		if name == "" || seen[name] {
@@ -321,6 +339,19 @@ func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
 			return nil, err
 		}
 		return queue, nil
+	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: managedClusterQueue}, managed); err == nil {
+		labels := managed.GetLabels()
+		if labels[labelManagedBy] != labelManagedByValue ||
+			labels[labelWorkspace] != workspace.Name ||
+			workspace.UID == "" ||
+			managed.GetAnnotations()[annotationOwnerUID] != string(workspace.UID) {
+			return nil, fmt.Errorf("managed ClusterQueue %q ownership is not authoritative", managedClusterQueue)
+		}
+		return managed, nil
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
 	}
 	if len(workspace.Spec.Quota) == 0 &&
 		strings.TrimSpace(workspace.Status.Queue.LocalQueue) != "" &&

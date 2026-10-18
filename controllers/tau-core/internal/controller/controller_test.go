@@ -2844,6 +2844,127 @@ func TestExistingTeamWorkspacePreservesManagedQueueContract(t *testing.T) {
 	}
 }
 
+func TestTeamWorkspaceInheritsAdmissionContractFromLocalQueueBacking(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = map[string]string{
+		annotationOwnerUID:    string(workspace.UID),
+		annotationResultScope: workspace.Spec.Defaults.OutputRoot,
+	}
+	legacyQueue := clusterQueueWithUID("legacy-cq", "legacy-cq-uid")
+	legacyQueue.Object["spec"] = map[string]any{
+		"admissionChecks": []any{"multikueue"},
+		"admissionChecksStrategy": map[string]any{
+			"admissionChecks": []any{map[string]any{"name": "policy"}},
+		},
+		"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(
+			workspace,
+			namespace,
+			team,
+			flavor,
+			testLocalQueue(workspace.Name, workspace.Spec.Queue, legacyQueue.GetName()),
+			legacyQueue,
+		).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}); err != nil {
+			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
+		}
+	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed); err != nil {
+		t.Fatal(err)
+	}
+	assertAdmissionContract(t, managed, legacyQueue)
+}
+
+func TestTeamWorkspacePreservesManagedAdmissionContractAfterSourceDeletion(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "legacy-cq"
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = map[string]string{
+		annotationOwnerUID:    string(workspace.UID),
+		annotationResultScope: workspace.Spec.Defaults.OutputRoot,
+	}
+	source := clusterQueueWithUID("legacy-cq", "legacy-cq-uid")
+	source.Object["spec"] = map[string]any{
+		"admissionChecks": []any{"multikueue"},
+		"admissionChecksStrategy": map[string]any{
+			"admissionChecks": []any{map[string]any{"name": "policy"}},
+		},
+		"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(
+			workspace,
+			namespace,
+			team,
+			flavor,
+			testLocalQueue(workspace.Name, workspace.Spec.Queue, source.GetName()),
+			source,
+		).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, request); err != nil {
+			t.Fatalf("initial Reconcile() iteration %d error = %v", i, err)
+		}
+	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed); err != nil {
+		t.Fatal(err)
+	}
+	assertAdmissionContract(t, managed, source)
+	if err := c.Delete(ctx, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	preserved := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: managed.GetName()}, preserved); err != nil {
+		t.Fatal(err)
+	}
+	assertAdmissionContract(t, preserved, managed)
+}
+
 func TestTeamWorkspacePreservesSharedLegacyQueueBeforeCreatingManagedQueues(t *testing.T) {
 	ctx := context.Background()
 	team := testTeam("vision", "8")
@@ -4039,6 +4160,23 @@ func clusterQueueWithUID(name, uid string) *unstructured.Unstructured {
 	queue := testClusterQueue(name)
 	queue.SetUID(types.UID(uid))
 	return queue
+}
+
+func assertAdmissionContract(t *testing.T, got, want *unstructured.Unstructured) {
+	t.Helper()
+	for _, field := range []string{"admissionChecks", "admissionChecksStrategy"} {
+		gotValue, _, err := unstructured.NestedFieldNoCopy(got.Object, "spec", field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantValue, _, err := unstructured.NestedFieldNoCopy(want.Object, "spec", field)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(gotValue, wantValue) {
+			t.Fatalf("managed %s = %#v, want %#v", field, gotValue, wantValue)
+		}
+	}
 }
 
 func assertCondition(t *testing.T, conditions []metav1.Condition, conditionType string, status metav1.ConditionStatus) {
