@@ -367,13 +367,31 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 ) error {
 	effective := map[string]resource.Quantity{}
 	if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
-		_, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.quotaReader(), workspace)
+		retainedQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.quotaReader(), workspace)
 		if err != nil {
 			return err
 		}
 		if !retained {
 			for _, quota := range workspace.Spec.Quota {
 				effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+			}
+		} else {
+			queue := newQueueObject(clusterQueueGVK)
+			if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: retainedQueue}, queue); err != nil {
+				return err
+			}
+			cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
+			if err != nil {
+				return fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
+			}
+			if strings.TrimSpace(cohort) == teamCohortName(team.Name) {
+				guarantees, err := clusterQueueNominalQuota(queue)
+				if err != nil {
+					return err
+				}
+				for key, quantity := range guarantees {
+					effective[key] = quantity.DeepCopy()
+				}
 			}
 		}
 	}

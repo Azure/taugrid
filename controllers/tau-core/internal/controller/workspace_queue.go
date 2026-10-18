@@ -307,6 +307,11 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	if !apiequality.Semantic.DeepEqual(*refreshedSpec, workspace.Spec) {
 		return "", fmt.Errorf("%w: workspace %q", errWorkspaceSpecChanged, workspace.Name)
 	}
+	if legacyQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace); err != nil {
+		return "", err
+	} else if retained {
+		return legacyQueue, nil
+	}
 
 	var team tauv1alpha1.TauTeam
 	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: workspace.Spec.TeamRef.Name, Namespace: workspace.Namespace}, &team); err != nil {
@@ -314,11 +319,6 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	}
 	if !team.DeletionTimestamp.IsZero() {
 		return "", fmt.Errorf("team %q is deleting", workspace.Spec.TeamRef.Name)
-	}
-	if legacyQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace); err != nil {
-		return "", err
-	} else if retained {
-		return legacyQueue, nil
 	}
 	teamReconciler := &TauTeamReconciler{Client: r.Client, APIReader: r.apiReader(), SystemNamespace: r.SystemNamespace}
 	appliedCohort, _, incomingReservations, err := teamReconciler.appliedWorkspaceQueue(ctx, workspace)

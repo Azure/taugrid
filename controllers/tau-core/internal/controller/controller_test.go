@@ -2985,6 +2985,88 @@ func TestTeamWorkspaceRetainedQueueSurvivesCapacityDropThroughReconcile(t *testi
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
 }
 
+func TestTeamWorkspaceRetainedQueueSurvivesTeamDeletionThroughReconcile(t *testing.T) {
+	ctx := context.Background()
+	now := metav1.Now()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "legacy"
+	workspace.Spec.Quota = nil
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.ObservedGeneration = workspace.Generation
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "legacy",
+		ClusterQueue:    "legacy",
+		ClusterQueueUID: "legacy-uid",
+	}
+	team := testTeam("vision", "8")
+	team.Finalizers = []string{teamFinalizer}
+	team.DeletionTimestamp = &now
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "legacy")
+	legacyQueue := clusterQueueWithUID("legacy", "legacy-uid")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, namespace, testLocalQueue(workspace.Name, "legacy", "legacy"), legacyQueue).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	if _, err := newTestWorkspaceReconciler(c).Reconcile(
+		ctx,
+		ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)},
+	); err != nil {
+		t.Fatal(err)
+	}
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
+		t.Fatalf("phase = %q, want Ready while Team is terminating; conditions=%#v", got.Status.Phase, got.Status.Conditions)
+	}
+	if !reflect.DeepEqual(got.Status.Queue, workspace.Status.Queue) {
+		t.Fatalf("status.queue = %#v, want retained route %#v", got.Status.Queue, workspace.Status.Queue)
+	}
+}
+
+func TestRetainedTeamCohortChildGuaranteeRemainsCharged(t *testing.T) {
+	ctx := context.Background()
+	team := testTeam("vision", "8")
+	workspace := testWorkspace("aurora")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	workspace.Spec.Queue = "legacy-child"
+	workspace.Spec.Quota = nil
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   "legacy-child",
+		ClusterQueue: "legacy-child",
+	}
+	child := testClusterQueue("legacy-child")
+	child.Object["spec"] = map[string]any{
+		"cohortName": teamCohortName(team.Name),
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+			true,
+		),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(team, workspace, child).
+		Build()
+
+	shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shared) != 1 || shared[0].NominalQuota.Cmp(resource.MustParse("4")) != 0 {
+		t.Fatalf("shared quota = %#v, want retained child guarantee charged exactly once", shared)
+	}
+}
+
 func TestEmptyQuotaWorkspacesRetainPlatformQueueAcrossTeams(t *testing.T) {
 	ctx := context.Background()
 	vision := testTeam("vision", "4")
