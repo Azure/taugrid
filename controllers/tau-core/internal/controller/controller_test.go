@@ -2932,6 +2932,10 @@ func TestTeamWorkspaceInheritsAdmissionContractFromLocalQueueBacking(t *testing.
 		},
 		"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
 	}
+	unrelatedQueue := clusterQueueWithUID(workspace.Spec.Queue, "unrelated-jobqueue-uid")
+	unrelatedQueue.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
+	}
 	team := testTeam("vision", "8")
 	team.Status.Phase = tauv1alpha1.TeamPhaseReady
 	team.Status.ObservedGeneration = team.Generation
@@ -2946,6 +2950,7 @@ func TestTeamWorkspaceInheritsAdmissionContractFromLocalQueueBacking(t *testing.
 			flavor,
 			testLocalQueue(workspace.Name, workspace.Spec.Queue, legacyQueue.GetName()),
 			legacyQueue,
+			unrelatedQueue,
 		).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
