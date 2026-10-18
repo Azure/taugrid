@@ -60,6 +60,18 @@ func mergeConditions(existing, desired []metav1.Condition) []metav1.Condition {
 	for _, condition := range existing {
 		byType[condition.Type] = condition
 	}
+	if compatibility, ok := byType[conditionV0PrimaryDiscovery]; ok {
+		found := false
+		for _, condition := range desired {
+			if condition.Type == conditionV0PrimaryDiscovery {
+				found = true
+				break
+			}
+		}
+		if !found {
+			desired = append(desired, compatibility)
+		}
+	}
 	latest := map[string]metav1.Condition{}
 	order := make([]string, 0, len(desired))
 	for _, condition := range desired {
