@@ -364,6 +364,7 @@ func applyActivatedRunConnection(
 	if err := checkCatalogWorkspaceConflict(options, source, source.Discovery); err != nil {
 		return options, workspaceconnection.ActiveConnection{}, err
 	}
+	ensurer = connectionEnsurerForSource(ensurer, source)
 	connection, err := ensureRunConnection(ctx, ensurer, source)
 	if err != nil {
 		if !required && errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
@@ -688,6 +689,10 @@ func discoverRunLifecycleProjectSource(cmd *cobra.Command) (runConnectionSource,
 	}
 	project, err := repository.Catalog.SelectLifecycleProject(projectName, startDir)
 	if err != nil {
+		if strings.TrimSpace(projectName) == "" &&
+			strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
+			return runConnectionSource{}, nil
+		}
 		return runConnectionSource{}, err
 	}
 	return runConnectionSource{

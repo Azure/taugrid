@@ -755,6 +755,62 @@ func TestRunLifecycleRejectsCatalogWorkspaceOverrideBeforeActivation(t *testing.
 	}
 }
 
+func TestRunLifecycleExplicitRoutingBypassesCatalogRootAmbiguity(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	withRunRoutingCWD(t, root)
+	workspace := readyTestWorkspace("research", "research-uid", "research-runs", "research-queue")
+
+	for _, commandName := range []string{"cancel", "status", "logs"} {
+		t.Run(commandName, func(t *testing.T) {
+			command := &cobra.Command{Use: commandName}
+			command.SetContext(context.Background())
+			command.Flags().String("context", "", "")
+			if err := command.Flags().Set("context", "explicit-context"); err != nil {
+				t.Fatal(err)
+			}
+			ensurer := &fakeRunConnectionEnsurer{}
+
+			gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithWorkspaceUsing(
+				command,
+				"explicit-context",
+				"",
+				"research",
+				true,
+				false,
+				true,
+				func(
+					cmd *cobra.Command,
+					kubeContext, namespace string,
+					contextExplicit, namespaceExplicit, workspaceRouting bool,
+				) (string, string, func(), error) {
+					return resolveRunLifecycleConnectionUsing(
+						cmd,
+						kubeContext,
+						namespace,
+						contextExplicit,
+						namespaceExplicit,
+						workspaceRouting,
+						ensurer,
+					)
+				},
+				func(_ *cobra.Command, kubeContext, _, name string) (tauworkspace.Workspace, error) {
+					if kubeContext != "explicit-context" || name != "research" {
+						t.Fatalf("fetch context=%q workspace=%q", kubeContext, name)
+					}
+					return workspace, nil
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer restore()
+			if gotContext != "explicit-context" || gotNamespace != "research-runs" || ensurer.calls != 0 {
+				t.Fatalf("context=%q namespace=%q calls=%d", gotContext, gotNamespace, ensurer.calls)
+			}
+		})
+	}
+}
+
 func TestRunLifecycleExplicitWorkspaceRoutesOutsideGit(t *testing.T) {
 	withRunRoutingCWD(t, t.TempDir())
 	workspace := readyTestWorkspace("research", "research-uid", "research-runs", "research-queue")

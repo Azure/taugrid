@@ -669,6 +669,51 @@ func TestResumeCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
 	}
 }
 
+func TestResumeSelectedWorkspaceAllowsExpiredUnreadyDescriptorCache(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	installFakeRoutingKubectlWithWorkspacePhase(t, "descriptor-namespace", "Degraded")
+	installCachedRoutingConnection(t, root, "descriptor-namespace")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "taugrid-flex" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"",
+		"",
+		false,
+		false,
+		defaultRunConnectionManager(command),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if routing.KubeContext != "taugrid-flex" ||
+		routing.Namespace != "alpha-namespace" ||
+		routing.TargetOptions.workspace != "alpha-workspace" {
+		t.Fatalf("routing = %#v", routing)
+	}
+}
+
 func TestResumeCatalogProjectWithExplicitContextPropagatesWorkspace(t *testing.T) {
 	root := multiProjectRunRoutingRepo(t)
 	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
