@@ -3067,6 +3067,62 @@ func TestRetainedTeamCohortChildGuaranteeRemainsCharged(t *testing.T) {
 	}
 }
 
+func TestSharedRetainedTeamCohortChildGuaranteeChargedOnce(t *testing.T) {
+	ctx := context.Background()
+	team := testTeam("vision", "8")
+	first := testWorkspace("aurora")
+	first.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	first.Spec.Queue = "legacy-child"
+	first.Spec.Quota = nil
+	first.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   "legacy-child",
+		ClusterQueue: "legacy-child",
+	}
+	second := testWorkspace("borealis")
+	second.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	second.Spec.Queue = "legacy-child"
+	second.Spec.Quota = nil
+	second.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   "legacy-child",
+		ClusterQueue: "legacy-child",
+	}
+	child := clusterQueueWithUID("legacy-child", "legacy-child-uid")
+	child.Object["spec"] = map[string]any{
+		"cohortName": teamCohortName(team.Name),
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
+			true,
+		),
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(team, first, second, child).
+		Build()
+
+	shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shared) != 1 || shared[0].NominalQuota.Cmp(resource.MustParse("0")) != 0 {
+		t.Fatalf("shared quota = %#v, want shared retained child charged once", shared)
+	}
+	reconciler := newTestWorkspaceReconciler(c)
+	for _, workspace := range []*tauv1alpha1.TauWorkspace{first, second} {
+		got, err := reconciler.reconcileWorkspaceClusterQueue(ctx, workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != child.GetName() {
+			t.Fatalf("reconcileWorkspaceClusterQueue(%q) = %q, want shared retained child %q", workspace.Name, got, child.GetName())
+		}
+		managed := newQueueObject(clusterQueueGVK)
+		err = c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed)
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("managed ClusterQueue %q was created beside shared retained child: %v", managed.GetName(), err)
+		}
+	}
+}
+
 func TestEmptyQuotaWorkspacesRetainPlatformQueueAcrossTeams(t *testing.T) {
 	ctx := context.Background()
 	vision := testTeam("vision", "4")

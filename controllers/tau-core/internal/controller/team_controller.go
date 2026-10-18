@@ -337,18 +337,19 @@ func (r *TauTeamReconciler) sharedTeamQuotaForWorkspace(
 		return nil, err
 	}
 	proposedFound := false
+	accountedRetainedQueues := map[string]bool{}
 	for i := range workspaces.Items {
 		workspace := &workspaces.Items[i]
 		if proposed != nil && workspace.Name == proposed.Name {
 			workspace = proposed
 			proposedFound = true
 		}
-		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining); err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining, accountedRetainedQueues); err != nil {
 			return nil, err
 		}
 	}
 	if proposed != nil && !proposedFound {
-		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining); err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining, accountedRetainedQueues); err != nil {
 			return nil, err
 		}
 	}
@@ -364,6 +365,7 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 	team *tauv1alpha1.TauTeam,
 	workspace *tauv1alpha1.TauWorkspace,
 	remaining map[string]tauv1alpha1.TauResourceQuota,
+	accountedRetainedQueues map[string]bool,
 ) error {
 	effective := map[string]resource.Quantity{}
 	if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
@@ -385,12 +387,19 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 				return fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
 			}
 			if strings.TrimSpace(cohort) == teamCohortName(team.Name) {
-				guarantees, err := clusterQueueNominalQuota(queue)
-				if err != nil {
-					return err
+				queueIdentity := queue.GetName()
+				if queue.GetUID() != "" {
+					queueIdentity = string(queue.GetUID())
 				}
-				for key, quantity := range guarantees {
-					effective[key] = quantity.DeepCopy()
+				if !accountedRetainedQueues[queueIdentity] {
+					accountedRetainedQueues[queueIdentity] = true
+					guarantees, err := clusterQueueNominalQuota(queue)
+					if err != nil {
+						return err
+					}
+					for key, quantity := range guarantees {
+						effective[key] = quantity.DeepCopy()
+					}
 				}
 			}
 		}
