@@ -134,6 +134,13 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Contex
 		return err
 	}
 	if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
+		retainedQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace)
+		if err != nil {
+			return err
+		}
+		if retained && retainedQueue == queue.GetName() {
+			return nil
+		}
 		return fmt.Errorf("refusing to delete ClusterQueue %q: object is not owned by workspace %q", queue.GetName(), workspace.Name)
 	}
 	if err := validateWorkspaceObjectUID(queue, workspace); err != nil {

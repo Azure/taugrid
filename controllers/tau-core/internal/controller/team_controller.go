@@ -199,7 +199,7 @@ func (r *TauTeamReconciler) validateTeamReservationsWithAdditional(
 		return err
 	}
 	for i := range workspaces.Items {
-		cohort, _, reservations, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
+		cohort, _, reservations, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
 		if err != nil {
 			return err
 		}
@@ -293,7 +293,7 @@ func (r *TauTeamReconciler) appliedTeamAllocation(
 		return nil, err
 	}
 	for i := range workspaces.Items {
-		appliedCohort, guarantees, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
+		appliedCohort, guarantees, _, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
 		if err != nil {
 			return nil, err
 		}
@@ -404,14 +404,19 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 			}
 		}
 	}
-	appliedCohort, applied, err := r.appliedWorkspaceGuarantees(ctx, workspace)
+	appliedCohort, applied, appliedQueueIdentity, err := r.appliedWorkspaceGuarantees(ctx, workspace)
 	if err != nil {
 		return err
 	}
 	if appliedCohort == teamCohortName(team.Name) {
-		for key, quantity := range applied {
-			if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
-				effective[key] = quantity.DeepCopy()
+		if accountedRetainedQueues[appliedQueueIdentity] {
+			effective = map[string]resource.Quantity{}
+		} else {
+			accountedRetainedQueues[appliedQueueIdentity] = true
+			for key, quantity := range applied {
+				if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
+					effective[key] = quantity.DeepCopy()
+				}
 			}
 		}
 	}
@@ -454,42 +459,46 @@ func resolvedWorkspaceQueueName(
 func (r *TauTeamReconciler) appliedWorkspaceGuarantees(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) (string, map[string]resource.Quantity, error) {
-	cohort, guarantees, _, err := r.appliedWorkspaceQueue(ctx, workspace)
-	return cohort, guarantees, err
+) (string, map[string]resource.Quantity, string, error) {
+	cohort, guarantees, _, identity, err := r.appliedWorkspaceQueue(ctx, workspace)
+	return cohort, guarantees, identity, err
 }
 
 func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) (string, map[string]resource.Quantity, map[string]resource.Quantity, error) {
+) (string, map[string]resource.Quantity, map[string]resource.Quantity, string, error) {
 	queue := newQueueObject(clusterQueueGVK)
 	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", nil, nil, nil
+			return "", nil, nil, "", nil
 		}
-		return "", nil, nil, err
+		return "", nil, nil, "", err
 	}
 	labels := queue.GetLabels()
 	if labels[labelManagedBy] != labelManagedByValue || labels[labelWorkspace] != workspace.Name {
-		return "", nil, nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
+		return "", nil, nil, "", fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
 	}
 	if ownerUID := queue.GetAnnotations()[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
-		return "", nil, nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
+		return "", nil, nil, "", fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
 	}
 	applied, err := clusterQueueNominalQuota(queue)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, "", err
 	}
 	reservations, err := clusterQueueReservations(queue)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, "", err
 	}
 	cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
+		return "", nil, nil, "", fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
 	}
-	return strings.TrimSpace(cohort), applied, reservations, nil
+	identity := queue.GetName()
+	if queue.GetUID() != "" {
+		identity = string(queue.GetUID())
+	}
+	return strings.TrimSpace(cohort), applied, reservations, identity, nil
 }
 
 func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.TauTeam) (ctrl.Result, error) {
@@ -506,7 +515,7 @@ func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.
 			return r.reportTeamStatus(ctx, team, false, tauv1alpha1.ConditionDeletionBlocked,
 				fmt.Sprintf("workspace %q still references this team", workspace.Name))
 		}
-		appliedCohort, _, err := r.appliedWorkspaceGuarantees(ctx, workspace)
+		appliedCohort, _, _, err := r.appliedWorkspaceGuarantees(ctx, workspace)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
