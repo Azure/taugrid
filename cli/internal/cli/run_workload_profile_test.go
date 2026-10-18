@@ -545,6 +545,7 @@ func TestRunSelectionAllowsRetainedWorkspaceQueueWithOriginalClusterQueue(t *tes
 				Workspace:     "training",
 				Namespace:     "team-alpha",
 				Queue:         "jobqueue",
+				ClusterQueue:  "legacy-cq",
 				QueueVerified: true,
 			}
 
