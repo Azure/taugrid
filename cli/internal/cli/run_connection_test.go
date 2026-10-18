@@ -898,6 +898,40 @@ func TestLifecycleExplicitContextBypassesCatalogAmbiguity(t *testing.T) {
 	}
 }
 
+func TestLifecycleExplicitContextBypassesMissingUnboundProjectAssignment(t *testing.T) {
+	root := t.TempDir()
+	initRunRoutingRepo(t, root)
+	writeRunRoutingFile(t, filepath.Join(root, projectcatalog.Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: alpha
+`)
+	writeRunRoutingFile(t, filepath.Join(root, "alpha", "tau", "train.yaml"), "name: alpha-train\n")
+	withRunRoutingCWD(t, filepath.Join(root, "alpha"))
+	t.Setenv("TAU_CONFIG_DIR", t.TempDir())
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{}
+
+	gotContext, gotNamespace, restore, err := resolveRunLifecycleConnectionWithEnsurer(
+		command,
+		"explicit-context",
+		"explicit-namespace",
+		true,
+		true,
+		false,
+		"",
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "explicit-context" || gotNamespace != "explicit-namespace" || ensurer.calls != 0 {
+		t.Fatalf("context=%q namespace=%q calls=%d", gotContext, gotNamespace, ensurer.calls)
+	}
+}
+
 func TestLifecycleExplicitContextStillResolvesProjectWorkspace(t *testing.T) {
 	root := multiProjectRunRoutingRepo(t)
 	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{

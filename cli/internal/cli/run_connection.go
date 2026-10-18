@@ -540,7 +540,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	if contextExplicit && kubeContext != "" && strings.TrimSpace(projectName) == "" {
-		source, err := discoverRunLifecycleConnectionSource(projectName)
+		source, err := discoverRunLifecycleConnectionSource(projectName, true)
 		if err == nil {
 			return resolveRunLifecycleConnectionFromSource(
 				cmd,
@@ -565,7 +565,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 		}
 		return kubeContext, ns, func() {}, nil
 	}
-	source, err := discoverRunLifecycleConnectionSource(projectName)
+	source, err := discoverRunLifecycleConnectionSource(projectName, contextExplicit && kubeContext != "")
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -581,7 +581,7 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	)
 }
 
-func discoverRunLifecycleConnectionSource(projectName string) (runConnectionSource, error) {
+func discoverRunLifecycleConnectionSource(projectName string, allowUnassignedCatalog bool) (runConnectionSource, error) {
 	startDir, err := os.Getwd()
 	if err != nil {
 		return runConnectionSource{}, err
@@ -604,6 +604,11 @@ func discoverRunLifecycleConnectionSource(projectName string) (runConnectionSour
 		source.Workspace = project.Workspace
 		discovery, err := assignedCatalogProjectConnection(repository.Catalog, project)
 		if err != nil {
+			if allowUnassignedCatalog &&
+				strings.TrimSpace(project.Workspace) == "" &&
+				errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
+				return source, nil
+			}
 			return runConnectionSource{}, err
 		}
 		source.Discovery = discovery
@@ -768,7 +773,7 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 	ensurer runConnectionEnsurer,
 ) (string, func(), error) {
 	_ = namespace
-	source, err := discoverRunLifecycleConnectionSource("")
+	source, err := discoverRunLifecycleConnectionSource("", false)
 	if err != nil {
 		if runContextExplicit(cmd) &&
 			strings.TrimSpace(kubeContext) != "" &&
