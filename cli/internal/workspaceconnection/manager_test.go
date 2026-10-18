@@ -1504,7 +1504,7 @@ func TestKubectlVerifierManagerPreservesAliasBackingForPlacement(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o jsonpath={.spec.clusterQueue}": "legacy-cq\n",
 		"auth can-i * * --all-namespaces":                                                   "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 	manager := Manager{Verifier: verifier}
 
 	verification, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
