@@ -323,6 +323,42 @@ func TestCatalogWorkspaceUsesExistingConnectionForClusterAccess(t *testing.T) {
 	}
 }
 
+func TestCatalogSelectedWorkspaceAllowsUnreadyDescriptorVerification(t *testing.T) {
+	descriptor, err := workspaceconnection.Parse([]byte(runRoutingDescriptor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	discovery := workspaceconnection.Discovery{Descriptor: descriptor}
+	manager := workspaceconnection.Manager{Verifier: workspaceconnection.KubectlVerifier{}}
+
+	selected := connectionEnsurerForSource(manager, runConnectionSource{
+		Catalog:   true,
+		Workspace: "alpha-workspace",
+		Discovery: &discovery,
+	})
+	selectedManager, ok := selected.(workspaceconnection.Manager)
+	if !ok {
+		t.Fatalf("selected ensurer type = %T", selected)
+	}
+	selectedVerifier, ok := selectedManager.Verifier.(workspaceconnection.KubectlVerifier)
+	if !ok {
+		t.Fatalf("selected verifier type = %T", selectedManager.Verifier)
+	}
+	if !selectedManager.AllowUnreadyWorkspace || !selectedVerifier.AllowUnreadyWorkspace {
+		t.Fatalf("selected manager = %#v verifier = %#v", selectedManager, selectedVerifier)
+	}
+
+	defaultWorkspace := connectionEnsurerForSource(manager, runConnectionSource{
+		Catalog:   true,
+		Workspace: descriptor.Workspace,
+		Discovery: &discovery,
+	}).(workspaceconnection.Manager)
+	defaultVerifier := defaultWorkspace.Verifier.(workspaceconnection.KubectlVerifier)
+	if defaultWorkspace.AllowUnreadyWorkspace || defaultVerifier.AllowUnreadyWorkspace {
+		t.Fatalf("default workspace readiness was relaxed: %#v %#v", defaultWorkspace, defaultVerifier)
+	}
+}
+
 func TestLifecycleCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
 	command := &cobra.Command{}
 	command.SetContext(context.Background())
@@ -679,6 +715,43 @@ func TestRunLifecycleWorkspacePlaceholderIsNotExplicitNamespace(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRunLifecycleRejectsCatalogWorkspaceOverrideBeforeActivation(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "workspace-a"},
+	})
+	withRunRoutingCWD(t, filepath.Join(root, "alpha"))
+	command := &cobra.Command{Use: "cancel"}
+	command.SetContext(context.Background())
+	activated := false
+
+	_, _, _, err := resolveRunLifecycleConnectionWithWorkspaceUsing(
+		command,
+		"ambient-context",
+		"",
+		"workspace-b",
+		false,
+		false,
+		true,
+		func(*cobra.Command, string, string, bool, bool, bool) (string, string, func(), error) {
+			activated = true
+			return "", "", func() {}, nil
+		},
+		func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
+			t.Fatal("workspace conflict fetched an override")
+			return tauworkspace.Workspace{}, nil
+		},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `--workspace "workspace-b"`) ||
+		!strings.Contains(err.Error(), `catalog workspace "workspace-a"`) {
+		t.Fatalf("workspace conflict = %v", err)
+	}
+	if activated {
+		t.Fatal("workspace conflict activated the catalog connection")
 	}
 }
 
@@ -1055,6 +1128,40 @@ func TestWorkspaceControlPlaneResolutionDoesNotFetchWorkloadPlacement(t *testing
 func TestWorkspaceControlPlaneExplicitContextBypassesCatalogAmbiguity(t *testing.T) {
 	root := multiProjectRunRoutingRepo(t)
 	withRunRoutingCWD(t, root)
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().String("context", "", "")
+	if err := command.Flags().Set("context", "explicit-context"); err != nil {
+		t.Fatal(err)
+	}
+	ensurer := &fakeRunConnectionEnsurer{}
+
+	gotContext, restore, err := resolveWorkspaceControlPlaneConnectionWithEnsurer(
+		command,
+		"explicit-context",
+		defaultSystemNamespace(),
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if gotContext != "explicit-context" || ensurer.calls != 0 {
+		t.Fatalf("context=%q calls=%d", gotContext, ensurer.calls)
+	}
+}
+
+func TestWorkspaceControlPlaneExplicitContextBypassesMissingUnboundProjectAssignment(t *testing.T) {
+	root := t.TempDir()
+	initRunRoutingRepo(t, root)
+	writeRunRoutingFile(t, filepath.Join(root, projectcatalog.Filename), `schema: tau.projects.v1
+projects:
+  alpha:
+    path: alpha
+`)
+	writeRunRoutingFile(t, filepath.Join(root, "alpha", "tau", "train.yaml"), "name: alpha-train\n")
+	withRunRoutingCWD(t, filepath.Join(root, "alpha"))
+	t.Setenv("TAU_CONFIG_DIR", t.TempDir())
 	command := &cobra.Command{}
 	command.SetContext(context.Background())
 	command.Flags().String("context", "", "")

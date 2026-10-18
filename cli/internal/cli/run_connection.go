@@ -131,6 +131,15 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 ) (string, string, func(), error) {
 	workspaceName := strings.TrimSpace(workspace)
 	useWorkspace := workspaceExplicit && workspaceName != ""
+	if useWorkspace {
+		source, err := discoverRunLifecycleProjectSource(cmd)
+		if err != nil {
+			return "", "", nil, err
+		}
+		if err := validateWorkspaceSelection(source, "", workspaceName); err != nil {
+			return "", "", nil, err
+		}
+	}
 
 	routingNamespace := namespace
 	if useWorkspace {
@@ -212,6 +221,45 @@ func defaultRunLifecycleConnectionManager(cmd *cobra.Command) workspaceconnectio
 	return manager
 }
 
+func allowUnreadyWorkspaceVerification(ensurer runConnectionEnsurer) runConnectionEnsurer {
+	setVerifier := func(manager workspaceconnection.Manager) workspaceconnection.Manager {
+		manager.AllowUnreadyWorkspace = true
+		switch verifier := manager.Verifier.(type) {
+		case workspaceconnection.KubectlVerifier:
+			verifier.AllowUnreadyWorkspace = true
+			manager.Verifier = verifier
+		case *workspaceconnection.KubectlVerifier:
+			updated := *verifier
+			updated.AllowUnreadyWorkspace = true
+			manager.Verifier = &updated
+		}
+		return manager
+	}
+	switch manager := ensurer.(type) {
+	case workspaceconnection.Manager:
+		return setVerifier(manager)
+	case *workspaceconnection.Manager:
+		updated := setVerifier(*manager)
+		return &updated
+	default:
+		return ensurer
+	}
+}
+
+func connectionEnsurerForSource(
+	ensurer runConnectionEnsurer,
+	source runConnectionSource,
+) runConnectionEnsurer {
+	selected := strings.TrimSpace(source.Workspace)
+	discovery := descriptorFor(source)
+	if selected == "" ||
+		discovery == nil ||
+		selected == strings.TrimSpace(discovery.Descriptor.Workspace) {
+		return ensurer
+	}
+	return allowUnreadyWorkspaceVerification(ensurer)
+}
+
 func stdinIsTerminal(input io.Reader) bool {
 	file, ok := input.(*os.File)
 	return ok && term.IsTerminal(int(file.Fd()))
@@ -248,6 +296,7 @@ func applyLiveRunConnection(
 			return options, workspaceconnection.ActiveConnection{}, err
 		}
 	}
+	ensurer = connectionEnsurerForSource(ensurer, source)
 	connection, err := ensureRunConnection(ctx, ensurer, source)
 	if err != nil {
 		return options, workspaceconnection.ActiveConnection{}, err
@@ -618,6 +667,36 @@ func discoverRunLifecycleConnectionSource(projectName string, allowUnassignedCat
 	return source, nil
 }
 
+func discoverRunLifecycleProjectSource(cmd *cobra.Command) (runConnectionSource, error) {
+	startDir, err := os.Getwd()
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	repository, err := projectcatalog.Discover(startDir)
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	if repository.Catalog == nil {
+		return runConnectionSource{}, nil
+	}
+	projectName := ""
+	if cmd.Flags().Lookup("project") != nil {
+		projectName, err = cmd.Flags().GetString("project")
+		if err != nil {
+			return runConnectionSource{}, fmt.Errorf("read inherited --project flag: %w", err)
+		}
+	}
+	project, err := repository.Catalog.SelectLifecycleProject(projectName, startDir)
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	return runConnectionSource{
+		Catalog:   true,
+		Project:   project.Name,
+		Workspace: project.Workspace,
+	}, nil
+}
+
 func resolveRunLifecycleConnectionFromSource(
 	cmd *cobra.Command,
 	kubeContext, namespace string,
@@ -773,10 +852,10 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 	ensurer runConnectionEnsurer,
 ) (string, func(), error) {
 	_ = namespace
-	source, err := discoverRunLifecycleConnectionSource("", false)
+	explicitContext := runContextExplicit(cmd) && strings.TrimSpace(kubeContext) != ""
+	source, err := discoverRunLifecycleConnectionSource("", explicitContext)
 	if err != nil {
-		if runContextExplicit(cmd) &&
-			strings.TrimSpace(kubeContext) != "" &&
+		if explicitContext &&
 			strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
 			if err := checkDescriptorContextConflict(
 				kubeContext,
@@ -789,7 +868,7 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 		}
 		return "", nil, err
 	}
-	if runContextExplicit(cmd) && strings.TrimSpace(kubeContext) != "" {
+	if explicitContext {
 		if err := checkDescriptorContextConflict(
 			kubeContext,
 			cmd.Flags().Changed("context"),
