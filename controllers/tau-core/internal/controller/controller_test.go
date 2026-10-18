@@ -3163,37 +3163,26 @@ func TestTeamWorkspacePreservesSameNameExternalQueue(t *testing.T) {
 func TestWorkspaceDeletionPreservesSameNameExternalQueue(t *testing.T) {
 	ctx := context.Background()
 	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
 	workspace.Spec.WorkloadIdentity = nil
 	workspace.Spec.Queue = workspaceClusterQueueName(workspace.Name)
-	namespace := testNamespace(workspace.Name)
+	now := metav1.Now()
+	workspace.DeletionTimestamp = &now
 	external := clusterQueueWithUID(workspace.Spec.Queue, "platform-cq-uid")
 	localQueue := testLocalQueue(workspace.Name, workspace.Spec.Queue, external.GetName())
 	localQueue.SetAnnotations(nil)
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(workspace, namespace, localQueue, external).
+		WithObjects(workspace, localQueue, external).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
 
-	for i := 0; i < 3; i++ {
-		if _, err := reconciler.Reconcile(ctx, request); err != nil {
-			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
-		}
-	}
-	var ready tauv1alpha1.TauWorkspace
-	if err := c.Get(ctx, request.NamespacedName, &ready); err != nil {
-		t.Fatal(err)
-	}
-	if ready.Status.Phase != tauv1alpha1.WorkspacePhaseReady ||
-		ready.Status.Queue.ClusterQueue != external.GetName() ||
-		ready.Status.Queue.ClusterQueueUID != string(external.GetUID()) {
-		t.Fatalf("workspace status = %#v, want verified external queue", ready.Status)
-	}
-	if err := c.Delete(ctx, &ready); err != nil {
-		t.Fatal(err)
+	if workspace.Status.Queue.ClusterQueueUID != "" {
+		t.Fatalf("test requires UID-less base status, got %#v", workspace.Status.Queue)
 	}
 	if _, err := reconciler.Reconcile(ctx, request); err != nil {
 		t.Fatal(err)

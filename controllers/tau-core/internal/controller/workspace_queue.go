@@ -408,9 +408,6 @@ func retainedEstablishedWorkspaceClusterQueue(
 	reader client.Reader,
 	workspace *tauv1alpha1.TauWorkspace,
 ) (string, bool, error) {
-	if workspace.Spec.TeamRef == nil {
-		return "", false, nil
-	}
 	sourceName := strings.TrimSpace(workspace.Status.Queue.ClusterQueue)
 	resolvedLocalQueue := false
 	if sourceName == "" {
@@ -446,7 +443,7 @@ func retainedEstablishedWorkspaceClusterQueue(
 	if len(workspace.Spec.Quota) == 0 {
 		return source.GetName(), true, nil
 	}
-	if resolvedLocalQueue {
+	if resolvedLocalQueue && workspace.Spec.TeamRef != nil {
 		cohort, _, err := unstructured.NestedString(source.Object, "spec", "cohortName")
 		if err != nil {
 			return "", false, fmt.Errorf("read ClusterQueue %q cohortName: %w", source.GetName(), err)

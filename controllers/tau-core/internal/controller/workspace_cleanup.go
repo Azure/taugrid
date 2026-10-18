@@ -134,14 +134,6 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Contex
 		return err
 	}
 	if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
-		if workspace.Spec.TeamRef == nil &&
-			queue.GetLabels()[labelManagedBy] != labelManagedByValue &&
-			workspace.Status.Queue.LocalQueue != "" &&
-			workspace.Status.Queue.ClusterQueue == queue.GetName() &&
-			workspace.Status.Queue.ClusterQueueUID != "" &&
-			workspace.Status.Queue.ClusterQueueUID == string(queue.GetUID()) {
-			return nil
-		}
 		retainedQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace)
 		if err != nil {
 			return err
