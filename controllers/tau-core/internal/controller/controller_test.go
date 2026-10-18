@@ -3669,6 +3669,62 @@ func TestCanonicalOwnerAndRetainedConsumerChargeSharedChildOnce(t *testing.T) {
 	}
 }
 
+func TestConsumerFirstQuotaIncreaseRejectedBeforeManagedQueueWrite(t *testing.T) {
+	ctx := context.Background()
+	team := testTeam("vision", "4")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	consumer := testWorkspace("aardvark")
+	consumer.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	consumer.Spec.Queue = "shared"
+	consumer.Spec.Quota = nil
+	consumer.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "shared",
+		ClusterQueue:    workspaceClusterQueueName("zeta"),
+		ClusterQueueUID: "shared-child-uid",
+	}
+	owner := testWorkspace("zeta")
+	owner.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	owner.Spec.Queue = workspaceClusterQueueName(owner.Name)
+	owner.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")}
+	child := desiredWorkspaceClusterQueue(owner)
+	child.SetUID(types.UID("shared-child-uid"))
+	child.Object["spec"].(map[string]any)["resourceGroups"] = quotaResourceGroups(
+		[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+		true,
+	)
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(team, consumer, owner, child, flavor).
+		Build()
+	var workspaces tauv1alpha1.TauWorkspaceList
+	if err := c.List(ctx, &workspaces, client.InNamespace(team.Namespace)); err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaces.Items) != 2 || workspaces.Items[0].Name != consumer.Name {
+		t.Fatalf("workspace traversal order = %#v, want consumer first", workspaces.Items)
+	}
+
+	_, err := newTestWorkspaceReconciler(c).reconcileWorkspaceClusterQueue(ctx, owner)
+	if err == nil || !strings.Contains(err.Error(), "workspace guarantees exceed team quota") {
+		t.Fatalf("reconcileWorkspaceClusterQueue() error = %v, want Team quota rejection", err)
+	}
+	preserved := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(child), preserved); err != nil {
+		t.Fatal(err)
+	}
+	guarantees, err := clusterQueueNominalQuota(preserved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := quotaKey(owner.Spec.Quota[0])
+	if got := guarantees[key]; got.Cmp(resource.MustParse("4")) != 0 {
+		t.Fatalf("persisted managed guarantee = %s, want original 4", got.String())
+	}
+}
+
 func TestEmptyQuotaWorkspacesRetainPlatformQueueAcrossTeams(t *testing.T) {
 	ctx := context.Background()
 	vision := testTeam("vision", "4")

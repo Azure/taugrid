@@ -337,19 +337,19 @@ func (r *TauTeamReconciler) sharedTeamQuotaForWorkspace(
 		return nil, err
 	}
 	proposedFound := false
-	accountedRetainedQueues := map[string]bool{}
+	accountedQueues := map[string]map[string]resource.Quantity{}
 	for i := range workspaces.Items {
 		workspace := &workspaces.Items[i]
 		if proposed != nil && workspace.Name == proposed.Name {
 			workspace = proposed
 			proposedFound = true
 		}
-		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining, accountedRetainedQueues); err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining, accountedQueues); err != nil {
 			return nil, err
 		}
 	}
 	if proposed != nil && !proposedFound {
-		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining, accountedRetainedQueues); err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining, accountedQueues); err != nil {
 			return nil, err
 		}
 	}
@@ -365,9 +365,10 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 	team *tauv1alpha1.TauTeam,
 	workspace *tauv1alpha1.TauWorkspace,
 	remaining map[string]tauv1alpha1.TauResourceQuota,
-	accountedRetainedQueues map[string]bool,
+	accountedQueues map[string]map[string]resource.Quantity,
 ) error {
 	effective := map[string]resource.Quantity{}
+	queueIdentity := ""
 	if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
 		retainedQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.quotaReader(), workspace)
 		if err != nil {
@@ -387,19 +388,16 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 				return fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
 			}
 			if strings.TrimSpace(cohort) == teamCohortName(team.Name) {
-				queueIdentity := queue.GetName()
+				queueIdentity = queue.GetName()
 				if queue.GetUID() != "" {
 					queueIdentity = string(queue.GetUID())
 				}
-				if !accountedRetainedQueues[queueIdentity] {
-					accountedRetainedQueues[queueIdentity] = true
-					guarantees, err := clusterQueueNominalQuota(queue)
-					if err != nil {
-						return err
-					}
-					for key, quantity := range guarantees {
-						effective[key] = quantity.DeepCopy()
-					}
+				guarantees, err := clusterQueueNominalQuota(queue)
+				if err != nil {
+					return err
+				}
+				for key, quantity := range guarantees {
+					effective[key] = quantity.DeepCopy()
 				}
 			}
 		}
@@ -409,15 +407,33 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 		return err
 	}
 	if appliedCohort == teamCohortName(team.Name) {
-		if accountedRetainedQueues[appliedQueueIdentity] {
-			effective = map[string]resource.Quantity{}
-		} else {
-			accountedRetainedQueues[appliedQueueIdentity] = true
-			for key, quantity := range applied {
-				if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
-					effective[key] = quantity.DeepCopy()
-				}
+		queueIdentity = appliedQueueIdentity
+		for key, quantity := range applied {
+			if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
+				effective[key] = quantity.DeepCopy()
 			}
+		}
+	}
+	if queueIdentity != "" {
+		accounted := accountedQueues[queueIdentity]
+		if accounted == nil {
+			accounted = map[string]resource.Quantity{}
+			accountedQueues[queueIdentity] = accounted
+		}
+		for key, guarantee := range effective {
+			if previous, ok := accounted[key]; ok {
+				if guarantee.Cmp(previous) <= 0 {
+					delete(effective, key)
+					continue
+				}
+				guarantee.Sub(previous)
+				effective[key] = guarantee
+			}
+			total := guarantee.DeepCopy()
+			if previous, ok := accounted[key]; ok {
+				total.Add(previous)
+			}
+			accounted[key] = total
 		}
 	}
 	for key, guarantee := range effective {
