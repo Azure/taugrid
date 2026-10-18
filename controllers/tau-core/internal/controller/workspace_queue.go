@@ -137,6 +137,18 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			"workspace LocalQueue is reconciled", nil
 	}
 	if workspace.Spec.TeamRef != nil {
+		if desiredClusterQueue != workspaceClusterQueueName(workspace.Name) &&
+			clusterQueueName == desiredClusterQueue {
+			clusterQueue := newQueueObject(clusterQueueGVK)
+			if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
+				return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
+					fmt.Sprintf("backing ClusterQueue %q is not ready: %v", clusterQueueName, err), nil
+			}
+			return tauv1alpha1.WorkspaceQueueStatus{
+					LocalQueue: localQueueName, ClusterQueue: clusterQueueName, ClusterQueueUID: string(clusterQueue.GetUID()),
+				}, true,
+				"established external workspace queue is readable", nil
+		}
 		if clusterQueueName != desiredClusterQueue {
 			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
 				fmt.Sprintf(
@@ -392,13 +404,14 @@ func retainedEstablishedWorkspaceClusterQueue(
 		return "", false, nil
 	}
 	sourceName := strings.TrimSpace(workspace.Status.Queue.ClusterQueue)
+	resolvedLocalQueue := false
 	if sourceName == "" {
 		var err error
 		sourceName, err = resolvedWorkspaceQueueName(ctx, reader, workspace)
 		if err != nil {
 			return "", false, err
 		}
-		sourceName, err = workspaceQueueClusterQueueName(ctx, reader, workspace, sourceName)
+		sourceName, resolvedLocalQueue, err = workspaceQueueClusterQueueName(ctx, reader, workspace, sourceName)
 		if err != nil {
 			return "", false, err
 		}
@@ -416,6 +429,15 @@ func retainedEstablishedWorkspaceClusterQueue(
 	if len(workspace.Spec.Quota) == 0 {
 		return source.GetName(), true, nil
 	}
+	if resolvedLocalQueue {
+		cohort, _, err := unstructured.NestedString(source.Object, "spec", "cohortName")
+		if err != nil {
+			return "", false, fmt.Errorf("read ClusterQueue %q cohortName: %w", source.GetName(), err)
+		}
+		if strings.TrimSpace(cohort) == teamCohortName(workspace.Spec.TeamRef.Name) {
+			return source.GetName(), true, nil
+		}
+	}
 	if strings.TrimSpace(workspace.Status.Queue.LocalQueue) != "" &&
 		strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == source.GetName() {
 		return source.GetName(), true, nil
@@ -428,25 +450,25 @@ func workspaceQueueClusterQueueName(
 	reader client.Reader,
 	workspace *tauv1alpha1.TauWorkspace,
 	queueName string,
-) (string, error) {
+) (string, bool, error) {
 	localQueue := newQueueObject(localQueueGVK)
 	if err := reader.Get(ctx, client.ObjectKey{
 		Name:      queueName,
 		Namespace: resolvedNamespace(workspace),
 	}, localQueue); err != nil {
 		if apierrors.IsNotFound(err) {
-			return queueName, nil
+			return queueName, false, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	clusterQueue, _, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
 	if err != nil {
-		return "", fmt.Errorf("read LocalQueue %q backing ClusterQueue: %w", localQueue.GetName(), err)
+		return "", false, fmt.Errorf("read LocalQueue %q backing ClusterQueue: %w", localQueue.GetName(), err)
 	}
 	if strings.TrimSpace(clusterQueue) == "" {
-		return "", fmt.Errorf("LocalQueue %q has no backing ClusterQueue", localQueue.GetName())
+		return "", false, fmt.Errorf("LocalQueue %q has no backing ClusterQueue", localQueue.GetName())
 	}
-	return clusterQueue, nil
+	return clusterQueue, true, nil
 }
 
 func (r *TauWorkspaceReconciler) workspaceQueueReductionOnly(

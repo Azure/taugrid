@@ -308,7 +308,7 @@ func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
 	}
 	if resolvedQueue != "" && strings.TrimSpace(workspace.Status.Queue.ClusterQueue) == "" {
 		var err error
-		resolvedQueue, err = workspaceQueueClusterQueueName(ctx, r.apiReader(), workspace, resolvedQueue)
+		resolvedQueue, _, err = workspaceQueueClusterQueueName(ctx, r.apiReader(), workspace, resolvedQueue)
 		if err != nil {
 			return nil, err
 		}
