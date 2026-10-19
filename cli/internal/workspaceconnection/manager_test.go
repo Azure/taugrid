@@ -52,6 +52,7 @@ type fakeVerifier struct {
 type compatibleFakeVerifier struct {
 	*fakeVerifier
 	queue string
+	calls int
 }
 
 func (f *compatibleFakeVerifier) VerifyCompatibleQueue(
@@ -59,6 +60,7 @@ func (f *compatibleFakeVerifier) VerifyCompatibleQueue(
 	_ Descriptor,
 	_, _, queue string,
 ) (string, error) {
+	f.calls++
 	if queue != f.queue {
 		return "", fmt.Errorf("queue %q is unavailable", queue)
 	}
@@ -1554,6 +1556,86 @@ func TestWithCompatibleQueueDoesNotPreserveOrdinaryWorkspaceQueue(t *testing.T) 
 	state.applyVerification(Descriptor{}, verification, time.Now())
 	if state.Queue != "external-b" {
 		t.Fatalf("saved queue = %q, want external-b", state.Queue)
+	}
+}
+
+func TestManagerRevalidationMovesExplicitActiveQueueAndRetainsCompatibility(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "external-a",
+			WorkspacePhase: "Ready", TeamBacked: true, QueueExplicit: true,
+			QueueBackings: map[string]string{"external-a": "legacy-cq"},
+		}},
+		Now:          func() time.Time { return now },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+
+	revalidation := Verification{
+		ContextName: "taugrid-flex", Namespace: "sample", Queue: "external-b",
+		WorkspacePhase: "Ready", TeamBacked: true, QueueExplicit: true,
+		QueueBackings: map[string]string{"external-b": "tau-ws-sample"},
+	}
+	noninteractiveVerifier := &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{result: revalidation},
+		queue:        "external-a",
+	}
+	noninteractive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  false,
+		Verifier:     noninteractiveVerifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := noninteractive.Ensure(context.Background(), root); !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), `LocalQueue "external-a" -> "external-b"`) {
+		t.Fatalf("explicit queue change did not require confirmation: %v", err)
+	}
+	if noninteractiveVerifier.calls != 1 {
+		t.Fatalf("compatible queue verification calls = %d, want retained external-a verification", noninteractiveVerifier.calls)
+	}
+
+	interactiveVerifier := &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{result: revalidation},
+		queue:        "external-a",
+	}
+	interactive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  true,
+		Input:        strings.NewReader("y\n"),
+		Output:       &bytes.Buffer{},
+		Verifier:     interactiveVerifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	active, err := interactive.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatalf("confirm explicit queue change: %v", err)
+	}
+	if active.Queue != "external-b" || active.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("active connection = %#v, want external-b -> tau-ws-sample", active)
+	}
+	if interactiveVerifier.calls != 1 {
+		t.Fatalf("compatible queue verification calls = %d, want retained external-a verification", interactiveVerifier.calls)
+	}
+	discovery, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadConnectionState(filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Queue != "external-b" || state.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("persisted connection = %#v, want external-b -> tau-ws-sample", state)
 	}
 }
 

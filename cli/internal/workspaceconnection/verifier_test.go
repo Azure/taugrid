@@ -54,6 +54,9 @@ func TestKubectlVerifierProjectsWorkspaceAndPermissions(t *testing.T) {
 	if got.Namespace != "sample" || got.Queue != "jobqueue" || got.ServiceAccount != "default" || got.WorkspaceUID != "workspace-uid" {
 		t.Fatalf("verification = %#v", got)
 	}
+	if !got.QueueExplicit {
+		t.Fatal("explicit active queue was not reported")
+	}
 }
 
 func TestKubectlVerifierReportsCompatibleTeamQueue(t *testing.T) {
@@ -86,6 +89,9 @@ func TestKubectlVerifierReportsCompatibleTeamQueue(t *testing.T) {
 	}
 	if len(got.CompatibleQueues) != 1 || got.CompatibleQueues[0] != "jobqueue" {
 		t.Fatalf("compatible queues = %#v, want jobqueue", got.CompatibleQueues)
+	}
+	if got.QueueExplicit {
+		t.Fatal("legacy compatible queue was reported as the explicit active route")
 	}
 }
 

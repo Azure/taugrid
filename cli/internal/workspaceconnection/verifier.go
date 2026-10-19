@@ -99,12 +99,13 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		return Verification{}, fmt.Errorf("read workspace LocalQueue %s/%s: %w", namespace, queue, err)
 	}
 	clusterQueue := strings.TrimSpace(workspace.Status.Queue.ClusterQueue)
+	specQueue := strings.TrimSpace(workspace.Spec.Queue)
+	queueExplicit := specQueue != "" && specQueue == queue
 	var compatibleQueues []string
 	if workspace.Spec.TeamRef != nil {
-		previousQueue := strings.TrimSpace(workspace.Spec.Queue)
-		if previousQueue != "" && previousQueue != queue {
-			if _, err := runner.Raw(ctx, []string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", previousQueue, "-o", "name"}, nil); err == nil {
-				compatibleQueues = append(compatibleQueues, previousQueue)
+		if specQueue != "" && specQueue != queue {
+			if _, err := runner.Raw(ctx, []string{"-n", namespace, "get", "localqueue.kueue.x-k8s.io", specQueue, "-o", "name"}, nil); err == nil {
+				compatibleQueues = append(compatibleQueues, specQueue)
 			}
 		}
 	}
@@ -127,6 +128,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			WorkspaceUID:     workspace.Metadata.UID,
 			WorkspacePhase:   workspace.Status.Phase,
 			TeamBacked:       workspace.Spec.TeamRef != nil,
+			QueueExplicit:    queueExplicit,
 			CompatibleQueues: compatibleQueues,
 			QueueBackings:    map[string]string{queue: clusterQueue},
 		}, nil
@@ -185,6 +187,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		WorkspaceUID:     workspace.Metadata.UID,
 		WorkspacePhase:   workspace.Status.Phase,
 		TeamBacked:       workspace.Spec.TeamRef != nil,
+		QueueExplicit:    queueExplicit,
 		CompatibleQueues: compatibleQueues,
 		QueueBackings:    map[string]string{queue: clusterQueue},
 	}, nil
