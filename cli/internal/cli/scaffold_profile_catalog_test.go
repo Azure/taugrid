@@ -15,9 +15,12 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 )
 
 const defaultCatalogNamespace = "taugrid-default"
+
+const catalogGeneration = 1
 
 func TestGeneratedScaffoldSelectsDefaultCatalogProfiles(t *testing.T) {
 	provider := defaultCatalogProvider(t)
@@ -48,11 +51,80 @@ func TestGeneratedScaffoldSelectsDefaultCatalogProfiles(t *testing.T) {
 		options := scaffoldTargetOptions(t, dir, "train-gpu")
 		_, err := selectRunWorkloadProfile(context.Background(), options, provider)
 		if err == nil ||
-			!strings.Contains(err.Error(), "gpusPerWorker=1") ||
-			!strings.Contains(err.Error(), "azure.workspace.cpu (gpusPerWorker=0)") {
+			!strings.Contains(err.Error(), "no ready workload profile matches") ||
+			strings.Contains(err.Error(), "azure.workspace.cpu") {
 			t.Fatalf("unedited train-gpu selection error = %v", err)
 		}
 	})
+}
+
+func TestDefaultCatalogCPUProfilesDoNotChangeScopedSelection(t *testing.T) {
+	full := defaultCatalogProfiles(t)
+	gpuOnly := gpuCatalogProfiles(full)
+	if len(gpuOnly) == len(full) {
+		t.Fatal("default catalog has no CPU-only profile; this test no longer guards anything")
+	}
+	before := catalogProviderFor(t, gpuOnly)
+	after := catalogProviderFor(t, full)
+
+	type scope struct{ team, lane string }
+	seen := map[scope]bool{}
+	for _, candidate := range gpuOnly {
+		for _, team := range candidate.Applicability.Teams {
+			for _, lane := range candidate.Applicability.Lanes {
+				seen[scope{team, lane}] = true
+			}
+		}
+	}
+	for s := range seen {
+		request := profile.SelectionRequest{Namespace: defaultCatalogNamespace, Team: s.team, Lane: s.lane}
+		want, wantErr := before.Select(context.Background(), request)
+		got, gotErr := after.Select(context.Background(), request)
+		if (wantErr == nil) != (gotErr == nil) || (wantErr == nil && want.Profile.Name != got.Profile.Name) {
+			t.Errorf("team=%q lane=%q without a GPU count: before CPU profiles = %q (%v), after = %q (%v)",
+				s.team, s.lane, want.Profile.Name, wantErr, got.Profile.Name, gotErr)
+		}
+	}
+}
+
+func TestScopedRunsKeepTheirProfileWithDefaultCatalog(t *testing.T) {
+	provider := defaultCatalogProvider(t)
+	one := 1
+	for _, tc := range []struct {
+		name string
+		gpus *int
+	}{{name: "omitted GPU count", gpus: nil}, {name: "explicit GPU count", gpus: &one}} {
+		t.Run(tc.name, func(t *testing.T) {
+			options := defaultRunDispatchOptions()
+			options.engine = runconfig.EngineJob
+			options.namespace = defaultCatalogNamespace
+			options.team = "research"
+			options.lane = "eval"
+			if tc.gpus != nil {
+				options.jobGPUs = tc.gpus
+				options.jobGPUsExplicit = true
+			}
+			got, err := selectRunWorkloadProfile(context.Background(), options, provider)
+			if err != nil {
+				t.Fatalf("select research/eval: %v", err)
+			}
+			if got.profileName != "azure.research.eval.gpu" {
+				t.Fatalf("selected %q, want azure.research.eval.gpu", got.profileName)
+			}
+		})
+	}
+}
+
+func TestCPULaneFailsClosedWithoutCPUProfile(t *testing.T) {
+	provider := catalogProviderFor(t, gpuCatalogProfiles(defaultCatalogProfiles(t)))
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineJob
+	options.namespace = defaultCatalogNamespace
+	options.lane = "cpu"
+	_, err := selectRunWorkloadProfile(context.Background(), options, provider)
+	if err == nil || !strings.Contains(err.Error(), "no ready workload profile matches") {
+		t.Fatalf("select cpu lane without a CPU profile error = %v", err)
+	}
 }
 
 func scaffoldTargetOptions(t *testing.T, dir, target string) unresolvedRunOptions {
@@ -66,6 +138,11 @@ func scaffoldTargetOptions(t *testing.T, dir, target string) unresolvedRunOption
 }
 
 func defaultCatalogProvider(t *testing.T) *profile.Provider {
+	t.Helper()
+	return catalogProviderFor(t, defaultCatalogProfiles(t))
+}
+
+func defaultCatalogProfiles(t *testing.T) []profile.ResolvedWorkloadProfile {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "charts", "tau-core-controller", "kustomize", "taucluster.yaml"))
 	if err != nil {
@@ -82,7 +159,6 @@ func defaultCatalogProvider(t *testing.T) *profile.Provider {
 	if len(cluster.Spec.WorkloadProfiles) == 0 {
 		t.Fatal("default catalog has no workload profiles")
 	}
-	const generation = 1
 	resolved := make([]profile.ResolvedWorkloadProfile, 0, len(cluster.Spec.WorkloadProfiles))
 	for _, intent := range cluster.Spec.WorkloadProfiles {
 		item := profile.ResolvedWorkloadProfile{
@@ -95,7 +171,7 @@ func defaultCatalogProvider(t *testing.T) *profile.Provider {
 			Conditions: []metav1.Condition{{
 				Type:               profile.ConditionReady,
 				Status:             metav1.ConditionTrue,
-				ObservedGeneration: generation,
+				ObservedGeneration: catalogGeneration,
 				Reason:             "Ready",
 				Message:            "ready",
 			}},
@@ -106,7 +182,22 @@ func defaultCatalogProvider(t *testing.T) *profile.Provider {
 		}
 		resolved = append(resolved, item)
 	}
-	snapshot, err := profile.NewProfileSetSnapshot(generation, resolved)
+	return resolved
+}
+
+func gpuCatalogProfiles(profiles []profile.ResolvedWorkloadProfile) []profile.ResolvedWorkloadProfile {
+	var gpu []profile.ResolvedWorkloadProfile
+	for _, candidate := range profiles {
+		if candidate.GPUsPerWorker > 0 {
+			gpu = append(gpu, candidate)
+		}
+	}
+	return gpu
+}
+
+func catalogProviderFor(t *testing.T, resolved []profile.ResolvedWorkloadProfile) *profile.Provider {
+	t.Helper()
+	snapshot, err := profile.NewProfileSetSnapshot(catalogGeneration, resolved)
 	if err != nil {
 		t.Fatalf("snapshot default catalog: %v", err)
 	}

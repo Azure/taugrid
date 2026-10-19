@@ -103,6 +103,8 @@ spec:
   # Generated from charts/tau-core-controller/values.yaml; do not edit.
   workloadProfiles:
     - applicability:
+        lanes:
+        - cpu
         namespaces:
         - 'taugrid-default'
       defaultLocalQueue: jobqueue
