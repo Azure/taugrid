@@ -79,9 +79,11 @@ When a run doesn't name `policy.profile`, TauGrid selects the unique profile tha
 passes these checks. If the run sets an explicit GPU count (Job `compute.gpus`
 or RayJob `gpus_per_worker`), implicit selection also skips profiles with a
 different `gpusPerWorker`. That way a CPU-only run and a GPU run can't resolve
-to each other's profile. The default catalog includes `azure.workspace.cpu`,
-which has no team or lane restriction, so the CPU-only `smoke` and `train`
-targets from `tau workspace init-repo` resolve it without naming a profile.
+to each other's profile. The default catalog includes `azure.workspace.cpu`
+for the `cpu` lane. The CPU-only `smoke` and `train` targets from
+`tau workspace init-repo` set `policy.lane: cpu`, so they resolve it without
+naming a profile. Because the lane scopes it, the profile doesn't match runs in
+any other team or lane.
 
 Missing, stale, drifted, forbidden, ambiguous, or unready data stops rendering.
 TauGrid stamps successful output with
