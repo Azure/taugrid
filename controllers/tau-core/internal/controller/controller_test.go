@@ -4790,15 +4790,25 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "8"},
 						},
 					},
+					map[string]any{
+						"name": "taugrid-gpu-h100",
+						"resources": []any{
+							map[string]any{"name": "cpu", "nominalQuota": "32"},
+							map[string]any{"name": "memory", "nominalQuota": "128Gi"},
+							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "4"},
+						},
+					},
 				},
 			},
 		},
 	}
 	flavor := newQueueObject(resourceFlavorGVK)
 	flavor.SetName("taugrid-gpu-h200")
+	secondaryFlavor := newQueueObject(resourceFlavorGVK)
+	secondaryFlavor.SetName("taugrid-gpu-h100")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(workspace, team, source, flavor).
+		WithObjects(workspace, team, source, flavor, secondaryFlavor).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 
@@ -4835,6 +4845,15 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	}
 	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h200", "memory"); got != "256Gi" {
 		t.Fatalf("managed memory quota = %q, want inherited admission quota 256Gi", got)
+	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h100", nvidiaGPUResourceName); got != "0" {
+		t.Fatalf("secondary flavor GPU quota = %q, want admission-only quota 0", got)
+	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h100", "cpu"); got != "32" {
+		t.Fatalf("secondary flavor CPU quota = %q, want inherited admission quota 32", got)
+	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h100", "memory"); got != "128Gi" {
+		t.Fatalf("secondary flavor memory quota = %q, want inherited admission quota 128Gi", got)
 	}
 	managed := newQueueObject(clusterQueueGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: managedName}, managed); err != nil {
@@ -4952,8 +4971,34 @@ func TestTeamWorkspaceQuotaRemovalChargesAppliedGuaranteesUntilUpdate(t *testing
 	if !found || len(keys) != 1 || !keys[quotaKey(cpuQuota)] {
 		t.Fatalf("managed quota keys = %#v, want only CPU after applied removal", keys)
 	}
-	if got := clusterQueueResourceQuota(t, c, managed.GetName(), "taugrid-gpu-h200", nvidiaGPUResourceName); got != "4" {
-		t.Fatalf("admission-only GPU quota = %q, want inherited 4", got)
+	childGPU := resource.MustParse(clusterQueueResourceQuota(
+		t,
+		c,
+		managed.GetName(),
+		"taugrid-gpu-h200",
+		nvidiaGPUResourceName,
+	))
+	if childGPU.Sign() != 0 {
+		t.Fatalf("admission-only GPU quota = %s, want 0 after removal", childGPU.String())
+	}
+	shared, err = (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, &refreshedTeam, &updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining = map[string]resource.Quantity{}
+	for _, quota := range shared {
+		remaining[quotaKey(quota)] = quota.NominalQuota
+	}
+	rootGPU := remaining[gpuKey]
+	totalGPU := rootGPU.DeepCopy()
+	totalGPU.Add(childGPU)
+	if rootGPU.Cmp(resource.MustParse("8")) != 0 || totalGPU.Cmp(resource.MustParse("8")) != 0 {
+		t.Fatalf(
+			"post-update GPU root=%s child=%s total=%s, want root and total 8",
+			rootGPU.String(),
+			childGPU.String(),
+			totalGPU.String(),
+		)
 	}
 }
 

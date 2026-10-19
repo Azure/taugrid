@@ -371,6 +371,10 @@ func preserveUndeclaredWorkspaceResources(
 	if err != nil {
 		return err
 	}
+	sourceManagedKeys, _, err := managedQuotaKeys(source)
+	if err != nil {
+		return err
+	}
 	for flavor, resources := range sourceQuotas {
 		target := desiredQuotas[flavor]
 		if target == nil {
@@ -378,7 +382,12 @@ func preserveUndeclaredWorkspaceResources(
 			desiredQuotas[flavor] = target
 		}
 		for resourceName, quota := range resources {
-			if !declared[resourceName] {
+			if _, found := target[resourceName]; found {
+				continue
+			}
+			if declared[resourceName] || sourceManagedKeys[resourceName+"\x00"+flavor] {
+				target[resourceName] = admissionOnlyResourceQuota(quota)
+			} else {
 				target[resourceName] = quota
 			}
 		}
@@ -391,6 +400,17 @@ func preserveUndeclaredWorkspaceResources(
 		return fmt.Errorf("preserve ClusterQueue %q undeclared resources: %w", source.GetName(), err)
 	}
 	return nil
+}
+
+func admissionOnlyResourceQuota(quota map[string]any) map[string]any {
+	out := make(map[string]any, len(quota))
+	for key, value := range quota {
+		out[key] = value
+	}
+	out["nominalQuota"] = "0"
+	out["borrowingLimit"] = "0"
+	out["lendingLimit"] = "0"
+	return out
 }
 
 func clusterQueueQuotaObjects(queue *unstructured.Unstructured) (map[string]map[string]map[string]any, error) {
