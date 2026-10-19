@@ -502,6 +502,17 @@ func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	if err != nil {
 		return "", nil, nil, "", err
 	}
+	if len(workspace.Spec.Quota) > 0 {
+		requested := map[string]bool{}
+		for _, quota := range workspace.Spec.Quota {
+			requested[quotaKey(quota)] = true
+		}
+		for key := range applied {
+			if !requested[key] {
+				delete(applied, key)
+			}
+		}
+	}
 	reservations, err := clusterQueueReservations(queue)
 	if err != nil {
 		return "", nil, nil, "", err

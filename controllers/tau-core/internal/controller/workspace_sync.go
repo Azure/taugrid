@@ -263,8 +263,13 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatusForRoute(
 	}
 	if previous == "" {
 		previous = strings.TrimSpace(workspace.Spec.Queue)
-	} else if storedFound && storedQueue != "" && previous != storedQueue {
-		previous = storedQueue
+	} else if storedFound {
+		effectiveQueue := strings.TrimSpace(workspace.Spec.Queue)
+		if storedQueue != "" && previous != storedQueue {
+			previous = storedQueue
+		} else if storedQueue == "" && effectiveQueue != "" && previous != effectiveQueue {
+			previous = effectiveQueue
+		}
 	}
 	if previous == "" || previous == canonical {
 		return queueStatus, nil

@@ -4776,10 +4776,21 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	team.Status.ObservedGeneration = team.Generation
 	source := testClusterQueue("jobqueue")
 	source.Object["spec"] = map[string]any{
-		"resourceGroups": quotaResourceGroups(
-			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
-			true,
-		),
+		"resourceGroups": []any{
+			map[string]any{
+				"coveredResources": []any{"cpu", "memory", nvidiaGPUResourceName},
+				"flavors": []any{
+					map[string]any{
+						"name": "taugrid-gpu-h200",
+						"resources": []any{
+							map[string]any{"name": "cpu", "nominalQuota": "64"},
+							map[string]any{"name": "memory", "nominalQuota": "256Gi"},
+							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "8"},
+						},
+					},
+				},
+			},
+		},
 	}
 	flavor := newQueueObject(resourceFlavorGVK)
 	flavor.SetName("taugrid-gpu-h200")
@@ -4814,6 +4825,23 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	if namespace.Labels[labelKueueDefaultLocalQueue] != managedName {
 		t.Fatalf("namespace default queue = %q, want managed route %q", namespace.Labels[labelKueueDefaultLocalQueue], managedName)
 	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h200", nvidiaGPUResourceName); got != "4" {
+		t.Fatalf("managed GPU quota = %q, want requested quota 4", got)
+	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h200", "cpu"); got != "64" {
+		t.Fatalf("managed CPU quota = %q, want inherited admission quota 64", got)
+	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h200", "memory"); got != "256Gi" {
+		t.Fatalf("managed memory quota = %q, want inherited admission quota 256Gi", got)
+	}
+	_, guarantees, _, _, err := (&TauTeamReconciler{Client: c, APIReader: c}).appliedWorkspaceQueue(ctx, &got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpuGuarantee := guarantees[quotaKey(workspace.Spec.Quota[0])]
+	if len(guarantees) != 1 || gpuGuarantee.Cmp(resource.MustParse("4")) != 0 {
+		t.Fatalf("accounted guarantees = %#v, want only requested GPU quota", guarantees)
+	}
 }
 
 func TestTeamWorkspaceExplicitQueueChangePublishesNewRoute(t *testing.T) {
@@ -4833,6 +4861,7 @@ func TestTeamWorkspaceExplicitQueueChangePublishesNewRoute(t *testing.T) {
 		ClusterQueue:    "cluster-a",
 		ClusterQueueUID: "cluster-a-uid",
 	}
+
 	namespace := testNamespace(workspace.Name)
 	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "queue-a")
 	namespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
@@ -4869,6 +4898,73 @@ func TestTeamWorkspaceExplicitQueueChangePublishesNewRoute(t *testing.T) {
 	preserved := newQueueObject(localQueueGVK)
 	if err := c.Get(ctx, client.ObjectKeyFromObject(queueA), preserved); err != nil {
 		t.Fatalf("previous LocalQueue was not retained: %v", err)
+	}
+}
+
+func TestTeamWorkspaceDefaultQueueChangePublishesNewRoute(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = ""
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "queue-a",
+		ClusterQueue:    "cluster-a",
+		ClusterQueueUID: "cluster-a-uid",
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "queue-a")
+	namespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "queue-b"},
+		},
+	}
+	queueA := testLocalQueue(workspace.Name, "queue-a", "cluster-a")
+	queueA.SetAnnotations(nil)
+	clusterA := clusterQueueWithUID("cluster-a", "cluster-a-uid")
+	clusterB := testClusterQueue("queue-b")
+	clusterB.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
+			true,
+		),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, team, cluster, queueA, clusterA, clusterB, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 5)
+
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:   "queue-b",
+		ClusterQueue: clusterB.GetName(),
+	}
+	if got.Status.Queue.LocalQueue != want.LocalQueue || got.Status.Queue.ClusterQueue != want.ClusterQueue {
+		t.Fatalf("queue status = %#v, want changed default route %#v", got.Status.Queue, want)
+	}
+	preserved := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(queueA), preserved); err != nil {
+		t.Fatalf("previous default LocalQueue was not retained: %v", err)
 	}
 }
 
