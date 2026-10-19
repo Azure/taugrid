@@ -252,23 +252,19 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatusForRoute(
 	canonical := workspaceLocalQueueName(workspace)
 	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
 	selectingInitialRoute := previous == ""
-	recovering := false
-	if previous == "" {
-		var stored tauv1alpha1.TauWorkspace
-		if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err != nil {
-			return tauv1alpha1.WorkspaceQueueStatus{}, err
-		}
-		if storedQueue := strings.TrimSpace(stored.Spec.Queue); storedQueue != "" {
-			previous = storedQueue
-		} else {
-			recovering = true
-		}
+	var stored tauv1alpha1.TauWorkspace
+	storedQueue := ""
+	storedFound := false
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err == nil {
+		storedFound = true
+		storedQueue = strings.TrimSpace(stored.Spec.Queue)
+	} else if !apierrors.IsNotFound(err) {
+		return tauv1alpha1.WorkspaceQueueStatus{}, err
 	}
-	if recovering {
+	if previous == "" {
 		previous = strings.TrimSpace(workspace.Spec.Queue)
-		if establishedLocalQueue != previous {
-			return queueStatus, nil
-		}
+	} else if storedFound && storedQueue != "" && previous != storedQueue {
+		previous = storedQueue
 	}
 	if previous == "" || previous == canonical {
 		return queueStatus, nil
@@ -294,7 +290,7 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatusForRoute(
 	}
 	clusterQueue := newQueueObject(clusterQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
-		if recovering && apierrors.IsNotFound(err) {
+		if selectingInitialRoute && establishedLocalQueue == previous && apierrors.IsNotFound(err) {
 			return queueStatus, nil
 		}
 		return tauv1alpha1.WorkspaceQueueStatus{}, fmt.Errorf(

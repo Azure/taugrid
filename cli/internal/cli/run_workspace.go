@@ -102,6 +102,7 @@ func applyWorkspaceDefaultsWithConnection(
 	o.experiment.Workspace = placement.Workspace
 	o.workspace = placement.Workspace
 	o.workspaceResultScope = w.Spec.Defaults.OutputRoot
+	o.workspaceClusterQueue = placement.ClusterQueue
 	workspaceNamespace := placement.Namespace
 	if o.namespace != "" && o.namespace != workspaceNamespace {
 		return o, fmt.Errorf("namespace %q conflicts with TauWorkspace %q target namespace %q", o.namespace, w.Metadata.Name, workspaceNamespace)
@@ -165,4 +166,12 @@ func workspacePriorityTier(priority string) string {
 	default:
 		return priority
 	}
+}
+
+func managedWorkspaceClusterQueueName(workspace string) string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return ""
+	}
+	return "tau-ws-" + workspace
 }

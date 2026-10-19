@@ -148,6 +148,10 @@ func TestRunProfileAcceptsNewTeamWorkspaceClientRoute(t *testing.T) {
 	if selected.queue != "jobqueue" {
 		t.Fatalf("selected LocalQueue = %q, want profile-compatible jobqueue", selected.queue)
 	}
+	if selected.selectedWorkloadProfile == nil ||
+		selected.selectedWorkloadProfile.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("selected profile backing = %#v, want managed Workspace ClusterQueue", selected.selectedWorkloadProfile)
+	}
 }
 
 func TestResolveWorkspacePlacementPreservesVerifiedTeamQueueWhenSpecQueueIsEmpty(t *testing.T) {

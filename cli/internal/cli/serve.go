@@ -493,10 +493,7 @@ func selectServeWorkloadProfile(
 		return profile.Profile{}, nil, fmt.Errorf("resolve authoritative serving queue binding: %w", err)
 	}
 	actualClusterQueue := strings.TrimSpace(resolvedClusterQueue)
-	managedWorkspaceClusterQueue := ""
-	if workspace = strings.TrimSpace(workspace); workspace != "" {
-		managedWorkspaceClusterQueue = "tau-ws-" + workspace
-	}
+	managedWorkspaceClusterQueue := managedWorkspaceClusterQueueName(workspace)
 	if selection.Source == profile.ProfileSourceCluster &&
 		actualClusterQueue != "" &&
 		actualClusterQueue != clusterQueue &&

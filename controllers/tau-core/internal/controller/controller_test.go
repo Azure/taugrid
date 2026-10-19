@@ -4756,9 +4756,9 @@ func TestTeamWorkspaceWithoutQueueResolvesTauClusterDefault(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
 		t.Fatalf("Get workspace: %v", err)
 	}
-	if got.Status.Queue.LocalQueue != workspaceClusterQueueName(workspace.Name) ||
+	if got.Status.Queue.LocalQueue != cluster.Spec.WorkspaceDefaults.DefaultQueue ||
 		got.Status.Queue.ClusterQueue != workspaceClusterQueueName(workspace.Name) {
-		t.Fatalf("status.queue = %#v, want Team-backed queue", got.Status.Queue)
+		t.Fatalf("status.queue = %#v, want default profile LocalQueue backed by Team queue", got.Status.Queue)
 	}
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
 }
@@ -4813,6 +4813,62 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	}
 	if namespace.Labels[labelKueueDefaultLocalQueue] != managedName {
 		t.Fatalf("namespace default queue = %q, want managed route %q", namespace.Labels[labelKueueDefaultLocalQueue], managedName)
+	}
+}
+
+func TestTeamWorkspaceExplicitQueueChangePublishesNewRoute(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "queue-b"
+	workspace.Spec.Quota = nil
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "queue-a",
+		ClusterQueue:    "cluster-a",
+		ClusterQueueUID: "cluster-a-uid",
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "queue-a")
+	namespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	queueA := testLocalQueue(workspace.Name, "queue-a", "cluster-a")
+	queueA.SetAnnotations(nil)
+	queueB := testLocalQueue(workspace.Name, "queue-b", "cluster-b")
+	queueB.SetAnnotations(nil)
+	clusterA := clusterQueueWithUID("cluster-a", "cluster-a-uid")
+	clusterB := clusterQueueWithUID("cluster-b", "cluster-b-uid")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, team, queueA, queueB, clusterA, clusterB).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 3)
+
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      queueB.GetName(),
+		ClusterQueue:    clusterB.GetName(),
+		ClusterQueueUID: string(clusterB.GetUID()),
+	}
+	if !reflect.DeepEqual(got.Status.Queue, want) {
+		t.Fatalf("queue status = %#v, want explicit new route %#v", got.Status.Queue, want)
+	}
+	preserved := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(queueA), preserved); err != nil {
+		t.Fatalf("previous LocalQueue was not retained: %v", err)
 	}
 }
 
