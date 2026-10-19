@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -258,14 +259,52 @@ func desiredWorkspaceClusterQueue(workspace *tauv1alpha1.TauWorkspace) *unstruct
 	return queue
 }
 
+func setManagedQuotaKeys(queue *unstructured.Unstructured, keys map[string]bool) error {
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	value, err := json.Marshal(ordered)
+	if err != nil {
+		return err
+	}
+	annotations := queue.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[annotationManagedQuotaKeys] = string(value)
+	queue.SetAnnotations(annotations)
+	return nil
+}
+
+func managedQuotaKeys(queue *unstructured.Unstructured) (map[string]bool, bool, error) {
+	raw, found := queue.GetAnnotations()[annotationManagedQuotaKeys]
+	if !found {
+		return nil, false, nil
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+		return nil, true, fmt.Errorf("ClusterQueue %q has invalid managed quota keys: %w", queue.GetName(), err)
+	}
+	out := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		out[key] = true
+	}
+	return out, true, nil
+}
+
 func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
 	desired *unstructured.Unstructured,
 ) error {
 	source, err := r.establishedWorkspaceClusterQueue(ctx, workspace, desired.GetName())
-	if err != nil || source == nil {
+	if err != nil {
 		return err
+	}
+	if source == nil {
+		return setWorkspaceManagedQuotaKeys(workspace, desired)
 	}
 	for _, field := range []string{"admissionChecks", "admissionChecksStrategy"} {
 		value, found, err := unstructured.NestedFieldCopy(source.Object, "spec", field)
@@ -292,7 +331,28 @@ func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
 	} else if err := preserveUndeclaredWorkspaceResources(workspace, source, desired); err != nil {
 		return err
 	}
-	return nil
+	return setWorkspaceManagedQuotaKeys(workspace, desired)
+}
+
+func setWorkspaceManagedQuotaKeys(
+	workspace *tauv1alpha1.TauWorkspace,
+	desired *unstructured.Unstructured,
+) error {
+	keys := map[string]bool{}
+	if len(workspace.Spec.Quota) > 0 {
+		for _, quota := range workspace.Spec.Quota {
+			keys[quotaKey(quota)] = true
+		}
+	} else {
+		nominals, err := clusterQueueNominalQuota(desired)
+		if err != nil {
+			return err
+		}
+		for key := range nominals {
+			keys[key] = true
+		}
+	}
+	return setManagedQuotaKeys(desired, keys)
 }
 
 func preserveUndeclaredWorkspaceResources(
@@ -303,79 +363,138 @@ func preserveUndeclaredWorkspaceResources(
 	for _, quota := range workspace.Spec.Quota {
 		declared[quota.Resource] = true
 	}
-	sourceGroups, found, err := unstructured.NestedSlice(source.Object, "spec", "resourceGroups")
+	sourceQuotas, err := clusterQueueQuotaObjects(source)
 	if err != nil {
-		return fmt.Errorf("read ClusterQueue %q resourceGroups: %w", source.GetName(), err)
+		return err
 	}
-	if !found {
-		return nil
-	}
-	desiredGroups, _, err := unstructured.NestedSlice(desired.Object, "spec", "resourceGroups")
+	desiredQuotas, err := clusterQueueQuotaObjects(desired)
 	if err != nil {
-		return fmt.Errorf("read desired ClusterQueue %q resourceGroups: %w", desired.GetName(), err)
+		return err
 	}
-	for _, rawGroup := range sourceGroups {
-		group, ok := rawGroup.(map[string]any)
-		if !ok {
-			return fmt.Errorf("ClusterQueue %q has malformed resourceGroups", source.GetName())
+	for flavor, resources := range sourceQuotas {
+		target := desiredQuotas[flavor]
+		if target == nil {
+			target = map[string]map[string]any{}
+			desiredQuotas[flavor] = target
 		}
-		covered, _, err := unstructured.NestedSlice(group, "coveredResources")
-		if err != nil {
-			return fmt.Errorf("read ClusterQueue %q coveredResources: %w", source.GetName(), err)
-		}
-		inheritedResources := map[string]bool{}
-		inheritedCovered := make([]any, 0, len(covered))
-		for _, rawResource := range covered {
-			resourceName := fmt.Sprint(rawResource)
+		for resourceName, quota := range resources {
 			if !declared[resourceName] {
-				inheritedResources[resourceName] = true
-				inheritedCovered = append(inheritedCovered, resourceName)
+				target[resourceName] = quota
 			}
 		}
-		if len(inheritedCovered) == 0 {
-			continue
-		}
-		flavors, _, err := unstructured.NestedSlice(group, "flavors")
-		if err != nil {
-			return fmt.Errorf("read ClusterQueue %q flavors: %w", source.GetName(), err)
-		}
-		inheritedFlavors := make([]any, 0, len(flavors))
-		for _, rawFlavor := range flavors {
-			flavor, ok := rawFlavor.(map[string]any)
-			if !ok {
-				return fmt.Errorf("ClusterQueue %q has malformed flavor quota", source.GetName())
-			}
-			resources, _, err := unstructured.NestedSlice(flavor, "resources")
-			if err != nil {
-				return fmt.Errorf("read ClusterQueue %q flavor resources: %w", source.GetName(), err)
-			}
-			inheritedQuotas := make([]any, 0, len(resources))
-			for _, rawQuota := range resources {
-				quota, ok := rawQuota.(map[string]any)
-				if !ok {
-					return fmt.Errorf("ClusterQueue %q has malformed resource quota", source.GetName())
-				}
-				if inheritedResources[fmt.Sprint(quota["name"])] {
-					inheritedQuotas = append(inheritedQuotas, quota)
-				}
-			}
-			if len(inheritedQuotas) == 0 {
-				continue
-			}
-			flavor["resources"] = inheritedQuotas
-			inheritedFlavors = append(inheritedFlavors, flavor)
-		}
-		if len(inheritedFlavors) == 0 {
-			continue
-		}
-		group["coveredResources"] = inheritedCovered
-		group["flavors"] = inheritedFlavors
-		desiredGroups = append(desiredGroups, group)
 	}
-	if err := unstructured.SetNestedSlice(desired.Object, desiredGroups, "spec", "resourceGroups"); err != nil {
+	groups, err := quotaObjectsResourceGroups(desiredQuotas)
+	if err != nil {
+		return fmt.Errorf("merge ClusterQueue %q admission resources: %w", source.GetName(), err)
+	}
+	if err := unstructured.SetNestedSlice(desired.Object, groups, "spec", "resourceGroups"); err != nil {
 		return fmt.Errorf("preserve ClusterQueue %q undeclared resources: %w", source.GetName(), err)
 	}
 	return nil
+}
+
+func clusterQueueQuotaObjects(queue *unstructured.Unstructured) (map[string]map[string]map[string]any, error) {
+	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
+	if err != nil {
+		return nil, fmt.Errorf("read ClusterQueue %q resourceGroups: %w", queue.GetName(), err)
+	}
+	if !found {
+		return map[string]map[string]map[string]any{}, nil
+	}
+	out := map[string]map[string]map[string]any{}
+	for _, rawGroup := range groups {
+		group, ok := rawGroup.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("ClusterQueue %q has malformed resourceGroups", queue.GetName())
+		}
+		flavors, _, err := unstructured.NestedSlice(group, "flavors")
+		if err != nil {
+			return nil, fmt.Errorf("ClusterQueue %q has malformed flavors: %w", queue.GetName(), err)
+		}
+		for _, rawFlavor := range flavors {
+			flavor, ok := rawFlavor.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("ClusterQueue %q has malformed flavor quota", queue.GetName())
+			}
+			flavorName := fmt.Sprint(flavor["name"])
+			resources, _, err := unstructured.NestedSlice(flavor, "resources")
+			if err != nil {
+				return nil, fmt.Errorf("ClusterQueue %q has malformed flavor resources: %w", queue.GetName(), err)
+			}
+			byResource := out[flavorName]
+			if byResource == nil {
+				byResource = map[string]map[string]any{}
+				out[flavorName] = byResource
+			}
+			for _, rawQuota := range resources {
+				quota, ok := rawQuota.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("ClusterQueue %q has malformed resource quota", queue.GetName())
+				}
+				byResource[fmt.Sprint(quota["name"])] = quota
+			}
+		}
+	}
+	return out, nil
+}
+
+func quotaObjectsResourceGroups(quotas map[string]map[string]map[string]any) ([]any, error) {
+	type quotaGroup struct {
+		resources []string
+		flavors   []string
+	}
+	byResourceSet := map[string]*quotaGroup{}
+	resourceSets := map[string]map[string]bool{}
+	for flavor, resources := range quotas {
+		names := make([]string, 0, len(resources))
+		set := map[string]bool{}
+		for resourceName := range resources {
+			names = append(names, resourceName)
+			set[resourceName] = true
+		}
+		sort.Strings(names)
+		for otherFlavor, otherSet := range resourceSets {
+			overlap := false
+			for resourceName := range set {
+				overlap = overlap || otherSet[resourceName]
+			}
+			if overlap && !reflect.DeepEqual(set, otherSet) {
+				return nil, fmt.Errorf("flavors %q and %q cover overlapping non-identical resource sets", flavor, otherFlavor)
+			}
+		}
+		resourceSets[flavor] = set
+		key := strings.Join(names, "\x00")
+		group := byResourceSet[key]
+		if group == nil {
+			group = &quotaGroup{resources: names}
+			byResourceSet[key] = group
+		}
+		group.flavors = append(group.flavors, flavor)
+	}
+	keys := make([]string, 0, len(byResourceSet))
+	for key := range byResourceSet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	groups := make([]any, 0, len(keys))
+	for _, key := range keys {
+		group := byResourceSet[key]
+		sort.Strings(group.flavors)
+		flavors := make([]any, 0, len(group.flavors))
+		for _, flavorName := range group.flavors {
+			resources := make([]any, 0, len(group.resources))
+			for _, resourceName := range group.resources {
+				resources = append(resources, quotas[flavorName][resourceName])
+			}
+			flavors = append(flavors, map[string]any{"name": flavorName, "resources": resources})
+		}
+		covered := make([]any, 0, len(group.resources))
+		for _, resourceName := range group.resources {
+			covered = append(covered, resourceName)
+		}
+		groups = append(groups, map[string]any{"coveredResources": covered, "flavors": flavors})
+	}
+	return groups, nil
 }
 
 func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(

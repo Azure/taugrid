@@ -502,13 +502,19 @@ func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	if err != nil {
 		return "", nil, nil, "", err
 	}
-	if len(workspace.Spec.Quota) > 0 {
-		requested := map[string]bool{}
+	managedKeys, found, err := managedQuotaKeys(queue)
+	if err != nil {
+		return "", nil, nil, "", err
+	}
+	if !found && len(workspace.Spec.Quota) > 0 {
+		managedKeys = map[string]bool{}
 		for _, quota := range workspace.Spec.Quota {
-			requested[quotaKey(quota)] = true
+			managedKeys[quotaKey(quota)] = true
 		}
+	}
+	if managedKeys != nil {
 		for key := range applied {
-			if !requested[key] {
+			if !managedKeys[key] {
 				delete(applied, key)
 			}
 		}
@@ -516,6 +522,13 @@ func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	reservations, err := clusterQueueReservations(queue)
 	if err != nil {
 		return "", nil, nil, "", err
+	}
+	if managedKeys != nil {
+		for key := range reservations {
+			if !managedKeys[key] {
+				delete(reservations, key)
+			}
+		}
 	}
 	cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
 	if err != nil {

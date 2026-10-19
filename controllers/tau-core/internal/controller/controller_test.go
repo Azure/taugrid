@@ -31,6 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	kueuev1beta2 "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	kueuewebhooks "sigs.k8s.io/kueue/pkg/webhooks"
 )
 
 func TestTauClusterObserveModeUpdatesStatusWithoutMutatingResources(t *testing.T) {
@@ -4834,6 +4836,32 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h200", "memory"); got != "256Gi" {
 		t.Fatalf("managed memory quota = %q, want inherited admission quota 256Gi", got)
 	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: managedName}, managed); err != nil {
+		t.Fatal(err)
+	}
+	var validated kueuev1beta2.ClusterQueue
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(managed.Object, &validated); err != nil {
+		t.Fatal(err)
+	}
+	if validationErrors := kueuewebhooks.ValidateClusterQueue(&validated); len(validationErrors) != 0 {
+		t.Fatalf("managed ClusterQueue failed Kueue validation: %v", validationErrors)
+	}
+	if err := unstructured.SetNestedSlice(managed.Object, []any{
+		map[string]any{
+			"name": "taugrid-gpu-h200",
+			"resources": []any{
+				map[string]any{"name": "cpu", "total": "2"},
+				map[string]any{"name": "memory", "total": "4Gi"},
+				map[string]any{"name": nvidiaGPUResourceName, "total": "1"},
+			},
+		},
+	}, "status", "flavorsReservation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Update(ctx, managed); err != nil {
+		t.Fatal(err)
+	}
 	_, guarantees, _, _, err := (&TauTeamReconciler{Client: c, APIReader: c}).appliedWorkspaceQueue(ctx, &got)
 	if err != nil {
 		t.Fatal(err)
@@ -4841,6 +4869,91 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	gpuGuarantee := guarantees[quotaKey(workspace.Spec.Quota[0])]
 	if len(guarantees) != 1 || gpuGuarantee.Cmp(resource.MustParse("4")) != 0 {
 		t.Fatalf("accounted guarantees = %#v, want only requested GPU quota", guarantees)
+	}
+	if err := (&TauTeamReconciler{Client: c, APIReader: c}).validateTeamReservations(ctx, team); err != nil {
+		t.Fatalf("inherited CPU/memory reservations blocked Team reconciliation: %v", err)
+	}
+}
+
+func TestTeamWorkspaceQuotaRemovalChargesAppliedGuaranteesUntilUpdate(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	cpuQuota := tauv1alpha1.TauResourceQuota{
+		Flavor:       "taugrid-gpu-h200",
+		Resource:     string(corev1.ResourceCPU),
+		NominalQuota: resource.MustParse("32"),
+	}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "4", "0", "0"),
+		cpuQuota,
+	}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Spec.Quota = append(team.Spec.Quota, tauv1alpha1.TauResourceQuota{
+		Flavor:       "taugrid-gpu-h200",
+		Resource:     string(corev1.ResourceCPU),
+		NominalQuota: resource.MustParse("64"),
+	})
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	source := testClusterQueue("jobqueue")
+	source.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, source, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 5)
+
+	var updated tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &updated); err != nil {
+		t.Fatal(err)
+	}
+	updated.Spec.Quota = []tauv1alpha1.TauResourceQuota{cpuQuota}
+	if err := c.Update(ctx, &updated); err != nil {
+		t.Fatal(err)
+	}
+	var refreshedTeam tauv1alpha1.TauTeam
+	if err := c.Get(ctx, client.ObjectKeyFromObject(team), &refreshedTeam); err != nil {
+		t.Fatal(err)
+	}
+	shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, &refreshedTeam, &updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := map[string]resource.Quantity{}
+	for _, quota := range shared {
+		remaining[quotaKey(quota)] = quota.NominalQuota
+	}
+	gpuKey := quotaKey(workspace.Spec.Quota[0])
+	gpuRemaining := remaining[gpuKey]
+	if gpuRemaining.Cmp(resource.MustParse("4")) != 0 {
+		t.Fatalf("GPU shared quota before managed update = %s, want 4", gpuRemaining.String())
+	}
+
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 3)
+
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed); err != nil {
+		t.Fatal(err)
+	}
+	keys, found, err := managedQuotaKeys(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || len(keys) != 1 || !keys[quotaKey(cpuQuota)] {
+		t.Fatalf("managed quota keys = %#v, want only CPU after applied removal", keys)
+	}
+	if got := clusterQueueResourceQuota(t, c, managed.GetName(), "taugrid-gpu-h200", nvidiaGPUResourceName); got != "4" {
+		t.Fatalf("admission-only GPU quota = %q, want inherited 4", got)
 	}
 }
 
