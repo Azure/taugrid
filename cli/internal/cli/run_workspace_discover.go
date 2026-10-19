@@ -20,6 +20,7 @@ import (
 func discoverPrimaryWorkspace(cmd *cobra.Command, kubeContext string) (tauworkspace.Workspace, error) {
 	r := kube.New(kubeContext)
 	systemNamespace := systemNamespaceFromCommand(cmd)
+	var namedFallbacks []tauworkspace.Workspace
 
 	for _, name := range namedWorkspaceCandidates() {
 		raw, err := r.Raw(cmd.Context(), []string{
@@ -34,6 +35,9 @@ func discoverPrimaryWorkspace(cmd *cobra.Command, kubeContext string) (tauworksp
 			return tauworkspace.Workspace{}, parseErr
 		}
 		if !tauworkspace.ProvablyPrimary(workspace) {
+			if tauworkspace.NamedGetFallback(workspace) {
+				namedFallbacks = append(namedFallbacks, workspace)
+			}
 			continue
 		}
 		selected, selErr := tauworkspace.SelectPrimary(
@@ -52,6 +56,14 @@ func discoverPrimaryWorkspace(cmd *cobra.Command, kubeContext string) (tauworksp
 		"get", "workspaces.tau.azure.com", "-o", "json",
 	}, nil)
 	if err != nil {
+		if len(namedFallbacks) == 1 {
+			return namedFallbacks[0], nil
+		}
+		if len(namedFallbacks) > 1 {
+			return tauworkspace.Workspace{}, fmt.Errorf(
+				"multiple Ready TauWorkspaces were found by name but listing is unavailable; pass --workspace explicitly",
+			)
+		}
 		return tauworkspace.Workspace{}, describeWorkspaceLookupError(err, kubeContext)
 	}
 	list, err := tauworkspace.ParseList([]byte(raw))

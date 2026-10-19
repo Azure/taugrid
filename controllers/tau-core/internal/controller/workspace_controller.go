@@ -5,12 +5,10 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -52,11 +50,22 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		logger.Info("ignoring workspace outside system namespace", "systemNamespace", systemNamespace(r.SystemNamespace))
 		return ctrl.Result{}, nil
 	}
+	storedQueue := workspace.Spec.Queue
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&workspace, workspaceFinalizer) {
-			if err := r.cleanupWorkspaceAccess(ctx, workspace.Name); err != nil {
+			if workspace.UID == "" || workspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+				if migrated {
+					return ctrl.Result{Requeue: true}, nil
+				}
+			}
+			if err := r.cleanupWorkspaceAccess(ctx, &workspace); err != nil {
 				return ctrl.Result{}, err
 			}
+			workspace.Spec.Queue = storedQueue
 			controllerutil.RemoveFinalizer(&workspace, workspaceFinalizer)
 			if err := r.Update(ctx, &workspace); err != nil {
 				return ctrl.Result{}, err
@@ -71,53 +80,20 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		return ctrl.Result{}, nil
 	}
-
-	primaryWorkspace, err := r.resolvePrimaryWorkspace(ctx)
+	compatibilityUpdated, err := r.ensureV0PrimaryDiscoveryCompatibility(ctx, &workspace)
 	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolve v0 primary workspace: %w", err)
+		return ctrl.Result{}, err
 	}
-	if primaryWorkspace != workspace.Name {
-		if err := r.cleanupWorkspaceAccess(ctx, workspace.Name); err != nil {
-			return ctrl.Result{}, err
-		}
-		message := fmt.Sprintf(
-			"TauGrid v0 activates one workspace; %q is primary and %q is blocked",
-			primaryWorkspace,
-			workspace.Name,
-		)
-		conditions := []metav1.Condition{
-			condition(tauv1alpha1.ConditionRBACReady, metav1.ConditionFalse, reasonAdditionalWorkspaceBlocked, message, workspace.Generation),
-			condition(tauv1alpha1.ConditionQueueReady, metav1.ConditionFalse, reasonAdditionalWorkspaceBlocked, message, workspace.Generation),
-			condition(tauv1alpha1.ConditionDriftDetected, metav1.ConditionFalse, "NoDrift", "No owned resource drift detected", workspace.Generation),
-		}
-		desiredStatus := tauv1alpha1.TauWorkspaceStatus{
-			Phase:              workspacePhase(conditions),
-			ObservedGeneration: workspace.Generation,
-			Target: tauv1alpha1.WorkspaceTargetStatus{
-				ResolvedNamespace: resolvedNamespace(&workspace),
-			},
-			Conditions: mergeConditions(workspace.Status.Conditions, conditions),
-		}
-		if !equalWorkspaceStatus(workspace.Status, desiredStatus) {
-			workspace.Status = desiredStatus
-			if err := r.Status().Update(ctx, &workspace); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{RequeueAfter: notReadyRequeue}, nil
-	}
-	if workspace.Annotations[annotationV0Primary] != "true" {
-		before := workspace.DeepCopy()
-		if workspace.Annotations == nil {
-			workspace.Annotations = map[string]string{}
-		}
-		workspace.Annotations[annotationV0Primary] = "true"
-		if err := r.Patch(ctx, &workspace, client.MergeFrom(before)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("persist v0 primary workspace marker: %w", err)
-		}
+	if compatibilityUpdated {
 		return ctrl.Result{Requeue: true}, nil
 	}
-
+	migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if migrated {
+		return ctrl.Result{Requeue: true}, nil
+	}
 	if strings.TrimSpace(workspace.Spec.Queue) == "" {
 		resolved, err := r.getDefaultWorkspaceQueue(ctx)
 		if err != nil {
@@ -126,6 +102,13 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		workspace.Spec.Queue = resolved
 	}
 	return r.syncWorkspace(ctx, &workspace)
+}
+
+func (r *TauWorkspaceReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *TauWorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {

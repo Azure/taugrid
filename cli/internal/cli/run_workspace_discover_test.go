@@ -178,3 +178,109 @@ esac
 			got.Metadata.Name)
 	}
 }
+
+func TestDiscoverPrimaryWorkspacePreservesMarkedIncumbentAfterNamedWorkspaceActivates(t *testing.T) {
+	logPath := fakeKubectl(t, `
+case "$*" in
+  *"get workspaces.tau.azure.com taugrid-default"*)
+    cat <<'JSON'
+{"apiVersion":"tau.azure.com/v1alpha1","kind":"TauWorkspace",
+ "metadata":{"name":"taugrid-default","creationTimestamp":"2026-01-01T00:00:00Z"},
+ "status":{"phase":"Ready","observedGeneration":2,"target":{"resolvedNamespace":"taugrid-default"}}}
+JSON
+    exit 0;;
+  *"get workspaces.tau.azure.com -o json"*)
+    cat <<'JSON'
+{"apiVersion":"v1","kind":"List","items":[
+ {"metadata":{"name":"taugrid-default","creationTimestamp":"2026-01-01T00:00:00Z"},
+  "status":{"phase":"Ready","observedGeneration":2,"target":{"resolvedNamespace":"taugrid-default"}}},
+ {"metadata":{"name":"research-primary","creationTimestamp":"2026-02-01T00:00:00Z",
+   "annotations":{"`+workloadmeta.AnnotationV0PrimaryWorkspace+`":"true"}},
+  "status":{"phase":"Ready","target":{"resolvedNamespace":"research"}}}]}
+JSON
+    exit 0;;
+  *)
+    exit 1;;
+esac
+`)
+
+	got, err := discoverPrimaryWorkspace(discoverCmd(), "production")
+	if err != nil {
+		t.Fatalf("discover active workspaces through an explicit context: %v", err)
+	}
+	if got.Metadata.Name != "research-primary" || got.Status.Target.ResolvedNamespace != "research" {
+		t.Fatalf("got workspace %q namespace %q, want marked incumbent research-primary/research",
+			got.Metadata.Name, got.Status.Target.ResolvedNamespace)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "--context production") {
+		t.Fatalf("context-only discovery did not route through the requested context:\n%s", calls)
+	}
+	if !strings.Contains(string(calls), "get workspaces.tau.azure.com -o json") {
+		t.Fatalf("active unmarked named workspace short-circuited incumbent discovery:\n%s", calls)
+	}
+}
+
+func TestDiscoverPrimaryWorkspaceUsesReadyNamedFallbackWhenListIsForbidden(t *testing.T) {
+	logPath := fakeKubectl(t, `
+case "$*" in
+  *"get workspaces.tau.azure.com taugrid-default"*)
+    cat <<'JSON'
+{"apiVersion":"tau.azure.com/v1alpha1","kind":"TauWorkspace",
+ "metadata":{"name":"taugrid-default","creationTimestamp":"2026-01-01T00:00:00Z"},
+ "status":{"phase":"Ready","observedGeneration":2,"target":{"resolvedNamespace":"research"}}}
+JSON
+    exit 0;;
+  *"get workspaces.tau.azure.com -o json"*)
+    echo 'Error from server (Forbidden): workspaces.tau.azure.com is forbidden' >&2
+    exit 1;;
+  *)
+    exit 1;;
+esac
+`)
+
+	got, err := discoverPrimaryWorkspace(discoverCmd(), "production")
+	if err != nil {
+		t.Fatalf("discover Ready named workspace with scoped permissions: %v", err)
+	}
+	if got.Metadata.Name != "taugrid-default" || got.Status.Target.ResolvedNamespace != "research" {
+		t.Fatalf("got workspace %q namespace %q, want taugrid-default/research",
+			got.Metadata.Name, got.Status.Target.ResolvedNamespace)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "--context production") {
+		t.Fatalf("context-only discovery did not route through the requested context:\n%s", calls)
+	}
+	if !strings.Contains(string(calls), "get workspaces.tau.azure.com -o json") {
+		t.Fatalf("discovery did not check for a marked incumbent before using the scoped fallback:\n%s", calls)
+	}
+}
+
+func TestDiscoverPrimaryWorkspaceRejectsNamedFallbackAmbiguityWhenListIsForbidden(t *testing.T) {
+	writeConnectionDescriptor(t, "research")
+	fakeKubectl(t, `
+case "$*" in
+  *"get workspaces.tau.azure.com research"*|*"get workspaces.tau.azure.com taugrid-default"*)
+    name=taugrid-default
+    case "$*" in *" research "*) name=research;; esac
+    printf '{"apiVersion":"tau.azure.com/v1alpha1","kind":"TauWorkspace","metadata":{"name":"%s"},"status":{"phase":"Ready","observedGeneration":2}}\n' "$name"
+    exit 0;;
+  *"get workspaces.tau.azure.com -o json"*)
+    echo 'Error from server (Forbidden): workspaces.tau.azure.com is forbidden' >&2
+    exit 1;;
+  *)
+    exit 1;;
+esac
+`)
+
+	_, err := discoverPrimaryWorkspace(discoverCmd(), "production")
+	if err == nil || !strings.Contains(err.Error(), "multiple Ready TauWorkspaces") {
+		t.Fatalf("ambiguous named fallbacks must require an explicit workspace, got: %v", err)
+	}
+}
