@@ -3092,6 +3092,7 @@ func TestExistingTeamWorkspacePreservesManagedQueueContract(t *testing.T) {
 	if err := newTestWorkspaceReconciler(c).preserveEstablishedWorkspaceQueueContract(
 		context.Background(),
 		workspace,
+		nil,
 		desired,
 	); err != nil {
 		t.Fatal(err)
@@ -3914,10 +3915,24 @@ func TestRetainedTeamCohortChildGuaranteeRemainsCharged(t *testing.T) {
 	child := testClusterQueue("legacy-child")
 	child.Object["spec"] = map[string]any{
 		"cohortName": teamCohortName(team.Name),
-		"resourceGroups": quotaResourceGroups(
-			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
-			true,
-		),
+		"resourceGroups": quotaResourceGroups([]tauv1alpha1.TauResourceQuota{
+			testGPUQuota("taugrid-gpu-h200", "4", "0", "0"),
+			{
+				Flavor:       "taugrid-gpu-h200",
+				Resource:     string(corev1.ResourceCPU),
+				NominalQuota: resource.MustParse("64"),
+			},
+			{
+				Flavor:       "taugrid-gpu-h200",
+				Resource:     string(corev1.ResourceMemory),
+				NominalQuota: resource.MustParse("256Gi"),
+			},
+		}, true),
+	}
+	if err := setManagedQuotaKeys(child, map[string]bool{
+		quotaKey(testGPUQuota("taugrid-gpu-h200", "4", "0", "0")): true,
+	}); err != nil {
+		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
@@ -4191,6 +4206,7 @@ func TestExistingTeamWorkspaceRejectsEmptyManagedQueueWithoutEstablishedContract
 	err := newTestWorkspaceReconciler(c).preserveEstablishedWorkspaceQueueContract(
 		context.Background(),
 		workspace,
+		nil,
 		desiredWorkspaceClusterQueue(workspace),
 	)
 	if err == nil || !strings.Contains(err.Error(), "established workspace queue contract is unavailable") {
@@ -4891,6 +4907,92 @@ func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
 	}
 	if err := (&TauTeamReconciler{Client: c, APIReader: c}).validateTeamReservations(ctx, team); err != nil {
 		t.Fatalf("inherited CPU/memory reservations blocked Team reconciliation: %v", err)
+	}
+}
+
+func TestNewTeamWorkspaceDoesNotInheritUnrequestedTeamGuarantee(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	cpuQuota := tauv1alpha1.TauResourceQuota{
+		Flavor:       "taugrid-gpu-h200",
+		Resource:     string(corev1.ResourceCPU),
+		NominalQuota: resource.MustParse("32"),
+	}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{cpuQuota}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Spec.Quota = append(team.Spec.Quota, tauv1alpha1.TauResourceQuota{
+		Flavor:       cpuQuota.Flavor,
+		Resource:     cpuQuota.Resource,
+		NominalQuota: resource.MustParse("64"),
+	})
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	source := testClusterQueue("jobqueue")
+	source.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups([]tauv1alpha1.TauResourceQuota{
+			testGPUQuota("taugrid-gpu-h200", "8", "0", "0"),
+			{
+				Flavor:       cpuQuota.Flavor,
+				Resource:     cpuQuota.Resource,
+				NominalQuota: resource.MustParse("64"),
+			},
+		}, true),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, source, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	reconcileWorkspaceTimes(t, newTestWorkspaceReconciler(c), ctx, workspace.Name, 5)
+
+	managedName := workspaceClusterQueueName(workspace.Name)
+	childGPU := resource.MustParse(clusterQueueResourceQuota(
+		t,
+		c,
+		managedName,
+		"taugrid-gpu-h200",
+		nvidiaGPUResourceName,
+	))
+	if childGPU.Sign() != 0 {
+		t.Fatalf("unrequested Team GPU quota = %s, want admission-only quota 0", childGPU.String())
+	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: managedName}, managed); err != nil {
+		t.Fatal(err)
+	}
+	keys, found, err := managedQuotaKeys(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || len(keys) != 1 || !keys[quotaKey(cpuQuota)] {
+		t.Fatalf("managed quota keys = %#v, want only requested CPU", keys)
+	}
+	shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := map[string]resource.Quantity{}
+	for _, quota := range shared {
+		remaining[quotaKey(quota)] = quota.NominalQuota
+	}
+	gpuKey := quotaKey(team.Spec.Quota[0])
+	rootGPU := remaining[gpuKey]
+	totalGPU := rootGPU.DeepCopy()
+	totalGPU.Add(childGPU)
+	if rootGPU.Cmp(resource.MustParse("8")) != 0 || totalGPU.Cmp(resource.MustParse("8")) != 0 {
+		t.Fatalf(
+			"initial partial quota GPU root=%s child=%s total=%s, want root and total 8",
+			rootGPU.String(),
+			childGPU.String(),
+			totalGPU.String(),
+		)
 	}
 }
 

@@ -349,7 +349,7 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 		return "", err
 	}
 	queue := desiredWorkspaceClusterQueue(workspace)
-	if err := r.preserveEstablishedWorkspaceQueueContract(ctx, workspace, queue); err != nil {
+	if err := r.preserveEstablishedWorkspaceQueueContract(ctx, workspace, &team, queue); err != nil {
 		return "", err
 	}
 	teamReady := team.Status.Phase == tauv1alpha1.TeamPhaseReady &&

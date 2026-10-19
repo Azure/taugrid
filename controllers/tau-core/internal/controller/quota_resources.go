@@ -297,6 +297,7 @@ func managedQuotaKeys(queue *unstructured.Unstructured) (map[string]bool, bool, 
 func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
+	team *tauv1alpha1.TauTeam,
 	desired *unstructured.Unstructured,
 ) error {
 	source, err := r.establishedWorkspaceClusterQueue(ctx, workspace, desired.GetName())
@@ -328,7 +329,7 @@ func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
 		if err := unstructured.SetNestedSlice(desired.Object, groups, "spec", "resourceGroups"); err != nil {
 			return fmt.Errorf("preserve ClusterQueue %q resourceGroups: %w", source.GetName(), err)
 		}
-	} else if err := preserveUndeclaredWorkspaceResources(workspace, source, desired); err != nil {
+	} else if err := preserveUndeclaredWorkspaceResources(workspace, team, source, desired); err != nil {
 		return err
 	}
 	return setWorkspaceManagedQuotaKeys(workspace, desired)
@@ -357,11 +358,18 @@ func setWorkspaceManagedQuotaKeys(
 
 func preserveUndeclaredWorkspaceResources(
 	workspace *tauv1alpha1.TauWorkspace,
+	team *tauv1alpha1.TauTeam,
 	source, desired *unstructured.Unstructured,
 ) error {
 	declared := map[string]bool{}
 	for _, quota := range workspace.Spec.Quota {
 		declared[quota.Resource] = true
+	}
+	teamQuotaKeys := map[string]bool{}
+	if team != nil {
+		for _, quota := range team.Spec.Quota {
+			teamQuotaKeys[quotaKey(quota)] = true
+		}
 	}
 	sourceQuotas, err := clusterQueueQuotaObjects(source)
 	if err != nil {
@@ -385,7 +393,8 @@ func preserveUndeclaredWorkspaceResources(
 			if _, found := target[resourceName]; found {
 				continue
 			}
-			if declared[resourceName] || sourceManagedKeys[resourceName+"\x00"+flavor] {
+			key := resourceName + "\x00" + flavor
+			if declared[resourceName] || sourceManagedKeys[key] || teamQuotaKeys[key] {
 				target[resourceName] = admissionOnlyResourceQuota(quota)
 			} else {
 				target[resourceName] = quota
