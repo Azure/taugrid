@@ -40,7 +40,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tau._render import Profile, UnsupportedShape, render_rayjob
+from tau._render import GPU_EXECUTION_RAY, Profile, UnsupportedShape, render_rayjob
 from tau.jupyter import notebook_files, server
 from tau.jupyter.notebook_files import list_candidates
 from tau.jupyter.submit import SubmitError, build_plan
@@ -269,3 +269,54 @@ def test_list_candidates_does_not_re_resolve_the_directory(tmp_path, monkeypatch
     result = list_candidates(directory, "analysis.ipynb")
 
     assert [row["name"] for row in result["files"]] == ["helpers.py"]
+
+
+def _pod(job, role: str):
+    spec = job["spec"]["rayClusterSpec"]
+    if role == "head":
+        return spec["headGroupSpec"]["template"]["spec"]
+    return spec["workerGroupSpecs"][0]["template"]["spec"]
+
+
+def _tolerated_taints(job, role: str):
+    return {
+        (t["key"], t["effect"])
+        for t in _pod(job, role).get("tolerations") or []
+    }
+
+
+def test_gpu_worker_tolerates_the_gpu_node_taints():
+    """A GPU worker must tolerate the taints the CLI Job renderer tolerates.
+
+    TauGrid's GPU ResourceFlavors declare ``sku=gpu:NoSchedule``; a worker pod
+    without the toleration is unschedulable on the default GPU pool.
+    """
+    job = _render(
+        profile=Profile(name="gpu", workers=1, gpus_per_worker=1),
+        gpu_execution=GPU_EXECUTION_RAY,
+    )
+
+    assert {
+        ("sku", "NoSchedule"),
+        ("nvidia.com/gpu", "NoSchedule"),
+    } <= _tolerated_taints(job, "worker")
+
+
+def test_cpu_worker_does_not_tolerate_gpu_taints():
+    """Negative control: a CPU profile must not claim GPU-node tolerance."""
+    job = _render(profile=Profile(name="cpu", workers=1, gpus_per_worker=0))
+
+    assert _tolerated_taints(job, "worker") == set()
+    assert _tolerated_taints(job, "head") == set()
+
+
+def test_gpu_tolerations_are_worker_scoped():
+    """The control-only head is pinned to zero GPUs and takes no GPU toleration."""
+    job = _render(
+        profile=Profile(name="gpu", workers=1, gpus_per_worker=2),
+        gpu_execution=GPU_EXECUTION_RAY,
+    )
+
+    assert _tolerated_taints(job, "worker")
+    assert _tolerated_taints(job, "head") == set()
+

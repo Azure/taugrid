@@ -160,6 +160,11 @@ DSHM_SIZE = "16Gi"
 HEAD_REQUESTS = {"cpu": "2", "memory": "8Gi"}
 HEAD_LIMITS = {"cpu": "4", "memory": "16Gi"}
 
+GPU_TOLERATIONS = (
+    {"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},
+    {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
+)
+
 _SECRET_REF_RE = re.compile(r"^[^\s:]+:[^\s:]+$")
 _RAY_VERSION_RE = re.compile(r"-ray((\d+)\.(\d+)\.\d+)")
 _SUPPORTED_RUNTIME_KEYS = {"pip"}
@@ -301,6 +306,8 @@ def render_rayjob(
             _container("ray-worker", image, _worker_resources(profile), _worker_resources(profile), env_vars)
         ]
     }
+    if profile.gpus_per_worker:
+        worker_pod["tolerations"] = [dict(toleration) for toleration in GPU_TOLERATIONS]
 
     if payload is not None:
         head_pod["initContainers"] = [_payload_init_container(image, payload)]

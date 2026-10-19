@@ -315,7 +315,69 @@ def check_submitter_backoff_pinned(root: Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
-# check 6: dedup identity keeps full wall-time precision
+# check 6: the two Ray pod renderers tolerate the same GPU taints
+# --------------------------------------------------------------------------- #
+
+_PY_RENDERER = "sdk/python/python/tau/_render.py"
+_GO_RENDERER = "cli/internal/jobrender/render.go"
+_GO_GPU_TOLERATION_RE = re.compile(
+    r'"key"\s*:\s*"([^"]+)"[^}]*?"effect"\s*:\s*"(NoSchedule|NoExecute)"'
+)
+_PY_GPU_TOLERATION_RE = re.compile(
+    r'"key"\s*:\s*"([^"]+)"[^}]*?"effect"\s*:\s*"(NoSchedule|NoExecute)"'
+)
+
+
+def check_gpu_tolerations_match_across_renderers(root: Path) -> list[str]:
+    findings: list[str] = []
+    go_path = root / _GO_RENDERER
+    py_path = root / _PY_RENDERER
+    if not go_path.is_file():
+        return [f"[gpu-tolerations] {_GO_RENDERER} is missing; the CLI renderer is the subject of this rule"]
+    if not py_path.is_file():
+        return [f"[gpu-tolerations] {_PY_RENDERER} is missing; the notebook renderer is the subject of this rule"]
+
+    go_text = _read(go_path)
+    go_block = re.search(r"func\s+gpuTolerations\s*\([^)]*\)\s*\[[^\]]*\][^{]*\{([\s\S]*?)\n\}", go_text)
+    if go_block is None:
+        return [
+            f"[gpu-tolerations] {_GO_RENDERER} no longer defines gpuTolerations; "
+            "the reference toleration set cannot be read, so agreement cannot be checked"
+        ]
+    go_taints = {(key, effect) for key, effect in _GO_GPU_TOLERATION_RE.findall(go_block.group(1))}
+    if not go_taints:
+        return [
+            f"[gpu-tolerations] {_GO_RENDERER} gpuTolerations() yields no NoSchedule/NoExecute key; "
+            "the reference set is empty, so this rule has no subject"
+        ]
+
+    py_text = _read(py_path)
+    py_assignments = re.findall(r"worker_pod\[\s*[\"']tolerations[\"']\s*\]\s*=([^\n]*)", py_text)
+    if not py_assignments:
+        return [
+            f"[gpu-tolerations] {_PY_RENDERER} never assigns worker_pod['tolerations']; "
+            "a GPU notebook worker cannot be admitted onto nodes tainted "
+            + ", ".join(sorted(f"{k}={e}" for k, e in go_taints))
+        ]
+
+    py_taints = set(_PY_GPU_TOLERATION_RE.findall(py_text))
+    missing = sorted(go_taints - py_taints)
+    if missing:
+        findings.append(
+            f"[gpu-tolerations] {_PY_RENDERER} omits GPU toleration(s) the CLI renderer sets: "
+            + ", ".join(f"{key}={effect}" for key, effect in missing)
+        )
+
+    if not re.search(r"if\s+profile\.gpus_per_worker\s*:", py_text):
+        findings.append(
+            f"[gpu-tolerations] {_PY_RENDERER} does not gate the worker tolerations on "
+            "profile.gpus_per_worker; a CPU profile would carry a GPU toleration it does not need"
+        )
+    return findings
+
+
+# --------------------------------------------------------------------------- #
+# check 7: dedup identity keeps full wall-time precision
 # --------------------------------------------------------------------------- #
 
 _METRIC_IDENTITY = "core/exptelemetry/metric.go"
@@ -1530,6 +1592,38 @@ def _fixture_submitter_clean(root: Path) -> None:
     )
 
 
+_GO_RENDERER_FIXTURE = (
+    "package jobrender\n\n"
+    "func gpuTolerations(count int) []any {\n"
+    "\tif count <= 0 {\n"
+    "\t\treturn nil\n"
+    "\t}\n"
+    '\treturn []any{map[string]any{"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"}}\n'
+    "}\n"
+)
+
+
+def _fixture_gpu_tolerations_defect(root: Path) -> None:
+    _write(root, _GO_RENDERER, _GO_RENDERER_FIXTURE)
+    _write(
+        root,
+        _PY_RENDERER,
+        "worker_pod: Dict[str, Any] = {}\n",
+    )
+
+
+def _fixture_gpu_tolerations_clean(root: Path) -> None:
+    _write(root, _GO_RENDERER, _GO_RENDERER_FIXTURE)
+    _write(
+        root,
+        _PY_RENDERER,
+        'GPU_TOLERATIONS = ({"key": "sku", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"},)\n'
+        "worker_pod: Dict[str, Any] = {}\n"
+        "if profile.gpus_per_worker:\n"
+        '    worker_pod["tolerations"] = [dict(t) for t in GPU_TOLERATIONS]\n',
+    )
+
+
 def _fixture_identity_defect(root: Path) -> None:
     _write(
         root,
@@ -1949,6 +2043,16 @@ CHECKS: tuple[Check, ...] = (
         check_submitter_backoff_pinned,
         _fixture_submitter_defect,
         _fixture_submitter_clean,
+    ),
+    Check(
+        "gpu-tolerations-match-across-renderers",
+        "6, b",
+        "The notebook RayJob renderer tolerates every GPU NoSchedule taint the CLI Job renderer "
+        "tolerates, on the worker pod and gated on gpusPerWorker. Two renderers emit pods for the "
+        "same tainted node pool; the CLI set is the reference.",
+        check_gpu_tolerations_match_across_renderers,
+        _fixture_gpu_tolerations_defect,
+        _fixture_gpu_tolerations_clean,
     ),
     Check(
         "identity-precision",
