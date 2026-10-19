@@ -106,7 +106,8 @@ func applySelectedWorkloadProfile(
 			return o, fmt.Errorf("resolve workload profile queue binding: %w", err)
 		}
 		workspaceClusterQueue := strings.TrimSpace(o.workspaceClusterQueue)
-		if workspaceQueue == profileQueue {
+		managedWorkspaceClusterQueue := managedWorkspaceClusterQueueName(o.workspace)
+		if workspaceQueue == profileQueue && workspaceClusterQueue != managedWorkspaceClusterQueue {
 			workspaceClusterQueue = strings.TrimSpace(profileClusterQueue)
 		}
 		if workspaceClusterQueue == "" {
@@ -117,7 +118,8 @@ func applySelectedWorkloadProfile(
 				profileQueue,
 			)
 		}
-		if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) {
+		if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) &&
+			(workspaceQueue != profileQueue || workspaceClusterQueue != managedWorkspaceClusterQueue) {
 			return o, fmt.Errorf(
 				"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace %s workload profile %q queue %q bound to ClusterQueue %q",
 				workspaceQueue,
