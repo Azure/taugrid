@@ -35,7 +35,7 @@ Companion: the notebook plugin itself, `notebook-plugin.md`.
 | R12 (4235906856) | The collector path is opt-in and needs a history path, project/experiment identity, durable storage and ADX configuration; the companion plugin emits `{"step":3,"loss":1.25}` but online rows require `_step`/`_timestamp` | §3.2 specifies the submission contract: what enables and mounts the offload sidecar, which identity is resolved and stamped, and the explicit normalizer that rewrites the plugin's conventions into history-shaped rows. §3 D5 no longer claims the loss pane "works with no opt-in" for the collector path. |
 | R13 (4235906860) | "TensorBoard-compatible" overstates the evidence: the cited test only pins Tau card classification for `train/loss`, not run identity, dtype conversion, duplicates, ordering, or non-scalars | §2.4.3 narrows the claim to "scalar events can be normalized into the canonical `MetricEvent` pipeline" and lists the verified rules: finite `float64` values, microsecond timestamps, nonnegative `int64` steps, non-scalars dropped. §2.1 and §2.5 are narrowed to match. |
 | R14 (4236026694) | The notebook read path cannot use the legacy series projection, which does not read the canonical `MetricEvent` rows delivered to ADX | §5.2 replaces the legacy reference with `GET /api/v2/stellar/runs/{run_id}/series`, documents the scoped request and its `points` response, and notes that the legacy route is served `Deprecation: true`. The §5 diagram points at the v2 route. |
-| R15 (this revision) | §2.4.1's identity mapping assumes the logdir yields one directory per trial arm, but nothing establishes that the platform guarantees it. A flattened tree, or several arms writing into one directory, collapses distinct trials onto one `run_group_id`, and the ADX dedup view then merges them into a single series that looks valid | **Decided: the adapter refuses rather than merges.** §2.4.1 now specifies the fail-closed rule and the three conditions under which a read is rejected without projecting rows. The design therefore no longer depends on an unverifiable platform guarantee: it needs no maintainer answer to proceed. §9 Q7 records the decision and §11 item 10 is closed. A submission convention that declares trial-arm multiplicity would let the adapter verify instead of refuse, and is a documentation task, not a blocker. |
+| R15 (this revision and r4279792645) | §2.4.1's identity mapping assumes the logdir yields one directory per trial arm, but nothing establishes that the platform guarantees it. A flattened tree, several arms writing into one directory, or a retained directory from an earlier attempt can collapse distinct trials onto one `run_group_id`, and the ADX dedup view then merges them into a single series that looks valid. A declared arm count is not proof: it can be satisfied by a stale directory while two current arms share another. | **Decided: the adapter refuses unless the current submission supplies an arm-to-directory ownership map.** §2.4.1 now rejects a missing map, a count-only declaration, duplicate ownership, an incomplete map, or a missing mapped directory without projecting rows. §3.2 makes the current-submission map part of the source declaration. The design therefore no longer depends on a platform guarantee or on stale discovery state; a producer that cannot supply the map is refused. §9 Q7 records the decision and §11 item 10 is corrected. |
 
 The original proposal (per-job TensorBoard sidecar + portal proxy) is preserved in
 §10.1 as a documented alternative with its costs. It is **deferred, not
@@ -194,27 +194,30 @@ field that *is* part of the identity — `run_group_id` — and not in a tag.
 
 **Trial separation is enforced by refusal, not by assumption.** The mapping above
 is implementable only where the adapter can *prove* that each trial arm owns a
-distinct directory. Where it cannot, the adapter **refuses the read** instead of
-projecting the rows, because the failure it would otherwise produce — two arms
-merged under one `run_group_id` — is a silently wrong loss curve, indistinguishable
-from a valid one. The adapter refuses when:
+distinct directory in the current submission. Where it cannot, the adapter
+**refuses the read** instead of projecting the rows, because the failure it would
+otherwise produce — two arms merged under one `run_group_id` — is a silently wrong
+loss curve, indistinguishable from a valid one. A declared arm count is not proof:
+two current arms can share one directory while a retained directory from an earlier
+attempt makes discovery find the declared number. The adapter therefore refuses when:
 
 1. the configured `metrics.history` glob resolves event files with **no
    run-relative path segment** below the configured root, so no directory value
    exists to carry `run_group_id`; or
-2. the submission contract (§3.2) declares a trial-arm multiplicity and discovery
-   finds **fewer distinct trial directories** than declared, which means at least
-   two arms wrote into one directory; or
-3. the contract declares **no** multiplicity, so there is nothing for (2) to
-   check against.
+2. the submission contract (§3.2) provides **no current-submission
+   arm-to-directory ownership map**; a count-only declaration is not a map; or
+3. the ownership map is not complete, one-to-one, and observable: every current
+   arm maps to exactly one directory, every mapped directory exists, and no
+   directory is mapped to more than one arm.
 
-Case 3 is a limitation worth stating plainly rather than papering over. TensorBoard
-rotation segments *legitimately* share one directory (§2.4.2), so a directory
-receiving writes from two trial arms is **not** distinguishable from a rotating
-single run by path alone. The adapter therefore cannot detect the multi-writer case
-structurally; it can only refuse when the declaration that would let it check for
-(2) is absent. A documented submission convention that always declares trial
-multiplicity removes the need for case 3 entirely.
+TensorBoard rotation segments *legitimately* share one directory (§2.4.2), so a
+directory receiving writes from two trial arms is **not** distinguishable from a
+rotating single run by path alone. The map removes that ambiguity at the
+submission boundary: directories discovered but absent from the current map are
+treated as retained state from another attempt and are ignored, not counted as
+evidence that a current arm owns them. If the producer cannot supply a complete
+current map, the adapter refuses rather than infer ownership from the directory
+inventory.
 
 Refusal costs runs a permissive adapter would have accepted — including flat,
 single-run layouts that are perfectly unambiguous to a human. That is the intended
@@ -362,11 +365,15 @@ have anything to read; every step is verified against `origin/main`:
    `cli/internal/cli/run_job.go:556-558`) and a writable `storage.output` PVC
    beneath `storage.DurableRoot` (`/data`, `cli/internal/storage/paths.go:12`;
    enforced at `run_job.go:515-521`).
-2. **Declare the source paths.** `metrics.history` must name at least one JSONL
-   path or glob when offload is enabled
+2. **Declare the source paths and trial ownership.** `metrics.history` must name
+   at least one JSONL path or glob when offload is enabled
    (`core/runconfig/config.go:702-704`), and each resolved path must stay under
    the durable root (`run_job.go:563-573`). This is where the adapter's source
-   patterns are declared.
+   patterns are declared. For a multi-arm trial, the same submission must also
+   provide the current-submission arm-to-directory ownership map required by
+   §2.4.1. The map is generated for this run, not inferred from whatever
+   directories happen to exist under the durable root; an arm count alone does
+   not satisfy it.
 3. **Resolve and stamp identity.** With offload enabled the platform requires
    `experiment.project` and `experiment.name`
    (`core/runconfig/config.go:705-712`) and passes `experiment.group` through
@@ -736,8 +743,10 @@ Reported because they affect how a reviewer reads the evidence:
    separation cannot be proven. That settles the question for implementation: it no
    longer blocks, because the design no longer depends on a platform guarantee it
    cannot verify. What remains is a documentation task rather than a blocker: a
-   submission convention that declares trial-arm multiplicity lets the adapter
-   perform check (2) in §2.4.1 instead of falling back to refusal under (3).
+   submission convention must provide a current-submission arm-to-directory
+   ownership map. A declared multiplicity or a directory count is not sufficient,
+   because stale directories can satisfy the count while current arms share one
+   directory.
 
 ---
 
@@ -821,6 +830,7 @@ reviewable.
 10. ~~**Answer §9 Q7** — whether the logdir hierarchy that §2.4.1 depends on is
     guaranteed by the submission convention.~~ **Decided: §2.4.1 now requires the
     adapter to refuse when trial separation cannot be proven, so the design no
-    longer depends on the guarantee.** A submission convention that declares
-    trial-arm multiplicity would let the adapter verify instead of refuse; that is
-    a documentation task, not a blocker.
+    longer depends on the guarantee.** The submission convention must provide a
+    current-submission arm-to-directory ownership map; a trial-arm count alone is
+    insufficient because retained directories can make the count look valid. The
+    map is a documentation task, not a blocker.
