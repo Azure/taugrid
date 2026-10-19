@@ -394,7 +394,10 @@ func preserveUndeclaredWorkspaceResources(
 				continue
 			}
 			key := resourceName + "\x00" + flavor
-			if declared[resourceName] || sourceManagedKeys[key] || teamQuotaKeys[key] {
+			if resourceName == nvidiaGPUResourceName ||
+				declared[resourceName] ||
+				sourceManagedKeys[key] ||
+				teamQuotaKeys[key] {
 				target[resourceName] = admissionOnlyResourceQuota(quota)
 			} else {
 				target[resourceName] = quota

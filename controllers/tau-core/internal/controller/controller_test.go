@@ -4940,13 +4940,21 @@ func TestNewTeamWorkspaceDoesNotInheritUnrequestedTeamGuarantee(t *testing.T) {
 				Resource:     cpuQuota.Resource,
 				NominalQuota: resource.MustParse("64"),
 			},
+			testGPUQuota("taugrid-gpu-h100", "4", "0", "0"),
+			{
+				Flavor:       "taugrid-gpu-h100",
+				Resource:     cpuQuota.Resource,
+				NominalQuota: resource.MustParse("32"),
+			},
 		}, true),
 	}
 	flavor := newQueueObject(resourceFlavorGVK)
 	flavor.SetName("taugrid-gpu-h200")
+	secondaryFlavor := newQueueObject(resourceFlavorGVK)
+	secondaryFlavor.SetName("taugrid-gpu-h100")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(workspace, team, source, flavor).
+		WithObjects(workspace, team, source, flavor, secondaryFlavor).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 
@@ -4963,9 +4971,29 @@ func TestNewTeamWorkspaceDoesNotInheritUnrequestedTeamGuarantee(t *testing.T) {
 	if childGPU.Sign() != 0 {
 		t.Fatalf("unrequested Team GPU quota = %s, want admission-only quota 0", childGPU.String())
 	}
+	secondaryGPU := resource.MustParse(clusterQueueResourceQuota(
+		t,
+		c,
+		managedName,
+		"taugrid-gpu-h100",
+		nvidiaGPUResourceName,
+	))
+	if secondaryGPU.Sign() != 0 {
+		t.Fatalf("unrequested non-Team GPU quota = %s, want admission-only quota 0", secondaryGPU.String())
+	}
+	if got := clusterQueueResourceQuota(t, c, managedName, "taugrid-gpu-h100", string(corev1.ResourceCPU)); got != "0" {
+		t.Fatalf("secondary flavor CPU quota = %q, want admission-only quota 0", got)
+	}
 	managed := newQueueObject(clusterQueueGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: managedName}, managed); err != nil {
 		t.Fatal(err)
+	}
+	var validated kueuev1beta2.ClusterQueue
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(managed.Object, &validated); err != nil {
+		t.Fatal(err)
+	}
+	if validationErrors := kueuewebhooks.ValidateClusterQueue(&validated); len(validationErrors) != 0 {
+		t.Fatalf("managed ClusterQueue failed Kueue validation: %v", validationErrors)
 	}
 	keys, found, err := managedQuotaKeys(managed)
 	if err != nil {
