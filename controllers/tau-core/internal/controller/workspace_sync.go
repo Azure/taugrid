@@ -136,6 +136,26 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			}
 		}
 	}
+	if currentTargetReady && workspace.Spec.TeamRef != nil &&
+		strings.TrimSpace(workspace.Status.Queue.LocalQueue) == "" {
+		recoveredQueueStatus, err := r.workspaceClientQueueStatusForRoute(
+			ctx,
+			workspace,
+			targetNamespace,
+			establishedLocalQueue,
+			queueStatus,
+		)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if recoveredQueueStatus.LocalQueue != queueStatus.LocalQueue {
+			workspace.Status.Queue = recoveredQueueStatus
+			if err := r.Status().Update(ctx, workspace); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
+	}
 	if currentTargetReady {
 		refreshed, activationErr := r.reconcileNamespace(ctx, workspace, targetNamespace, true)
 		if activationErr != nil || !refreshed {
@@ -231,13 +251,18 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatusForRoute(
 	}
 	canonical := workspaceLocalQueueName(workspace)
 	previous := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
+	selectingInitialRoute := previous == ""
 	recovering := false
 	if previous == "" {
 		var stored tauv1alpha1.TauWorkspace
 		if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err != nil {
 			return tauv1alpha1.WorkspaceQueueStatus{}, err
 		}
-		recovering = strings.TrimSpace(stored.Spec.Queue) == ""
+		if storedQueue := strings.TrimSpace(stored.Spec.Queue); storedQueue != "" {
+			previous = storedQueue
+		} else {
+			recovering = true
+		}
 	}
 	if recovering {
 		previous = strings.TrimSpace(workspace.Spec.Queue)
@@ -251,7 +276,7 @@ func (r *TauWorkspaceReconciler) workspaceClientQueueStatusForRoute(
 	localQueue := newQueueObject(localQueueGVK)
 	if err := r.Get(ctx, client.ObjectKey{Name: previous, Namespace: namespace}, localQueue); err != nil {
 		if apierrors.IsNotFound(err) {
-			if recovering {
+			if selectingInitialRoute {
 				return queueStatus, nil
 			}
 			return workspace.Status.Queue, nil

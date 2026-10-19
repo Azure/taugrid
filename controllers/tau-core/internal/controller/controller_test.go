@@ -2636,7 +2636,7 @@ func TestLegacyTeamWorkspacePreservesExistingQueueContract(t *testing.T) {
 	reconciler := newTestWorkspaceReconciler(c)
 	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 6; i++ {
 		if _, err := reconciler.Reconcile(ctx, req); err != nil {
 			t.Fatalf("Reconcile() iteration %d error = %v", i, err)
 		}
@@ -2798,6 +2798,106 @@ func TestTeamWorkspaceRecoversInheritedAliasFromEmptyQueueStatus(t *testing.T) {
 	}
 	if backing, _, _ := unstructured.NestedString(preserved.Object, "spec", "clusterQueue"); backing != external.GetName() {
 		t.Fatalf("cached LocalQueue backing = %q, want %q", backing, external.GetName())
+	}
+}
+
+func TestTeamWorkspacePersistsRecoveredRouteBeforeActivation(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+	workspace.Spec.WorkloadIdentity = nil
+	workspace.Spec.Queue = ""
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseDegraded
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+	cluster := &tauv1alpha1.TauCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: tauv1alpha1.TauClusterSingletonName},
+		Spec: tauv1alpha1.TauClusterSpec{
+			WorkspaceDefaults: tauv1alpha1.TauClusterWorkspaceDefaults{DefaultQueue: "jobqueue"},
+		},
+	}
+	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	alias := testLocalQueue(workspace.Name, "jobqueue", "external-cq")
+	alias.SetAnnotations(nil)
+	external := clusterQueueWithUID("external-cq", "external-cq-uid")
+	external.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")},
+			true,
+		),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	base := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, cluster, team, alias, external, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	statusFailure := errors.New("status update unavailable")
+	failing := &statusUpdateFailingClient{Client: base, updateErr: statusFailure}
+	reconciler := newTestWorkspaceReconciler(failing)
+	resolved := workspace.DeepCopy()
+	resolved.Spec.Queue = "jobqueue"
+
+	_, err := reconciler.syncWorkspace(ctx, resolved)
+	if !errors.Is(err, statusFailure) {
+		t.Fatalf("sync error = %v, want status update failure", err)
+	}
+	var gotNamespace corev1.Namespace
+	if err := base.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if gotNamespace.Labels[labelKueueDefaultLocalQueue] != alias.GetName() {
+		t.Fatalf("namespace route changed before recovered status persisted: %#v", gotNamespace.Labels)
+	}
+	var stored tauv1alpha1.TauWorkspace
+	if err := base.Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status.Queue.LocalQueue != "" {
+		t.Fatalf("failed status update persisted queue %#v", stored.Status.Queue)
+	}
+
+	failing.updateErr = nil
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err := base.Get(ctx, client.ObjectKeyFromObject(workspace), &stored); err != nil {
+		t.Fatal(err)
+	}
+	want := tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      alias.GetName(),
+		ClusterQueue:    external.GetName(),
+		ClusterQueueUID: string(external.GetUID()),
+	}
+	if !reflect.DeepEqual(stored.Status.Queue, want) {
+		t.Fatalf("checkpointed queue status = %#v, want %#v", stored.Status.Queue, want)
+	}
+	if err := base.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if gotNamespace.Labels[labelKueueDefaultLocalQueue] != alias.GetName() {
+		t.Fatalf("namespace activated in route checkpoint reconcile: %#v", gotNamespace.Labels)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := reconciler.Reconcile(ctx, request); err != nil {
+			t.Fatalf("activation reconcile %d: %v", i, err)
+		}
+	}
+	if err := base.Get(ctx, client.ObjectKey{Name: workspace.Name}, &gotNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if gotNamespace.Labels[labelKueueDefaultLocalQueue] != workspaceClusterQueueName(workspace.Name) {
+		t.Fatalf("namespace route = %q, want managed route after checkpoint", gotNamespace.Labels[labelKueueDefaultLocalQueue])
 	}
 }
 
@@ -3119,10 +3219,10 @@ func TestEmptyQuotaTeamWorkspaceRetainsOversizedLocalQueueBacking(t *testing.T) 
 	if got.Status.Phase != tauv1alpha1.WorkspacePhaseReady {
 		t.Fatalf("phase = %q, want Ready on retained external allocation; conditions=%#v", got.Status.Phase, got.Status.Conditions)
 	}
-	if got.Status.Queue.LocalQueue != workspaceLocalQueueName(workspace) ||
+	if got.Status.Queue.LocalQueue != workspace.Spec.Queue ||
 		got.Status.Queue.ClusterQueue != external.GetName() ||
 		got.Status.Queue.ClusterQueueUID != string(external.GetUID()) {
-		t.Fatalf("status.queue = %#v, want managed LocalQueue backed by retained ClusterQueue %#v", got.Status.Queue, external)
+		t.Fatalf("status.queue = %#v, want profile LocalQueue backed by retained ClusterQueue %#v", got.Status.Queue, external)
 	}
 	managed := newQueueObject(clusterQueueGVK)
 	err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed)
@@ -3452,7 +3552,7 @@ func TestTeamWorkspacePreservesManagedAdmissionContractAfterSourceDeletion(t *te
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		if _, err := reconciler.Reconcile(ctx, request); err != nil {
 			t.Fatalf("initial Reconcile() iteration %d error = %v", i, err)
 		}
@@ -3465,8 +3565,9 @@ func TestTeamWorkspacePreservesManagedAdmissionContractAfterSourceDeletion(t *te
 	if err := c.Delete(ctx, source); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reconciler.Reconcile(ctx, request); err != nil {
-		t.Fatal(err)
+	if _, err := reconciler.Reconcile(ctx, request); err == nil ||
+		!strings.Contains(err.Error(), `compatible LocalQueue "legacy-cq" backing ClusterQueue "legacy-cq" is not ready`) {
+		t.Fatalf("missing external compatibility backing did not fail closed: %v", err)
 	}
 	preserved := newQueueObject(clusterQueueGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: managed.GetName()}, preserved); err != nil {
@@ -4471,6 +4572,31 @@ type resourceMutationRecordingClient struct {
 	mutations []string
 }
 
+type statusUpdateFailingClient struct {
+	client.Client
+	updateErr error
+}
+
+func (c *statusUpdateFailingClient) Status() client.SubResourceWriter {
+	return &statusUpdateFailingWriter{SubResourceWriter: c.Client.Status(), client: c}
+}
+
+type statusUpdateFailingWriter struct {
+	client.SubResourceWriter
+	client *statusUpdateFailingClient
+}
+
+func (w *statusUpdateFailingWriter) Update(
+	ctx context.Context,
+	obj client.Object,
+	opts ...client.SubResourceUpdateOption,
+) error {
+	if w.client.updateErr != nil {
+		return w.client.updateErr
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
 type namespaceMutationFailingClient struct {
 	client.Client
 	createErr error
@@ -4635,6 +4761,59 @@ func TestTeamWorkspaceWithoutQueueResolvesTauClusterDefault(t *testing.T) {
 		t.Fatalf("status.queue = %#v, want Team-backed queue", got.Status.Queue)
 	}
 	assertCondition(t, got.Status.Conditions, tauv1alpha1.ConditionQueueReady, metav1.ConditionTrue)
+}
+
+func TestNewTeamWorkspacePublishesProfileCompatibleQueue(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "4", "0", "0")}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	source := testClusterQueue("jobqueue")
+	source.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(
+			[]tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")},
+			true,
+		),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, source, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+
+	reconcileWorkspaceTimes(t, newTestWorkspaceReconciler(c), ctx, workspace.Name, 5)
+
+	var got tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &got); err != nil {
+		t.Fatal(err)
+	}
+	managedName := workspaceClusterQueueName(workspace.Name)
+	if got.Status.Queue.LocalQueue != workspace.Spec.Queue ||
+		got.Status.Queue.ClusterQueue != managedName {
+		t.Fatalf("status.queue = %#v, want profile LocalQueue %q backed by %q", got.Status.Queue, workspace.Spec.Queue, managedName)
+	}
+	alias := newQueueObject(localQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Spec.Queue, Namespace: workspace.Name}, alias); err != nil {
+		t.Fatal(err)
+	}
+	if backing, _, _ := unstructured.NestedString(alias.Object, "spec", "clusterQueue"); backing != managedName {
+		t.Fatalf("profile LocalQueue backing = %q, want managed ClusterQueue %q", backing, managedName)
+	}
+	var namespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: workspace.Name}, &namespace); err != nil {
+		t.Fatal(err)
+	}
+	if namespace.Labels[labelKueueDefaultLocalQueue] != managedName {
+		t.Fatalf("namespace default queue = %q, want managed route %q", namespace.Labels[labelKueueDefaultLocalQueue], managedName)
+	}
 }
 
 func TestEmptyQuotaTeamWorkspaceWithoutQueueRetainsResolvedDefault(t *testing.T) {

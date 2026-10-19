@@ -17,6 +17,7 @@ import (
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -117,6 +118,35 @@ func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *test
 	}
 	if placement.ClusterQueue != "legacy-cq" {
 		t.Fatalf("ClusterQueue = %q, want compatible persisted backing", placement.ClusterQueue)
+	}
+}
+
+func TestRunProfileAcceptsNewTeamWorkspaceClientRoute(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Target.ResolvedNamespace = "alpha"
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "jobqueue",
+		ClusterQueue: "tau-ws-sample",
+	}
+	options, err := applyWorkspaceDefaults(defaultRunDispatchOptions(), workspace, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.engine = "job"
+	options.team = "research"
+	options.lane = "training"
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 1, 1),
+	)
+	if err != nil {
+		t.Fatalf("managed Team Workspace route rejected: %v", err)
+	}
+	if selected.queue != "jobqueue" {
+		t.Fatalf("selected LocalQueue = %q, want profile-compatible jobqueue", selected.queue)
 	}
 }
 
