@@ -21,6 +21,7 @@ import (
 	offloadcontract "github.com/Azure/taugrid/core/metricsoffload"
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Config struct {
@@ -135,6 +136,16 @@ func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
 		return NormalizedRDMA{}
 	}
 	return NormalizedRDMA{Enabled: true}
+}
+
+func ValidateRunName(value string) error {
+	if value == "" {
+		return nil
+	}
+	if problems := validation.IsDNS1123Label(value); len(problems) > 0 {
+		return fmt.Errorf("run name %q must be a valid Kubernetes DNS label: %s", value, strings.Join(problems, "; "))
+	}
+	return nil
 }
 
 const SecurityModeRestricted = "restricted"

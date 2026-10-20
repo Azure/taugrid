@@ -323,6 +323,9 @@ var (
 )
 
 func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
+	if err := runconfig.ValidateRunName(name); err != nil {
+		return nil, err
+	}
 	if len(o.envKV) > 0 || o.keyVault != "" || o.kvTenantID != "" || o.kvClientID != "" {
 		return nil, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct Job/RayJob configs must remove runtime.env_kv or use workflow.file")
 	}

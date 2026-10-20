@@ -12,6 +12,7 @@ import (
 
 	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type FieldStatus string
@@ -30,18 +31,22 @@ type FieldInfo struct {
 	DeprecatedValues []string
 	Default          string
 	Notes            string
+	Pattern          string
+	MaxLength        int
 }
+
+const runNameSchemaPattern = `^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 
 var fieldCatalog = map[string]FieldInfo{
 	"schema_version": {Status: statusReserved, Description: "Reserved for SDK-generated managed workflow manifests; not part of the direct tau run config contract."},
-	"name":           {Status: statusSupported, Description: "Stable run or workload name. When omitted, a positional tau run NAME may provide it."},
+	"name":           {Status: statusSupported, Description: "Stable run or workload name. Must be a Kubernetes DNS label of at most 63 characters. When omitted, a positional tau run NAME may provide it.", Pattern: runNameSchemaPattern, MaxLength: validation.DNS1123LabelMaxLength},
 	"engine":         {Status: statusSupported, Description: "Selects the workload kind when Tau cannot infer it.", Values: []string{"job", "rayjob"}, DeprecatedValues: []string{"ray"}},
 	"entrypoint":     {Status: statusSupported, Description: "Script path for the workload, resolved relative to the config file."},
 	"script":         {Status: statusSupported, Description: "Alias for entrypoint."},
 	"image":          {Status: statusSupported, Description: "Container image override when runtime.image is not set."},
 
 	"run":                            {Status: statusSupported, Description: "Nested aliases for run identity and entrypoint fields."},
-	"run.name":                       {Status: statusSupported, Description: "Nested stable run or workload name."},
+	"run.name":                       {Status: statusSupported, Description: "Nested stable run or workload name. Must be a Kubernetes DNS label of at most 63 characters.", Pattern: runNameSchemaPattern, MaxLength: validation.DNS1123LabelMaxLength},
 	"run.engine":                     {Status: statusSupported, Description: "Nested workload-kind selector.", Values: []string{"job", "rayjob"}, DeprecatedValues: []string{"ray"}},
 	"run.entrypoint":                 {Status: statusSupported, Description: "Nested workload script path, resolved relative to the config file."},
 	"run.script":                     {Status: statusSupported, Description: "Alias for run.entrypoint."},
@@ -326,6 +331,12 @@ func schemaForType(t reflect.Type, path string) map[string]any {
 		}
 		if info.Notes != "" {
 			schema["x-tau-notes"] = info.Notes
+		}
+		if info.Pattern != "" {
+			schema["pattern"] = info.Pattern
+		}
+		if info.MaxLength > 0 {
+			schema["maxLength"] = info.MaxLength
 		}
 	}
 	switch {

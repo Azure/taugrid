@@ -1057,6 +1057,40 @@ compute:
 	}
 }
 
+func TestRunConfigValidateRunName(t *testing.T) {
+	tests := []struct {
+		name    string
+		runName string
+		wantErr bool
+	}{
+		{name: "maximum", runName: strings.Repeat("a", 63)},
+		{name: "over maximum", runName: strings.Repeat("a", 64), wantErr: true},
+		{name: "uppercase", runName: "Fuzz-R2-B2-033", wantErr: true},
+		{name: "leading hyphen", runName: "-fuzz-r2-b2-034", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			config := filepath.Join(dir, "tau.yaml")
+			raw := fmt.Sprintf("name: %s\nengine: job\nentrypoint: train.py\ncompute:\n  gpus: 0\n", tt.runName)
+			if err := os.WriteFile(config, []byte(raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := NewRoot()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"run", "validate", "--config", config})
+			err := cmd.Execute()
+			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "run name")) {
+				t.Fatalf("expected run name error, got %v", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate %q: %v", tt.runName, err)
+			}
+		})
+	}
+}
+
 func TestRunConfigValidateRejectsManagedManifestScope(t *testing.T) {
 	dir := t.TempDir()
 	config := filepath.Join(dir, "tau.yaml")

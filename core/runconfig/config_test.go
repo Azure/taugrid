@@ -55,6 +55,32 @@ func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	}
 }
 
+func TestValidateRunName(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{name: "omitted"},
+		{name: "minimum", value: "a"},
+		{name: "maximum", value: strings.Repeat("a", 63)},
+		{name: "over maximum", value: strings.Repeat("a", 64), wantErr: true},
+		{name: "uppercase", value: "Fuzz-R2-B2-033", wantErr: true},
+		{name: "leading hyphen", value: "-fuzz-r2-b2-034", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRunName(tt.value)
+			if tt.wantErr && err == nil {
+				t.Fatalf("ValidateRunName(%q) succeeded, want error", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateRunName(%q): %v", tt.value, err)
+			}
+		})
+	}
+}
+
 func TestRunTTLSecondsAfterFinished(t *testing.T) {
 	cfg, err := parse([]byte(`name: short-retention
 engine: job
@@ -1009,6 +1035,18 @@ func TestJSONSchemaCoversCoreFields(t *testing.T) {
 	}
 	if !strings.Contains(workingDir["description"].(string), "container.workingDir") {
 		t.Fatalf("runtime.working_dir description does not name the Kubernetes field: %v", workingDir["description"])
+	}
+	for path, name := range map[string]map[string]any{
+		"name":     props["name"].(map[string]any),
+		"run.name": props["run"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any),
+	} {
+		if name["maxLength"] != float64(63) {
+			t.Fatalf("%s maxLength = %v, want 63", path, name["maxLength"])
+		}
+		pattern, ok := name["pattern"].(string)
+		if !ok || pattern == "" {
+			t.Fatalf("%s pattern = %v, want non-empty string", path, name["pattern"])
+		}
 	}
 }
 
