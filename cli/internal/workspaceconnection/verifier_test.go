@@ -110,7 +110,7 @@ func TestKubectlVerifierReportsDefaultedTeamQueue(t *testing.T) {
 		    "phase": "Ready",
 		    "observedGeneration": 7,
 		    "target": {"resolvedNamespace": "sample"},
-		    "queue": {"localQueue": "default-b", "clusterQueue": "tau-ws-sample"}
+		    "queue": {"localQueue": "default-b", "clusterQueue": "default-b"}
 		  }
 		}`,
 		"-n sample get localqueue.kueue.x-k8s.io default-b -o name": "localqueue.kueue.x-k8s.io/default-b\n",

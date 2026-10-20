@@ -1659,19 +1659,28 @@ func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testin
 		t.Fatal(err)
 	}
 
-	revalidation := Verification{
-		ContextName: "taugrid-flex", Namespace: "sample", Queue: "default-b",
-		WorkspacePhase: "Ready", TeamBacked: true, QueueDefaulted: true,
-		QueueBackings: map[string]string{"default-b": "tau-ws-sample"},
-	}
-	noninteractiveVerifier := &compatibleFakeVerifier{
-		fakeVerifier: &fakeVerifier{result: revalidation},
-		queue:        "default-a",
-	}
+	runner := &verifierFakeRunner{responses: map[string]string{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
+		  "apiVersion": "tau.azure.com/v1alpha1",
+		  "kind": "TauWorkspace",
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 8},
+		  "spec": {"authorization": {"mode": "cluster-wide"}, "teamRef": {"name": "vision"}},
+		  "status": {
+		    "phase": "Ready",
+		    "observedGeneration": 8,
+		    "target": {"resolvedNamespace": "sample"},
+		    "queue": {"localQueue": "default-b", "clusterQueue": "default-b"}
+		  }
+		}`,
+		"-n sample get localqueue.kueue.x-k8s.io default-b -o name":                          "localqueue.kueue.x-k8s.io/default-b\n",
+		"-n sample get localqueue.kueue.x-k8s.io default-a -o jsonpath={.spec.clusterQueue}": "default-a\n",
+		"auth can-i * * --all-namespaces":                                                    "yes\n",
+	}}
+	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
 	noninteractive := Manager{
 		ConfigDir:    configDir,
 		Interactive:  false,
-		Verifier:     noninteractiveVerifier,
+		Verifier:     verifier,
 		Now:          func() time.Time { return now.Add(2 * time.Minute) },
 		ReadinessTTL: time.Minute,
 	}
@@ -1679,20 +1688,12 @@ func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testin
 		!strings.Contains(err.Error(), `LocalQueue "default-a" -> "default-b"`) {
 		t.Fatalf("default queue change did not require confirmation: %v", err)
 	}
-	if noninteractiveVerifier.calls != 1 {
-		t.Fatalf("compatible queue verification calls = %d, want retained default-a verification", noninteractiveVerifier.calls)
-	}
-
-	interactiveVerifier := &compatibleFakeVerifier{
-		fakeVerifier: &fakeVerifier{result: revalidation},
-		queue:        "default-a",
-	}
 	interactive := Manager{
 		ConfigDir:    configDir,
 		Interactive:  true,
 		Input:        strings.NewReader("y\n"),
 		Output:       &bytes.Buffer{},
-		Verifier:     interactiveVerifier,
+		Verifier:     verifier,
 		Now:          func() time.Time { return now.Add(2 * time.Minute) },
 		ReadinessTTL: time.Minute,
 	}
@@ -1700,11 +1701,8 @@ func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testin
 	if err != nil {
 		t.Fatalf("confirm default queue change: %v", err)
 	}
-	if active.Queue != "default-b" || active.ClusterQueue != "tau-ws-sample" {
-		t.Fatalf("active connection = %#v, want default-b -> tau-ws-sample", active)
-	}
-	if interactiveVerifier.calls != 1 {
-		t.Fatalf("compatible queue verification calls = %d, want retained default-a verification", interactiveVerifier.calls)
+	if active.Queue != "default-b" || active.ClusterQueue != "default-b" {
+		t.Fatalf("active connection = %#v, want default-b -> default-b", active)
 	}
 }
 

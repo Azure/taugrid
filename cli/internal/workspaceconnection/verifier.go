@@ -103,7 +103,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	queueExplicit := specQueue != "" && specQueue == queue
 	queueDefaulted := workspace.Spec.TeamRef != nil &&
 		specQueue == "" &&
-		queue != clusterQueue
+		queue != "tau-ws-"+descriptor.Workspace
 	var compatibleQueues []string
 	if workspace.Spec.TeamRef != nil {
 		if specQueue != "" && specQueue != queue {
