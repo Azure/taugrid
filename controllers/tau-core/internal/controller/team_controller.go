@@ -513,13 +513,7 @@ func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	if err != nil {
 		return "", nil, nil, "", err
 	}
-	if !found && len(workspace.Spec.Quota) > 0 {
-		managedKeys = map[string]bool{}
-		for _, quota := range workspace.Spec.Quota {
-			managedKeys[quotaKey(quota)] = true
-		}
-	}
-	if managedKeys != nil {
+	if found {
 		for key := range applied {
 			if !managedKeys[key] {
 				delete(applied, key)
@@ -530,7 +524,7 @@ func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	if err != nil {
 		return "", nil, nil, "", err
 	}
-	if managedKeys != nil {
+	if found {
 		for key := range reservations {
 			if !managedKeys[key] {
 				delete(reservations, key)

@@ -5132,6 +5132,79 @@ func TestTeamWorkspaceQuotaRemovalChargesAppliedGuaranteesUntilUpdate(t *testing
 	}
 }
 
+func TestLegacyWorkspaceQueueQuotaRemovalKeepsAppliedReservationsCharged(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	cpuQuota := tauv1alpha1.TauResourceQuota{
+		Flavor:       "taugrid-gpu-h200",
+		Resource:     string(corev1.ResourceCPU),
+		NominalQuota: resource.MustParse("32"),
+	}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{cpuQuota}
+	team := testTeam("vision", "8")
+	team.Spec.Quota = append(team.Spec.Quota, tauv1alpha1.TauResourceQuota{
+		Flavor:       cpuQuota.Flavor,
+		Resource:     cpuQuota.Resource,
+		NominalQuota: resource.MustParse("64"),
+	})
+	queue := desiredWorkspaceClusterQueue(workspace)
+	queue.Object["spec"].(map[string]any)["resourceGroups"] = quotaResourceGroups(
+		[]tauv1alpha1.TauResourceQuota{
+			testGPUQuota("taugrid-gpu-h200", "4", "0", "0"),
+			cpuQuota,
+		},
+		true,
+	)
+	delete(queue.GetAnnotations(), annotationManagedQuotaKeys)
+	if err := unstructured.SetNestedSlice(queue.Object, []any{
+		map[string]any{
+			"name": "taugrid-gpu-h200",
+			"resources": []any{
+				map[string]any{"name": nvidiaGPUResourceName, "total": "2"},
+			},
+		},
+	}, "status", "flavorsReservation"); err != nil {
+		t.Fatal(err)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, queue).
+		Build()
+	reconciler := &TauTeamReconciler{Client: c, APIReader: c}
+
+	_, guarantees, reservations, _, err := reconciler.appliedWorkspaceQueue(ctx, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpuKey := quotaKey(testGPUQuota("taugrid-gpu-h200", "4", "0", "0"))
+	gpuGuarantee := guarantees[gpuKey]
+	gpuReservation := reservations[gpuKey]
+	if gpuGuarantee.Cmp(resource.MustParse("4")) != 0 ||
+		gpuReservation.Cmp(resource.MustParse("2")) != 0 {
+		t.Fatalf(
+			"legacy applied GPU guarantee=%s reservation=%s, want 4 and 2",
+			gpuGuarantee.String(),
+			gpuReservation.String(),
+		)
+	}
+	for i := 0; i < 2; i++ {
+		shared, err := reconciler.sharedTeamQuotaForWorkspace(ctx, team, workspace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		remaining := map[string]resource.Quantity{}
+		for _, quota := range shared {
+			remaining[quotaKey(quota)] = quota.NominalQuota
+		}
+		gpuRemaining := remaining[gpuKey]
+		if gpuRemaining.Cmp(resource.MustParse("4")) != 0 {
+			t.Fatalf("retry %d GPU shared quota = %s, want 4", i, gpuRemaining.String())
+		}
+	}
+}
+
 func TestTeamWorkspaceQuotaClearPreservesChargedResourceContract(t *testing.T) {
 	ctx := context.Background()
 	workspace := testWorkspace("aurora")
