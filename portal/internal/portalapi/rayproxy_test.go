@@ -5,9 +5,13 @@ package portalapi
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/portal/internal/expapi"
 )
 
 type fakeRayReader struct {
@@ -38,6 +42,99 @@ func newRayTestServer(rt http.RoundTripper) *Server {
 			Reader:    fakeRayReader{json: rayHeadSvcJSON},
 			Transport: rt,
 		},
+	}
+}
+
+func newRoutedRayTestServer(t *testing.T, rt http.RoundTripper) *Server {
+	t.Helper()
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Ray: RayOptions{
+			Reader:    fakeRayReader{json: rayHeadSvcJSON},
+			Namespace: "ray",
+			Transport: rt,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return server
+}
+
+func TestRayAPIRoutesRemainUnscopedAndScoped(t *testing.T) {
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/api/authenticate"},
+		{method: http.MethodGet, path: "/api/authentication_mode"},
+		{method: http.MethodGet, path: "/api/cluster_status"},
+		{method: http.MethodGet, path: "/api/grafana_health"},
+		{method: http.MethodGet, path: "/api/jobs/"},
+		{method: http.MethodGet, path: "/api/jobs/job-id"},
+		{method: http.MethodGet, path: "/api/prometheus_health"},
+		{method: http.MethodGet, path: "/api/serve/applications/"},
+		{method: http.MethodGet, path: "/api/v0/cluster_metadata"},
+		{method: http.MethodGet, path: "/api/v0/logs"},
+		{method: http.MethodGet, path: "/api/v0/logs/file"},
+		{method: http.MethodGet, path: "/api/v0/placement_groups"},
+		{method: http.MethodGet, path: "/api/v0/platform_events"},
+		{method: http.MethodGet, path: "/api/v0/tasks"},
+		{method: http.MethodGet, path: "/api/v0/tasks/summarize"},
+		{method: http.MethodGet, path: "/api/v0/tasks/timeline"},
+	}
+
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			var upstreamPath string
+			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				upstreamPath = r.URL.Path
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{}`)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			})
+			server := newRoutedRayTestServer(t, rt)
+
+			unscoped := httptest.NewRecorder()
+			server.Handler().ServeHTTP(unscoped, httptest.NewRequest(route.method, route.path, nil))
+			if unscoped.Code != http.StatusBadRequest {
+				t.Fatalf("unscoped status = %d, want 400; body = %s", unscoped.Code, unscoped.Body.String())
+			}
+			if !strings.Contains(unscoped.Body.String(), "ambiguous Ray request") {
+				t.Fatalf("unscoped body = %q, want ambiguous Ray request", unscoped.Body.String())
+			}
+
+			scopedPath := rayProxyPrefix + "ray/alpha" + route.path
+			scoped := httptest.NewRecorder()
+			server.Handler().ServeHTTP(scoped, httptest.NewRequest(route.method, scopedPath, nil))
+			if scoped.Code != http.StatusOK {
+				t.Fatalf("scoped status = %d, want 200; body = %s", scoped.Code, scoped.Body.String())
+			}
+			if upstreamPath != route.path {
+				t.Fatalf("upstream path = %q, want %q", upstreamPath, route.path)
+			}
+		})
+	}
+}
+
+func TestRayProfilingRouteRemainsAvailableUnscopedAndScoped(t *testing.T) {
+	server := newRoutedRayTestServer(t, nil)
+	for _, path := range []string{
+		"/api/profiling_enabled",
+		rayProxyPrefix + "ray/alpha/api/profiling_enabled",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+				t.Fatalf("Content-Type = %q, want application/json; charset=utf-8", got)
+			}
+		})
 	}
 }
 

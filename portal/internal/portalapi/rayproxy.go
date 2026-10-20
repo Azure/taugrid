@@ -23,7 +23,6 @@ const rayWorkspaceProxyPrefix = "/api/portal/ray/workspaces/"
 const rayDashboardPort = "8265"
 
 var rayUnscopedPrefixes = []string{
-	"/api/",
 	"/static/",
 	"/nodes",
 	"/logical/",

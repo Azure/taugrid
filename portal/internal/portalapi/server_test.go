@@ -94,6 +94,34 @@ func TestPortalPathSPAFallbackAndMissingAsset(t *testing.T) {
 	}
 }
 
+func TestUnknownAPIRoutesReturnJSONNotFound(t *testing.T) {
+	server := newTestServer(t)
+	for _, path := range []string{
+		"/api/portal/not-a-real-board?workspace=alpha",
+		"/api/portal/not-a-real-board/nested?workspace=alpha",
+		"/api/not-a-ray-route",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404; body = %s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+				t.Fatalf("Content-Type = %q, want application/json; charset=utf-8", got)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v; body = %s", err, rec.Body.String())
+			}
+			if body["error"] != "not found" {
+				t.Fatalf("error = %q, want not found", body["error"])
+			}
+		})
+	}
+}
+
 func TestOverviewListsBoards(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/portal/overview", nil)
