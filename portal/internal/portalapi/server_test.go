@@ -1143,7 +1143,7 @@ func TestRayHistoryPinsSingleWorkspaceDurableScope(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?workspace=other-workspace&namespace=other-namespace&cluster=other-cluster", nil))
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/ray/history/uid-1?workspace=taugrid-default&namespace=other-namespace&cluster=other-cluster", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}

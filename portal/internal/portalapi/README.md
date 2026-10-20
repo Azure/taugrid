@@ -99,8 +99,9 @@ Without `--workspace-directory`, the Portal serves one workspace derived from
 the `--workspace` CLI flag, defaulting to `default` when it is unset. Directory mode intentionally
 does not load remote kubeconfigs or infer viewer access from the shared Portal
 ServiceAccount. Local expstore and `source=auto` remain single-store tools rather
-than multi-tenant boundaries; managed workspace experiment views force
-`source=kusto`.
+than multi-tenant boundaries. An explicit `workspace` query in fixed mode must
+match the configured workspace; conflicts fail with HTTP 403 before any board
+data source is read. Managed workspace experiment views force `source=kusto`.
 
 ## Navigation and board APIs
 
