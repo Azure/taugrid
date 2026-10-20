@@ -61,7 +61,7 @@ stellar:
     idempotencyKey: tau-stellar-expstore-init
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: "0.4.4"
+    tag: "0.4.5"
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   deploymentAnnotations: {}
@@ -136,7 +136,7 @@ lifecycleRecorder:
     resourceName: taugrid-lifecycle-schema
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/tau
-    tag: "0.4.4"
+    tag: "0.4.5"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
@@ -245,7 +245,7 @@ portal:
     create: false
   image:
     repository: mcr.microsoft.com/aks/ai-runtime/taugrid-portal
-    tag: "0.4.4"
+    tag: "0.4.5"
     digest: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
