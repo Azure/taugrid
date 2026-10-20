@@ -178,6 +178,7 @@ portal:
   store: ""
   cluster: ""
   workspace: taugrid-default
+  localQueue: ""
   workspaceDirectory:
     enabled: false
     # Allow browser workspace switching without per-user identity only for

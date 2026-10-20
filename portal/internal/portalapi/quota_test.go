@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/Azure/taugrid/portal/internal/expapi"
 )
 
 type quotaReader struct {
@@ -72,6 +74,33 @@ func TestQuotaEndpointUsesResolvedWorkspaceScope(t *testing.T) {
 	}
 	if body.Scope.WorkspaceID != "vision" || body.Workspace.Name != "tau-ws-vision" {
 		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestQuotaEndpointUsesConfiguredSingleWorkspaceLocalQueue(t *testing.T) {
+	reader := &quotaReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto"},
+		Runs:    RunsOptions{Namespace: "tau-default", LocalQueue: "jobqueue"},
+		Quota:   QuotaOptions{Reader: reader},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/portal/quota", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if reader.localNamespace != "tau-default" || reader.localQueueName != "jobqueue" ||
+		reader.clusterQueueName != "tau-cq" {
+		t.Fatalf(
+			"reads = LocalQueue %q/%q, ClusterQueue %q",
+			reader.localNamespace,
+			reader.localQueueName,
+			reader.clusterQueueName,
+		)
 	}
 }
 

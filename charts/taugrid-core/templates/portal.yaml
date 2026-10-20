@@ -294,6 +294,10 @@ spec:
             - {{ $source | quote }}
             - --workspace
             - {{ default "default" $portal.workspace | quote }}
+            {{- with $portal.localQueue }}
+            - --local-queue
+            - {{ . | quote }}
+            {{- end }}
             {{- with $portal.store }}
             - --store
             - {{ . | quote }}
