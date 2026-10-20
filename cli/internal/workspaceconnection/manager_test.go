@@ -1676,7 +1676,7 @@ func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testin
 		"-n sample get localqueue.kueue.x-k8s.io default-a -o jsonpath={.spec.clusterQueue}": "default-a\n",
 		"auth can-i * * --all-namespaces":                                                    "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 	noninteractive := Manager{
 		ConfigDir:    configDir,
 		Interactive:  false,
