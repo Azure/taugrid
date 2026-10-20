@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -15,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -81,7 +84,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 		return nil
 	}
 	var namespace corev1.Namespace
-	if err := r.Get(ctx, client.ObjectKey{Name: namespaceName}, &namespace); err != nil {
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: namespaceName}, &namespace); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -91,6 +94,13 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 		namespace.Annotations[annotationOwnerUID] != string(workspace.UID) ||
 		workspace.UID == "" {
 		return nil
+	}
+	inUse, message, err := r.namespaceRoutingMetadataInUse(ctx, workspace, &namespace)
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return errors.New(message)
 	}
 	for _, key := range []string{
 		labelManagedBy,
@@ -106,6 +116,118 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 		delete(namespace.Annotations, annotationOwnerUID)
 	}
 	return r.Update(ctx, &namespace)
+}
+
+func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+) (bool, string, error) {
+	establishedLocalQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
+	if establishedLocalQueue == "" {
+		return false, "", nil
+	}
+	workloads := &unstructured.UnstructuredList{}
+	workloads.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: workloadGVK.Group, Version: workloadGVK.Version, Kind: workloadGVK.Kind + "List",
+	})
+	if err := r.apiReader().List(ctx, workloads, client.InNamespace(namespace.Name)); err != nil {
+		return false, "", fmt.Errorf("list Workloads in namespace %q before routing metadata cleanup: %w", namespace.Name, err)
+	}
+	cleanedLabels := make(map[string]string, len(namespace.Labels))
+	for key, value := range namespace.Labels {
+		cleanedLabels[key] = value
+	}
+	for _, key := range []string{
+		labelManagedBy,
+		labelTeam,
+		labelWorkspace,
+		labelWorkspaceLocalQueue,
+		labelKueueDefaultLocalQueue,
+	} {
+		delete(cleanedLabels, key)
+	}
+	for i := range workloads.Items {
+		workload := &workloads.Items[i]
+		if workloadFinished(workload) {
+			continue
+		}
+		queueName, found, err := unstructured.NestedString(workload.Object, "spec", "queueName")
+		if err != nil {
+			return false, "", fmt.Errorf("read Workload %s queueName: %w", client.ObjectKeyFromObject(workload), err)
+		}
+		if !found || strings.TrimSpace(queueName) != establishedLocalQueue {
+			continue
+		}
+		localQueue := newQueueObject(localQueueGVK)
+		localQueueKey := client.ObjectKey{Name: establishedLocalQueue, Namespace: namespace.Name}
+		if err := r.apiReader().Get(ctx, localQueueKey, localQueue); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, "", fmt.Errorf("read LocalQueue %s before routing metadata cleanup: %w", localQueueKey, err)
+		}
+		clusterQueueName, found, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+		if err != nil {
+			return false, "", fmt.Errorf("read LocalQueue %s backing ClusterQueue: %w", localQueueKey, err)
+		}
+		if !found || strings.TrimSpace(clusterQueueName) == "" {
+			return false, "", fmt.Errorf("LocalQueue %s has no backing ClusterQueue", localQueueKey)
+		}
+		admittedClusterQueue, admitted, err := unstructured.NestedString(workload.Object, "status", "admission", "clusterQueue")
+		if err != nil {
+			return false, "", fmt.Errorf("read Workload %s admitted ClusterQueue: %w", client.ObjectKeyFromObject(workload), err)
+		}
+		if admitted && strings.TrimSpace(admittedClusterQueue) != "" {
+			clusterQueueName = admittedClusterQueue
+		}
+		clusterQueue := newQueueObject(clusterQueueGVK)
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
+			return false, "", fmt.Errorf("read ClusterQueue %s before routing metadata cleanup: %w", clusterQueueName, err)
+		}
+		if expectedUID := strings.TrimSpace(workspace.Status.Queue.ClusterQueueUID); expectedUID != "" &&
+			clusterQueueName == strings.TrimSpace(workspace.Status.Queue.ClusterQueue) &&
+			string(clusterQueue.GetUID()) != expectedUID {
+			return false, "", fmt.Errorf(
+				"ClusterQueue %q UID changed from %q to %q before routing metadata cleanup",
+				clusterQueueName,
+				expectedUID,
+				clusterQueue.GetUID(),
+			)
+		}
+		selectorMap, found, err := unstructured.NestedMap(clusterQueue.Object, "spec", "namespaceSelector")
+		if err != nil {
+			return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+		}
+		labelSelector := metav1.LabelSelector{}
+		if found {
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &labelSelector); err != nil {
+				return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+			}
+		}
+		selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
+		if err != nil {
+			return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+		}
+		if !selector.Matches(labels.Set(namespace.Labels)) {
+			return false, "", fmt.Errorf(
+				"ClusterQueue %q namespaceSelector does not match namespace %q for unfinished Workload %s",
+				clusterQueueName,
+				namespace.Name,
+				client.ObjectKeyFromObject(workload),
+			)
+		}
+		if selector.Matches(labels.Set(cleanedLabels)) {
+			continue
+		}
+		return true, fmt.Sprintf(
+			"waiting for Workload %s using retained LocalQueue %q and ClusterQueue %q before removing namespace routing metadata",
+			client.ObjectKeyFromObject(workload),
+			establishedLocalQueue,
+			clusterQueueName,
+		), nil
+	}
+	return false, "", nil
 }
 
 func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
