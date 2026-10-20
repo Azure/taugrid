@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/Azure/taugrid/cli/internal/reposcaffold"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/kube"
 	"github.com/Azure/taugrid/core/version"
 )
@@ -79,6 +81,20 @@ func newWorkspaceInitRepoCmd() *cobra.Command {
 }
 
 func newRepoScaffoldCmd(use, short, invocation string) *cobra.Command {
+	return newRepoScaffoldCmdWithCredentials(
+		use,
+		short,
+		invocation,
+		func(cmd *cobra.Command) workspaceconnection.CredentialProvider {
+			return defaultRunConnectionManager(cmd).Credentials
+		},
+	)
+}
+
+func newRepoScaffoldCmdWithCredentials(
+	use, short, invocation string,
+	credentials func(*cobra.Command) workspaceconnection.CredentialProvider,
+) *cobra.Command {
 	var opts reposcaffold.Options
 	cmd := &cobra.Command{
 		Use:   use,
@@ -102,7 +118,7 @@ credentials automatically.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
-			if err := resolveRepoScaffoldAuthorization(cmd, &opts); err != nil {
+			if err := resolveRepoScaffoldAuthorization(cmd, &opts, credentials(cmd)); err != nil {
 				return err
 			}
 			result, err := reposcaffold.Render(opts)
@@ -158,7 +174,11 @@ credentials automatically.`,
 	return cmd
 }
 
-func resolveRepoScaffoldAuthorization(cmd *cobra.Command, opts *reposcaffold.Options) error {
+func resolveRepoScaffoldAuthorization(
+	cmd *cobra.Command,
+	opts *reposcaffold.Options,
+	credentials workspaceconnection.CredentialProvider,
+) error {
 	if strings.TrimSpace(opts.AuthorizationMode) != "" {
 		return nil
 	}
@@ -178,7 +198,20 @@ func resolveRepoScaffoldAuthorization(cmd *cobra.Command, opts *reposcaffold.Opt
 	if systemNamespace == "" {
 		systemNamespace = defaultSystemNamespace()
 	}
-	workspace, err := fetchWorkspace(cmd, kubeContext, systemNamespace, workspaceName)
+	var workspace tauworkspace.Workspace
+	var err error
+	if strings.TrimSpace(opts.AzureSubscriptionID) == "" {
+		workspace, err = fetchWorkspace(cmd, kubeContext, systemNamespace, workspaceName)
+	} else {
+		workspace, err = fetchRepoScaffoldAKSWorkspace(
+			cmd,
+			opts,
+			kubeContext,
+			systemNamespace,
+			workspaceName,
+			credentials,
+		)
+	}
 	if err != nil {
 		return fmt.Errorf(
 			"resolve authorization for TauWorkspace %q: %w; for offline generation, pass --authorization-mode",
@@ -197,6 +230,58 @@ func resolveRepoScaffoldAuthorization(cmd *cobra.Command, opts *reposcaffold.Opt
 		}
 	}
 	return nil
+}
+
+func fetchRepoScaffoldAKSWorkspace(
+	cmd *cobra.Command,
+	opts *reposcaffold.Options,
+	kubeContext, systemNamespace, workspaceName string,
+	credentials workspaceconnection.CredentialProvider,
+) (tauworkspace.Workspace, error) {
+	if credentials == nil {
+		return tauworkspace.Workspace{}, fmt.Errorf("workspace connection credential provider is not configured")
+	}
+	descriptor := workspaceconnection.Descriptor{
+		Cluster: workspaceconnection.ClusterDescriptor{
+			ContextName:     kubeContext,
+			SystemNamespace: systemNamespace,
+		},
+		Access: workspaceconnection.AccessDescriptor{
+			Method: workspaceconnection.AccessMethodAKS,
+			AKS: &workspaceconnection.AKSAccessDescriptor{
+				ResourceID: fmt.Sprintf(
+					"/subscriptions/%s/resourceGroups/%s/providers/Microsoft.ContainerService/managedClusters/%s",
+					strings.TrimSpace(opts.AzureSubscriptionID),
+					strings.TrimSpace(opts.AKSResourceGroup),
+					strings.TrimSpace(opts.AKSCluster),
+				),
+				TenantID: strings.TrimSpace(opts.AzureTenantID),
+			},
+		},
+		Authorization: workspaceconnection.AuthorizationDescriptor{
+			Mode: workspaceconnection.AuthorizationModeClusterWide,
+		},
+	}
+	raw, err := credentials.UserKubeconfig(cmd.Context(), descriptor)
+	if err != nil {
+		return tauworkspace.Workspace{}, fmt.Errorf("acquire AKS credentials: %w", err)
+	}
+	file, err := os.CreateTemp("", "tau-repo-scaffold-kubeconfig-*")
+	if err != nil {
+		return tauworkspace.Workspace{}, fmt.Errorf("create temporary AKS kubeconfig: %w", err)
+	}
+	path := file.Name()
+	defer func() {
+		_ = os.Remove(path)
+	}()
+	if _, err := file.Write(raw); err != nil {
+		_ = file.Close()
+		return tauworkspace.Workspace{}, fmt.Errorf("write temporary AKS kubeconfig: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return tauworkspace.Workspace{}, fmt.Errorf("close temporary AKS kubeconfig: %w", err)
+	}
+	return fetchWorkspaceWithKubeconfig(cmd, kubeContext, path, systemNamespace, workspaceName)
 }
 
 func newWorkspaceListCmd() *cobra.Command {
@@ -475,7 +560,14 @@ owner reviews and applies the request out of band.`,
 }
 
 func fetchWorkspace(cmd *cobra.Command, kubeContext, namespace, name string) (tauworkspace.Workspace, error) {
-	r := kube.New(kubeContext)
+	return fetchWorkspaceWithKubeconfig(cmd, kubeContext, "", namespace, name)
+}
+
+func fetchWorkspaceWithKubeconfig(
+	cmd *cobra.Command,
+	kubeContext, kubeconfigPath, namespace, name string,
+) (tauworkspace.Workspace, error) {
+	r := kube.NewWithKubeconfig(kubeContext, kubeconfigPath)
 	raw, err := r.Raw(cmd.Context(), []string{"-n", namespace, "get", "workspaces.tau.azure.com", name, "-o", "json"}, nil)
 	if err != nil {
 		return tauworkspace.Workspace{}, describeWorkspaceLookupError(err, kubeContext)
