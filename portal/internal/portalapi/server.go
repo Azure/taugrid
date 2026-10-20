@@ -91,6 +91,7 @@ type NodesOptions struct {
 type RunsOptions struct {
 	Reader       runs.Reader
 	Namespace    string
+	LocalQueue   string
 	History      runs.HistoryReader
 	HistoryTable string
 	HistoryLimit int
@@ -193,6 +194,7 @@ func NewServer(opts Options) (*Server, error) {
 			Name:              singleWorkspace,
 			Cluster:           singleWorkspaceCluster,
 			Namespace:         firstNonEmpty(opts.Runs.Namespace, opts.Ray.Namespace),
+			LocalQueue:        strings.TrimSpace(opts.Runs.LocalQueue),
 			Source:            opts.Stellar.Source,
 			AuthorizationMode: workspaceAuthorizationClusterWide,
 			ExperimentsURL:    "/stellar",
