@@ -1257,9 +1257,14 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	now := metav1.Now()
 	workspace.Finalizers = []string{workspaceFinalizer}
 	workspace.DeletionTimestamp = &now
+	workspace.Spec.Target.Namespace = "new-aurora"
 	workspace.Status.Target.ResolvedNamespace = "aurora"
 	targetNamespace := testNamespace("aurora")
-	targetNamespace.Labels = map[string]string{labelWorkspace: "aurora"}
+	targetNamespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	targetNamespace.Labels[labelTeam] = "vision"
+	targetNamespace.Labels["preserved"] = "true"
+	targetNamespace.Annotations[annotationResultScope] = workspace.Spec.Defaults.OutputRoot
+	targetNamespace.Annotations["preserved"] = "true"
 	targetRole := testRole("aurora", defaultRoleName, "aurora")
 	targetBinding := testRoleBinding("aurora", defaultRoleName, "aurora")
 	targetServiceAccount := testServiceAccount("aurora", "tau-workload", "aurora")
@@ -1298,6 +1303,35 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Name: "aurora"}, targetNamespace); err != nil {
 		t.Fatalf("target namespace was deleted: %v", err)
 	}
+	for _, key := range []string{
+		labelManagedBy,
+		labelTeam,
+		labelWorkspace,
+		labelWorkspaceLocalQueue,
+		labelKueueDefaultLocalQueue,
+	} {
+		if _, ok := targetNamespace.Labels[key]; ok {
+			t.Fatalf("target namespace retained workspace label %q: %#v", key, targetNamespace.Labels)
+		}
+	}
+	for _, key := range []string{annotationOwnerUID, annotationResultScope} {
+		if _, ok := targetNamespace.Annotations[key]; ok {
+			t.Fatalf("target namespace retained workspace annotation %q: %#v", key, targetNamespace.Annotations)
+		}
+	}
+	for key, want := range map[string]string{
+		labelPSAEnforce: "baseline",
+		labelPSAAudit:   "restricted",
+		labelPSAWarn:    "restricted",
+		"preserved":     "true",
+	} {
+		if got := targetNamespace.Labels[key]; got != want {
+			t.Fatalf("target namespace label %q = %q, want %q", key, got, want)
+		}
+	}
+	if got := targetNamespace.Annotations["preserved"]; got != "true" {
+		t.Fatalf("target namespace preserved annotation = %q, want true", got)
+	}
 	if err := c.Get(ctx, client.ObjectKey{Name: clusterQueueReaderBindingName("aurora")}, &rbacv1.ClusterRoleBinding{}); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected ClusterQueue reader ClusterRoleBinding deleted, got err=%v", err)
 	}
@@ -1305,6 +1339,59 @@ func TestWorkspaceDeleteCleansWorkspaceAccess(t *testing.T) {
 	deletedLocalQueue.SetGroupVersionKind(localQueueGVK)
 	if err := c.Get(ctx, client.ObjectKey{Name: "aurora", Namespace: "aurora"}, deletedLocalQueue); !apierrors.IsNotFound(err) {
 		t.Fatalf("expected controller-owned LocalQueue deleted, got err=%v", err)
+	}
+}
+
+func TestWorkspaceDeletePreservesNamespaceMetadataForDifferentOwnerUID(t *testing.T) {
+	ctx := context.Background()
+	scheme := testScheme(t)
+	workspace := testWorkspace("aurora")
+	now := metav1.Now()
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.DeletionTimestamp = &now
+	workspace.Status.Target.ResolvedNamespace = "aurora"
+	targetNamespace := testNamespace("aurora")
+	targetNamespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	targetNamespace.Labels[labelTeam] = "vision"
+	targetNamespace.Labels["preserved"] = "true"
+	targetNamespace.Annotations[annotationOwnerUID] = "different-workspace-uid"
+	targetNamespace.Annotations[annotationResultScope] = workspace.Spec.Defaults.OutputRoot
+	targetNamespace.Annotations["preserved"] = "true"
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(workspace, targetNamespace).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+
+	if _, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "aurora", Namespace: tauv1alpha1.SystemNamespace}}); err != nil {
+		t.Fatalf("Reconcile delete error = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKey{Name: "aurora"}, targetNamespace); err != nil {
+		t.Fatalf("target namespace was deleted: %v", err)
+	}
+	for key, want := range map[string]string{
+		labelManagedBy:              labelManagedByValue,
+		labelTeam:                   "vision",
+		labelWorkspace:              workspace.Name,
+		labelWorkspaceLocalQueue:    workspace.Spec.Queue,
+		labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+		labelPSAEnforce:             "baseline",
+		labelPSAAudit:               "restricted",
+		labelPSAWarn:                "restricted",
+		"preserved":                 "true",
+	} {
+		if got := targetNamespace.Labels[key]; got != want {
+			t.Fatalf("target namespace label %q = %q, want %q", key, got, want)
+		}
+	}
+	for key, want := range map[string]string{
+		annotationOwnerUID:    "different-workspace-uid",
+		annotationResultScope: workspace.Spec.Defaults.OutputRoot,
+		"preserved":           "true",
+	} {
+		if got := targetNamespace.Annotations[key]; got != want {
+			t.Fatalf("target namespace annotation %q = %q, want %q", key, got, want)
+		}
 	}
 }
 

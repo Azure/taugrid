@@ -121,7 +121,14 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	if err := r.cleanupWorkspaceClusterQueue(ctx, workspace); err != nil {
 		return err
 	}
-	return r.cleanupSystemReaderRBAC(ctx, workspace)
+	if err := r.cleanupSystemReaderRBAC(ctx, workspace); err != nil {
+		return err
+	}
+	targetNamespace := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace)
+	if targetNamespace == "" {
+		targetNamespace = resolvedNamespace(workspace)
+	}
+	return r.cleanupStaleNamespaceMetadata(ctx, workspace, targetNamespace)
 }
 
 func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
