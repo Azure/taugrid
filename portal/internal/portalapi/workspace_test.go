@@ -5,6 +5,7 @@ package portalapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -247,6 +248,69 @@ func TestWorkspaceDirectoryRequiresAuthenticatedViewer(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDirectoryAllowsExplicitPublicClusterWideScopes(t *testing.T) {
+	dir, err := NewWorkspaceDirectory(WorkspaceDirectoryConfig{
+		LocalCluster:                    "cluster-a",
+		AllowUnauthenticatedClusterWide: true,
+		Workspaces: []WorkspaceRecord{
+			{
+				ID: "public", Name: "Public", Cluster: "cluster-a", Namespace: "public",
+				LocalQueue: "jobqueue", Source: "kubernetes", Default: true,
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationClusterWide},
+			},
+			{
+				ID: "private", Name: "Private", Cluster: "cluster-a", Namespace: "private",
+				LocalQueue: "jobqueue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC, Groups: []string{"private-team"}},
+			},
+			{
+				ID: "restricted-cluster-wide", Name: "Restricted", Cluster: "cluster-a", Namespace: "restricted",
+				LocalQueue: "jobqueue", Source: "kubernetes",
+				Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationClusterWide, Groups: []string{"operators"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewWorkspaceDirectory: %v", err)
+	}
+
+	scopes := dir.List(context.Background(), Viewer{})
+	if len(scopes) != 1 || scopes[0].WorkspaceID != "public" {
+		t.Fatalf("anonymous directory listing = %+v, want only public", scopes)
+	}
+	selected, err := dir.Resolve(context.Background(), Viewer{}, "")
+	if err != nil {
+		t.Fatalf("resolve public default: %v", err)
+	}
+	if selected.WorkspaceID != "public" {
+		t.Fatalf("resolved workspace = %q, want public", selected.WorkspaceID)
+	}
+	if _, err := dir.Resolve(context.Background(), Viewer{}, "private"); !errors.Is(err, errViewerUnauthenticated) {
+		t.Fatalf("anonymous private resolve error = %v, want unauthenticated", err)
+	}
+	if _, err := dir.Resolve(context.Background(), Viewer{Groups: []string{"operators"}}, "restricted-cluster-wide"); !errors.Is(err, errViewerUnauthenticated) {
+		t.Fatalf("group-only cluster-wide resolve error = %v, want unauthenticated", err)
+	}
+
+	server := &Server{
+		workspaceDirectory: dir,
+		identity:           normalizeIdentityOptions(IdentityOptions{}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/portal/workspaces?workspace=public", nil)
+	rec := httptest.NewRecorder()
+	server.handleWorkspaces(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("workspace directory status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response workspaceDirectoryResponse
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode workspace directory response: %v", err)
+	}
+	if response.Selected == nil || response.Selected.WorkspaceID != "public" || len(response.Workspaces) != 1 {
+		t.Fatalf("workspace directory response = %+v", response)
+	}
+}
+
 func TestWorkspaceDirectoryValidation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -307,6 +371,12 @@ func TestWorkspaceDirectoryValidation(t *testing.T) {
 			name: "explicit authorization required",
 			cfg: WorkspaceDirectoryConfig{LocalCluster: "c", Workspaces: []WorkspaceRecord{
 				{ID: "w", Cluster: "c", Namespace: "n", Source: "kubernetes", Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationClusterWide}},
+			}},
+		},
+		{
+			name: "public mode does not expose workspace rbac",
+			cfg: WorkspaceDirectoryConfig{LocalCluster: "c", AllowUnauthenticatedClusterWide: true, Workspaces: []WorkspaceRecord{
+				{ID: "w", Cluster: "c", Namespace: "n", Source: "kubernetes", Authorization: WorkspaceAuthorization{Mode: workspaceAuthorizationRBAC}},
 			}},
 		},
 	}
