@@ -129,6 +129,12 @@ smoke_file="$(find_first tau-native-smoke-result.json)"
   echo "## Published image contract"
   echo
   if [[ -n "$image_file" ]]; then
+    image_mode="$(jq -r '.mode // "nightly"' "$image_file")"
+    printf -- '- Mode: `%s`\n' "$(markdown_cell "$image_mode")"
+    if [[ "$image_mode" == "release" ]]; then
+      printf -- '- Release version: `%s`\n' \
+        "$(markdown_cell "$(jq -r '.release_version // .tag // "unknown"' "$image_file")")"
+    fi
     printf -- '- Source commit: `%s`\n' \
       "$(markdown_cell "$(jq -r '.source_version // "unknown"' "$image_file")")"
     printf -- '- Immutable tag: `%s`\n' \

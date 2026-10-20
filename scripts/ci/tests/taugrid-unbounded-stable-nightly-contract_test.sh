@@ -7,6 +7,9 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly PIPELINE="${REPO_ROOT}/.pipelines/taugrid-unbounded-stable-nightly.yml"
+readonly CONTROLLER_MAKEFILE="${REPO_ROOT}/images/tau-core-controller/Makefile"
+readonly PORTAL_MAKEFILE="${REPO_ROOT}/images/taugrid-portal/Makefile"
+readonly COLLECTOR_MAKEFILE="${REPO_ROOT}/images/gpu-metrics-collector/Makefile"
 readonly REPORTER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-report.sh"
 readonly RECOVER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-recover.sh"
 readonly SMOKE="${REPO_ROOT}/tests/e2e/cmd/taugrid-nightly-smoke/runner.go"
@@ -19,6 +22,9 @@ fail() {
 }
 
 [ -f "$PIPELINE" ] || fail "pipeline is missing"
+[ -f "$CONTROLLER_MAKEFILE" ] || fail "controller image Makefile is missing"
+[ -f "$PORTAL_MAKEFILE" ] || fail "portal image Makefile is missing"
+[ -f "$COLLECTOR_MAKEFILE" ] || fail "GPU collector image Makefile is missing"
 [ -x "$REPORTER" ] || fail "nightly report generator must be executable"
 [ -x "$RECOVER" ] || fail "nightly recovery helper must be executable"
 [ -f "$SMOKE" ] || fail "Tau-native nightly Go runner is missing"
@@ -56,6 +62,31 @@ done
 
 grep -Fq 'image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"' "$PIPELINE" ||
   fail "nightly images must use an immutable source-and-build tag"
+grep -Fq "name: releaseVersion" "$PIPELINE" ||
+  fail "pipeline must expose an explicit manual release image mode"
+grep -Fq 'default: ""' "$PIPELINE" ||
+  fail "scheduled runs must default to nightly image builds"
+grep -Fq 'if [[ -n "${release_version}" ]]; then' "$PIPELINE" ||
+  fail "release mode must bypass nightly image publication"
+grep -Fq "registry=mcr.microsoft.com" "$PIPELINE" ||
+  fail "release mode must resolve images from MCR"
+grep -Fq "repository_prefix=aks/ai-runtime" "$PIPELINE" ||
+  fail "release mode must use the public TauGrid MCR repository prefix"
+for component in \
+  tau-core-controller \
+  taugrid-portal \
+  gpu-metrics-collector; do
+  grep -Fq "$component" "$PIPELINE" ||
+    fail "release mode must validate ${component}"
+done
+grep -Fq 'docker buildx imagetools inspect --raw "${image_ref}"' "$PIPELINE" ||
+  fail "release mode must fail closed when an MCR manifest is missing"
+grep -Fq '.platform.architecture == "amd64"' "$PIPELINE" ||
+  fail "release mode must require an amd64 manifest"
+grep -Fq '.platform.architecture == "arm64"' "$PIPELINE" ||
+  fail "release mode must require an arm64 manifest"
+grep -Fq "release_version: (" "$PIPELINE" ||
+  fail "image contract must preserve the requested release version"
 grep -Fq "tau-core-controller docker-push" "$PIPELINE" ||
   fail "pipeline must publish the controller from current main"
 grep -Fq "taugrid-portal docker-push" "$PIPELINE" ||
@@ -64,6 +95,24 @@ grep -Fq "gpu-metrics-collector docker-push" "$PIPELINE" ||
   fail "pipeline must publish the GPU collector from current main"
 grep -Fq "az acr repository show" "$PIPELINE" ||
   fail "pipeline must verify published image digests"
+for makefile in \
+  "$CONTROLLER_MAKEFILE" \
+  "$PORTAL_MAKEFILE" \
+  "$COLLECTOR_MAKEFILE"; do
+  grep -Fq "CACHE_REPO ?=" "$makefile" ||
+    fail "$(basename "$(dirname "$makefile")") must support a registry cache repository"
+  grep -Fq -- "--cache-from type=registry" "$makefile" ||
+    fail "$(basename "$(dirname "$makefile")") must import the registry cache"
+  grep -Fq -- "--cache-to type=registry" "$makefile" ||
+    fail "$(basename "$(dirname "$makefile")") must export the registry cache"
+done
+for component in \
+  tau-core-controller \
+  taugrid-portal \
+  gpu-metrics-collector; do
+  grep -Fq "CACHE_REPO=\"\${registry}/\${repository_prefix}/build-cache/${component}\"" "$PIPELINE" ||
+    fail "nightly builds must use a dedicated ${component} cache repository"
+done
 if grep -Fq "az aks check-acr" "$PIPELINE"; then
   fail "the deployment identity must not query the image registry"
 fi
@@ -104,6 +153,8 @@ grep -Fq "taugrid-unbounded-stable-nightly-recover.sh recover" "$PIPELINE" ||
   fail "readiness failures must restore the previous release state"
 grep -Fq "lifecycleRecorder.enabled == true" "$PIPELINE" ||
   fail "deployment must fail closed for an unpublished lifecycle recorder image"
+grep -Fq '[[ "${image_mode}" == "nightly" ]]' "$PIPELINE" ||
+  fail "released MCR deployments must allow the released lifecycle recorder path"
 
 grep -Fq "helm history" "$PIPELINE" ||
   fail "failure diagnostics must retain Helm history"

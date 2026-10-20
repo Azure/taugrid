@@ -21,6 +21,7 @@ mkdir -p "${fixture}/images" "${fixture}/deployment/tau-native-smoke"
 
 cat >"${fixture}/images/images.json" <<'EOF'
 {
+  "mode": "nightly",
   "registry": "example.azurecr.io",
   "repository_prefix": "nightly/taugrid",
   "tag": "nightly-0123456789ab-42",
@@ -97,9 +98,46 @@ grep -Fq -- '- Ray worker nodes: `node-1, node-1`' "$output" ||
   fail "report must render the actual Ray worker nodes"
 grep -Fq -- '- Immutable tag: `nightly-0123456789ab-42`' "$output" ||
   fail "report must render the immutable image tag"
+grep -Fq -- '- Mode: `nightly`' "$output" ||
+  fail "report must render nightly image mode"
 if grep -Fq 'example.azurecr.io' "$output"; then
   fail "report must not expose the environment-specific registry"
 fi
+
+cat >"${fixture}/images/images.json" <<'EOF'
+{
+  "mode": "release",
+  "registry": "mcr.microsoft.com",
+  "repository_prefix": "aks/ai-runtime",
+  "tag": "0.4.5",
+  "source_version": "0123456789abcdef",
+  "release_version": "0.4.5"
+}
+EOF
+cat >"${fixture}/deployment/deployment-result.json" <<'EOF'
+{
+  "environment": "unbounded-stable",
+  "status": "passed",
+  "reason": "",
+  "source_version": "0123456789abcdef",
+  "image_tag": "0.4.5",
+  "previous_revision": "8",
+  "current_revision": "9"
+}
+EOF
+release_output="${fixture}/release-report.md"
+BUILD_BUILDNUMBER=20261008.2 \
+BUILD_BUILDID=43 \
+BUILD_SOURCEBRANCH=refs/heads/main \
+BUILD_SOURCEVERSION=0123456789abcdef \
+PREFLIGHT_JOB_RESULT=Succeeded \
+BUILD_IMAGES_JOB_RESULT=Succeeded \
+DEPLOY_JOB_RESULT=Succeeded \
+"$REPORTER" "$fixture" "$release_output"
+grep -Fq -- '- Mode: `release`' "$release_output" ||
+  fail "report must render released MCR image mode"
+grep -Fq -- '- Release version: `0.4.5`' "$release_output" ||
+  fail "report must render the requested release version"
 
 empty_fixture="${fixture}/empty"
 mkdir -p "$empty_fixture"

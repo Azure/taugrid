@@ -13,6 +13,10 @@ CONTEXT := ../..
 
 .PHONY: build test test-kind-e2e lint generate manifests clean docker-build docker-push
 
+comma := ,
+CACHE_REPO ?=
+CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_REPO):cache --cache-to type=registry$(comma)ref=$(CACHE_REPO):cache$(comma)mode=max)
+
 build:
 	$(MAKE) -C $(SRC) build
 
@@ -38,6 +42,7 @@ docker-build:
 	docker buildx build \
 		--platform $(PLATFORMS) \
 		--tag $(IMG) \
+		$(CACHE_ARGS) \
 		--file Dockerfile \
 		$(CONTEXT)
 
@@ -45,6 +50,7 @@ docker-push:
 	docker buildx build \
 		--platform $(PLATFORMS) \
 		--tag $(IMG) \
+		$(CACHE_ARGS) \
 		--file Dockerfile \
 		--push \
 		$(CONTEXT)

@@ -12,6 +12,12 @@ schedules:
         - main
     always: true
 
+parameters:
+  - name: releaseVersion
+    displayName: Released MCR image version (empty builds nightly)
+    type: string
+    default: ""
+
 pool:
   name: $(TAUGRID_UNBOUNDED_STABLE_POOL)
 
@@ -49,14 +55,14 @@ jobs:
         displayName: Validate nightly report
 
   - job: build_images
-    displayName: Publish immutable nightly images
+    displayName: Resolve immutable deployment images
     dependsOn: preflight
     timeoutInMinutes: 180
     steps:
       - checkout: self
 
       - task: AzureCLI@2
-        displayName: Build, publish, and verify deployment images
+        displayName: Resolve and verify deployment images
         inputs:
           azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
           scriptType: bash
@@ -73,69 +79,114 @@ jobs:
               fi
             }
 
-            require_value UNBOUNDED_STABLE_ACR_NAME
-            require_value NIGHTLY_IMAGE_REPOSITORY_PREFIX
-
-            registry="${UNBOUNDED_STABLE_ACR_NAME}.azurecr.io"
-            image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"
             artifact_dir="$(Build.ArtifactStagingDirectory)/images"
             mkdir -p "${artifact_dir}"
+            release_version="${RELEASE_VERSION:-}"
+            image_mode=nightly
 
-            az acr login --name "${UNBOUNDED_STABLE_ACR_NAME}"
-            builder="taugrid-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
-            docker buildx create --name "${builder}" --driver docker-container --use
-            trap 'docker buildx rm "${builder}" >/dev/null 2>&1 || true' EXIT
-
-            controller_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}"
-            portal_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}"
-            collector_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"
-
-            make -C images/tau-core-controller docker-push \
-              IMG="${controller_image}" \
-              TAG="${image_tag}" \
-              PLATFORMS=linux/amd64,linux/arm64
-            make -C images/taugrid-portal docker-push \
-              IMG="${portal_image}" \
-              TAG="${image_tag}" \
-              VERSION="${image_tag}" \
-              COMMIT="${BUILD_SOURCEVERSION}" \
-              DATE="$(git show -s --format=%cI "${BUILD_SOURCEVERSION}")" \
-              PLATFORMS=linux/amd64,linux/arm64
-            make -C images/gpu-metrics-collector docker-push \
-              ACR_REGISTRY="${registry}" \
-              PUSH_IMG="${collector_image}" \
-              TAG="${image_tag}" \
-              PLATFORMS=linux/amd64,linux/arm64
-
-            for image in \
-              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}" \
-              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}" \
-              "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"; do
-              digest="$(az acr repository show \
-                --name "${UNBOUNDED_STABLE_ACR_NAME}" \
-                --image "${image}" \
-                --query digest \
-                --output tsv)"
-              if [[ -z "${digest}" ]]; then
-                echo "##vso[task.logissue type=error]Published image ${image} has no registry digest"
+            if [[ -n "${release_version}" ]]; then
+              if [[ ! "${release_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "##vso[task.logissue type=error]releaseVersion must be an X.Y.Z version"
                 exit 1
               fi
-            done
+
+              image_mode=release
+              registry=mcr.microsoft.com
+              repository_prefix=aks/ai-runtime
+              image_tag="${release_version}"
+
+              for component in \
+                tau-core-controller \
+                taugrid-portal \
+                gpu-metrics-collector; do
+                image_ref="${registry}/${repository_prefix}/${component}:${image_tag}"
+                if ! manifest="$(docker buildx imagetools inspect --raw "${image_ref}")"; then
+                  echo "##vso[task.logissue type=error]Released image manifest is missing: ${image_ref}"
+                  exit 1
+                fi
+                if ! jq -e '
+                  (.manifests // []) as $manifests
+                  | any($manifests[]; .platform.os == "linux" and .platform.architecture == "amd64")
+                    and any($manifests[]; .platform.os == "linux" and .platform.architecture == "arm64")
+                ' <<<"${manifest}" >/dev/null; then
+                  echo "##vso[task.logissue type=error]Released image must publish linux/amd64 and linux/arm64: ${image_ref}"
+                  exit 1
+                fi
+              done
+            else
+              require_value UNBOUNDED_STABLE_ACR_NAME
+              require_value NIGHTLY_IMAGE_REPOSITORY_PREFIX
+
+              registry="${UNBOUNDED_STABLE_ACR_NAME}.azurecr.io"
+              repository_prefix="${NIGHTLY_IMAGE_REPOSITORY_PREFIX}"
+              image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"
+
+              az acr login --name "${UNBOUNDED_STABLE_ACR_NAME}"
+              builder="taugrid-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
+              docker buildx create --name "${builder}" --driver docker-container --use
+              trap 'docker buildx rm "${builder}" >/dev/null 2>&1 || true' EXIT
+
+              controller_image="${registry}/${repository_prefix}/tau-core-controller:${image_tag}"
+              portal_image="${registry}/${repository_prefix}/taugrid-portal:${image_tag}"
+              collector_image="${registry}/${repository_prefix}/gpu-metrics-collector:${image_tag}"
+
+              make -C images/tau-core-controller docker-push \
+                IMG="${controller_image}" \
+                TAG="${image_tag}" \
+                CACHE_REPO="${registry}/${repository_prefix}/build-cache/tau-core-controller" \
+                PLATFORMS=linux/amd64,linux/arm64
+              make -C images/taugrid-portal docker-push \
+                IMG="${portal_image}" \
+                TAG="${image_tag}" \
+                VERSION="${image_tag}" \
+                COMMIT="${BUILD_SOURCEVERSION}" \
+                DATE="$(git show -s --format=%cI "${BUILD_SOURCEVERSION}")" \
+                CACHE_REPO="${registry}/${repository_prefix}/build-cache/taugrid-portal" \
+                PLATFORMS=linux/amd64,linux/arm64
+              make -C images/gpu-metrics-collector docker-push \
+                ACR_REGISTRY="${registry}" \
+                PUSH_IMG="${collector_image}" \
+                TAG="${image_tag}" \
+                CACHE_REPO="${registry}/${repository_prefix}/build-cache/gpu-metrics-collector" \
+                PLATFORMS=linux/amd64,linux/arm64
+
+              for image in \
+                "${repository_prefix}/tau-core-controller:${image_tag}" \
+                "${repository_prefix}/taugrid-portal:${image_tag}" \
+                "${repository_prefix}/gpu-metrics-collector:${image_tag}"; do
+                digest="$(az acr repository show \
+                  --name "${UNBOUNDED_STABLE_ACR_NAME}" \
+                  --image "${image}" \
+                  --query digest \
+                  --output tsv)"
+                if [[ -z "${digest}" ]]; then
+                  echo "##vso[task.logissue type=error]Published image ${image} has no registry digest"
+                  exit 1
+                fi
+              done
+            fi
 
             jq -n \
+              --arg mode "${image_mode}" \
               --arg registry "${registry}" \
-              --arg repositoryPrefix "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}" \
+              --arg repositoryPrefix "${repository_prefix}" \
               --arg tag "${image_tag}" \
               --arg sourceVersion "${BUILD_SOURCEVERSION}" \
+              --arg releaseVersion "${release_version}" \
               '{
+                mode: $mode,
                 registry: $registry,
                 repository_prefix: $repositoryPrefix,
                 tag: $tag,
-                source_version: $sourceVersion
+                source_version: $sourceVersion,
+                release_version: (
+                  if $releaseVersion == "" then null else $releaseVersion end
+                )
               }' >"${artifact_dir}/images.json"
         env:
           UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
           NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
+          RELEASE_VERSION: ${{ parameters.releaseVersion }}
 
       - task: PublishPipelineArtifact@1
         displayName: Publish immutable image contract
@@ -195,7 +246,20 @@ jobs:
                   repository_prefix="$(jq -r '.repository_prefix' "${image_contract}")"
                   image_tag="$(jq -r '.tag' "${image_contract}")"
                   source_version="$(jq -r '.source_version' "${image_contract}")"
+                  image_mode="$(jq -r '.mode' "${image_contract}")"
                   [[ "${source_version}" == "${BUILD_SOURCEVERSION}" ]]
+                  case "${image_mode}" in
+                    nightly) ;;
+                    release)
+                      [[ "${registry}" == "mcr.microsoft.com" ]]
+                      [[ "${repository_prefix}" == "aks/ai-runtime" ]]
+                      [[ "$(jq -r '.release_version' "${image_contract}")" == "${image_tag}" ]]
+                      ;;
+                    *)
+                      echo "##vso[task.logissue type=error]Unknown image contract mode: ${image_mode}"
+                      exit 1
+                      ;;
+                  esac
 
                   artifact_dir="$(Build.ArtifactStagingDirectory)/deployment"
                   diagnostics_dir="${artifact_dir}/diagnostics"
@@ -306,7 +370,8 @@ jobs:
                       --kube-context unbounded-stable \
                       --all \
                       --output json)"
-                    if jq -e '.["taugrid-core"].lifecycleRecorder.enabled == true' \
+                    if [[ "${image_mode}" == "nightly" ]] &&
+                      jq -e '.["taugrid-core"].lifecycleRecorder.enabled == true' \
                       <<<"${live_values}" >/dev/null; then
                       echo "##vso[task.logissue type=error]The nightly cannot replace the lifecycle recorder with an unpublished image; use a released MCR image or disable the recorder before enabling this deployment"
                       exit 1
