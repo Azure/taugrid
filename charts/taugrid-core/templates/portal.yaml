@@ -172,7 +172,7 @@ rules:
     resources: ["nodes"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
-    resources: ["daemonsets"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["localqueues", "clusterqueues", "cohorts", "workloads"]
@@ -294,6 +294,9 @@ spec:
             - {{ $source | quote }}
             - --workspace
             - {{ default "default" $portal.workspace | quote }}
+            {{- if eq $accessMode "authenticated-proxy" }}
+            - --gpu-consumers-enabled
+            {{- end }}
             {{- with $portal.localQueue }}
             - --local-queue
             - {{ . | quote }}
