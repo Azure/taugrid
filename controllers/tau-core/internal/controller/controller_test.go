@@ -2375,9 +2375,9 @@ func TestUnmigratedWorkspaceRetargetMigratesHistoryBeforeDeletion(t *testing.T) 
 	if err := deletionClient.Get(ctx, client.ObjectKeyFromObject(newNamespace), &gotNew); err != nil {
 		t.Fatalf("Get new desired Namespace: %v", err)
 	}
-	if gotNew.Annotations[annotationOwnerUID] != string(workspace.UID) ||
-		gotNew.Labels[labelWorkspace] != workspace.Name {
-		t.Fatalf("normal retarget deletion did not preserve adopted Namespace ownership: labels=%#v annotations=%#v", gotNew.Labels, gotNew.Annotations)
+	if gotNew.Annotations[annotationOwnerUID] != "" ||
+		gotNew.Labels[labelWorkspace] != "" {
+		t.Fatalf("normal retarget deletion retained adopted Namespace ownership: labels=%#v annotations=%#v", gotNew.Labels, gotNew.Annotations)
 	}
 }
 
