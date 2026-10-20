@@ -252,6 +252,30 @@ func TestServeDeployAuthoritativeProfileContract(t *testing.T) {
 		}
 	})
 
+	t.Run("managed Workspace ClusterQueue", func(t *testing.T) {
+		runner := &connectedServeTestRunner{
+			namespace:    "alpha",
+			queue:        "jobqueue",
+			clusterQueue: "tau-ws-sample",
+		}
+		stubServeDependencies(
+			t,
+			runner,
+			readyClusterProfileClientForProfiles(t, 23, false, ordinary),
+		)
+		cmd := NewRoot()
+		var stdout bytes.Buffer
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(append([]string{"serve", "deploy"}, base...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("managed Workspace queue rejected: %v", err)
+		}
+		if !strings.Contains(stdout.String(), "kueue.x-k8s.io/queue-name: jobqueue") {
+			t.Fatalf("managed Workspace render lost profile LocalQueue:\n%s", stdout.String())
+		}
+	})
+
 	t.Run("ambiguous team applicability", func(t *testing.T) {
 		denied := ordinary
 		denied.Applicability.Teams = []string{"research", "experimental"}

@@ -226,6 +226,10 @@ func applySelectedWorkloadProfile(
 		}
 		clusterQueue = resolvedClusterQueue
 	}
+	if managedClusterQueue := managedWorkspaceClusterQueueName(o.workspace); managedClusterQueue != "" &&
+		strings.TrimSpace(o.workspaceClusterQueue) == managedClusterQueue {
+		clusterQueue = managedClusterQueue
+	}
 	o.selectedWorkloadProfile = &selectedWorkloadProfile{
 		Selection:    selection,
 		Render:       renderProfile,

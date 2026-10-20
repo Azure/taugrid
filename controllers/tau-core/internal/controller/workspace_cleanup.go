@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -93,6 +94,7 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 	}
 	for _, key := range []string{
 		labelManagedBy,
+		labelTeam,
 		labelWorkspace,
 		labelWorkspaceLocalQueue,
 		labelKueueDefaultLocalQueue,
@@ -116,7 +118,56 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	if err := r.cleanupStaleWorkspaceLocalQueues(ctx, workspace, "", ""); err != nil {
 		return err
 	}
+	if err := r.cleanupWorkspaceClusterQueue(ctx, workspace); err != nil {
+		return err
+	}
 	return r.cleanupSystemReaderRBAC(ctx, workspace)
+}
+
+func (r *TauWorkspaceReconciler) cleanupWorkspaceClusterQueue(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
+	queue := newQueueObject(clusterQueueGVK)
+	queue.SetName(workspaceClusterQueueName(workspace.Name))
+	if err := r.Get(ctx, client.ObjectKeyFromObject(queue), queue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
+		if queue.GetLabels()[labelManagedBy] != labelManagedByValue {
+			return nil
+		}
+		retainedQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace)
+		if err != nil {
+			return err
+		}
+		if retained && retainedQueue == queue.GetName() {
+			return nil
+		}
+		return fmt.Errorf("refusing to delete ClusterQueue %q: object is not owned by workspace %q", queue.GetName(), workspace.Name)
+	}
+	if err := validateWorkspaceObjectUID(queue, workspace); err != nil {
+		return fmt.Errorf("refusing to delete ClusterQueue %q: %w", queue.GetName(), err)
+	}
+	if expectedUID := workspace.Status.Queue.ClusterQueueUID; workspace.Status.Queue.ClusterQueue == queue.GetName() &&
+		expectedUID != "" && string(queue.GetUID()) != expectedUID {
+		return fmt.Errorf("refusing to delete ClusterQueue %q: UID changed from %q to %q", queue.GetName(), expectedUID, queue.GetUID())
+	}
+	if err := r.deleteWithPreconditions(ctx, queue); err != nil {
+		return err
+	}
+	remaining := newQueueObject(clusterQueueGVK)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(queue), remaining); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return fmt.Errorf(
+		"waiting for ClusterQueue %q deletion to complete; finalizers=%v",
+		remaining.GetName(),
+		remaining.GetFinalizers(),
+	)
 }
 
 func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
@@ -183,6 +234,35 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 	return nil
 }
 
+func (r *TauWorkspaceReconciler) cleanupOwnedNamespaceAccess(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace, keepServiceAccount string,
+) error {
+	var namespaces corev1.NamespaceList
+	if err := r.List(ctx, &namespaces, client.MatchingLabels{
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range namespaces.Items {
+		namespace := &namespaces.Items[i]
+		if workspace.UID == "" ||
+			namespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+			continue
+		}
+		if err := r.cleanupStaleWorkloadIdentityServiceAccounts(
+			ctx,
+			workspace,
+			namespace.Name,
+			keepServiceAccount,
+		); err != nil {
+			return err
+		}
+	}
+	return r.reconcileOwnedNamespaceResearcherAccess(ctx, workspace, targetNamespace)
+}
+
 func canDeleteLegacyWorkspaceRole(role *rbacv1.Role, workspace *tauv1alpha1.TauWorkspace) bool {
 	return workspace.UID != "" &&
 		workspace.Annotations[annotationOwnerUID] == string(workspace.UID) &&
@@ -209,13 +289,128 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkspaceLocalQueues(
 	}
 	for i := range queues.Items {
 		localQueue := &queues.Items[i]
-		if localQueue.GetNamespace() == keepNamespace && localQueue.GetName() == keepName {
+		if preserveWorkspaceLocalQueue(workspace, localQueue, keepNamespace, keepName) {
 			continue
 		}
 		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
 			return fmt.Errorf("refusing to delete LocalQueue %q: %w", localQueue.GetName(), err)
 		}
 		if err := r.deleteWithPreconditions(ctx, localQueue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *TauWorkspaceReconciler) staleWorkspaceLocalQueuesDrained(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	keepNamespace, keepName string,
+) (bool, string, error) {
+	queues := &unstructured.UnstructuredList{}
+	queues.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: localQueueGVK.Group, Version: localQueueGVK.Version, Kind: localQueueGVK.Kind + "List",
+	})
+	if err := r.List(ctx, queues, client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return false, "", err
+	}
+	for i := range queues.Items {
+		localQueue := &queues.Items[i]
+		if preserveWorkspaceLocalQueue(workspace, localQueue, keepNamespace, keepName) {
+			continue
+		}
+		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
+			return false, "", fmt.Errorf("cannot verify stale LocalQueue %q: %w", localQueue.GetName(), err)
+		}
+		workloads := &unstructured.UnstructuredList{}
+		workloads.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: workloadGVK.Group, Version: workloadGVK.Version, Kind: workloadGVK.Kind + "List",
+		})
+		if err := r.List(ctx, workloads, client.InNamespace(localQueue.GetNamespace())); err != nil {
+			return false, "", err
+		}
+		for j := range workloads.Items {
+			workload := &workloads.Items[j]
+			queueName, _, err := unstructured.NestedString(workload.Object, "spec", "queueName")
+			if err != nil {
+				return false, "", fmt.Errorf("read Workload %s queueName: %w", client.ObjectKeyFromObject(workload), err)
+			}
+			if queueName != localQueue.GetName() || workloadFinished(workload) {
+				continue
+			}
+			return false, fmt.Sprintf(
+				"waiting for Workload %s to finish before removing LocalQueue %q",
+				client.ObjectKeyFromObject(workload),
+				localQueue.GetName(),
+			), nil
+		}
+	}
+	return true, "", nil
+}
+
+func preserveWorkspaceLocalQueue(
+	workspace *tauv1alpha1.TauWorkspace,
+	localQueue *unstructured.Unstructured,
+	keepNamespace, keepName string,
+) bool {
+	if localQueue.GetNamespace() != keepNamespace {
+		return false
+	}
+	if localQueue.GetName() == keepName {
+		return true
+	}
+	for _, name := range workspaceCompatibilityLocalQueueNames(workspace) {
+		if localQueue.GetName() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func workloadFinished(workload *unstructured.Unstructured) bool {
+	conditions, found, err := unstructured.NestedSlice(workload.Object, "status", "conditions")
+	if err != nil || !found {
+		return false
+	}
+	for _, rawCondition := range conditions {
+		condition, ok := rawCondition.(map[string]any)
+		if ok && condition["type"] == "Finished" && condition["status"] == "True" {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace, keepServiceAccount string,
+) error {
+	var accounts corev1.ServiceAccountList
+	if err := r.List(ctx, &accounts, client.InNamespace(targetNamespace), client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range accounts.Items {
+		account := &accounts.Items[i]
+		desiredClientID := ""
+		if workspace.Spec.WorkloadIdentity != nil {
+			desiredClientID = strings.TrimSpace(workspace.Spec.WorkloadIdentity.ClientID)
+		}
+		if keepServiceAccount != "" &&
+			account.Name == keepServiceAccount &&
+			strings.TrimSpace(account.Annotations[annotationAzureWIClientID]) == desiredClientID {
+			continue
+		}
+		if err := r.ensureWorkspaceObjectUID(ctx, account, workspace); err != nil {
+			return fmt.Errorf("refusing to delete stale workload identity ServiceAccount: %w", err)
+		}
+		if err := r.deleteWithPreconditions(ctx, account); err != nil {
 			return err
 		}
 	}

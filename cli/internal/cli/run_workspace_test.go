@@ -17,6 +17,7 @@ import (
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
+	"github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -89,6 +90,112 @@ func TestResolveWorkspacePlacementUsesLiveStatusAndValidatesConnection(t *testin
 		placement.LocalQueue != "status-queue" ||
 		placement.ClusterQueue != "status-cluster-queue" {
 		t.Fatalf("placement = %+v", placement)
+	}
+}
+
+func TestResolveWorkspacePlacementPreservesCompatibleTeamQueueConnection(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "tau-ws-sample",
+		ClusterQueue: "tau-ws-sample",
+	}
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:     workspace.Metadata.Name,
+		Namespace:     workspace.Status.Target.ResolvedNamespace,
+		Queue:         "jobqueue",
+		ClusterQueue:  "legacy-cq",
+		QueueVerified: true,
+	}
+
+	placement, err := resolveWorkspacePlacement(workspace, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.LocalQueue != "jobqueue" {
+		t.Fatalf("LocalQueue = %q, want compatible persisted queue", placement.LocalQueue)
+	}
+	if placement.ClusterQueue != "legacy-cq" {
+		t.Fatalf("ClusterQueue = %q, want compatible persisted backing", placement.ClusterQueue)
+	}
+}
+
+func TestRunProfileAcceptsNewTeamWorkspaceClientRoute(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Target.ResolvedNamespace = "alpha"
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "jobqueue",
+		ClusterQueue: "tau-ws-sample",
+	}
+	options, err := applyWorkspaceDefaults(defaultRunDispatchOptions(), workspace, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.engine = "job"
+	options.team = "research"
+	options.lane = "training"
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 1, 1),
+	)
+	if err != nil {
+		t.Fatalf("managed Team Workspace route rejected: %v", err)
+	}
+	if selected.queue != "jobqueue" {
+		t.Fatalf("selected LocalQueue = %q, want profile-compatible jobqueue", selected.queue)
+	}
+	if selected.selectedWorkloadProfile == nil ||
+		selected.selectedWorkloadProfile.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("selected profile backing = %#v, want managed Workspace ClusterQueue", selected.selectedWorkloadProfile)
+	}
+}
+
+func TestResolveWorkspacePlacementPreservesVerifiedTeamQueueWhenSpecQueueIsEmpty(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = ""
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "tau-ws-sample",
+		ClusterQueue: "tau-ws-sample",
+	}
+	connection := workspaceconnection.ActiveConnection{
+		Workspace:     workspace.Metadata.Name,
+		Namespace:     workspace.Status.Target.ResolvedNamespace,
+		Queue:         "inherited-default",
+		ClusterQueue:  "legacy-cq",
+		QueueVerified: true,
+	}
+
+	placement, err := resolveWorkspacePlacement(workspace, connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if placement.LocalQueue != "inherited-default" {
+		t.Fatalf("LocalQueue = %q, want verified inherited default", placement.LocalQueue)
+	}
+	if placement.ClusterQueue != "legacy-cq" {
+		t.Fatalf("ClusterQueue = %q, want verified inherited backing", placement.ClusterQueue)
+	}
+}
+
+func TestResolveWorkspacePlacementRejectsUnverifiedTeamQueueAlias(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = ""
+	workspace.Status.Queue.LocalQueue = "tau-ws-sample"
+	connection := workspaceconnection.ActiveConnection{
+		Workspace: workspace.Metadata.Name,
+		Namespace: workspace.Status.Target.ResolvedNamespace,
+		Queue:     "unverified",
+	}
+
+	_, err := resolveWorkspacePlacement(workspace, connection)
+	if err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("expected unverified queue conflict, got %v", err)
 	}
 }
 

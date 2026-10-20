@@ -438,7 +438,7 @@ func newServeDeployCmd() *cobra.Command {
 func selectServeWorkloadProfile(
 	ctx context.Context,
 	provider *profile.Provider,
-	profileName, namespace, resolvedQueue, resolvedClusterQueue string,
+	profileName, workspace, namespace, resolvedQueue, resolvedClusterQueue string,
 	explicitGPUs, explicitNodes *int, kind string,
 ) (profile.Profile, *selectedWorkloadProfile, error) {
 	set, err := provider.ProfileSet(ctx)
@@ -492,14 +492,22 @@ func selectServeWorkloadProfile(
 	if err != nil {
 		return profile.Profile{}, nil, fmt.Errorf("resolve authoritative serving queue binding: %w", err)
 	}
-	if actual := strings.TrimSpace(resolvedClusterQueue); selection.Source == profile.ProfileSourceCluster && actual != clusterQueue {
+	actualClusterQueue := strings.TrimSpace(resolvedClusterQueue)
+	managedWorkspaceClusterQueue := managedWorkspaceClusterQueueName(workspace)
+	if selection.Source == profile.ProfileSourceCluster &&
+		actualClusterQueue != "" &&
+		actualClusterQueue != clusterQueue &&
+		actualClusterQueue != managedWorkspaceClusterQueue {
 		return profile.Profile{}, nil, fmt.Errorf(
 			"resolved platform LocalQueue %q points to ClusterQueue %q, but authoritative workload profile %q expects %q",
 			renderProfile.Queue,
-			actual,
+			actualClusterQueue,
 			selection.Profile.Name,
 			clusterQueue,
 		)
+	}
+	if managedWorkspaceClusterQueue != "" && actualClusterQueue == managedWorkspaceClusterQueue {
+		clusterQueue = actualClusterQueue
 	}
 	if explicitGPUs != nil && *explicitGPUs != int(selection.Profile.GPUsPerWorker) {
 		return profile.Profile{}, nil, fmt.Errorf(

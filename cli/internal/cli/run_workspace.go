@@ -41,6 +41,10 @@ func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspacecon
 		LocalQueue:   firstNonEmpty(w.Status.Queue.LocalQueue, w.Spec.Queue),
 		ClusterQueue: strings.TrimSpace(w.Status.Queue.ClusterQueue),
 	}
+	if workspaceConnectionQueueCompatible(w, connection, placement) {
+		placement.LocalQueue = strings.TrimSpace(connection.Queue)
+		placement.ClusterQueue = strings.TrimSpace(connection.ClusterQueue)
+	}
 	if placement.Namespace == "" {
 		return workspacePlacement{}, fmt.Errorf("workspace %q has no resolved target namespace", w.Metadata.Name)
 	}
@@ -69,6 +73,18 @@ func resolveWorkspacePlacement(w tauworkspace.Workspace, connection workspacecon
 	return placement, nil
 }
 
+func workspaceConnectionQueueCompatible(
+	w tauworkspace.Workspace,
+	connection workspaceconnection.ActiveConnection,
+	placement workspacePlacement,
+) bool {
+	return w.Spec.TeamRef != nil &&
+		connection.QueueVerified &&
+		strings.TrimSpace(connection.Namespace) == placement.Namespace &&
+		strings.TrimSpace(connection.Queue) != "" &&
+		strings.TrimSpace(connection.ClusterQueue) != ""
+}
+
 func applyWorkspaceDefaults(o unresolvedRunOptions, w tauworkspace.Workspace, runName string) (unresolvedRunOptions, error) {
 	return applyWorkspaceDefaultsWithConnection(o, w, runName, workspaceconnection.ActiveConnection{})
 }
@@ -86,6 +102,7 @@ func applyWorkspaceDefaultsWithConnection(
 	o.experiment.Workspace = placement.Workspace
 	o.workspace = placement.Workspace
 	o.workspaceResultScope = w.Spec.Defaults.OutputRoot
+	o.workspaceClusterQueue = placement.ClusterQueue
 	workspaceNamespace := placement.Namespace
 	if o.namespace != "" && o.namespace != workspaceNamespace {
 		return o, fmt.Errorf("namespace %q conflicts with TauWorkspace %q target namespace %q", o.namespace, w.Metadata.Name, workspaceNamespace)
@@ -149,4 +166,12 @@ func workspacePriorityTier(priority string) string {
 	default:
 		return priority
 	}
+}
+
+func managedWorkspaceClusterQueueName(workspace string) string {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return ""
+	}
+	return "tau-ws-" + workspace
 }

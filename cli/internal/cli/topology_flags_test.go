@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/Azure/taugrid/cli/internal/jobrender"
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -64,6 +66,92 @@ metadata:
 	}
 	if !reflect.DeepEqual(runner.calls, wantCalls) {
 		t.Fatalf("kubectl calls=%v want %v", runner.calls, wantCalls)
+	}
+}
+
+func TestServerSubmissionValidationAcceptsManagedWorkspaceBacking(t *testing.T) {
+	workspace := readyWorkspace()
+	workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "vision"}
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Target.ResolvedNamespace = "alpha"
+	workspace.Status.Queue = tauworkspace.WorkspaceQueueStatus{
+		LocalQueue:   "jobqueue",
+		ClusterQueue: "tau-ws-sample",
+	}
+	options, err := applyWorkspaceDefaults(defaultRunDispatchOptions(), workspace, "train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.engine = "job"
+	options.team = "research"
+	options.lane = "training"
+	selectedOptions, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProfileProvider(t, profile.ExecutionTargetSingleCluster, 1, 1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := selectedOptions.selectedWorkloadProfile
+	if selected == nil || selected.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("selected profile = %#v, want managed Workspace backing", selected)
+	}
+	for _, workload := range []struct {
+		name     string
+		manifest string
+	}{
+		{
+			name: "Job",
+			manifest: `apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train
+  labels:
+    kueue.x-k8s.io/queue-name: jobqueue
+`,
+		},
+		{
+			name: "RayJob",
+			manifest: `apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: train
+  labels:
+    kueue.x-k8s.io/queue-name: jobqueue
+`,
+		},
+		{
+			name: "managed workflow",
+			manifest: `apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: train
+  labels:
+    kueue.x-k8s.io/queue-name: jobqueue
+`,
+		},
+	} {
+		t.Run(workload.name, func(t *testing.T) {
+			runner := &fakeRawRunner{
+				outputs: map[string]string{
+					fakeRawKey("-n", "alpha", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): `{"metadata":{"name":"jobqueue"},"spec":{"clusterQueue":"tau-ws-sample"}}`,
+					fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "tau-ws-sample", "-o", "json"):         `{"metadata":{"name":"tau-ws-sample"},"spec":{"resourceGroups":[]},"status":{"conditions":[{"type":"Active","status":"True"}]}}`,
+				},
+				errors: map[string]error{},
+			}
+			err := validateRenderedQueue(
+				context.Background(),
+				runner,
+				"alpha",
+				[]byte(workload.manifest),
+				jobrender.Options{},
+				queueValidationPolicy{ClusterQueue: selected.ClusterQueue},
+			)
+			if err != nil {
+				t.Fatalf("server submission validation rejected managed Workspace backing: %v", err)
+			}
+		})
 	}
 }
 

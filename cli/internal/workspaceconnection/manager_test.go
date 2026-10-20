@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -46,6 +47,24 @@ type fakeVerifier struct {
 	err    error
 	paths  []string
 	modes  []os.FileMode
+}
+
+type compatibleFakeVerifier struct {
+	*fakeVerifier
+	queue string
+	calls int
+}
+
+func (f *compatibleFakeVerifier) VerifyCompatibleQueue(
+	_ context.Context,
+	_ Descriptor,
+	_, _, queue string,
+) (string, error) {
+	f.calls++
+	if queue != f.queue {
+		return "", fmt.Errorf("queue %q is unavailable", queue)
+	}
+	return "legacy-cq", nil
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, _ Descriptor, kubeconfigPath string) (Verification, error) {
@@ -1408,6 +1427,282 @@ func TestContractChangesTreatsEmptyServiceAccountAsDefault(t *testing.T) {
 	changes := state.contractChanges(verification)
 	if len(changes) != 1 || !strings.Contains(changes[0], `service account "default" -> "workspace-sa"`) {
 		t.Fatalf("workspace ServiceAccount drift = %v", changes)
+	}
+}
+
+func TestContractChangesAllowsVerifiedCompatibleQueueMigration(t *testing.T) {
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{
+		Namespace:        "sample",
+		Queue:            "tau-ws-sample",
+		CompatibleQueues: []string{"jobqueue"},
+	}
+	if changes := state.contractChanges(verification); len(changes) != 0 {
+		t.Fatalf("compatible LocalQueue migration required interactive review: %v", changes)
+	}
+}
+
+func TestApplyVerificationPreservesVerifiedCompatibleQueue(t *testing.T) {
+	verifiedAt := time.Now()
+	state := connectionState{Namespace: "sample", Queue: "jobqueue"}
+	verification := Verification{
+		Namespace:        "sample",
+		Queue:            "tau-ws-sample",
+		CompatibleQueues: []string{"jobqueue"},
+		QueueBackings:    map[string]string{"jobqueue": "legacy-cq"},
+	}
+	state.applyVerification(Descriptor{}, verification, verifiedAt)
+	if state.Queue != "jobqueue" {
+		t.Fatalf("queue = %q, want verified compatible queue jobqueue", state.Queue)
+	}
+	active := state.active()
+	if active.Queue != "jobqueue" || active.ClusterQueue != "legacy-cq" || !active.QueueVerified {
+		t.Fatalf("active connection = %#v, want verified compatible queue", active)
+	}
+}
+
+func TestWithCompatibleQueueVerifiesPersistedQueueIndependentOfWorkspaceSpec(t *testing.T) {
+	manager := Manager{Verifier: &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{},
+		queue:        "inherited-default",
+	}}
+	verification := manager.withCompatibleQueue(
+		context.Background(),
+		Descriptor{},
+		"/tmp/kubeconfig",
+		"inherited-default",
+		Verification{Namespace: "sample", Queue: "tau-ws-sample", TeamBacked: true},
+	)
+	if !slices.Contains(verification.CompatibleQueues, "inherited-default") {
+		t.Fatalf("compatible queues = %#v, want persisted inherited default", verification.CompatibleQueues)
+	}
+	if verification.QueueBackings["inherited-default"] != "legacy-cq" {
+		t.Fatalf("compatible queue backing = %#v, want inherited-default -> legacy-cq", verification.QueueBackings)
+	}
+}
+
+func TestKubectlVerifierManagerPreservesAliasBackingForPlacement(t *testing.T) {
+	descriptor, err := Parse([]byte(validDescriptorYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &verifierFakeRunner{responses: map[string]string{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
+		  "apiVersion": "tau.azure.com/v1alpha1",
+		  "kind": "TauWorkspace",
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 7},
+		  "spec": {"authorization": {"mode": "cluster-wide"}, "queue": "jobqueue", "teamRef": {"name": "vision"}},
+		  "status": {
+		    "phase": "Ready",
+		    "observedGeneration": 7,
+		    "target": {"resolvedNamespace": "sample"},
+		    "queue": {"localQueue": "tau-ws-sample", "clusterQueue": "tau-ws-sample"}
+		  }
+		}`,
+		"-n sample get localqueue.kueue.x-k8s.io tau-ws-sample -o name":                     "localqueue.kueue.x-k8s.io/tau-ws-sample\n",
+		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o name":                          "localqueue.kueue.x-k8s.io/jobqueue\n",
+		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o jsonpath={.spec.clusterQueue}": "legacy-cq\n",
+		"auth can-i * * --all-namespaces":                                                   "yes\n",
+	}}
+	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	manager := Manager{Verifier: verifier}
+
+	verification, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !slices.Contains(verification.CompatibleQueues, "jobqueue") {
+		t.Fatalf("compatible queues = %#v, want jobqueue", verification.CompatibleQueues)
+	}
+	if verification.QueueBackings["jobqueue"] != "" {
+		t.Fatalf("alias backing = %q before manager verification, want empty", verification.QueueBackings["jobqueue"])
+	}
+
+	verification = manager.withCompatibleQueue(
+		context.Background(),
+		descriptor,
+		"/tmp/kubeconfig",
+		"jobqueue",
+		verification,
+	)
+	state := connectionState{Workspace: "sample", Namespace: "sample", Queue: "jobqueue"}
+	state.applyVerification(descriptor, verification, time.Now())
+	active := state.active()
+	if active.Queue != "jobqueue" || active.ClusterQueue != "legacy-cq" || !active.QueueVerified {
+		t.Fatalf("placement connection = %#v, want verified jobqueue -> legacy-cq", active)
+	}
+}
+
+func TestWithCompatibleQueueDoesNotPreserveOrdinaryWorkspaceQueue(t *testing.T) {
+	manager := Manager{Verifier: &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{},
+		queue:        "external-a",
+	}}
+	verification := manager.withCompatibleQueue(
+		context.Background(),
+		Descriptor{},
+		"/tmp/kubeconfig",
+		"external-a",
+		Verification{Namespace: "sample", Queue: "external-b"},
+	)
+	if len(verification.CompatibleQueues) != 0 {
+		t.Fatalf("compatible queues = %#v, want ordinary queue change preserved", verification.CompatibleQueues)
+	}
+	state := connectionState{Namespace: "sample", Queue: "external-a"}
+	changes := state.contractChanges(verification)
+	if len(changes) != 1 || !strings.Contains(changes[0], `LocalQueue "external-a" -> "external-b"`) {
+		t.Fatalf("contract changes = %v, want external queue change", changes)
+	}
+	state.applyVerification(Descriptor{}, verification, time.Now())
+	if state.Queue != "external-b" {
+		t.Fatalf("saved queue = %q, want external-b", state.Queue)
+	}
+}
+
+func TestManagerRevalidationMovesExplicitActiveQueueAndRetainsCompatibility(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "external-a",
+			WorkspacePhase: "Ready", TeamBacked: true, QueueExplicit: true,
+			QueueBackings: map[string]string{"external-a": "legacy-cq"},
+		}},
+		Now:          func() time.Time { return now },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+
+	revalidation := Verification{
+		ContextName: "taugrid-flex", Namespace: "sample", Queue: "external-b",
+		WorkspacePhase: "Ready", TeamBacked: true, QueueExplicit: true,
+		QueueBackings: map[string]string{"external-b": "tau-ws-sample"},
+	}
+	noninteractiveVerifier := &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{result: revalidation},
+		queue:        "external-a",
+	}
+	noninteractive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  false,
+		Verifier:     noninteractiveVerifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := noninteractive.Ensure(context.Background(), root); !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), `LocalQueue "external-a" -> "external-b"`) {
+		t.Fatalf("explicit queue change did not require confirmation: %v", err)
+	}
+	if noninteractiveVerifier.calls != 1 {
+		t.Fatalf("compatible queue verification calls = %d, want retained external-a verification", noninteractiveVerifier.calls)
+	}
+
+	interactiveVerifier := &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{result: revalidation},
+		queue:        "external-a",
+	}
+	interactive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  true,
+		Input:        strings.NewReader("y\n"),
+		Output:       &bytes.Buffer{},
+		Verifier:     interactiveVerifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	active, err := interactive.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatalf("confirm explicit queue change: %v", err)
+	}
+	if active.Queue != "external-b" || active.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("active connection = %#v, want external-b -> tau-ws-sample", active)
+	}
+	if interactiveVerifier.calls != 1 {
+		t.Fatalf("compatible queue verification calls = %d, want retained external-a verification", interactiveVerifier.calls)
+	}
+	discovery, err := Discover(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadConnectionState(filepath.Join(configDir, "connections", ConnectionKeyForDiscovery(discovery)+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Queue != "external-b" || state.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("persisted connection = %#v, want external-b -> tau-ws-sample", state)
+	}
+}
+
+func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "default-a",
+			WorkspacePhase: "Ready", TeamBacked: true, QueueDefaulted: true,
+			QueueBackings: map[string]string{"default-a": "tau-ws-sample"},
+		}},
+		Now:          func() time.Time { return now },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &verifierFakeRunner{responses: map[string]string{
+		"-n tau-system get workspace.tau.azure.com sample -o json": `{
+		  "apiVersion": "tau.azure.com/v1alpha1",
+		  "kind": "TauWorkspace",
+		  "metadata": {"name": "sample", "namespace": "tau-system", "uid": "workspace-uid", "generation": 8},
+		  "spec": {"authorization": {"mode": "cluster-wide"}, "teamRef": {"name": "vision"}},
+		  "status": {
+		    "phase": "Ready",
+		    "observedGeneration": 8,
+		    "target": {"resolvedNamespace": "sample"},
+		    "queue": {"localQueue": "default-b", "clusterQueue": "default-b"}
+		  }
+		}`,
+		"-n sample get localqueue.kueue.x-k8s.io default-b -o name":                          "localqueue.kueue.x-k8s.io/default-b\n",
+		"-n sample get localqueue.kueue.x-k8s.io default-a -o jsonpath={.spec.clusterQueue}": "default-a\n",
+		"auth can-i * * --all-namespaces":                                                    "yes\n",
+	}}
+	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	noninteractive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  false,
+		Verifier:     verifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := noninteractive.Ensure(context.Background(), root); !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), `LocalQueue "default-a" -> "default-b"`) {
+		t.Fatalf("default queue change did not require confirmation: %v", err)
+	}
+	interactive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  true,
+		Input:        strings.NewReader("y\n"),
+		Output:       &bytes.Buffer{},
+		Verifier:     verifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	active, err := interactive.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatalf("confirm default queue change: %v", err)
+	}
+	if active.Queue != "default-b" || active.ClusterQueue != "default-b" {
+		t.Fatalf("active connection = %#v, want default-b -> default-b", active)
 	}
 }
 

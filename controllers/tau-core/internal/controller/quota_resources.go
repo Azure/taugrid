@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -226,6 +227,370 @@ func desiredTeamCohort(team *tauv1alpha1.TauTeam, sharedQuota []tauv1alpha1.TauR
 	return cohort
 }
 
+func desiredWorkspaceClusterQueue(workspace *tauv1alpha1.TauWorkspace) *unstructured.Unstructured {
+	name := workspaceClusterQueueName(workspace.Name)
+	queue := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": clusterQueueGVK.GroupVersion().String(),
+		"kind":       clusterQueueGVK.Kind,
+		"metadata": map[string]any{
+			"name": name,
+		},
+		"spec": map[string]any{
+			"cohortName":       teamCohortName(workspace.Spec.TeamRef.Name),
+			"queueingStrategy": "BestEffortFIFO",
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+			},
+			"preemption": map[string]any{
+				"withinClusterQueue":  "LowerPriority",
+				"reclaimWithinCohort": "Never",
+				"borrowWithinCohort": map[string]any{
+					"policy": "Never",
+				},
+			},
+			"resourceGroups": quotaResourceGroups(workspace.Spec.Quota, true),
+		},
+	}}
+	queue.SetGroupVersionKind(clusterQueueGVK)
+	labels := workspaceLabels(workspace.Name)
+	labels[labelTeam] = workspace.Spec.TeamRef.Name
+	queue.SetLabels(labels)
+	setOwnerUIDAnnotation(queue, workspace.UID)
+	return queue
+}
+
+func setManagedQuotaKeys(queue *unstructured.Unstructured, keys map[string]bool) error {
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sort.Strings(ordered)
+	value, err := json.Marshal(ordered)
+	if err != nil {
+		return err
+	}
+	annotations := queue.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[annotationManagedQuotaKeys] = string(value)
+	queue.SetAnnotations(annotations)
+	return nil
+}
+
+func managedQuotaKeys(queue *unstructured.Unstructured) (map[string]bool, bool, error) {
+	raw, found := queue.GetAnnotations()[annotationManagedQuotaKeys]
+	if !found {
+		return nil, false, nil
+	}
+	var keys []string
+	if err := json.Unmarshal([]byte(raw), &keys); err != nil {
+		return nil, true, fmt.Errorf("ClusterQueue %q has invalid managed quota keys: %w", queue.GetName(), err)
+	}
+	out := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		out[key] = true
+	}
+	return out, true, nil
+}
+
+func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	team *tauv1alpha1.TauTeam,
+	desired *unstructured.Unstructured,
+) error {
+	source, err := r.establishedWorkspaceClusterQueue(ctx, workspace, desired.GetName())
+	if err != nil {
+		return err
+	}
+	if source == nil {
+		return setWorkspaceManagedQuotaKeys(workspace, desired)
+	}
+	for _, field := range []string{"admissionChecks", "admissionChecksStrategy"} {
+		value, found, err := unstructured.NestedFieldCopy(source.Object, "spec", field)
+		if err != nil {
+			return fmt.Errorf("read ClusterQueue %q %s: %w", source.GetName(), field, err)
+		}
+		if found {
+			if err := unstructured.SetNestedField(desired.Object, value, "spec", field); err != nil {
+				return fmt.Errorf("preserve ClusterQueue %q %s: %w", source.GetName(), field, err)
+			}
+		}
+	}
+	if len(workspace.Spec.Quota) == 0 {
+		groups, found, err := unstructured.NestedSlice(source.Object, "spec", "resourceGroups")
+		if err != nil {
+			return fmt.Errorf("read ClusterQueue %q resourceGroups: %w", source.GetName(), err)
+		}
+		if !found || len(groups) == 0 {
+			return fmt.Errorf("established ClusterQueue %q has no resourceGroups to migrate", source.GetName())
+		}
+		if err := unstructured.SetNestedSlice(desired.Object, groups, "spec", "resourceGroups"); err != nil {
+			return fmt.Errorf("preserve ClusterQueue %q resourceGroups: %w", source.GetName(), err)
+		}
+		if keys, found, err := managedQuotaKeys(source); err != nil {
+			return err
+		} else if found {
+			return setManagedQuotaKeys(desired, keys)
+		}
+	} else if err := preserveUndeclaredWorkspaceResources(workspace, team, source, desired); err != nil {
+		return err
+	}
+	return setWorkspaceManagedQuotaKeys(workspace, desired)
+}
+
+func setWorkspaceManagedQuotaKeys(
+	workspace *tauv1alpha1.TauWorkspace,
+	desired *unstructured.Unstructured,
+) error {
+	keys := map[string]bool{}
+	if len(workspace.Spec.Quota) > 0 {
+		for _, quota := range workspace.Spec.Quota {
+			keys[quotaKey(quota)] = true
+		}
+	} else {
+		nominals, err := clusterQueueNominalQuota(desired)
+		if err != nil {
+			return err
+		}
+		for key := range nominals {
+			keys[key] = true
+		}
+	}
+	return setManagedQuotaKeys(desired, keys)
+}
+
+func preserveUndeclaredWorkspaceResources(
+	workspace *tauv1alpha1.TauWorkspace,
+	team *tauv1alpha1.TauTeam,
+	source, desired *unstructured.Unstructured,
+) error {
+	declared := map[string]bool{}
+	for _, quota := range workspace.Spec.Quota {
+		declared[quota.Resource] = true
+	}
+	teamQuotaKeys := map[string]bool{}
+	if team != nil {
+		for _, quota := range team.Spec.Quota {
+			teamQuotaKeys[quotaKey(quota)] = true
+		}
+	}
+	sourceQuotas, err := clusterQueueQuotaObjects(source)
+	if err != nil {
+		return err
+	}
+	desiredQuotas, err := clusterQueueQuotaObjects(desired)
+	if err != nil {
+		return err
+	}
+	sourceManagedKeys, _, err := managedQuotaKeys(source)
+	if err != nil {
+		return err
+	}
+	for flavor, resources := range sourceQuotas {
+		target := desiredQuotas[flavor]
+		if target == nil {
+			target = map[string]map[string]any{}
+			desiredQuotas[flavor] = target
+		}
+		for resourceName, quota := range resources {
+			if _, found := target[resourceName]; found {
+				continue
+			}
+			key := resourceName + "\x00" + flavor
+			if resourceName == nvidiaGPUResourceName ||
+				declared[resourceName] ||
+				sourceManagedKeys[key] ||
+				teamQuotaKeys[key] {
+				target[resourceName] = admissionOnlyResourceQuota(quota)
+			} else {
+				target[resourceName] = quota
+			}
+		}
+	}
+	groups, err := quotaObjectsResourceGroups(desiredQuotas)
+	if err != nil {
+		return fmt.Errorf("merge ClusterQueue %q admission resources: %w", source.GetName(), err)
+	}
+	if err := unstructured.SetNestedSlice(desired.Object, groups, "spec", "resourceGroups"); err != nil {
+		return fmt.Errorf("preserve ClusterQueue %q undeclared resources: %w", source.GetName(), err)
+	}
+	return nil
+}
+
+func admissionOnlyResourceQuota(quota map[string]any) map[string]any {
+	out := make(map[string]any, len(quota))
+	for key, value := range quota {
+		out[key] = value
+	}
+	out["nominalQuota"] = "0"
+	out["borrowingLimit"] = "0"
+	out["lendingLimit"] = "0"
+	return out
+}
+
+func clusterQueueQuotaObjects(queue *unstructured.Unstructured) (map[string]map[string]map[string]any, error) {
+	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
+	if err != nil {
+		return nil, fmt.Errorf("read ClusterQueue %q resourceGroups: %w", queue.GetName(), err)
+	}
+	if !found {
+		return map[string]map[string]map[string]any{}, nil
+	}
+	out := map[string]map[string]map[string]any{}
+	for _, rawGroup := range groups {
+		group, ok := rawGroup.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("ClusterQueue %q has malformed resourceGroups", queue.GetName())
+		}
+		flavors, _, err := unstructured.NestedSlice(group, "flavors")
+		if err != nil {
+			return nil, fmt.Errorf("ClusterQueue %q has malformed flavors: %w", queue.GetName(), err)
+		}
+		for _, rawFlavor := range flavors {
+			flavor, ok := rawFlavor.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("ClusterQueue %q has malformed flavor quota", queue.GetName())
+			}
+			flavorName := fmt.Sprint(flavor["name"])
+			resources, _, err := unstructured.NestedSlice(flavor, "resources")
+			if err != nil {
+				return nil, fmt.Errorf("ClusterQueue %q has malformed flavor resources: %w", queue.GetName(), err)
+			}
+			byResource := out[flavorName]
+			if byResource == nil {
+				byResource = map[string]map[string]any{}
+				out[flavorName] = byResource
+			}
+			for _, rawQuota := range resources {
+				quota, ok := rawQuota.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("ClusterQueue %q has malformed resource quota", queue.GetName())
+				}
+				byResource[fmt.Sprint(quota["name"])] = quota
+			}
+		}
+	}
+	return out, nil
+}
+
+func quotaObjectsResourceGroups(quotas map[string]map[string]map[string]any) ([]any, error) {
+	type quotaGroup struct {
+		resources []string
+		flavors   []string
+	}
+	byResourceSet := map[string]*quotaGroup{}
+	resourceSets := map[string]map[string]bool{}
+	for flavor, resources := range quotas {
+		names := make([]string, 0, len(resources))
+		set := map[string]bool{}
+		for resourceName := range resources {
+			names = append(names, resourceName)
+			set[resourceName] = true
+		}
+		sort.Strings(names)
+		for otherFlavor, otherSet := range resourceSets {
+			overlap := false
+			for resourceName := range set {
+				overlap = overlap || otherSet[resourceName]
+			}
+			if overlap && !reflect.DeepEqual(set, otherSet) {
+				return nil, fmt.Errorf("flavors %q and %q cover overlapping non-identical resource sets", flavor, otherFlavor)
+			}
+		}
+		resourceSets[flavor] = set
+		key := strings.Join(names, "\x00")
+		group := byResourceSet[key]
+		if group == nil {
+			group = &quotaGroup{resources: names}
+			byResourceSet[key] = group
+		}
+		group.flavors = append(group.flavors, flavor)
+	}
+	keys := make([]string, 0, len(byResourceSet))
+	for key := range byResourceSet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	groups := make([]any, 0, len(keys))
+	for _, key := range keys {
+		group := byResourceSet[key]
+		sort.Strings(group.flavors)
+		flavors := make([]any, 0, len(group.flavors))
+		for _, flavorName := range group.flavors {
+			resources := make([]any, 0, len(group.resources))
+			for _, resourceName := range group.resources {
+				resources = append(resources, quotas[flavorName][resourceName])
+			}
+			flavors = append(flavors, map[string]any{"name": flavorName, "resources": resources})
+		}
+		covered := make([]any, 0, len(group.resources))
+		for _, resourceName := range group.resources {
+			covered = append(covered, resourceName)
+		}
+		groups = append(groups, map[string]any{"coveredResources": covered, "flavors": flavors})
+	}
+	return groups, nil
+}
+
+func (r *TauWorkspaceReconciler) establishedWorkspaceClusterQueue(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	managedClusterQueue string,
+) (*unstructured.Unstructured, error) {
+	resolvedQueue := strings.TrimSpace(workspace.Spec.Queue)
+	if resolvedQueue == "" {
+		var err error
+		resolvedQueue, err = resolvedWorkspaceQueueName(ctx, r.apiReader(), workspace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if resolvedQueue != "" {
+		var err error
+		resolvedQueue, _, err = workspaceQueueClusterQueueName(ctx, r.apiReader(), workspace, resolvedQueue)
+		if err != nil {
+			return nil, err
+		}
+	}
+	seen := map[string]bool{managedClusterQueue: true}
+	for _, name := range []string{workspace.Status.Queue.ClusterQueue, resolvedQueue} {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		queue := newQueueObject(clusterQueueGVK)
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: name}, queue); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, err
+		}
+		return queue, nil
+	}
+	managed := newQueueObject(clusterQueueGVK)
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: managedClusterQueue}, managed); err == nil {
+		labels := managed.GetLabels()
+		if labels[labelManagedBy] != labelManagedByValue ||
+			labels[labelWorkspace] != workspace.Name ||
+			workspace.UID == "" ||
+			managed.GetAnnotations()[annotationOwnerUID] != string(workspace.UID) {
+			return nil, fmt.Errorf("managed ClusterQueue %q ownership is not authoritative", managedClusterQueue)
+		}
+		return managed, nil
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if len(workspace.Spec.Quota) == 0 &&
+		strings.TrimSpace(workspace.Status.Queue.LocalQueue) != "" &&
+		strings.TrimSpace(workspace.Status.Queue.LocalQueue) != workspaceLocalQueueName(workspace) {
+		return nil, fmt.Errorf("established workspace queue contract is unavailable")
+	}
+	return nil, nil
+}
+
 func reconcileManagedUnstructuredWithReader(
 	ctx context.Context,
 	kubeClient client.Client,
@@ -271,6 +636,11 @@ func reconcileManagedUnstructuredWithReader(
 		reflect.DeepEqual(existing.GetAnnotations(), desired.GetAnnotations()) {
 		return nil
 	}
+	if desired.GroupVersionKind() == clusterQueueGVK {
+		if err := validateClusterQueueQuotaReduction(existing, desired); err != nil {
+			return err
+		}
+	}
 	if err := unstructured.SetNestedMap(existing.Object, desiredSpec, "spec"); err != nil {
 		return err
 	}
@@ -279,7 +649,40 @@ func reconcileManagedUnstructuredWithReader(
 	return kubeClient.Update(ctx, existing)
 }
 
+func validateClusterQueueQuotaReduction(existing, desired *unstructured.Unstructured) error {
+	reservations, err := clusterQueueReservations(existing)
+	if err != nil {
+		return err
+	}
+	if len(reservations) == 0 {
+		return nil
+	}
+	maximums, err := clusterQueueMaximumQuota(desired)
+	if err != nil {
+		return err
+	}
+	for key, total := range reservations {
+		maximum := maximums[key]
+		if total.Cmp(maximum) > 0 {
+			resourceName, flavorName, _ := strings.Cut(key, "\x00")
+			return fmt.Errorf(
+				"refusing to reduce ClusterQueue %q flavor %q resource %q below active reservation %s (new maximum %s)",
+				existing.GetName(), flavorName, resourceName, total.String(), maximum.String(),
+			)
+		}
+	}
+	return nil
+}
+
+func clusterQueueMaximumQuota(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	return clusterQueueQuota(queue, true)
+}
+
 func clusterQueueNominalQuota(queue *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	return clusterQueueQuota(queue, false)
+}
+
+func clusterQueueQuota(queue *unstructured.Unstructured, includeBorrowing bool) (map[string]resource.Quantity, error) {
 	groups, found, err := unstructured.NestedSlice(queue.Object, "spec", "resourceGroups")
 	if err != nil || !found {
 		return nil, fmt.Errorf("ClusterQueue %q has no readable resourceGroups", queue.GetName())
@@ -313,6 +716,18 @@ func clusterQueueNominalQuota(queue *unstructured.Unstructured) (map[string]reso
 				nominal, err := resource.ParseQuantity(fmt.Sprint(quota["nominalQuota"]))
 				if err != nil {
 					return nil, fmt.Errorf("ClusterQueue %q has invalid nominal quota: %w", queue.GetName(), err)
+				}
+				if includeBorrowing {
+					borrowing := strings.TrimSpace(fmt.Sprint(quota["borrowingLimit"]))
+					if borrowing == "" || borrowing == "<nil>" {
+						maximums[resourceName+"\x00"+flavorName] = nominal
+						continue
+					}
+					limit, err := resource.ParseQuantity(borrowing)
+					if err != nil {
+						return nil, fmt.Errorf("ClusterQueue %q has invalid borrowing limit: %w", queue.GetName(), err)
+					}
+					nominal.Add(limit)
 				}
 				maximums[resourceName+"\x00"+flavorName] = nominal
 			}

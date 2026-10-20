@@ -37,7 +37,7 @@ tests:
           content:
             apiGroups: ["kueue.x-k8s.io"]
             resources: ["clusterqueues"]
-            verbs: ["get", "list", "watch", "update"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
         documentIndex: 2
       - contains:
           path: rules

@@ -139,9 +139,17 @@ func (r *TauWorkspaceReconciler) persistLegacyWorkspaceOwnerUID(
 	return true, nil
 }
 
-func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, targetNamespace string) (bool, error) {
+func (r *TauWorkspaceReconciler) reconcileNamespace(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	targetNamespace string,
+	activateQueue bool,
+) (bool, error) {
 	if workspace.UID == "" {
 		return false, fmt.Errorf("%w: TauWorkspace %q has no UID", errNamespaceOwnershipUnverified, workspace.Name)
+	}
+	if err := validateQuotaValues(workspace.Spec.Quota); err != nil {
+		return false, err
 	}
 	if reason := reservedNamespaceReason(targetNamespace, systemNamespace(r.SystemNamespace)); reason != "" {
 		return false, fmt.Errorf("refusing to manage namespace %q: %s", targetNamespace, reason)
@@ -149,10 +157,13 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	var namespace corev1.Namespace
 	err := r.Get(ctx, client.ObjectKey{Name: targetNamespace}, &namespace)
 	if apierrors.IsNotFound(err) && workspace.Spec.Target.CreateNamespace {
+		labels := workspaceNamespaceLabels(workspace.Name, "")
+		delete(labels, labelWorkspaceLocalQueue)
+		delete(labels, labelKueueDefaultLocalQueue)
 		namespace = corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:        targetNamespace,
-				Labels:      workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue),
+				Labels:      labels,
 				Annotations: workspaceNamespaceAnnotations(workspace),
 			},
 		}
@@ -221,12 +232,26 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 	}
 	changed := false
 	requiredLabels := map[string]string{
-		labelWorkspace:              workspace.Name,
-		labelWorkspaceLocalQueue:    workspace.Spec.Queue,
-		labelKueueDefaultLocalQueue: workspace.Spec.Queue,
+		labelWorkspace: workspace.Name,
 	}
 	if workspace.Spec.Target.CreateNamespace {
-		requiredLabels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+		requiredLabels = workspaceNamespaceLabels(workspace.Name, "")
+		delete(requiredLabels, labelWorkspaceLocalQueue)
+		delete(requiredLabels, labelKueueDefaultLocalQueue)
+	}
+	if activateQueue {
+		localQueueName, err := r.namespaceLocalQueueName(ctx, workspace, targetNamespace)
+		if err != nil {
+			return false, err
+		}
+		requiredLabels[labelWorkspaceLocalQueue] = localQueueName
+		requiredLabels[labelKueueDefaultLocalQueue] = localQueueName
+	}
+	if workspace.Spec.TeamRef != nil {
+		requiredLabels[labelTeam] = workspace.Spec.TeamRef.Name
+	} else if _, ok := namespace.Labels[labelTeam]; ok {
+		delete(namespace.Labels, labelTeam)
+		changed = true
 	}
 	for k, v := range requiredLabels {
 		if namespace.Labels[k] != v {
@@ -257,6 +282,14 @@ func (r *TauWorkspaceReconciler) reconcileNamespace(ctx context.Context, workspa
 		}
 	}
 	return true, nil
+}
+
+func (r *TauWorkspaceReconciler) namespaceLocalQueueName(
+	_ context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	_ string,
+) (string, error) {
+	return workspaceLocalQueueName(workspace), nil
 }
 
 func hasExplicitNamespaceAdoptionEvidence(
