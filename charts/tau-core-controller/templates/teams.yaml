@@ -1,0 +1,12 @@
+{{- range .Values.teams }}
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauTeam
+metadata:
+  name: {{ required "teams[].name is required" .name | quote }}
+  namespace: {{ include "tau-core-controller.namespace" $ }}
+  labels:
+    {{- include "tau-core-controller.labels" $ | nindent 4 }}
+spec:
+  {{- toYaml (default dict .spec) | nindent 2 }}
+{{- end }}
