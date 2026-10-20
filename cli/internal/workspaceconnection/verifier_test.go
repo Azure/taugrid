@@ -116,7 +116,7 @@ func TestKubectlVerifierReportsDefaultedTeamQueue(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io default-b -o name": "localqueue.kueue.x-k8s.io/default-b\n",
 		"auth can-i * * --all-namespaces":                           "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 
 	got, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
 	if err != nil {
