@@ -329,6 +329,11 @@ func (r *TauWorkspaceReconciler) preserveEstablishedWorkspaceQueueContract(
 		if err := unstructured.SetNestedSlice(desired.Object, groups, "spec", "resourceGroups"); err != nil {
 			return fmt.Errorf("preserve ClusterQueue %q resourceGroups: %w", source.GetName(), err)
 		}
+		if keys, found, err := managedQuotaKeys(source); err != nil {
+			return err
+		} else if found {
+			return setManagedQuotaKeys(desired, keys)
+		}
 	} else if err := preserveUndeclaredWorkspaceResources(workspace, team, source, desired); err != nil {
 		return err
 	}

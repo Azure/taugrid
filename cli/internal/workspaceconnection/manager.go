@@ -60,6 +60,7 @@ type Verification struct {
 	WorkspacePhase   string
 	TeamBacked       bool
 	QueueExplicit    bool
+	QueueDefaulted   bool
 	CompatibleQueues []string
 	QueueBackings    map[string]string
 }
@@ -923,7 +924,9 @@ func (s connectionState) contractChanges(verification Verification) []string {
 		changes = append(changes, fmt.Sprintf("namespace %q -> %q", s.Namespace, verification.Namespace))
 	}
 	if s.Queue != verification.Queue &&
-		(verification.QueueExplicit || !slices.Contains(verification.CompatibleQueues, s.Queue)) {
+		(verification.QueueExplicit ||
+			verification.QueueDefaulted ||
+			!slices.Contains(verification.CompatibleQueues, s.Queue)) {
 		changes = append(changes, fmt.Sprintf("LocalQueue %q -> %q", s.Queue, verification.Queue))
 	}
 	storedServiceAccount := effectiveServiceAccount(s.ServiceAccount)
@@ -937,7 +940,9 @@ func (s connectionState) contractChanges(verification Verification) []string {
 func (s *connectionState) applyVerification(descriptor Descriptor, verification Verification, verifiedAt time.Time) {
 	s.ContextName = firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
 	s.Namespace = verification.Namespace
-	if verification.QueueExplicit || !slices.Contains(verification.CompatibleQueues, s.Queue) {
+	if verification.QueueExplicit ||
+		verification.QueueDefaulted ||
+		!slices.Contains(verification.CompatibleQueues, s.Queue) {
 		s.Queue = verification.Queue
 	}
 	s.ClusterQueue = verification.QueueBackings[s.Queue]

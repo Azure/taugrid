@@ -101,6 +101,9 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	clusterQueue := strings.TrimSpace(workspace.Status.Queue.ClusterQueue)
 	specQueue := strings.TrimSpace(workspace.Spec.Queue)
 	queueExplicit := specQueue != "" && specQueue == queue
+	queueDefaulted := workspace.Spec.TeamRef != nil &&
+		specQueue == "" &&
+		queue != clusterQueue
 	var compatibleQueues []string
 	if workspace.Spec.TeamRef != nil {
 		if specQueue != "" && specQueue != queue {
@@ -129,6 +132,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 			WorkspacePhase:   workspace.Status.Phase,
 			TeamBacked:       workspace.Spec.TeamRef != nil,
 			QueueExplicit:    queueExplicit,
+			QueueDefaulted:   queueDefaulted,
 			CompatibleQueues: compatibleQueues,
 			QueueBackings:    map[string]string{queue: clusterQueue},
 		}, nil
@@ -188,6 +192,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 		WorkspacePhase:   workspace.Status.Phase,
 		TeamBacked:       workspace.Spec.TeamRef != nil,
 		QueueExplicit:    queueExplicit,
+		QueueDefaulted:   queueDefaulted,
 		CompatibleQueues: compatibleQueues,
 		QueueBackings:    map[string]string{queue: clusterQueue},
 	}, nil

@@ -5132,6 +5132,86 @@ func TestTeamWorkspaceQuotaRemovalChargesAppliedGuaranteesUntilUpdate(t *testing
 	}
 }
 
+func TestTeamWorkspaceQuotaClearPreservesChargedResourceContract(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.UID = types.UID("workspace-uid")
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: "vision"}
+	workspace.Spec.Quota = []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "4", "0", "0"),
+	}
+	team := testTeam("vision", "8")
+	team.UID = types.UID("team-uid")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
+	source := testClusterQueue("jobqueue")
+	source.Object["spec"] = map[string]any{
+		"resourceGroups": []any{
+			map[string]any{
+				"coveredResources": []any{"cpu", "memory", nvidiaGPUResourceName},
+				"flavors": []any{
+					map[string]any{
+						"name": "taugrid-gpu-h200",
+						"resources": []any{
+							map[string]any{"name": "cpu", "nominalQuota": "64"},
+							map[string]any{"name": "memory", "nominalQuota": "256Gi"},
+							map[string]any{"name": nvidiaGPUResourceName, "nominalQuota": "8"},
+						},
+					},
+				},
+			},
+		},
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, team, source, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 5)
+
+	var updated tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &updated); err != nil {
+		t.Fatal(err)
+	}
+	updated.Spec.Quota = nil
+	if err := c.Update(ctx, &updated); err != nil {
+		t.Fatal(err)
+	}
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 3)
+
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, managed); err != nil {
+		t.Fatal(err)
+	}
+	keys, found, err := managedQuotaKeys(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpuKey := quotaKey(workspace.Spec.Quota[0])
+	if !found || len(keys) != 1 || !keys[gpuKey] {
+		t.Fatalf("managed quota keys = %#v, want preserved GPU guarantee only", keys)
+	}
+	if err := (&TauTeamReconciler{Client: c, APIReader: c}).validateTeamCapacity(ctx, team); err != nil {
+		t.Fatalf("cleared workspace quota left invalid Team accounting: %v", err)
+	}
+	shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, &updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := map[string]resource.Quantity{}
+	for _, quota := range shared {
+		remaining[quotaKey(quota)] = quota.NominalQuota
+	}
+	gpuRemaining := remaining[gpuKey]
+	if gpuRemaining.Cmp(resource.MustParse("4")) != 0 {
+		t.Fatalf("GPU shared quota after clear = %s, want 4", gpuRemaining.String())
+	}
+}
+
 func TestTeamWorkspaceExplicitQueueChangePublishesNewRoute(t *testing.T) {
 	ctx := context.Background()
 	workspace := testWorkspace("aurora")

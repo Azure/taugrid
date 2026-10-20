@@ -1639,6 +1639,75 @@ func TestManagerRevalidationMovesExplicitActiveQueueAndRetainsCompatibility(t *t
 	}
 }
 
+func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "default-a",
+			WorkspacePhase: "Ready", TeamBacked: true, QueueDefaulted: true,
+			QueueBackings: map[string]string{"default-a": "tau-ws-sample"},
+		}},
+		Now:          func() time.Time { return now },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+
+	revalidation := Verification{
+		ContextName: "taugrid-flex", Namespace: "sample", Queue: "default-b",
+		WorkspacePhase: "Ready", TeamBacked: true, QueueDefaulted: true,
+		QueueBackings: map[string]string{"default-b": "tau-ws-sample"},
+	}
+	noninteractiveVerifier := &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{result: revalidation},
+		queue:        "default-a",
+	}
+	noninteractive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  false,
+		Verifier:     noninteractiveVerifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := noninteractive.Ensure(context.Background(), root); !errors.Is(err, ErrInteractiveRequired) ||
+		!strings.Contains(err.Error(), `LocalQueue "default-a" -> "default-b"`) {
+		t.Fatalf("default queue change did not require confirmation: %v", err)
+	}
+	if noninteractiveVerifier.calls != 1 {
+		t.Fatalf("compatible queue verification calls = %d, want retained default-a verification", noninteractiveVerifier.calls)
+	}
+
+	interactiveVerifier := &compatibleFakeVerifier{
+		fakeVerifier: &fakeVerifier{result: revalidation},
+		queue:        "default-a",
+	}
+	interactive := Manager{
+		ConfigDir:    configDir,
+		Interactive:  true,
+		Input:        strings.NewReader("y\n"),
+		Output:       &bytes.Buffer{},
+		Verifier:     interactiveVerifier,
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	active, err := interactive.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatalf("confirm default queue change: %v", err)
+	}
+	if active.Queue != "default-b" || active.ClusterQueue != "tau-ws-sample" {
+		t.Fatalf("active connection = %#v, want default-b -> tau-ws-sample", active)
+	}
+	if interactiveVerifier.calls != 1 {
+		t.Fatalf("compatible queue verification calls = %d, want retained default-a verification", interactiveVerifier.calls)
+	}
+}
+
 func TestManagerRejectsUnsupportedConnectionState(t *testing.T) {
 	root := writeDescriptorFixture(t)
 	configDir := t.TempDir()
