@@ -1,0 +1,24 @@
+{
+  "coverage": {
+    "ackAndConsumptionProofRequiredForRecovery": true,
+    "allAcceptedRev21Tests": true,
+    "allModeledCrashBoundariesAndHonestUnknown": true,
+    "authorityExpectedLatestRejectsStaleSignedPrefix": true,
+    "canonicalRootSignedAdmission": true,
+    "crossRoleAndWithinRoleKeyCollisionRejected": true,
+    "exactDistinctServiceAndWitnessRoles": true,
+    "expiredCrossRunAndReplayRaceAckRejected": true,
+    "forgedOrUnsignedAdmissionRejected": true,
+    "freshUnpredictableChallengeRequired": true,
+    "mandatoryRunBoundAndClosedHashesCountsStatus": true,
+    "quorumLossAndDeploymentUnavailabilityRejected": true,
+    "witnessValidatesFullLogAndRefusesArbitraryHead": true
+  },
+  "outcome": "PASS_OFFLINE_CONTRACT_CANDIDATE",
+  "schema": "dapple-r050708-guarded-bootstrap-rev24-validation/v1",
+  "tests": 78,
+  "zeroLiveNetworkCalls": true,
+  "zeroMutations": true,
+  "zeroRecoveryCalls": true,
+  "zeroStateReads": true
+}

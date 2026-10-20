@@ -1,0 +1,15 @@
+{
+  "contractSHA256": "95a67c5f1c9dcba36d5d0937543b0998e831f6976473308b82d3f04ffd67ac8c",
+  "independentVerificationRequired": true,
+  "indexSHA256": "343704eef4252b1ee6b598182cadd66bbf2f099208915dd09ed58f5a6918fcfc",
+  "liveAuthority": false,
+  "mode": "0444",
+  "recoveryAuthority": false,
+  "replacementTransferIssued": false,
+  "row15": false,
+  "schema": "dapple-r050708-guarded-bootstrap-rev24-receipt/v1",
+  "serviceDeployed": false,
+  "tests": 78,
+  "validationSHA256": "80d02eda1ea7b518f2a1d40c868a85c2c26a57772172c9923d5e556901f555ad",
+  "verdict": "OFFLINE_REV24_DIAGNOSTIC_CONTRACT_CANDIDATE"
+}

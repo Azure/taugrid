@@ -1,0 +1,141 @@
+{
+  "antiStaleAndConsistency": {
+    "authorityExpectedLatest": "recovery requires canonical-root-signed latest checkpoint index and tree head observed through witness gossip",
+    "availabilityAssumption": "at least two of three admitted independent witnesses and authority freshness gossip are reachable and non-equivocating",
+    "latestConsistency": "entries, witnessed checkpoint, and authority freshness statement must agree exactly on latest index/head",
+    "priorConsistency": "challenge binds prior accepted checkpoint; recovered complete log must reproduce that head at that exact index",
+    "rejects": [
+      "stale signed prefix",
+      "withheld suffix",
+      "rollback or divergent fork",
+      "split view and witness equivocation",
+      "reorder, replay, gap, or substitution"
+    ]
+  },
+  "authority": {
+    "cleanup": false,
+    "continuation": false,
+    "live": false,
+    "mutation": false,
+    "network": false,
+    "patch": false,
+    "recovery": false,
+    "release": false,
+    "replacementTransfer": false,
+    "retry": false,
+    "row15": false,
+    "rows": false,
+    "stateRead": false
+  },
+  "canonicalAuthorityAnchor": {
+    "admissionSignature": "Ed25519 by already-canonical authority root",
+    "binds": [
+      "exact ledger revision and JSON SHA256",
+      "trust domain and algorithm",
+      "one service identity, role, key ID, and public key",
+      "exactly three witness identities, roles, key IDs, and distinct public keys",
+      "exact 2-of-3 threshold",
+      "validity, rotation, and revocation state",
+      "separately accepted deployment acceptance ID"
+    ],
+    "crossRoleOrWithinRoleKeyCollision": "rejected",
+    "producerSelfAdmission": false,
+    "required": true
+  },
+  "canonicalCurrentState": {
+    "directAPICalls": {
+      "maximum": 2,
+      "minimum": 0
+    },
+    "patchMutations": {
+      "maximum": 1,
+      "minimum": 0
+    },
+    "reservationObserved": null,
+    "reservationPossible": [
+      "rows05-08-remediation-20261019t003520z-v2",
+      "rows05-08-remediation-20261019t080808z-v3"
+    ],
+    "rev347AuthorityAndTransfer": "terminal_non_reusable"
+  },
+  "closedEvidenceSemantics": {
+    "bodyBytes": "non-boolean integer 0 through 16777216",
+    "hashes": "exact lowercase 64-character hexadecimal SHA256",
+    "honestUnknown": "send ambiguity and PATCH application remain UNKNOWN unless validated response evidence proves a terminal classification",
+    "reason": "bounded string",
+    "requestCrossBinding": "exact GET or PATCH request SHA256 carried through intent, ACK, consumption, send disposition, response, and validation",
+    "runBound": "mandatory first event with exact authority/transfer/contract",
+    "status": "non-boolean integer 100 through 599"
+  },
+  "closes": {
+    "blockers": [
+      "unsigned caller-supplied admission",
+      "witness role, identity, and exact quorum defects",
+      "ACK replay without authority freshness",
+      "signed stale checkpoint rollback",
+      "recovery lacking service ACK proof",
+      "incomplete event and response closure",
+      "missing deployment and availability prerequisite"
+    ],
+    "ledgerRevision": 354,
+    "rejection": "REJECT_OFFLINE_REV23_UNANCHORED_ADMISSION_REPLAYABLE_ACK_AND_STALE_CHECKPOINT"
+  },
+  "deploymentPrerequisite": {
+    "authoritySigned": true,
+    "closedEvidence": [
+      "service identity and endpoint",
+      "three distinct witness identities and endpoints",
+      "key custody evidence SHA256",
+      "quorum reachability",
+      "durable persistence and retention lock",
+      "verified backup",
+      "freshness and gossip health",
+      "exact admission SHA256 match"
+    ],
+    "deployedByThisPacket": false,
+    "missingOrUnhealthy": "no future live authority",
+    "separateAcceptanceRequired": true
+  },
+  "freshOneTimePreSendAck": {
+    "authorityChallenge": [
+      "canonical-root signature",
+      "unpredictable 256-bit nonce",
+      "authority/run/transfer/contract/generation binding",
+      "issued and bounded expiry epochs",
+      "prior accepted checkpoint index and head",
+      "deployment acceptance SHA256"
+    ],
+    "recoveryRequires": "both original ACK and signed consumption proof",
+    "replay": "same nonce/run/sequence/event/request tuple cannot be consumed twice; old, expired, cross-run, cross-request, or post-hoc proof is rejected",
+    "sequence": [
+      "durably append exact request INTENT",
+      "verify service-signed ACK bound to challenge and log head",
+      "atomically consume ACK once at service",
+      "receive signed consumption proof",
+      "only then authorize API send"
+    ]
+  },
+  "preservedRev21Controls": {
+    "closedNodeAndStatusProjections": true,
+    "completeBoundedResponseEvidence": true,
+    "exactDirectHTTPSWireContract": true,
+    "noRetryFallbackExtraOrPostStateGET": true,
+    "secretSafeLifecycle": true,
+    "singleNearWriteGETConditionalAtomicFullSpecPATCH": true,
+    "strictDuplicateAndNonFiniteRejectingJSON": true,
+    "terminalOneUseTransferConsumption": true
+  },
+  "schema": "dapple-r050708-guarded-bootstrap-contract-rev24/v1",
+  "verdict": "OFFLINE_REV24_DIAGNOSTIC_CONTRACT_CANDIDATE",
+  "witnessValidation": {
+    "beforeSigning": [
+      "validate full log from zero head",
+      "validate mandatory RUN_BOUND",
+      "validate every transition and canonical payload",
+      "validate service ACK and one-time consumption proof on every INTENT",
+      "validate request hashes, previous heads, leaf hashes, and tree heads",
+      "validate prior-checkpoint consistency"
+    ],
+    "blindHeadSigning": false
+  }
+}

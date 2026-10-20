@@ -1,0 +1,132 @@
+{
+  "memberCount": 20,
+  "members": [
+    {
+      "bytes": 5576,
+      "mode": "0444",
+      "path": "CONTRACT.json",
+      "sha256": "95a67c5f1c9dcba36d5d0937543b0998e831f6976473308b82d3f04ffd67ac8c"
+    },
+    {
+      "bytes": 498,
+      "mode": "0444",
+      "path": "README.md",
+      "sha256": "e2241005126f206dcb50de38633498eed09f7f325e526b7f3536b430a041814e"
+    },
+    {
+      "bytes": 17360,
+      "mode": "0444",
+      "path": "diagnostic_contract.py",
+      "sha256": "e6f38bce6d43b71751b347b885a8e67a36f30ac0e2addf1caf2b9a9e6f93c339"
+    },
+    {
+      "bytes": 20837,
+      "mode": "0444",
+      "path": "evidence_protocol.py",
+      "sha256": "21538d3a2fca62fa0a05fb113f3cc21b9023e313af8ca67b886e81560397d4cb"
+    },
+    {
+      "bytes": 532,
+      "mode": "0444",
+      "path": "provenance/LEDGER-REV354-CHECKSUMS.sha256",
+      "sha256": "a876c51717bbb5d16c7a3383b02d0c3d1f4b9070f8e63776664a8fd98a2b25ab"
+    },
+    {
+      "bytes": 1599833,
+      "mode": "0444",
+      "path": "provenance/LEDGER-REV354.json",
+      "sha256": "a085081217ec47fcd0882bde8af4498bbc21a995849502f86015bbd53f5ae01c"
+    },
+    {
+      "bytes": 322274,
+      "mode": "0444",
+      "path": "provenance/LEDGER-REV354.md",
+      "sha256": "707ab5a70d4d9b78fa2994bcf14564a583db4c2bdbfc710b22051f4ee6a0b457"
+    },
+    {
+      "bytes": 5690,
+      "mode": "0444",
+      "path": "provenance/REV23-ADVERSARIAL.json",
+      "sha256": "cc720ac2f456ab63af772eb690935832a1f2e46141a14d8db8b94e1e174b68e9"
+    },
+    {
+      "bytes": 3988028,
+      "mode": "0444",
+      "path": "provenance/REV23-CANDIDATE.tar.gz",
+      "sha256": "5533ce9a07c70d4d737382c9d220938cd05ca5321957eb7f14e25697e567dd10"
+    },
+    {
+      "bytes": 4954,
+      "mode": "0444",
+      "path": "provenance/REV23-REJECTION.json",
+      "sha256": "54f648a4ef255713591c42bdead998b132c4bb84993b3a1161b3cea7513abe5a"
+    },
+    {
+      "bytes": 23323,
+      "mode": "0444",
+      "path": "provenance/REV23-VERIFIER.py",
+      "sha256": "e60213137bb99444780f3146944ee4f2f430147f9fc158b57c5558a1c3f1caf3"
+    },
+    {
+      "bytes": 13588,
+      "mode": "0444",
+      "path": "raw_patch_client.py",
+      "sha256": "26a723b8e29cccdc389d451eaf8c09d611ab27625345e51d4682d1dc45548032"
+    },
+    {
+      "bytes": 20009,
+      "mode": "0444",
+      "path": "rev24_protocol.py",
+      "sha256": "112b6b86e576d7dbab88b947bc938d0bc511409f29435a6e75e3eafc39e66419"
+    },
+    {
+      "bytes": 17605,
+      "mode": "0444",
+      "path": "seal_packet.py",
+      "sha256": "2b39ac015ed8a7c58768bcddb9cb50df2d282e99938c2da5ef89b8bc517ed591"
+    },
+    {
+      "bytes": 1652,
+      "mode": "0444",
+      "path": "strict_json.py",
+      "sha256": "c827b4335eebe093fb1879c3c541c63da8eb56456ac0c4d23b60f856b11d7e8f"
+    },
+    {
+      "bytes": 8352,
+      "mode": "0444",
+      "path": "tests/test_diagnostic_contract.py",
+      "sha256": "84599361f1d8b154a8db759f837ecc66dcf9a3be7f7db4b9a1f2eeae951ba164"
+    },
+    {
+      "bytes": 16364,
+      "mode": "0444",
+      "path": "tests/test_rev18_security.py",
+      "sha256": "916783a8c1e8e8b3a8e5d7ac720cb6e75b1fd340b1080a86be8d4014680b2582"
+    },
+    {
+      "bytes": 18344,
+      "mode": "0444",
+      "path": "tests/test_rev24_protocol.py",
+      "sha256": "e42549b4f5ac203f18274456f44dcf6075915abf4cf74906ddfdf456ea27eb7d"
+    },
+    {
+      "bytes": 9877,
+      "mode": "0444",
+      "path": "validation/TEST-OUTPUT.txt",
+      "sha256": "abe7a9092f1dcfeda8bb85f7943accb4bb9f63c649ed030ade214c0b522990ba"
+    },
+    {
+      "bytes": 945,
+      "mode": "0444",
+      "path": "validation/VALIDATION.json",
+      "sha256": "80d02eda1ea7b518f2a1d40c868a85c2c26a57772172c9923d5e556901f555ad"
+    }
+  ],
+  "row15Prohibited": true,
+  "schema": "dapple-r050708-guarded-bootstrap-rev24-index/v1",
+  "verdict": "OFFLINE_REV24_DIAGNOSTIC_CONTRACT_CANDIDATE",
+  "zeroLiveNetworkCalls": true,
+  "zeroMutations": true,
+  "zeroRecoveryCalls": true,
+  "zeroStateReads": true
+}
