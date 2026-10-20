@@ -124,7 +124,7 @@ func TestRunResultRefFallsBackFromJobToRayJob(t *testing.T) {
 	reader := &fakeRunResultReader{
 		responses: map[string]string{
 			"job":           "",
-			"rayjob.ray.io": `{"metadata":{"annotations":{"` + workloadmeta.AnnotationResultPath + `":"/data/research-workspace/runs/modernbert-ray","` + workloadmeta.AnnotationResultPVC + `":"research-workspace","` + workloadmeta.AnnotationArtifactPublication + `":"staged","` + workloadmeta.AnnotationArtifactPublicationID + `":"publication-1"}}}`,
+			"rayjob.ray.io": `{"metadata":{"annotations":{"` + workloadmeta.AnnotationResultPath + `":"/data/research-workspace/runs/modernbert-ray","` + workloadmeta.AnnotationResultPVC + `":"research-workspace","` + workloadmeta.AnnotationArtifactPublication + `":"staged","` + workloadmeta.AnnotationArtifactPublicationID + `":"publication-1"}},"spec":{"rayClusterSpec":{"headGroupSpec":{"template":{"spec":{"nodeSelector":{"pool":"ray-head"},"tolerations":[{"key":"ray-head","operator":"Exists"}]}}}}}}`,
 		},
 	}
 	ref, err := runResultRefWithReader(context.Background(), reader, "research-workspace", "modernbert-ray")
@@ -139,6 +139,9 @@ func TestRunResultRefFallsBackFromJobToRayJob(t *testing.T) {
 	}
 	if ref.PublicationID != "publication-1" {
 		t.Fatalf("RayJob publication ID = %q", ref.PublicationID)
+	}
+	if ref.Placement.NodeSelector["pool"] != "ray-head" || len(ref.Placement.Tolerations) != 1 {
+		t.Fatalf("RayJob placement = %#v", ref.Placement)
 	}
 	if strings.Join(reader.calls, ",") != "job,rayjob.ray.io" {
 		t.Fatalf("lookup order = %v", reader.calls)
@@ -203,6 +206,36 @@ func TestRunResultRefCarriesDeclaredCheckpoint(t *testing.T) {
 	}
 	if ref.CheckpointArtifact != "last.safetensors" {
 		t.Fatalf("CheckpointArtifact = %q, want %q", ref.CheckpointArtifact, "last.safetensors")
+	}
+}
+
+func TestRunResultRefCarriesWorkloadPlacement(t *testing.T) {
+	reader := &fakeRunResultReader{
+		responses: map[string]string{
+			"job": `{
+				"metadata":{"annotations":{"` + workloadmeta.AnnotationResultPath + `":"/data/runs/demo","` + workloadmeta.AnnotationResultPVC + `":"artifacts"}},
+				"spec":{"template":{"spec":{
+					"nodeSelector":{"kueue.azure.com/gpu-series":"ndm-a100-v4"},
+					"affinity":{"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"topology.kubernetes.io/zone","operator":"In","values":["eastus-1"]}]}]}}},
+					"tolerations":[{"key":"nvidia.com/gpu","operator":"Exists","effect":"NoSchedule"}]
+				}}}
+			}`,
+			"rayjob.ray.io": "",
+		},
+	}
+
+	ref, err := runResultRefWithReader(context.Background(), reader, "demo", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Placement.NodeSelector["kueue.azure.com/gpu-series"] != "ndm-a100-v4" {
+		t.Fatalf("nodeSelector = %#v", ref.Placement.NodeSelector)
+	}
+	if ref.Placement.Affinity == nil || len(ref.Placement.Affinity.NodeAffinity) == 0 {
+		t.Fatal("workload affinity was not preserved")
+	}
+	if len(ref.Placement.Tolerations) != 1 || ref.Placement.Tolerations[0]["key"] != "nvidia.com/gpu" {
+		t.Fatalf("tolerations = %#v", ref.Placement.Tolerations)
 	}
 }
 

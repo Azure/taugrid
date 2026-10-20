@@ -5,15 +5,18 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,6 +49,11 @@ func TestHelperPodYAML_RoundTrip(t *testing.T) {
 		PVCName:   "blob-training",
 		TTLSec:    60,
 		Script:    "cat 'foo'\n",
+		Placement: helperPodPlacement{
+			NodeSelector: map[string]string{"pool": "storage"},
+			Affinity:     &helperPodAffinity{NodeAffinity: map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{}}},
+			Tolerations:  []map[string]any{{"key": "storage", "operator": "Exists"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("helperPodYAML: %v", err)
@@ -68,6 +76,9 @@ func TestHelperPodYAML_RoundTrip(t *testing.T) {
 	}
 	if len(got.Spec.Volumes) != 1 || got.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "blob-training" {
 		t.Errorf("volumes: %+v", got.Spec.Volumes)
+	}
+	if got.Spec.NodeSelector["pool"] != "storage" || got.Spec.Affinity == nil || len(got.Spec.Affinity.NodeAffinity) == 0 || len(got.Spec.Tolerations) != 1 {
+		t.Errorf("placement: %+v", got.Spec)
 	}
 }
 
@@ -105,6 +116,169 @@ func TestHelperPodYAML_ResistsYAMLInjection(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestResolveHelperPodPlacementConstrainsHeterogeneousCSIAndPreservesWorkloadPlacement(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"blob.csi.azure.com"}}}`, nil
+		case "get csinode -o json":
+			return `{"items":[
+				{"metadata":{"name":"gpu-b"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}},
+				{"metadata":{"name":"spark-452c"},"spec":{"drivers":null}},
+				{"metadata":{"name":"gpu-a"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}}
+			]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+	base := helperPodPlacement{
+		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "ndm-a100-v4"},
+		Affinity: &helperPodAffinity{
+			NodeAffinity: map[string]any{
+				"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+					"nodeSelectorTerms": []any{
+						map[string]any{
+							"matchExpressions": []any{
+								map[string]any{"key": "topology.kubernetes.io/zone", "operator": "In", "values": []any{"eastus-1"}},
+							},
+						},
+					},
+				},
+			},
+		},
+		Tolerations: []map[string]any{
+			{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
+		},
+	}
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.NodeSelector, base.NodeSelector) {
+		t.Fatalf("nodeSelector = %#v, want %#v", got.NodeSelector, base.NodeSelector)
+	}
+	if !reflect.DeepEqual(got.Tolerations, base.Tolerations) {
+		t.Fatalf("tolerations = %#v, want %#v", got.Tolerations, base.Tolerations)
+	}
+	nodeAffinity := got.Affinity.NodeAffinity
+	required := nodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	terms := required["nodeSelectorTerms"].([]any)
+	term := terms[0].(map[string]any)
+	if len(term["matchExpressions"].([]any)) != 1 {
+		t.Fatalf("existing matchExpressions were not preserved: %#v", term)
+	}
+	fields := term["matchFields"].([]any)
+	if len(fields) != 1 {
+		t.Fatalf("matchFields = %#v, want one CSI compatibility requirement", fields)
+	}
+	requirement := fields[0].(map[string]any)
+	if requirement["key"] != "metadata.name" || requirement["operator"] != "In" {
+		t.Fatalf("requirement = %#v", requirement)
+	}
+	if got := requirement["values"].([]string); !reflect.DeepEqual(got, []string{"gpu-a", "gpu-b"}) {
+		t.Fatalf("compatible nodes = %v, want [gpu-a gpu-b]", got)
+	}
+	baseTerm := base.Affinity.NodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)["nodeSelectorTerms"].([]any)[0].(map[string]any)
+	if _, mutated := baseTerm["matchFields"]; mutated {
+		t.Fatalf("base placement was mutated: %#v", base)
+	}
+}
+
+func TestResolveHelperPodPlacementLeavesPortableStorageUnconstrained(t *testing.T) {
+	tests := []struct {
+		name        string
+		pv          string
+		csiNodes    string
+		wantCSINode bool
+	}{
+		{
+			name:        "non-CSI",
+			pv:          `{"spec":{"hostPath":{"path":"/data"}}}`,
+			wantCSINode: false,
+		},
+		{
+			name:        "universally registered CSI",
+			pv:          `{"spec":{"csi":{"driver":"file.csi.azure.com"}}}`,
+			csiNodes:    `{"items":[{"metadata":{"name":"node-a"},"spec":{"drivers":[{"name":"file.csi.azure.com"}]}},{"metadata":{"name":"node-b"},"spec":{"drivers":[{"name":"file.csi.azure.com"}]}}]}`,
+			wantCSINode: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sawCSINode := false
+			runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+				switch strings.Join(args, " ") {
+				case "-n team-a get pvc artifacts -o json":
+					return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+				case "get pv pv-artifacts -o json":
+					return tc.pv, nil
+				case "get csinode -o json":
+					sawCSINode = true
+					return tc.csiNodes, nil
+				default:
+					t.Fatalf("unexpected kubectl args: %v", args)
+					return "", nil
+				}
+			})
+
+			got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts", helperPodPlacement{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Affinity != nil {
+				t.Fatalf("portable storage gained affinity: %#v", got.Affinity)
+			}
+			if sawCSINode != tc.wantCSINode {
+				t.Fatalf("CSINode lookup = %v, want %v", sawCSINode, tc.wantCSINode)
+			}
+		})
+	}
+}
+
+func TestResolveHelperPodPlacementLeavesUnboundPVCForSchedulerBinding(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if strings.Join(args, " ") != "-n team-a get pvc artifacts -o json" {
+			t.Fatalf("unexpected kubectl args: %v", args)
+		}
+		return `{"spec":{"storageClassName":"portable"},"status":{"phase":"Pending"}}`, nil
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts", helperPodPlacement{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Affinity != nil {
+		t.Fatalf("unbound PVC gained affinity: %#v", got.Affinity)
+	}
+}
+
+func TestWaitForHelperPodTerminalSurfacesPermanentMountFailurePromptly(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch {
+		case len(args) > 1 && args[0] == "get" && args[1] == "-n":
+			return "Pending", nil
+		case len(args) > 1 && args[0] == "get" && args[1] == "events":
+			return `{"items":[{"type":"Warning","reason":"FailedMount","message":"driver name blob.csi.azure.com not found in the list of registered CSI drivers"}]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	start := time.Now()
+	_, err := waitForHelperPodTerminal(context.Background(), runner, "team-a", "tau-ls-run", 10*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "FailedMount") || !strings.Contains(err.Error(), "blob.csi.azure.com") {
+		t.Fatalf("mount diagnostic = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Fatalf("permanent mount failure took %v to surface", elapsed)
 	}
 }
 
