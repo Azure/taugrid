@@ -1504,7 +1504,7 @@ func TestKubectlVerifierManagerPreservesAliasBackingForPlacement(t *testing.T) {
 		"-n sample get localqueue.kueue.x-k8s.io jobqueue -o jsonpath={.spec.clusterQueue}": "legacy-cq\n",
 		"auth can-i * * --all-namespaces":                                                   "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 	manager := Manager{Verifier: verifier}
 
 	verification, err := verifier.Verify(context.Background(), descriptor, "/tmp/kubeconfig")
@@ -1676,7 +1676,7 @@ func TestManagerRevalidationMovesChangedDefaultAndRetainsCompatibility(t *testin
 		"-n sample get localqueue.kueue.x-k8s.io default-a -o jsonpath={.spec.clusterQueue}": "default-a\n",
 		"auth can-i * * --all-namespaces":                                                    "yes\n",
 	}}
-	verifier := KubectlVerifier{NewRunner: func(string, string) rawRunner { return runner }}
+	verifier := KubectlVerifier{NewRunner: func(string, string) RawRunner { return runner }}
 	noninteractive := Manager{
 		ConfigDir:    configDir,
 		Interactive:  false,
@@ -2063,6 +2063,7 @@ func TestManagerRejectsNotReadyDuringNoninteractiveRefresh(t *testing.T) {
 		Now:          func() time.Time { return now },
 		ReadinessTTL: time.Minute,
 	}
+
 	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
@@ -2079,6 +2080,46 @@ func TestManagerRejectsNotReadyDuringNoninteractiveRefresh(t *testing.T) {
 	_, err := second.Ensure(context.Background(), root)
 	if err == nil || !strings.Contains(err.Error(), `workspace "sample" is not Ready (phase=Degraded)`) {
 		t.Fatalf("expected NotReady failure, got %v", err)
+	}
+}
+
+func TestManagerAllowsNotReadyDuringLifecycleRefresh(t *testing.T) {
+	root := writeDescriptorFixture(t)
+	configDir := t.TempDir()
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	first := Manager{
+		ConfigDir:   configDir,
+		Interactive: false,
+		Credentials: &fakeCredentialProvider{raw: []byte("apiVersion: v1\nkind: Config\n")},
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspaceUID: "workspace-uid", WorkspacePhase: "Ready",
+		}},
+		Now:          func() time.Time { return now },
+		ReadinessTTL: time.Minute,
+	}
+	if _, err := withFirstUseApproval(first).Ensure(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	second := Manager{
+		ConfigDir:             configDir,
+		Interactive:           false,
+		AllowUnreadyWorkspace: true,
+		Verifier: &fakeVerifier{result: Verification{
+			ContextName: "taugrid-flex", Namespace: "sample", Queue: "jobqueue",
+			WorkspaceUID: "workspace-uid", WorkspacePhase: "Degraded",
+		}},
+		Now:          func() time.Time { return now.Add(2 * time.Minute) },
+		ReadinessTTL: time.Minute,
+	}
+	connection, err := second.Ensure(context.Background(), root)
+	if err != nil {
+		t.Fatalf("lifecycle refresh rejected Degraded workspace: %v", err)
+	}
+	if connection.WorkspaceUID != "workspace-uid" ||
+		connection.Namespace != "sample" ||
+		connection.Queue != "jobqueue" {
+		t.Fatalf("connection = %#v", connection)
 	}
 }
 

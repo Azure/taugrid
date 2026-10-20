@@ -95,6 +95,44 @@ func applySelectedWorkloadProfile(
 	selection profile.Selection,
 	renderProfile profile.Profile,
 ) (unresolvedRunOptions, error) {
+	profileQueue := strings.TrimSpace(renderProfile.Queue)
+	if o.workspaceQueueResolved {
+		workspaceQueue := strings.TrimSpace(o.queue)
+		if workspaceQueue == "" {
+			return o, fmt.Errorf("verified TauWorkspace routing has no LocalQueue")
+		}
+		profileClusterQueue, err := selection.Profile.ClusterQueueFor(o.namespace, profileQueue)
+		if err != nil {
+			return o, fmt.Errorf("resolve workload profile queue binding: %w", err)
+		}
+		workspaceClusterQueue := strings.TrimSpace(o.workspaceClusterQueue)
+		managedWorkspaceClusterQueue := managedWorkspaceClusterQueueName(o.workspace)
+		if workspaceQueue == profileQueue && workspaceClusterQueue != managedWorkspaceClusterQueue {
+			workspaceClusterQueue = strings.TrimSpace(profileClusterQueue)
+		}
+		if workspaceClusterQueue == "" {
+			return o, fmt.Errorf(
+				"verified TauWorkspace LocalQueue %q differs from workload profile %q queue %q but has no resolved ClusterQueue",
+				workspaceQueue,
+				selection.Profile.Name,
+				profileQueue,
+			)
+		}
+		if workspaceClusterQueue != strings.TrimSpace(profileClusterQueue) &&
+			(workspaceQueue != profileQueue || workspaceClusterQueue != managedWorkspaceClusterQueue) {
+			return o, fmt.Errorf(
+				"verified TauWorkspace LocalQueue %q resolves to ClusterQueue %q and cannot replace %s workload profile %q queue %q bound to ClusterQueue %q",
+				workspaceQueue,
+				workspaceClusterQueue,
+				selection.Profile.ExecutionTarget,
+				selection.Profile.Name,
+				profileQueue,
+				profileClusterQueue,
+			)
+		}
+		o.workspaceClusterQueue = workspaceClusterQueue
+		renderProfile.Queue = workspaceQueue
+	}
 	if strings.TrimSpace(o.priorityTier) != "" &&
 		(strings.TrimSpace(o.workloadPriorityClass) != "" ||
 			strings.TrimSpace(o.podPriorityClass) != "" ||
@@ -216,7 +254,9 @@ func applySelectedWorkloadProfile(
 		o.disableDefaultPriorities = renderProfile.Topology.DisableDefaultPriorities
 	}
 	clusterQueue := ""
-	if o.selectedWorkloadProfile != nil {
+	if o.workspaceQueueResolved && strings.TrimSpace(o.workspaceClusterQueue) != "" {
+		clusterQueue = o.workspaceClusterQueue
+	} else if o.selectedWorkloadProfile != nil {
 		clusterQueue = o.selectedWorkloadProfile.ClusterQueue
 	}
 	if clusterQueue == "" {

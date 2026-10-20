@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Azure/taugrid/cli/internal/projectcatalog"
+	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 )
 
@@ -49,6 +50,7 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+
 		if resolution.Project == nil || resolution.Project.Name != "beta" {
 			t.Fatalf("project = %#v", resolution.Project)
 		}
@@ -71,6 +73,24 @@ func TestResolveRunRequestCatalogSelection(t *testing.T) {
 			t.Fatalf("expected duplicate target ambiguity, got %v", err)
 		}
 	})
+}
+
+func TestResolveRunRequestCarriesCatalogWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "beta-workspace"},
+	})
+	resolution, err := resolveRunRequest(root, "beta", "", "train")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Project == nil || resolution.Project.Workspace != "beta-workspace" {
+		t.Fatalf("project = %#v", resolution.Project)
+	}
+	if resolution.Connection.Workspace != "beta-workspace" {
+		t.Fatalf("connection source workspace = %q", resolution.Connection.Workspace)
+	}
 }
 
 func TestResolveRunRequestConfigSymlinkOwnership(t *testing.T) {
@@ -269,6 +289,61 @@ policy:
 	}
 	if ensurer.calls != 0 {
 		t.Fatalf("workspace conflict activated connection %d times", ensurer.calls)
+	}
+}
+
+func TestNoCatalogExplicitWorkspaceOverridesConfigWorkspace(t *testing.T) {
+	root := t.TempDir()
+	configureRunRoutingProfile(t)
+	writeRunRoutingFile(t, filepath.Join(root, "train.sh"), "#!/bin/sh\necho train\n")
+	writeRunRoutingFile(t, filepath.Join(root, "tau", "train.yaml"), `name: explicit-workspace
+engine: job
+entrypoint: ../train.sh
+compute:
+  gpus: 0
+runtime:
+  image: busybox:1.36
+policy:
+  profile: test-routing
+  workspace: config-workspace
+  queue: jobqueue
+  namespace: default
+`)
+	withRunRoutingCWD(t, root)
+	originalWorkspaceFetcher := fetchRunWorkspace
+	fetchRunWorkspace = func(_ *cobra.Command, kubeContext, systemNamespace, name string) (tauworkspace.Workspace, error) {
+		if kubeContext != "explicit-context" || systemNamespace != defaultSystemNamespace() || name != "flag-workspace" {
+			t.Fatalf("workspace fetch context=%q systemNamespace=%q name=%q", kubeContext, systemNamespace, name)
+		}
+		workspace := readyWorkspace()
+		workspace.Metadata.Name = name
+		workspace.Spec.Target.Namespace = "default"
+		workspace.Spec.Queue = "jobqueue"
+		workspace.Status.Target.ResolvedNamespace = "default"
+		workspace.Status.Queue.LocalQueue = "jobqueue"
+		workspace.Status.Queue.ClusterQueue = "jobqueue"
+		return workspace, nil
+	}
+	t.Cleanup(func() { fetchRunWorkspace = originalWorkspaceFetcher })
+
+	cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer {
+		return &fakeRunConnectionEnsurer{}
+	})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{
+		"--config", filepath.Join(root, "tau", "train.yaml"),
+		"--workspace", "flag-workspace",
+		"--context", "explicit-context",
+		"--dry-run=client",
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("explicit workspace override: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "kind: Job") {
+		t.Fatalf("render missing Job:\n%s", stdout.String())
 	}
 }
 
@@ -471,6 +546,9 @@ func writeRunRoutingCatalog(t *testing.T, root string, projects map[string]proje
 	for _, name := range names {
 		project := projects[name]
 		fmt.Fprintf(&builder, "  %s:\n    path: %s\n    connection: %s\n", name, project.Path, project.Connection)
+		if project.Workspace != "" {
+			fmt.Fprintf(&builder, "    workspace: %s\n", project.Workspace)
+		}
 	}
 	writeRunRoutingFile(t, filepath.Join(root, projectcatalog.Filename), builder.String())
 }

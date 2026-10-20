@@ -449,6 +449,211 @@ func TestRunSelectionAuthorizesReadyProfileForCustomWorkspaceNamespace(t *testin
 	}
 }
 
+func TestRunSelectionRejectsWorkspaceQueueThatChangesSingleClusterClusterQueue(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "legacy-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "tau-ws-training"
+	workspace.Status.Queue.ClusterQueue = "tau-ws-training"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `cannot replace singleCluster workload profile`) ||
+		!strings.Contains(err.Error(), `"legacy-cq"`) {
+		t.Fatalf("selection = %#v, error = %v, want singleCluster ClusterQueue transition rejection", selected, err)
+	}
+}
+
+func TestRunSelectionRejectsWorkspaceQueueThatChangesMultiKueueClusterQueue(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "multikueue-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "tau-ws-training"
+	workspace.Status.Queue.ClusterQueue = "tau-ws-training"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	_, err = selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), `cannot replace multiKueue workload profile`) ||
+		!strings.Contains(err.Error(), `"multikueue-cq"`) {
+		t.Fatalf("error = %v, want MultiKueue ClusterQueue transition rejection", err)
+	}
+}
+
+func TestRunSelectionAllowsRetainedWorkspaceQueueWithOriginalClusterQueue(t *testing.T) {
+	for _, executionTarget := range []profile.ExecutionTarget{
+		profile.ExecutionTargetSingleCluster,
+		profile.ExecutionTargetMultiKueue,
+	} {
+		t.Run(string(executionTarget), func(t *testing.T) {
+			resolved := testRunResolvedProfile(executionTarget, 2, 4, 11)
+			resolved.Name = "azure.research.training.l"
+			resolved.Applicability.Namespaces = []string{"team-alpha"}
+			resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+				Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "legacy-cq",
+			}}
+			workspace := readyWorkspace()
+			workspace.Metadata.Name = "training"
+			workspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "research"}
+			workspace.Spec.Queue = "jobqueue"
+			workspace.Spec.Target.Namespace = "team-alpha"
+			workspace.Status.Target.ResolvedNamespace = "team-alpha"
+			workspace.Status.Queue.LocalQueue = "tau-ws-training"
+			workspace.Status.Queue.ClusterQueue = "tau-ws-training"
+			connection := workspaceconnection.ActiveConnection{
+				Workspace:     "training",
+				Namespace:     "team-alpha",
+				Queue:         "jobqueue",
+				ClusterQueue:  "legacy-cq",
+				QueueVerified: true,
+			}
+
+			options := defaultRunDispatchOptions()
+			options.engine = runconfig.EngineRayJob
+			options.profileName = resolved.Name
+			options.profileNameExplicit = true
+			options.team = "research"
+			options.lane = "training"
+			options, err := applyWorkspaceDefaultsWithConnection(options, workspace, "train", connection)
+			if err != nil {
+				t.Fatalf("apply workspace defaults: %v", err)
+			}
+			selected, err := selectRunWorkloadProfile(
+				context.Background(),
+				options,
+				testRunProviderForResolved(t, 11, resolved),
+			)
+			if err != nil {
+				t.Fatalf("select profile with retained LocalQueue: %v", err)
+			}
+			if selected.queue != "jobqueue" ||
+				selected.selectedWorkloadProfile == nil ||
+				selected.selectedWorkloadProfile.ClusterQueue != "legacy-cq" {
+				t.Fatalf("retained workspace selection = %#v", selected)
+			}
+		})
+	}
+}
+
+func TestRunSelectionAllowsWorkspaceQueueThatPreservesMultiKueueClusterQueue(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetMultiKueue, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "multikueue-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "workspace-jobqueue"
+	workspace.Status.Queue.ClusterQueue = "multikueue-cq"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err != nil {
+		t.Fatalf("select MultiKueue profile with preserved ClusterQueue: %v", err)
+	}
+	if selected.queue != "workspace-jobqueue" ||
+		selected.selectedWorkloadProfile == nil ||
+		selected.selectedWorkloadProfile.ClusterQueue != "multikueue-cq" {
+		t.Fatalf("MultiKueue workspace selection = %#v", selected)
+	}
+}
+
+func TestRunSelectionAllowsWorkspaceQueueThatPreservesSingleClusterClusterQueue(t *testing.T) {
+	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 2, 4, 11)
+	resolved.Name = "azure.research.training.l"
+	resolved.Applicability.Namespaces = []string{"team-alpha"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "team-alpha", Name: "jobqueue", ClusterQueue: "local-cq",
+	}}
+	workspace := readyWorkspace()
+	workspace.Metadata.Name = "training"
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "workspace-jobqueue"
+	workspace.Status.Queue.ClusterQueue = "local-cq"
+
+	options := defaultRunDispatchOptions()
+	options.engine = runconfig.EngineRayJob
+	options.profileName = resolved.Name
+	options.profileNameExplicit = true
+	options.team = "research"
+	options.lane = "training"
+	options, err := applyWorkspaceDefaults(options, workspace, "train")
+	if err != nil {
+		t.Fatalf("apply workspace defaults: %v", err)
+	}
+	selected, err := selectRunWorkloadProfile(
+		context.Background(),
+		options,
+		testRunProviderForResolved(t, 11, resolved),
+	)
+	if err != nil {
+		t.Fatalf("select singleCluster profile with preserved ClusterQueue: %v", err)
+	}
+	if selected.queue != "workspace-jobqueue" ||
+		selected.selectedWorkloadProfile == nil ||
+		selected.selectedWorkloadProfile.ClusterQueue != "local-cq" {
+		t.Fatalf("singleCluster workspace selection = %#v", selected)
+	}
+}
+
 func TestProfileRefreshDistinguishesConfigAssertionsFromPriorRevisionValues(t *testing.T) {
 	options := defaultRunDispatchOptions()
 	options.engine = runconfig.EngineJob

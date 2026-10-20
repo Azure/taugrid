@@ -19,6 +19,7 @@ type runConnectionSource struct {
 	Git       bool
 	Catalog   bool
 	Project   string
+	Workspace string
 }
 
 type runRequestResolution struct {
@@ -137,6 +138,7 @@ func resolveRunRequest(
 	}
 	resolution.Project = project
 	resolution.Connection.Project = project.Name
+	resolution.Connection.Workspace = project.Workspace
 	resolution.Input = runInputDiscovery{
 		ConfigPath:     input.ConfigPath,
 		ExplicitConfig: input.ExplicitConfig,

@@ -468,11 +468,6 @@ func TestValidateCachedRunLogsRouteRejectsWorkspaceDrift(t *testing.T) {
 			json: `{"metadata":{"uid":"expected-uid","generation":1},"spec":{"target":{"namespace":"other-ns"}},"status":{"phase":"Ready","observedGeneration":1}}`,
 			want: "namespace changed",
 		},
-		{
-			name: "not ready",
-			json: `{"metadata":{"uid":"expected-uid"},"spec":{"target":{"namespace":"research-ns"}},"status":{"phase":"Pending"}}`,
-			want: "not Ready",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
@@ -487,6 +482,33 @@ func TestValidateCachedRunLogsRouteRejectsWorkspaceDrift(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestValidateCachedRunLogsRouteAllowsDegradedWorkspace(t *testing.T) {
+	route := runLogsRoute{
+		Workspace:       "research",
+		WorkspaceUID:    "expected-uid",
+		SystemNamespace: "tau-system",
+		Namespace:       "research-ns",
+	}
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		wantArgs := "-n tau-system get workspace.tau.azure.com research -o json"
+		if got := strings.Join(args, " "); got != wantArgs {
+			t.Fatalf("args = %q, want %q", got, wantArgs)
+		}
+		return `{
+			"metadata":{"uid":"expected-uid","generation":2},
+			"spec":{"target":{"namespace":"research-ns"}},
+			"status":{
+				"phase":"Degraded",
+				"observedGeneration":2,
+				"target":{"resolvedNamespace":"research-ns"}
+			}
+		}`, nil
+	})
+	if err := validateCachedRunLogsRoute(context.Background(), runner, route); err != nil {
+		t.Fatalf("degraded workspace route rejected: %v", err)
 	}
 }
 

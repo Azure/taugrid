@@ -12,13 +12,14 @@ import (
 	"github.com/Azure/taugrid/core/kube"
 )
 
-type rawRunner interface {
+type RawRunner interface {
 	Raw(context.Context, []string, []byte) (string, error)
 }
 
 type KubectlVerifier struct {
-	KubectlPath string
-	NewRunner   func(contextName, kubeconfigPath string) rawRunner
+	KubectlPath           string
+	NewRunner             func(contextName, kubeconfigPath string) RawRunner
+	AllowUnreadyWorkspace bool
 }
 
 func (v KubectlVerifier) VerifyCompatibleQueue(
@@ -63,7 +64,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	if queue == "" {
 		return Verification{}, fmt.Errorf("TauWorkspace %q has no resolved LocalQueue", descriptor.Workspace)
 	}
-	if !tauworkspace.Ready(workspace) {
+	if !v.AllowUnreadyWorkspace && !tauworkspace.Ready(workspace) {
 		return Verification{}, fmt.Errorf(
 			"TauWorkspace %q is not Ready (phase=%s, observedGeneration=%d, generation=%d)",
 			descriptor.Workspace,
@@ -198,7 +199,7 @@ func (v KubectlVerifier) Verify(ctx context.Context, descriptor Descriptor, kube
 	}, nil
 }
 
-func (v KubectlVerifier) runner(contextName, kubeconfigPath string) rawRunner {
+func (v KubectlVerifier) runner(contextName, kubeconfigPath string) RawRunner {
 	if v.NewRunner != nil {
 		return v.NewRunner(contextName, kubeconfigPath)
 	}
