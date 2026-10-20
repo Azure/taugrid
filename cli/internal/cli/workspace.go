@@ -60,8 +60,9 @@ func NewRepoGenRoot() *cobra.Command {
 		Long: `tau-gen generates Tau-ready research repository workspaces.
 
 It is the standalone generator surface for the same scaffold available through
-` + "`tau workspace init-repo`" + `. It creates local files only; TauWorkspace
-policy remains platform-owned and is selected at run time.`,
+` + "`tau workspace init-repo`" + `. It writes local files only; connected
+scaffolds resolve TauWorkspace authorization from the selected cluster unless
+--authorization-mode is supplied for offline generation.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -90,15 +91,20 @@ images/train.Dockerfile, scripts/configure.sh, scripts/smoke.sh,
 scripts/train.sh, .gitignore, and supporting Python/Azure/agent setup files.
 
 This command does not create cloud resources and does not add policy.workspace to
-committed Tau configs. Provide --workspace with --kube-context to generate a
-provider-neutral connection descriptor that uses existing kubeconfig credentials.
-Add all AKS flags to let Tau acquire AKS credentials automatically.`,
+committed Tau configs. Provide --workspace with --kube-context to resolve the live
+TauWorkspace authorization and generate a provider-neutral connection descriptor
+that uses existing kubeconfig credentials. For offline generation, provide
+--authorization-mode explicitly. Add all AKS flags to let Tau acquire AKS
+credentials automatically.`,
 		Example: `  ` + invocation + ` my-project --image myregistry.azurecr.io/my-project:latest
   ` + invocation + ` my-project --image myregistry.azurecr.io/my-project:latest \
       --workspace research-a --kube-context aks-research`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts.Name = args[0]
+			if err := resolveRepoScaffoldAuthorization(cmd, &opts); err != nil {
+				return err
+			}
 			result, err := reposcaffold.Render(opts)
 			if err != nil {
 				return err
@@ -141,6 +147,7 @@ Add all AKS flags to let Tau acquire AKS credentials automatically.`,
 	cmd.Flags().StringVar(&opts.AKSCluster, "aks-cluster", "", "AKS cluster name for the connection descriptor")
 	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "Kubernetes context for the connection descriptor (defaults to --aks-cluster for AKS access)")
 	cmd.Flags().StringVar(&opts.SystemNamespace, "system-namespace", defaultSystemNamespace(), systemNamespaceHelp())
+	cmd.Flags().StringVar(&opts.AuthorizationMode, "authorization-mode", "", "authorization mode for offline connected scaffold generation: cluster-wide|workspace-rbac")
 	cmd.Flags().StringVar(&opts.ACRName, "acr-name", "", "ACR name placeholder for .env.example and setup-azure.sh")
 	cmd.Flags().StringVar(&opts.UpstreamRepo, "upstream", "", "open GitHub repo URL for external-github/dpr templates")
 	cmd.Flags().StringVar(&opts.UpstreamRef, "ref", "", "upstream branch, tag, or commit for external-github/dpr templates")
@@ -149,6 +156,47 @@ Add all AKS flags to let Tau acquire AKS credentials automatically.`,
 	cmd.Flags().StringVar(&opts.TrainCommand, "train-command", "", "initial train scaffold command")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite generator-managed files if they already exist")
 	return cmd
+}
+
+func resolveRepoScaffoldAuthorization(cmd *cobra.Command, opts *reposcaffold.Options) error {
+	if strings.TrimSpace(opts.AuthorizationMode) != "" {
+		return nil
+	}
+	workspaceName := strings.TrimSpace(opts.Workspace)
+	kubeContext := strings.TrimSpace(opts.KubeContext)
+	if kubeContext == "" &&
+		strings.TrimSpace(opts.AzureSubscriptionID) != "" &&
+		strings.TrimSpace(opts.AzureTenantID) != "" &&
+		strings.TrimSpace(opts.AKSResourceGroup) != "" &&
+		strings.TrimSpace(opts.AKSCluster) != "" {
+		kubeContext = strings.TrimSpace(opts.AKSCluster)
+	}
+	if workspaceName == "" || kubeContext == "" {
+		return nil
+	}
+	systemNamespace := strings.TrimSpace(opts.SystemNamespace)
+	if systemNamespace == "" {
+		systemNamespace = defaultSystemNamespace()
+	}
+	workspace, err := fetchWorkspace(cmd, kubeContext, systemNamespace, workspaceName)
+	if err != nil {
+		return fmt.Errorf(
+			"resolve authorization for TauWorkspace %q: %w; for offline generation, pass --authorization-mode",
+			workspaceName,
+			err,
+		)
+	}
+	opts.AuthorizationMode = tauworkspace.AuthorizationModeWorkspaceRBAC
+	if workspace.Spec.Authorization != nil && strings.TrimSpace(workspace.Spec.Authorization.Mode) != "" {
+		opts.AuthorizationMode = strings.TrimSpace(workspace.Spec.Authorization.Mode)
+	}
+	if opts.AuthorizationMode == tauworkspace.AuthorizationModeWorkspaceRBAC {
+		opts.RequiredRole = strings.TrimSpace(workspace.Spec.Role)
+		if opts.RequiredRole == "" {
+			opts.RequiredRole = tauworkspace.DefaultResearcherRole
+		}
+	}
+	return nil
 }
 
 func newWorkspaceListCmd() *cobra.Command {

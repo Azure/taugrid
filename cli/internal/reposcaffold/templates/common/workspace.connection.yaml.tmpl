@@ -10,8 +10,8 @@ access:
     tenantID: {{.AzureTenantID}}
 {{end}}authorization:
   mode: {{.AuthorizationMode}}
-  requiredRole: {{.RequiredRole}}
-requirements:
+{{if .RequiredRole}}  requiredRole: {{.RequiredRole}}
+{{end}}requirements:
   minTauVersion: {{.MinTauVersion}}
 network:
   privateCluster: false
