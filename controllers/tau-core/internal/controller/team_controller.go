@@ -400,8 +400,14 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 				if err != nil {
 					return err
 				}
+				if !found {
+					managedKeys = map[string]bool{}
+					for _, quota := range team.Spec.Quota {
+						managedKeys[quotaKey(quota)] = true
+					}
+				}
 				for key, quantity := range guarantees {
-					if found && !managedKeys[key] {
+					if !managedKeys[key] {
 						continue
 					}
 					effective[key] = quantity.DeepCopy()

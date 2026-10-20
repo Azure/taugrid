@@ -3904,6 +3904,8 @@ func TestTeamWorkspaceRetainedQueueSurvivesTeamDeletionThroughReconcile(t *testi
 func TestRetainedTeamCohortChildGuaranteeRemainsCharged(t *testing.T) {
 	ctx := context.Background()
 	team := testTeam("vision", "8")
+	team.Status.Phase = tauv1alpha1.TeamPhaseReady
+	team.Status.ObservedGeneration = team.Generation
 	workspace := testWorkspace("aurora")
 	workspace.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
 	workspace.Spec.Queue = "legacy-child"
@@ -3929,22 +3931,38 @@ func TestRetainedTeamCohortChildGuaranteeRemainsCharged(t *testing.T) {
 			},
 		}, true),
 	}
-	if err := setManagedQuotaKeys(child, map[string]bool{
-		quotaKey(testGPUQuota("taugrid-gpu-h200", "4", "0", "0")): true,
-	}); err != nil {
-		t.Fatal(err)
+	additional := testWorkspace("borealis")
+	additional.UID = types.UID("borealis-uid")
+	additional.Spec.TeamRef = &tauv1alpha1.TauClusterObjectReference{Name: team.Name}
+	additional.Spec.Queue = "jobqueue"
+	additional.Spec.Quota = []tauv1alpha1.TauResourceQuota{
+		testGPUQuota("taugrid-gpu-h200", "4", "0", "0"),
 	}
+	source := testClusterQueue("jobqueue")
+	source.Object["spec"] = map[string]any{
+		"resourceGroups": quotaResourceGroups(additional.Spec.Quota, true),
+	}
+	flavor := newQueueObject(resourceFlavorGVK)
+	flavor.SetName("taugrid-gpu-h200")
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(team, workspace, child).
+		WithObjects(team, workspace, child, additional, source, flavor).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 
-	shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, workspace)
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 2; i++ {
+		shared, err := (&TauTeamReconciler{Client: c, APIReader: c}).sharedTeamQuotaForWorkspace(ctx, team, additional)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(shared) != 1 || shared[0].NominalQuota.Cmp(resource.MustParse("0")) != 0 {
+			t.Fatalf("retry %d shared quota = %#v, want retained and requested GPU charged", i, shared)
+		}
 	}
-	if len(shared) != 1 || shared[0].NominalQuota.Cmp(resource.MustParse("4")) != 0 {
-		t.Fatalf("shared quota = %#v, want retained child guarantee charged exactly once", shared)
+	reconcileWorkspaceTimes(t, newTestWorkspaceReconciler(c), ctx, additional.Name, 5)
+	managed := newQueueObject(clusterQueueGVK)
+	if err := c.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(additional.Name)}, managed); err != nil {
+		t.Fatalf("provision managed Workspace after retained legacy child: %v", err)
 	}
 }
 
