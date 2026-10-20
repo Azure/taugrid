@@ -174,7 +174,7 @@ var fieldCatalog = map[string]FieldInfo{
 
 	"resilience":                 {Status: statusSupported, Description: "Automatic retry on transient job failure (preemption, eviction)."},
 	"resilience.max_retries":     {Status: statusSupported, Description: "Maximum number of automatic retries on retryable failure. 0 disables retry.", Default: "0"},
-	"resilience.retry_on":        {Status: statusSupported, Description: "Failure reasons that trigger retry.", Default: "Preempted, Evicted", Values: []string{"Preempted", "Evicted", "OOMKilled"}},
+	"resilience.retry_on":        {Status: statusSupported, Description: "Failure reasons that trigger retry.", Default: "Preempted, Evicted", Values: resilienceRetryReasons},
 	"resilience.checkpoint_path": {Status: statusSupported, Description: "Checkpoint directory override injected as TAU_RESUME_FROM. Default: /data/checkpoints/finetunes/<name>."},
 	"resilience.backoff_initial": {Status: statusSupported, Description: "Initial backoff duration between retries (Go duration string).", Default: "30s"},
 	"resilience.backoff_max":     {Status: statusSupported, Description: "Maximum backoff duration between retries (Go duration string).", Default: "5m"},
