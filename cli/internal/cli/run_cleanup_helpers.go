@@ -41,11 +41,5 @@ func newManagerCleanupHooks(r *kube.Runner, namespace, name string) managerClean
 
 func fetchManagerCleanupStatusSnapshot(ctx context.Context, r kubeRawRunner, namespace, name string) (status.Snapshot, error) {
 	snap, err := status.FetchManagerCleanup(ctx, r, namespace, name)
-	if err != nil {
-		return snap, err
-	}
-	if err := ctx.Err(); err != nil {
-		return snap, err
-	}
-	return snap, nil
+	return snap, managerCleanupContextError(ctx, err)
 }
