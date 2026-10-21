@@ -232,5 +232,21 @@ The checkpoint was trained with an earlier Job-based launch of the same CPT
 and GRPO code. Running the `07-eval` RayJob on that checkpoint reproduced
 every number above exactly.
 
-> **TODO:** add full RayJob rerun results (CPT, GRPO, and eval all launched
-> from this example).
+A full rerun with every stage launched from this example scored lower. The
+Job-based CPT column is the checkpoint that the GRPO model above started from.
+
+
+| Metric | Job-based CPT | RayJob CPT | RayJob GRPO |
+| --- | --- | --- | --- |
+| Compile, overall | 58/220 | 53/220 | 57/220 |
+| Compile, paragraph completion | 16/70 | 14/70 | 14/70 |
+| Compile, program completion | 16/50 | 18/50 | 18/50 |
+| Compile, structural validation | 26/100 | 21/100 | 25/100 |
+| COBOL perplexity | 1.49 | 1.48 | 1.48 |
+| PERFORM reference accuracy | 40.4% | 27.3% | 28.1% |
+
+All three columns were scored with the same `07-eval` RayJob. GRPO adds a
+similar amount on either CPT checkpoint (+4 on the RayJob CPT, +6 on the
+Job-based CPT), so the gap comes from CPT. The cause is not yet known. The
+training image moved to newer `transformers` and DeepSpeed releases than the
+Job-based run used.
