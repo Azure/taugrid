@@ -1,0 +1,34 @@
+name: cobol-rl-prompts
+engine: job
+entrypoint: prepare_rl_prompts.py
+
+experiment:
+  project: cobol-cpt-grpo
+  name: rl-prompts
+  group: data
+
+runtime:
+  image: registry.example.com/cobol-train:v0.28.0-ray2.56.0
+  env:
+    RAW: /data/datasets/cobol/raw
+    DATA_ROOT: /data/datasets/cobol
+    OUT: /data/datasets/cobol/prepared
+    MAX_WORKERS: "8"
+    MIN_BODY_LINES: "5"
+    MAX_BODY_LINES: "200"
+    MAX_PROMPT_CHARS: "50000"
+    PYTHONUNBUFFERED: "1"
+
+compute:
+  gpus: 0
+  cpu_request: "4"
+  memory_request: 16Gi
+  cpu_limit: "8"
+  memory_limit: 32Gi
+
+storage:
+  data_pvc: workspace-data
+  output: /data/projects/taugrid-default/runs/cobol-cpt-grpo/rl-prompts
+
+policy:
+  workspace: taugrid-default

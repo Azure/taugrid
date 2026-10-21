@@ -1,0 +1,29 @@
+name: cobol-collect-rl
+engine: job
+entrypoint: collect-rl-data.sh
+
+experiment:
+  project: cobol-cpt-grpo
+  name: collect-rl
+  group: data
+
+runtime:
+  image: python:3.11.17-bookworm@sha256:c255868cf24d6ca01031d262fa952f59b108b96776625f3d7f1af85d5f28e26a
+  env:
+    RAW: /data/datasets/cobol/raw
+    HF_HOME: /tmp/hf-cache
+    SOURCE_LICENSES: permissive
+
+compute:
+  gpus: 0
+  cpu_request: "4"
+  memory_request: 16Gi
+  cpu_limit: "8"
+  memory_limit: 32Gi
+
+storage:
+  data_pvc: workspace-data
+  output: /data/projects/taugrid-default/runs/cobol-cpt-grpo/collect-rl
+
+policy:
+  workspace: taugrid-default
