@@ -24,7 +24,6 @@ type runResultRef struct {
 	Publication        string
 	PublicationID      string
 	CheckpointArtifact string
-	Placement          helperPodPlacement
 }
 
 func cleanRelativeArtifact(artifact string) (string, error) {
@@ -102,7 +101,7 @@ or already deleted workload with no Tau result annotations, pass both flags.`,
 				}
 				resultPath = path.Join(ref.Path, artifactpublish.GenerationsDir, ref.PublicationID)
 				marker := path.Join(resultPath, artifactpublish.CompletionMarker)
-				raw, err := fetchPVCFileWithPlacement(cmd.Context(), resolvedContext, ns, name, ref.PVC, marker, ref.Placement)
+				raw, err := fetchPVCFile(cmd.Context(), resolvedContext, ns, name, ref.PVC, marker)
 				if err != nil {
 					return fmt.Errorf("staged artifacts are not completely published: %w", err)
 				}
@@ -118,20 +117,20 @@ or already deleted workload with no Tau result annotations, pass both flags.`,
 					return err
 				}
 				file := path.Join(resultPath, cleanArtifact)
-				raw, err := fetchPVCFileWithPlacement(cmd.Context(), resolvedContext, ns, name, ref.PVC, file, ref.Placement)
+				raw, err := fetchPVCFile(cmd.Context(), resolvedContext, ns, name, ref.PVC, file)
 				if err != nil {
 					return err
 				}
 				return writeRunGet(cmd, output, raw, nil, file, ref.PVC, "")
 			}
 			if !isDir {
-				raw, err := fetchPVCFileWithPlacement(cmd.Context(), resolvedContext, ns, name, ref.PVC, resultPath, ref.Placement)
+				raw, err := fetchPVCFile(cmd.Context(), resolvedContext, ns, name, ref.PVC, resultPath)
 				if err != nil {
 					return err
 				}
 				return writeRunGet(cmd, output, raw, nil, resultPath, ref.PVC, "")
 			}
-			entries, err := fetchPVCListRecursiveWithPlacement(cmd.Context(), resolvedContext, ns, name, ref.PVC, resultPath, ref.Placement)
+			entries, err := fetchPVCListRecursive(cmd.Context(), resolvedContext, ns, name, ref.PVC, resultPath)
 			if err != nil {
 				return err
 			}
@@ -197,36 +196,17 @@ func parseRunResultRef(raw []byte, resource string) (runResultRef, error) {
 		Metadata struct {
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
-		Spec struct {
-			Template struct {
-				Spec helperPodPlacement `json:"spec"`
-			} `json:"template"`
-			RayClusterSpec struct {
-				HeadGroupSpec struct {
-					Template struct {
-						Spec helperPodPlacement `json:"spec"`
-					} `json:"template"`
-				} `json:"headGroupSpec"`
-			} `json:"rayClusterSpec"`
-		} `json:"spec"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return runResultRef{}, fmt.Errorf("parse run %s json: %w", resource, err)
 	}
-	ref := runResultRef{
+	return runResultRef{
 		Path:               obj.Metadata.Annotations[workloadmeta.AnnotationResultPath],
 		PVC:                obj.Metadata.Annotations[workloadmeta.AnnotationResultPVC],
 		Publication:        obj.Metadata.Annotations[workloadmeta.AnnotationArtifactPublication],
 		PublicationID:      obj.Metadata.Annotations[workloadmeta.AnnotationArtifactPublicationID],
 		CheckpointArtifact: obj.Metadata.Annotations[workloadmeta.AnnotationCheckpointArtifact],
-	}
-	switch resource {
-	case "job":
-		ref.Placement = obj.Spec.Template.Spec
-	case "rayjob.ray.io":
-		ref.Placement = obj.Spec.RayClusterSpec.HeadGroupSpec.Template.Spec
-	}
-	return ref, nil
+	}, nil
 }
 
 func looksLikeDirectory(p string) bool {
