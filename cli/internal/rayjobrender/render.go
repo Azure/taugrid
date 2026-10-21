@@ -37,13 +37,12 @@ const (
 	agentPort                = 52365
 	gcsPort                  = 6379
 	clientPort               = 10001
-	maxRayJobResourceNameLen = 47
+	maxRayJobResourceNameLen = runconfig.MaxRayJobRunNameLength
 
 	rayJobTTLSecondsAfterFinished = 15
 )
 
 var (
-	resourceNamePartRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 	rayImageVersionRE  = regexp.MustCompile(`-ray((\d+)\.(\d+)\.\d+)`)
 	migProfileRE       = regexp.MustCompile(`^\d+g\.\d+gb$`)
 	pythonModuleNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -173,11 +172,8 @@ func (o Options) validate() error {
 	if o.Name == "" {
 		return fmt.Errorf("name is required")
 	}
-	if !resourceNamePartRE.MatchString(o.Name) {
-		return fmt.Errorf("name %q is invalid (use lowercase alphanumerics with internal hyphens)", o.Name)
-	}
-	if len(o.Name) > maxRayJobResourceNameLen {
-		return fmt.Errorf("RayJob name %q is too long (%d chars; KubeRay limit is %d)", o.Name, len(o.Name), maxRayJobResourceNameLen)
+	if err := runconfig.ValidateRunName(o.Name, runconfig.EngineRayJob, 1); err != nil {
+		return err
 	}
 	if o.Namespace == "" {
 		return fmt.Errorf("namespace is required")

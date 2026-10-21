@@ -323,9 +323,6 @@ var (
 )
 
 func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTarget, error) {
-	if err := runconfig.ValidateRunName(name); err != nil {
-		return nil, err
-	}
 	if len(o.envKV) > 0 || o.keyVault != "" || o.kvTenantID != "" || o.kvClientID != "" {
 		return nil, fmt.Errorf("runtime.env_kv is only supported for workflow.file managed configs; direct Job/RayJob configs must remove runtime.env_kv or use workflow.file")
 	}
@@ -334,6 +331,9 @@ func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTar
 	}
 	engine, err := resolveDirectRunEngine(o)
 	if err != nil {
+		return nil, err
+	}
+	if err := runconfig.ValidateRunName(name, string(engine), o.nodes); err != nil {
 		return nil, err
 	}
 	if err := validateDirectMetricsOffloadDispatch(o, engine); err != nil {

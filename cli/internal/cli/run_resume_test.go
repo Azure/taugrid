@@ -350,6 +350,55 @@ func TestResumeObservesExistingWorkloadBeforeReplacementProfileApplicabilityFail
 	}
 }
 
+func TestRunResumeReconstructsDottedJobName(t *testing.T) {
+	zeroGPUs := 0
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: train.v1\nengine: job\nentrypoint: train.py\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	var replacementName string
+	err := runResumeCommand(
+		command,
+		"train.v1",
+		resumeRouting{
+			ConfigPath:  config,
+			KubeContext: "test-context",
+			Namespace:   "ray",
+			TargetOptions: runDispatchOptions{
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runComputeInput:  runComputeInput{jobGPUs: &zeroGPUs},
+			},
+		},
+		"/data/train.v1/checkpoints",
+		"client",
+		true,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot("train.v1")
+				snapshot.Events = []status.Event{{Reason: "Evicted"}}
+				return snapshot, nil
+			},
+			executeTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
+				replacement := resolvedJobRequestForTest(target)
+				if replacement == nil {
+					t.Fatal("resume did not reconstruct a direct Job")
+				}
+				replacementName = replacement.Name
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementName != "train.v1" {
+		t.Fatalf("replacement name = %q, want train.v1", replacementName)
+	}
+}
+
 func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 	zeroGPUs := 0
 	config := filepath.Join(t.TempDir(), "tau.yaml")

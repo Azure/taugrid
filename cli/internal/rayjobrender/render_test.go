@@ -1083,17 +1083,32 @@ func TestRenderTauEnvSecretGateAgreesWithRunconfig(t *testing.T) {
 	}
 }
 
-func TestRenderRejectsKubeRayNameTooLong(t *testing.T) {
-	_, err := Render(Options{
-		Name:          strings.Repeat("a", maxRayJobResourceNameLen+1),
-		Namespace:     "tau",
-		ScriptName:    "train.py",
-		Script:        []byte("print('x')\n"),
-		Workers:       1,
-		GPUsPerWorker: 1,
-	})
-	if err == nil || !strings.Contains(err.Error(), "KubeRay limit is 47") {
-		t.Fatalf("expected KubeRay name length error, got %v", err)
+func TestRenderValidatesKubeRayNameContract(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		runName string
+		wantErr bool
+	}{
+		{name: "maximum", runName: strings.Repeat("a", maxRayJobResourceNameLen)},
+		{name: "over maximum", runName: strings.Repeat("a", maxRayJobResourceNameLen+1), wantErr: true},
+		{name: "dotted", runName: "train.v1", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Render(Options{
+				Name:          tt.runName,
+				Namespace:     "tau",
+				ScriptName:    "train.py",
+				Script:        []byte("print('x')\n"),
+				Workers:       1,
+				GPUsPerWorker: 1,
+			})
+			if tt.wantErr && err == nil {
+				t.Fatalf("Render(%q) succeeded, want error", tt.runName)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("Render(%q): %v", tt.runName, err)
+			}
+		})
 	}
 }
 

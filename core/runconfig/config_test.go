@@ -59,23 +59,34 @@ func TestValidateRunName(t *testing.T) {
 	tests := []struct {
 		name    string
 		value   string
+		engine  string
+		nodes   int
 		wantErr bool
 	}{
-		{name: "omitted"},
-		{name: "minimum", value: "a"},
-		{name: "maximum", value: strings.Repeat("a", 63)},
-		{name: "over maximum", value: strings.Repeat("a", 64), wantErr: true},
-		{name: "uppercase", value: "Fuzz-R2-B2-033", wantErr: true},
-		{name: "leading hyphen", value: "-fuzz-r2-b2-034", wantErr: true},
+		{name: "omitted", engine: EngineJob},
+		{name: "job minimum", value: "a", engine: EngineJob},
+		{name: "job DNS label maximum", value: strings.Repeat("a", 63), engine: EngineJob},
+		{name: "job dotted DNS subdomain maximum", value: strings.Repeat("a", 31) + "." + strings.Repeat("b", 31), engine: EngineJob},
+		{name: "job over maximum", value: strings.Repeat("a", 64), engine: EngineJob, wantErr: true},
+		{name: "job double dot", value: "train..v1", engine: EngineJob, wantErr: true},
+		{name: "job uppercase", value: "Train-v1", engine: EngineJob, wantErr: true},
+		{name: "job leading hyphen", value: "-train-v1", engine: EngineJob, wantErr: true},
+		{name: "job trailing hyphen", value: "train-v1-", engine: EngineJob, wantErr: true},
+		{name: "multi-node maximum", value: strings.Repeat("a", 54), engine: EngineJob, nodes: 2},
+		{name: "multi-node over maximum", value: strings.Repeat("a", 55), engine: EngineJob, nodes: 2, wantErr: true},
+		{name: "multi-node dotted", value: "train.v1", engine: EngineJob, nodes: 2, wantErr: true},
+		{name: "RayJob maximum", value: strings.Repeat("a", 47), engine: EngineRayJob},
+		{name: "RayJob over maximum", value: strings.Repeat("a", 48), engine: EngineRayJob, wantErr: true},
+		{name: "RayJob dotted", value: "train.v1", engine: EngineRayJob, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateRunName(tt.value)
+			err := ValidateRunName(tt.value, tt.engine, tt.nodes)
 			if tt.wantErr && err == nil {
-				t.Fatalf("ValidateRunName(%q) succeeded, want error", tt.value)
+				t.Fatalf("ValidateRunName(%q, %q, %d) succeeded, want error", tt.value, tt.engine, tt.nodes)
 			}
 			if !tt.wantErr && err != nil {
-				t.Fatalf("ValidateRunName(%q): %v", tt.value, err)
+				t.Fatalf("ValidateRunName(%q, %q, %d): %v", tt.value, tt.engine, tt.nodes, err)
 			}
 		})
 	}
@@ -1040,12 +1051,14 @@ func TestJSONSchemaCoversCoreFields(t *testing.T) {
 		"name":     props["name"].(map[string]any),
 		"run.name": props["run"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any),
 	} {
-		if name["maxLength"] != float64(63) {
-			t.Fatalf("%s maxLength = %v, want 63", path, name["maxLength"])
+		if _, ok := name["maxLength"]; ok {
+			t.Fatalf("%s must not publish an unconditional maxLength: %v", path, name)
 		}
-		pattern, ok := name["pattern"].(string)
-		if !ok || pattern == "" {
-			t.Fatalf("%s pattern = %v, want non-empty string", path, name["pattern"])
+		if _, ok := name["pattern"]; ok {
+			t.Fatalf("%s must not publish an unconditional pattern: %v", path, name)
+		}
+		if !strings.Contains(name["description"].(string), "execution target") {
+			t.Fatalf("%s description does not explain target-dependent validation: %v", path, name)
 		}
 	}
 }
