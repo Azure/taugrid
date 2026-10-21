@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: help build test lint check license-headers \
+.PHONY: help build test lint check license-headers toolchain-pins \
 	install-tau install-tau-cli install-tau-sdk \
 	install-taugrid-portal install-taugrid-metrics-collector \
 	uninstall-tau uninstall-taugrid-portal uninstall-taugrid-metrics-collector \
@@ -62,6 +62,7 @@ help:
 	@echo "  make test                    # run Go, offline E2E, and Python tests"
 	@echo "  make lint                    # lint Go and Python source"
 	@echo "  make check                   # run build, test, lint, and license checks"
+	@echo "  make toolchain-pins          # verify repository Go toolchain pins"
 	@echo "  make install-tau             # install the Tau CLI and optional Python SDK"
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
@@ -140,6 +141,7 @@ lint:
 	@cd $(TAU_SDK_DIR) && $(PYTHON) -m ruff check .
 
 check:
+	$(MAKE) toolchain-pins
 	$(MAKE) build
 	$(MAKE) test
 	$(MAKE) lint
@@ -147,6 +149,9 @@ check:
 
 license-headers:
 	python3 $(REPO_ROOT)/scripts/check-license-headers.py
+
+toolchain-pins:
+	bash $(REPO_ROOT)/scripts/ci/check-go-toolchain-pins.sh
 
 install-tau: install-tau-cli
 	$(MAKE) -C $(TAU_SDK_DIR) install-optional PYTHON="$(PYTHON)"
