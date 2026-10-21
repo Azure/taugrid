@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS microsoft-go
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.10-1 AS microsoft-go
 
-ARG MICROSOFT_GO_COMMIT=5e399a544ddb40d8ae13d077b10dc9a91d8b36e1
+ARG MICROSOFT_GO_COMMIT=519c6ca6486122d981e6c1b5ee95e3df7ecbdc38
 
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
@@ -19,10 +19,10 @@ RUN git init \
     && git -C go am /tmp/microsoft-go/patches/[0-9][0-9][0-9][0-9]-*.patch \
     && cd go/src \
     && GOROOT_BOOTSTRAP=/usr/local/go ./make.bash \
-    && ../bin/go version | grep -F "go1.26.9" \
+    && ../bin/go version | grep -F "go1.26.10" \
     && GOEXPERIMENT=systemcrypto ../bin/go env GOEXPERIMENT | grep -Fx "systemcrypto"
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.10-1 AS builder
 
 COPY --from=microsoft-go /tmp/microsoft-go/go /usr/local/microsoft-go
 ENV GOROOT=/usr/local/microsoft-go \
