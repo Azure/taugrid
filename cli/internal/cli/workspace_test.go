@@ -5,11 +5,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
+	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/version"
 )
 
@@ -62,6 +66,7 @@ func TestRepoGenExposesBuildVersion(t *testing.T) {
 }
 
 func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
+	fakeKubectl(t, `printf '%s\n' '{"metadata":{"name":"ws-a"},"spec":{"authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"}}'`)
 	dir := filepath.Join(t.TempDir(), "repo")
 	cmd := NewRoot()
 	var out bytes.Buffer
@@ -71,10 +76,7 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 		"workspace", "init-repo", "cli-demo",
 		"--image", "example.azurecr.io/cli-demo:test",
 		"--workspace", "ws-a",
-		"--azure-subscription-id", "00000000-0000-0000-0000-000000000000",
-		"--azure-tenant-id", "11111111-1111-1111-1111-111111111111",
-		"--aks-resource-group", "rg-ai",
-		"--aks-cluster", "aks-ai",
+		"--kube-context", "aks-ai",
 		"--acr-name", "example",
 		"--output", dir,
 	})
@@ -127,13 +129,131 @@ func TestWorkspaceInitRepoGeneratesScaffold(t *testing.T) {
 		}
 	}
 	connection := readWorkspaceTestFile(t, filepath.Join(dir, "tau/workspace.connection.yaml"))
-	for _, want := range []string{"mode: workspace-rbac", "requiredRole: researcher"} {
+	for _, want := range []string{"mode: workspace-rbac", "requiredRole: tau-researcher-v1"} {
 		if !strings.Contains(connection, want) {
 			t.Fatalf("workspace connection missing %q:\n%s", want, connection)
 		}
 	}
 	if strings.Contains(connection, "mode: cluster-wide") {
 		t.Fatalf("workspace-scoped repository generated a cluster-wide connection:\n%s", connection)
+	}
+}
+
+type scaffoldCredentialProviderFunc func(context.Context, workspaceconnection.Descriptor) ([]byte, error)
+
+func (f scaffoldCredentialProviderFunc) UserKubeconfig(
+	ctx context.Context,
+	descriptor workspaceconnection.Descriptor,
+) ([]byte, error) {
+	return f(ctx, descriptor)
+}
+
+func TestWorkspaceInitRepoAcquiresAKSCredentialsBeforeAuthorizationLookup(t *testing.T) {
+	logPath := fakeKubectl(t, `printf '%s\n' '{"metadata":{"name":"v045-debug-workspace"},"spec":{"authorization":{"mode":"cluster-wide"}}}'`)
+	var credentialDescriptor workspaceconnection.Descriptor
+	credentials := scaffoldCredentialProviderFunc(func(
+		_ context.Context,
+		descriptor workspaceconnection.Descriptor,
+	) ([]byte, error) {
+		credentialDescriptor = descriptor
+		return []byte("apiVersion: v1\nkind: Config\n"), nil
+	})
+	dir := filepath.Join(t.TempDir(), "repo")
+	cmd := newRepoScaffoldCmdWithCredentials(
+		"init-repo NAME",
+		"Generate a Python + uv Tau repo scaffold",
+		"tau workspace init-repo",
+		func(*cobra.Command) workspaceconnection.CredentialProvider {
+			return credentials
+		},
+	)
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"debug-project",
+		"--image", "example.invalid/v045-debug:latest",
+		"--workspace", "v045-debug-workspace",
+		"--azure-subscription-id", "00000000-0000-0000-0000-000000000000",
+		"--azure-tenant-id", "11111111-1111-1111-1111-111111111111",
+		"--aks-resource-group", "rg-ai",
+		"--aks-cluster", "aks-ai",
+		"--system-namespace", "tau-platform",
+		"--output", dir,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	if credentialDescriptor.Access.Method != workspaceconnection.AccessMethodAKS ||
+		credentialDescriptor.Access.AKS == nil ||
+		credentialDescriptor.Access.AKS.ResourceID != "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-ai/providers/Microsoft.ContainerService/managedClusters/aks-ai" ||
+		credentialDescriptor.Access.AKS.TenantID != "11111111-1111-1111-1111-111111111111" {
+		t.Fatalf("credential descriptor = %#v", credentialDescriptor)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(calls), "--kubeconfig ") ||
+		!strings.Contains(string(calls), "--context aks-ai -n tau-platform get workspaces.tau.azure.com v045-debug-workspace") {
+		t.Fatalf("workspace lookup did not use acquired AKS credentials:\n%s", calls)
+	}
+	connection := readWorkspaceTestFile(t, filepath.Join(dir, "tau", "workspace.connection.yaml"))
+	if !strings.Contains(connection, "method: aks") || !strings.Contains(connection, "mode: cluster-wide") {
+		t.Fatalf("generated AKS connection did not preserve live authorization:\n%s", connection)
+	}
+}
+
+func TestWorkspaceInitRepoResolvesClusterWideAuthorization(t *testing.T) {
+	fakeKubectl(t, `printf '%s\n' '{"metadata":{"name":"v045-debug-workspace"},"spec":{"authorization":{"mode":"cluster-wide"}}}'`)
+	dir := filepath.Join(t.TempDir(), "repo")
+	cmd := NewRoot()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"workspace", "init-repo", "debug-project",
+		"--image", "example.invalid/v045-debug:latest",
+		"--workspace", "v045-debug-workspace",
+		"--kube-context", "aks-ai-runtime-flex-admin",
+		"--system-namespace", "tau-platform",
+		"--output", dir,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	connection := readWorkspaceTestFile(t, filepath.Join(dir, "tau", "workspace.connection.yaml"))
+	descriptor, err := workspaceconnection.Parse([]byte(connection))
+	if err != nil {
+		t.Fatalf("parse generated connection: %v\n%s", err, connection)
+	}
+	if descriptor.Authorization.Mode != workspaceconnection.AuthorizationModeClusterWide {
+		t.Fatalf("authorization mode = %q, want cluster-wide", descriptor.Authorization.Mode)
+	}
+	if descriptor.Authorization.RequiredRole != "" {
+		t.Fatalf("cluster-wide descriptor required role = %q, want empty", descriptor.Authorization.RequiredRole)
+	}
+}
+
+func TestWorkspaceInitRepoSupportsExplicitOfflineAuthorization(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "repo")
+	cmd := NewRoot()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{
+		"workspace", "init-repo", "offline-project",
+		"--image", "example.invalid/offline:latest",
+		"--workspace", "offline-workspace",
+		"--kube-context", "offline-context",
+		"--authorization-mode", "workspace-rbac",
+		"--output", dir,
+	})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+	connection := readWorkspaceTestFile(t, filepath.Join(dir, "tau", "workspace.connection.yaml"))
+	for _, want := range []string{"mode: workspace-rbac", "requiredRole: researcher"} {
+		if !strings.Contains(connection, want) {
+			t.Fatalf("offline workspace connection missing %q:\n%s", want, connection)
+		}
 	}
 }
 

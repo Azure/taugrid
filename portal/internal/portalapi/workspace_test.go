@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Azure/taugrid/portal/internal/expapi"
@@ -185,6 +186,84 @@ func TestSingleWorkspaceCanonicalStellarResolvesAutoSource(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSingleWorkspacePortalAPIsRejectMismatchedWorkspace(t *testing.T) {
+	runsReader := &stubRunsReader{}
+	quotaReader := &quotaReader{}
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto", Workspace: "default"},
+		Runs: RunsOptions{
+			Reader: runsReader, Namespace: "tau-default", LocalQueue: "jobqueue",
+		},
+		Quota: QuotaOptions{Reader: quotaReader},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range []string{
+		"/api/portal/workspaces",
+		"/api/portal/overview",
+		"/api/portal/quota",
+		"/api/portal/jobs",
+		"/api/portal/cluster",
+		"/api/portal/cost",
+		"/api/portal/ray",
+		"/api/portal/ray/history/run-1",
+		"/api/portal/ray/proxy/tau-default/ray-cluster/",
+		"/api/portal/nodes",
+		"/api/portal/nodeutil",
+		"/api/portal/runs",
+		"/api/portal/runs/tau-default/run-1",
+		"/api/portal/workloads/run-1",
+	} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path+"?workspace=other", nil)
+			server.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden ||
+				!strings.Contains(rec.Body.String(), "workspace query conflicts with configured workspace") {
+				t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if runsReader.lastNS != "" {
+		t.Fatalf("mismatched workspace reached Runs reader with namespace %q", runsReader.lastNS)
+	}
+	if quotaReader.localNamespace != "" || quotaReader.localQueueName != "" ||
+		quotaReader.clusterQueueName != "" || quotaReader.cohortName != "" {
+		t.Fatalf("mismatched workspace reached quota reader: %+v", quotaReader)
+	}
+}
+
+func TestSingleWorkspacePortalAPIsAcceptConfiguredWorkspace(t *testing.T) {
+	server, err := NewServer(Options{
+		Stellar: expapi.Options{Source: "kusto", Workspace: "default"},
+		Runs: RunsOptions{
+			Reader: &stubRunsReader{}, Namespace: "tau-default", LocalQueue: "jobqueue",
+		},
+		Quota: QuotaOptions{Reader: &quotaReader{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, suffix := range []string{"", "?workspace=default"} {
+		for _, path := range []string{
+			"/api/portal/workspaces",
+			"/api/portal/runs",
+			"/api/portal/quota",
+		} {
+			t.Run(path+suffix, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				server.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+suffix, nil))
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+				}
+			})
+		}
 	}
 }
 

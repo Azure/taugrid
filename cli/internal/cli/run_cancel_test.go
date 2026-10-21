@@ -111,10 +111,10 @@ func TestFetchManagerCleanupStatusSnapshot_TimeoutReturnsPartialSnapshot(t *test
 			return "", errors.New(`Error from server (NotFound): rayjobs.ray.io "train-001" not found`)
 		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "-l", workloadmeta.LabelJob+"=train-001", "-o", "json"):
 			<-ctx.Done()
-			return "", ctx.Err()
+			return "", errors.New("kubectl get workloads: signal: killed")
 		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "-l", "kueue.x-k8s.io/job-uid=job-uid", "-o", "json"):
 			<-ctx.Done()
-			return "", ctx.Err()
+			return "", errors.New("kubectl get workloads: signal: killed")
 		default:
 			t.Fatalf("unexpected kubectl args: %v", extraArgs)
 			return "", nil
@@ -507,7 +507,7 @@ func TestDeleteWorkloadAndWaitForManagerCleanup_ExactNameGetDeadlineReturnsRichT
 			return "", nil
 		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "wl-a", "-o", "json"):
 			<-ctx.Done()
-			return "", ctx.Err()
+			return "", errors.New("kubectl get workload: signal: killed")
 		default:
 			t.Fatalf("unexpected kubectl args: %v", extraArgs)
 			return "", nil
@@ -542,6 +542,50 @@ func TestDeleteWorkloadAndWaitForManagerCleanup_ExactNameGetDeadlineReturnsRichT
 	}
 }
 
+func TestCancelWorkload_FinalSelectorDeadlineReturnsUncertainCleanup(t *testing.T) {
+	runner := rawRunnerFunc(func(ctx context.Context, extraArgs []string, _ []byte) (string, error) {
+		switch fakeRawKey(extraArgs...) {
+		case fakeRawKey("-n", "ray", "delete", "rayjob.ray.io", "train-001", "--ignore-not-found"):
+			return "rayjob.ray.io \"train-001\" deleted\n", nil
+		case fakeRawKey("-n", "ray", "delete", "job", "train-001", "--ignore-not-found"):
+			return "job.batch \"train-001\" deleted\n", nil
+		case fakeRawKey("-n", "ray", "delete", "service", "train-001-headless", "--ignore-not-found"):
+			return "", nil
+		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "-l", workloadmeta.LabelJob+"=train-001", "-o", "json"):
+			<-ctx.Done()
+			return "", errors.New("kubectl get workloads: signal: killed")
+		default:
+			t.Fatalf("unexpected kubectl args: %v", extraArgs)
+			return "", nil
+		}
+	})
+
+	err := cancelWorkload(context.Background(), runner, "train-001", "ray", io.Discard, cancelWorkloadOptions{
+		Timeout:  20 * time.Millisecond,
+		Interval: time.Second,
+	}, cancelWorkloadHooks{
+		fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+			return status.Snapshot{
+				Name:         "train-001",
+				Namespace:    "ray",
+				JobFound:     true,
+				JobManagedBy: "kueue.x-k8s.io/multikueue",
+			}, nil
+		},
+		wait: func(context.Context, time.Duration) error { return nil },
+		now:  time.Now,
+	})
+	if err == nil {
+		t.Fatal("expected uncertain cleanup timeout")
+	}
+	if got := err.Error(); !strings.Contains(got, "timed out after 20ms waiting to prove MultiKueue manager workload cleanup") {
+		t.Fatalf("expected deterministic cleanup timeout, got %q", got)
+	}
+	if strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("expected context-killed selector query to use cleanup diagnostic, got %v", err)
+	}
+}
+
 func TestDeleteWorkloadAndWaitForManagerCleanup_ExactNameParentCancellationPropagates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	runner := rawRunnerFunc(func(getCtx context.Context, extraArgs []string, _ []byte) (string, error) {
@@ -555,7 +599,7 @@ func TestDeleteWorkloadAndWaitForManagerCleanup_ExactNameParentCancellationPropa
 		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "wl-a", "-o", "json"):
 			cancel()
 			<-getCtx.Done()
-			return "", getCtx.Err()
+			return "", errors.New("kubectl get workload: signal: killed")
 		default:
 			t.Fatalf("unexpected kubectl args: %v", extraArgs)
 			return "", nil
