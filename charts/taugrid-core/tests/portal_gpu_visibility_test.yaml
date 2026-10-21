@@ -5,10 +5,41 @@ suite: Portal GPU visibility contract
 templates:
   - templates/portal.yaml
 tests:
-  - it: enables fleet GPU consumers only for authenticated proxy access
+  - it: keeps fleet GPU consumers disabled for the default legacy image
+    set:
+      portal.enabled: true
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.5
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-consumers-enabled
+
+  - it: does not assume a custom image supports fleet GPU consumers
     set:
       portal.enabled: true
       portal.image.tag: test
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-consumers-enabled
+
+  - it: enables fleet GPU consumers for an explicitly compatible authenticated image
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.gpuConsumers.enabled: true
       portal.access.mode: authenticated-proxy
       portal.access.externalURL: https://portal.example.com
     documentSelector:
@@ -19,22 +50,20 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --gpu-consumers-enabled
 
-  - it: keeps fleet GPU consumers disabled for cluster internal access
+  - it: rejects fleet GPU consumers without authenticated proxy access
     set:
       portal.enabled: true
       portal.image.tag: test
-    documentSelector:
-      path: kind
-      value: Deployment
+      portal.gpuConsumers.enabled: true
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].args
-          content: --gpu-consumers-enabled
+      - failedTemplate:
+          errorMessage: portal.gpuConsumers.enabled=true requires portal.access.mode=authenticated-proxy
 
   - it: preserves fixed workspace and operator scope arguments
     set:
       portal.enabled: true
       portal.image.tag: test
+      portal.gpuConsumers.enabled: true
       portal.workspace: research
       portal.localQueue: research-queue
       portal.jobs.scopeMode: operator
