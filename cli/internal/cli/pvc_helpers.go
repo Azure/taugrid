@@ -697,21 +697,25 @@ func addRequiredNodeNames(placement *helperPodPlacement, nodeNames []string) {
 	if len(terms) == 0 {
 		terms = []any{map[string]any{}}
 	}
-	requirement := map[string]any{
-		"key":      "metadata.name",
-		"operator": "In",
-		"values":   nodeNames,
-	}
-	for i, rawTerm := range terms {
-		term, _ := rawTerm.(map[string]any)
-		if term == nil {
-			term = map[string]any{}
-			terms[i] = term
+	expanded := make([]any, 0, len(terms)*len(nodeNames))
+	for _, rawTerm := range terms {
+		source, _ := rawTerm.(map[string]any)
+		for _, nodeName := range nodeNames {
+			term := make(map[string]any, len(source)+1)
+			for key, value := range source {
+				term[key] = value
+			}
+			matchFields, _ := source["matchFields"].([]any)
+			fields := append([]any(nil), matchFields...)
+			term["matchFields"] = append(fields, map[string]any{
+				"key":      "metadata.name",
+				"operator": "In",
+				"values":   []string{nodeName},
+			})
+			expanded = append(expanded, term)
 		}
-		matchFields, _ := term["matchFields"].([]any)
-		term["matchFields"] = append(matchFields, requirement)
 	}
-	required["nodeSelectorTerms"] = terms
+	required["nodeSelectorTerms"] = expanded
 }
 
 func waitForHelperPodTerminal(ctx context.Context, r kubeRawRunner, namespace, podName string, timeout time.Duration) (string, error) {

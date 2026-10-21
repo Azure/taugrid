@@ -311,10 +311,66 @@ func TestResolveHelperPodPlacementConstrainsHeterogeneousCSI(t *testing.T) {
 	}
 	required := got.Affinity.NodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
 	terms := required["nodeSelectorTerms"].([]any)
-	fields := terms[0].(map[string]any)["matchFields"].([]any)
-	values := fields[0].(map[string]any)["values"].([]string)
-	if !reflect.DeepEqual(values, []string{"storage-a", "storage-b"}) {
-		t.Fatalf("compatible nodes = %v, want [storage-a storage-b]", values)
+	if len(terms) != 2 {
+		t.Fatalf("node selector terms = %d, want one OR term per compatible node", len(terms))
+	}
+	var nodeNames []string
+	for _, rawTerm := range terms {
+		fields := rawTerm.(map[string]any)["matchFields"].([]any)
+		values := fields[0].(map[string]any)["values"].([]string)
+		if len(values) != 1 {
+			t.Fatalf("metadata.name values = %v, want exactly one Kubernetes-valid value", values)
+		}
+		nodeNames = append(nodeNames, values[0])
+	}
+	if !reflect.DeepEqual(nodeNames, []string{"storage-a", "storage-b"}) {
+		t.Fatalf("compatible node terms = %v, want [storage-a storage-b]", nodeNames)
+	}
+}
+
+func TestResolveHelperPodPlacementIntersectsPVTopologyWithCompatibleNodes(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"blob.csi.azure.com"},"nodeAffinity":{"required":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"topology.kubernetes.io/zone","operator":"In","values":["zone-a"]}]},{"matchExpressions":[{"key":"topology.kubernetes.io/zone","operator":"In","values":["zone-b"]}]}]}}}}`, nil
+		case "get csinode -o json":
+			return `{"items":[
+				{"metadata":{"name":"storage-b"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}},
+				{"metadata":{"name":"storage-a"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}},
+				{"metadata":{"name":"worker"},"spec":{"drivers":null}}
+			]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := got.Affinity.NodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	terms := required["nodeSelectorTerms"].([]any)
+	if len(terms) != 4 {
+		t.Fatalf("node selector terms = %d, want 2 PV terms x 2 compatible nodes", len(terms))
+	}
+	var intersections []string
+	for _, rawTerm := range terms {
+		term := rawTerm.(map[string]any)
+		expressions := term["matchExpressions"].([]any)
+		zoneValues := expressions[0].(map[string]any)["values"].([]any)
+		fields := term["matchFields"].([]any)
+		nodeValues := fields[0].(map[string]any)["values"].([]string)
+		if len(nodeValues) != 1 {
+			t.Fatalf("metadata.name values = %v, want exactly one Kubernetes-valid value", nodeValues)
+		}
+		intersections = append(intersections, zoneValues[0].(string)+"/"+nodeValues[0])
+	}
+	want := []string{"zone-a/storage-a", "zone-a/storage-b", "zone-b/storage-a", "zone-b/storage-b"}
+	if !reflect.DeepEqual(intersections, want) {
+		t.Fatalf("PV/node intersections = %v, want %v", intersections, want)
 	}
 }
 
