@@ -16,7 +16,7 @@ uses a separately submitted `tau.serve(...)` handle. See the
 
 ## Workspace connection
 
-{{if .HasWorkspaceConnection}}The non-secret `tau/workspace.connection.yaml` requires `{{.AuthorizationMode}}` authorization and role `{{.RequiredRole}}`. On first use, {{if .HasAKSAccess}}Tau obtains AKS cluster-user credentials through your Azure sign-in{{else}}Tau loads the named context from your normal kubeconfig{{end}}, verifies that contract, and writes an isolated kubeconfig outside the repository. You do not need to pass a namespace, queue name, or `--config`.
+{{if .HasWorkspaceConnection}}The non-secret `tau/workspace.connection.yaml` requires `{{.AuthorizationMode}}` authorization{{if .RequiredRole}} and role `{{.RequiredRole}}`{{end}}. On first use, {{if .HasAKSAccess}}Tau obtains AKS cluster-user credentials through your Azure sign-in{{else}}Tau loads the named context from your normal kubeconfig{{end}}, verifies that contract, and writes an isolated kubeconfig outside the repository. You do not need to pass a namespace, queue name, or `--config`.
 {{else}}This scaffold is not connected to a Tau workspace yet. Ask the platform owner to add `tau/workspace.connection.yaml`; do not commit kubeconfigs, tokens, namespace names, or queue names.
 {{end}}
 

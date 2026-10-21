@@ -37,6 +37,7 @@ const (
 var (
 	errViewerUnauthenticated = errors.New("authenticated viewer identity is required")
 	errViewerClaimsTooLarge  = errors.New("authenticated viewer claims exceed supported limits")
+	errWorkspaceForbidden    = errors.New("workspace query conflicts with configured workspace")
 	errWorkspaceNotFound     = errors.New("workspace not found")
 )
 
@@ -469,6 +470,11 @@ func (s *Server) resolveWorkspaceScope(r *http.Request) (WorkspaceScope, error) 
 		if scope.Availability == "" {
 			scope.Availability = workspaceAvailabilityAvailable
 		}
+		for _, workspace := range r.URL.Query()["workspace"] {
+			if workspace != "" && workspace != scope.WorkspaceID {
+				return WorkspaceScope{}, errWorkspaceForbidden
+			}
+		}
 		if values, ok := r.URL.Query()["namespace"]; ok && len(values) > 0 {
 			scope.Namespace = values[0]
 		}
@@ -514,6 +520,8 @@ func (s *Server) localWorkspaceScope(w http.ResponseWriter, r *http.Request) (Wo
 			writeJSONError(w, http.StatusRequestHeaderFieldsTooLarge, err.Error())
 		case errors.Is(err, errViewerUnauthenticated):
 			writeJSONError(w, http.StatusUnauthorized, err.Error())
+		case errors.Is(err, errWorkspaceForbidden):
+			writeJSONError(w, http.StatusForbidden, err.Error())
 		case errors.Is(err, errWorkspaceNotFound):
 			writeJSONError(w, http.StatusNotFound, err.Error())
 		default:
@@ -558,7 +566,10 @@ func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.workspaceDirectory == nil {
-		scope, _ := s.resolveWorkspaceScope(r)
+		scope, ok := s.localWorkspaceScope(w, r)
+		if !ok {
+			return
+		}
 		scope.ExperimentsNative = s.nativeExperiments(scope)
 		writeJSON(w, http.StatusOK, workspaceDirectoryResponse{
 			Workspaces: []WorkspaceScope{scope},
@@ -632,20 +643,26 @@ func (s *Server) workspaceAwareStellar(next http.Handler) http.Handler {
 				writeJSONError(w, http.StatusForbidden, "this Stellar route is not available in Portal")
 				return
 			}
-			for _, workspace := range r.URL.Query()["workspace"] {
-				if workspace != "" && workspace != s.singleWorkspaceScope.WorkspaceID {
+			scope, err := s.resolveWorkspaceScope(r)
+			if err != nil {
+				if errors.Is(err, errWorkspaceForbidden) {
 					if writeV2BoundaryError(http.StatusForbidden, "WORKSPACE_FORBIDDEN", "workspace query conflicts with configured workspace") {
 						return
 					}
 					writeJSONError(w, http.StatusForbidden, "workspace query conflicts with configured workspace")
 					return
 				}
+				if writeV2BoundaryError(http.StatusBadRequest, "INVALID_WORKSPACE_SCOPE", err.Error()) {
+					return
+				}
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
 			}
-			source := s.singleWorkspaceScope.Source
+			source := scope.Source
 			if expapi.IsCanonicalV2Read(r.URL.Path) {
 				source = canonicalStellarSource(source, s.stellarKustoAvailable)
 			}
-			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, s.singleWorkspaceScope.WorkspaceID, source)))
+			next.ServeHTTP(w, expapi.WithWorkspaceRoutePolicy(workspaceScopedRequest(r, nil, scope.WorkspaceID, source)))
 			return
 		}
 		scope, err := s.resolveWorkspaceScope(r)

@@ -33,9 +33,9 @@ jobs:
       - checkout: self
 
       - task: GoTool@0
-        displayName: Use Go 1.26.9
+        displayName: Use Go 1.26.10
         inputs:
-          version: 1.26.9
+          version: 1.26.10
 
       - bash: |
           set -euo pipefail
@@ -156,9 +156,9 @@ jobs:
             - checkout: self
 
             - task: GoTool@0
-              displayName: Use Go 1.26.9
+              displayName: Use Go 1.26.10
               inputs:
-                version: 1.26.9
+                version: 1.26.10
 
             - task: DownloadPipelineArtifact@2
               displayName: Download immutable image contract
