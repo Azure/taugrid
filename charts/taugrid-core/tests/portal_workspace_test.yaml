@@ -24,6 +24,7 @@ tests:
     set:
       portal.enabled: true
       portal.workspace: research
+      portal.localQueue: research-queue
       portal.image.tag: pinned
     asserts:
       - contains:
@@ -32,6 +33,42 @@ tests:
         documentSelector:
           path: kind
           value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --local-queue
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: research-queue
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: renders an explicit public cluster-wide workspace directory
+    values:
+      - workspace-directory-values.yaml
+    set:
+      portal.workspaceDirectory.allowUnauthenticatedClusterWide: true
+    asserts:
+      - matchRegex:
+          path: data["workspaces.json"]
+          pattern: '"allowUnauthenticatedClusterWide": true'
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: preserves the legacy workspace directory JSON shape by default
+    values:
+      - workspace-directory-values.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["workspaces.json"]
+          pattern: '"allowUnauthenticatedClusterWide"'
+        documentSelector:
+          path: kind
+          value: ConfigMap
 
   - it: uses the typed catalog contract without migration switches
     set:

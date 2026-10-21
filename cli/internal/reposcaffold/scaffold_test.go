@@ -26,6 +26,7 @@ func TestRenderPythonScaffold(t *testing.T) {
 		AzureTenantID:       "11111111-1111-1111-1111-111111111111",
 		AKSResourceGroup:    "rg-ai",
 		AKSCluster:          "aks-ai",
+		AuthorizationMode:   workspaceconnection.AuthorizationModeWorkspaceRBAC,
 		ACRName:             "example",
 	})
 	if err != nil {
@@ -221,10 +222,11 @@ func TestUnconnectedScaffoldDoesNotClaimAuthorizationMode(t *testing.T) {
 
 func TestProviderNeutralWorkspaceConnectionScaffold(t *testing.T) {
 	files, err := Preview(Options{
-		Name:        "portable",
-		Image:       "registry.example/portable:test",
-		Workspace:   "research",
-		KubeContext: "research #1",
+		Name:              "portable",
+		Image:             "registry.example/portable:test",
+		Workspace:         "research",
+		KubeContext:       "research #1",
+		AuthorizationMode: workspaceconnection.AuthorizationModeWorkspaceRBAC,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +256,62 @@ func TestProviderNeutralWorkspaceConnectionScaffold(t *testing.T) {
 	}
 	if descriptor.Cluster.ContextName != "research #1" {
 		t.Fatalf("generated context = %q, want quoted kubeconfig name", descriptor.Cluster.ContextName)
+	}
+}
+
+func TestConnectedScaffoldAuthorizationModes(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		mode              string
+		wantRole          string
+		wantDocumentation string
+	}{
+		{
+			name:              "cluster-wide",
+			mode:              workspaceconnection.AuthorizationModeClusterWide,
+			wantDocumentation: "requires `cluster-wide` authorization.",
+		},
+		{
+			name:              "workspace-rbac",
+			mode:              workspaceconnection.AuthorizationModeWorkspaceRBAC,
+			wantRole:          "researcher",
+			wantDocumentation: "requires `workspace-rbac` authorization and role `researcher`.",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := Preview(Options{
+				Name:              "authorization",
+				Image:             "registry.example/authorization:test",
+				Workspace:         "research",
+				KubeContext:       "research-cluster",
+				AuthorizationMode: tc.mode,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection := previewFile(t, files, "tau/workspace.connection.yaml")
+			descriptor, err := workspaceconnection.Parse([]byte(connection))
+			if err != nil {
+				t.Fatalf("generated workspace connection is invalid: %v\n%s", err, connection)
+			}
+			if descriptor.Authorization.Mode != tc.mode || descriptor.Authorization.RequiredRole != tc.wantRole {
+				t.Fatalf("generated authorization = %#v, want mode %q role %q", descriptor.Authorization, tc.mode, tc.wantRole)
+			}
+			assertContains(t, previewFile(t, files, "README.md"), tc.wantDocumentation)
+			assertContains(t, previewFile(t, files, "AGENTS.md"), tc.wantDocumentation)
+		})
+	}
+}
+
+func TestConnectedScaffoldRequiresAuthorizationMode(t *testing.T) {
+	_, err := Preview(Options{
+		Name:        "authorization",
+		Image:       "registry.example/authorization:test",
+		Workspace:   "research",
+		KubeContext: "research-cluster",
+	})
+	if err == nil || !strings.Contains(err.Error(), "--authorization-mode is required") {
+		t.Fatalf("Preview() error = %v, want explicit authorization mode requirement", err)
 	}
 }
 
@@ -528,6 +586,17 @@ func previewContains(files []RenderedFile, want string) bool {
 		}
 	}
 	return false
+}
+
+func previewFile(t *testing.T, files []RenderedFile, path string) string {
+	t.Helper()
+	for _, file := range files {
+		if file.Path == path {
+			return file.Content
+		}
+	}
+	t.Fatalf("preview missing %s", path)
+	return ""
 }
 
 func assertPreviewContains(t *testing.T, files []RenderedFile, path, want string) {

@@ -1,9 +1,9 @@
 module github.com/Azure/taugrid/monitoring/gpu-health-checker
 
-go 1.26.9
+go 1.27.2
 
 require (
-	github.com/NVIDIA/go-dcgm v1.4611.2
+	github.com/NVIDIA/go-dcgm v1.4701.2
 	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1

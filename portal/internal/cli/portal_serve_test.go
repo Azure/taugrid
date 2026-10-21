@@ -71,6 +71,9 @@ func TestPortalJobsScopeDefaultsFailClosed(t *testing.T) {
 	if got := serve.Flags().Lookup("namespace").DefValue; got != "" {
 		t.Fatalf("--namespace default = %q, want empty for cluster-wide Ray/Runs reads", got)
 	}
+	if got := serve.Flags().Lookup("local-queue").DefValue; got != "" {
+		t.Fatalf("--local-queue default = %q, want empty", got)
+	}
 	if flag := serve.Flags().Lookup("policy"); flag != nil {
 		t.Fatalf("portal serve still exposes removed --policy flag: %#v", flag)
 	}
@@ -118,9 +121,14 @@ func TestPortalServeKeepsRunningWithoutKubernetesCredentials(t *testing.T) {
 }
 
 func TestSingleWorkspaceKubernetesBoardsShareNamespace(t *testing.T) {
-	rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions("tau-default")
-	if rayOpts.Namespace != "tau-default" || runsOpts.Namespace != "tau-default" {
-		t.Fatalf("board namespaces = ray %q, runs %q; want tau-default", rayOpts.Namespace, runsOpts.Namespace)
+	rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions("tau-default", "jobqueue")
+	if rayOpts.Namespace != "tau-default" || runsOpts.Namespace != "tau-default" || runsOpts.LocalQueue != "jobqueue" {
+		t.Fatalf(
+			"board scope = ray namespace %q, runs namespace %q, LocalQueue %q; want tau-default/tau-default/jobqueue",
+			rayOpts.Namespace,
+			runsOpts.Namespace,
+			runsOpts.LocalQueue,
+		)
 	}
 }
 

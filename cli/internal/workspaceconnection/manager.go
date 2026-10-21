@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -46,13 +47,22 @@ type Verifier interface {
 	Verify(context.Context, Descriptor, string) (Verification, error)
 }
 
+type compatibleQueueVerifier interface {
+	VerifyCompatibleQueue(context.Context, Descriptor, string, string, string) (string, error)
+}
+
 type Verification struct {
-	ContextName    string
-	Namespace      string
-	Queue          string
-	ServiceAccount string
-	WorkspaceUID   string
-	WorkspacePhase string
+	ContextName      string
+	Namespace        string
+	Queue            string
+	ServiceAccount   string
+	WorkspaceUID     string
+	WorkspacePhase   string
+	TeamBacked       bool
+	QueueExplicit    bool
+	QueueDefaulted   bool
+	CompatibleQueues []string
+	QueueBackings    map[string]string
 }
 
 type ActiveConnection struct {
@@ -64,6 +74,8 @@ type ActiveConnection struct {
 	KubeconfigPath    string
 	Namespace         string
 	Queue             string
+	ClusterQueue      string
+	QueueVerified     bool
 }
 
 type AssignableConnection struct {
@@ -85,6 +97,7 @@ type connectionState struct {
 	KubeconfigPath    string       `json:"kubeconfig_path"`
 	Namespace         string       `json:"namespace"`
 	Queue             string       `json:"queue"`
+	ClusterQueue      string       `json:"cluster_queue,omitempty"`
 	ServiceAccount    string       `json:"service_account,omitempty"`
 	RequiredRole      string       `json:"required_role"`
 	RepositoryRoot    string       `json:"repository_root,omitempty"`
@@ -107,6 +120,10 @@ type Manager struct {
 	ReadinessTTL        time.Duration
 	RevalidationTimeout time.Duration
 	TauVersion          string
+	// AllowUnreadyWorkspace permits connection verification for diagnostics and
+	// existing-workload lifecycle operations. Identity, placement, authorization,
+	// and Kubernetes permission checks still run.
+	AllowUnreadyWorkspace bool
 }
 
 func DefaultConfigDir() (string, error) {
@@ -323,9 +340,12 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		var verification Verification
 		var verifyErr error
 		if len(sourceKubeconfig) > 0 {
-			verification, verifyErr = m.verifyCandidate(verifyCtx, configDir, discovery, sourceKubeconfig)
+			verification, verifyErr = m.verifyCandidate(verifyCtx, configDir, discovery, sourceKubeconfig, state.Queue)
 		} else {
 			verification, verifyErr = m.Verifier.Verify(verifyCtx, discovery.Descriptor, state.KubeconfigPath)
+			if verifyErr == nil {
+				verification = m.withCompatibleQueue(verifyCtx, discovery.Descriptor, state.KubeconfigPath, state.Queue, verification)
+			}
 		}
 		if verifyErr != nil {
 			if timeout := m.signInTimeout(verifyCtx, "revalidating the cached workspace connection"); timeout != nil {
@@ -333,7 +353,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			}
 			return ActiveConnection{}, fmt.Errorf("revalidate Tau workspace connection: %w", verifyErr)
 		}
-		if err := validateVerification(discovery.Descriptor, verification); err != nil {
+		if err := validateVerification(discovery.Descriptor, verification, m.AllowUnreadyWorkspace); err != nil {
 			return ActiveConnection{}, fmt.Errorf("revalidate Tau workspace connection: %w", err)
 		}
 		if changes := state.contractChanges(verification); len(changes) > 0 {
@@ -377,7 +397,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 			return ActiveConnection{}, fmt.Errorf("reacquire Kubernetes credentials: %w", err)
 		}
 		kubeconfigPath := expectedKubeconfigPath
-		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
+		verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig, state.Queue)
 		if err != nil {
 			return ActiveConnection{}, fmt.Errorf("verify reacquired Tau workspace connection: %w", err)
 		}
@@ -457,7 +477,7 @@ func (m Manager) EnsureDiscovery(ctx context.Context, discovery Discovery) (Acti
 		return ActiveConnection{}, fmt.Errorf("obtain Kubernetes credentials: %w", err)
 	}
 	kubeconfigPath := isolatedKubeconfigPath(configDir, discovery)
-	verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig)
+	verification, err := m.verifyCandidate(ctx, configDir, discovery, rawKubeconfig, state.Queue)
 	if err != nil {
 		return ActiveConnection{}, fmt.Errorf("verify Tau workspace connection: %w", err)
 	}
@@ -671,7 +691,11 @@ func (m Manager) stateFresh(state connectionState) bool {
 	return !state.VerifiedAt.IsZero() && m.now().Sub(state.VerifiedAt) <= ttl
 }
 
-func validateVerification(descriptor Descriptor, verification Verification) error {
+func validateVerification(
+	descriptor Descriptor,
+	verification Verification,
+	allowUnreadyWorkspace bool,
+) error {
 	contextName := firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
 	if contextName != descriptor.Cluster.ContextName {
 		return fmt.Errorf(
@@ -681,7 +705,7 @@ func validateVerification(descriptor Descriptor, verification Verification) erro
 			descriptor.Cluster.ContextName,
 		)
 	}
-	if verification.WorkspacePhase != "Ready" {
+	if !allowUnreadyWorkspace && verification.WorkspacePhase != "Ready" {
 		return fmt.Errorf(
 			"workspace %q is not Ready (phase=%s)",
 			descriptor.Workspace,
@@ -907,7 +931,10 @@ func (s connectionState) contractChanges(verification Verification) []string {
 	if s.Namespace != verification.Namespace {
 		changes = append(changes, fmt.Sprintf("namespace %q -> %q", s.Namespace, verification.Namespace))
 	}
-	if s.Queue != verification.Queue {
+	if s.Queue != verification.Queue &&
+		(verification.QueueExplicit ||
+			verification.QueueDefaulted ||
+			!slices.Contains(verification.CompatibleQueues, s.Queue)) {
 		changes = append(changes, fmt.Sprintf("LocalQueue %q -> %q", s.Queue, verification.Queue))
 	}
 	storedServiceAccount := effectiveServiceAccount(s.ServiceAccount)
@@ -921,7 +948,12 @@ func (s connectionState) contractChanges(verification Verification) []string {
 func (s *connectionState) applyVerification(descriptor Descriptor, verification Verification, verifiedAt time.Time) {
 	s.ContextName = firstNonEmpty(verification.ContextName, descriptor.Cluster.ContextName)
 	s.Namespace = verification.Namespace
-	s.Queue = verification.Queue
+	if verification.QueueExplicit ||
+		verification.QueueDefaulted ||
+		!slices.Contains(verification.CompatibleQueues, s.Queue) {
+		s.Queue = verification.Queue
+	}
+	s.ClusterQueue = verification.QueueBackings[s.Queue]
 	s.ServiceAccount = verification.ServiceAccount
 	s.WorkspaceUID = verification.WorkspaceUID
 	s.VerifiedAt = verifiedAt
@@ -944,6 +976,8 @@ func (s connectionState) active() ActiveConnection {
 		KubeconfigPath:    s.KubeconfigPath,
 		Namespace:         s.Namespace,
 		Queue:             s.Queue,
+		ClusterQueue:      s.ClusterQueue,
+		QueueVerified:     !s.VerifiedAt.IsZero(),
 	}
 }
 
@@ -1086,6 +1120,7 @@ func (m Manager) verifyCandidate(
 	configDir string,
 	discovery Discovery,
 	rawKubeconfig []byte,
+	expectedQueue string,
 ) (Verification, error) {
 	candidatePath, err := writeKubeconfigCandidate(configDir, rawKubeconfig)
 	if err != nil {
@@ -1103,10 +1138,46 @@ func (m Manager) verifyCandidate(
 		}
 		return Verification{}, err
 	}
-	if err := validateVerification(discovery.Descriptor, verification); err != nil {
+	if err := validateVerification(discovery.Descriptor, verification, m.AllowUnreadyWorkspace); err != nil {
 		return Verification{}, err
 	}
+	verification = m.withCompatibleQueue(verifyCtx, discovery.Descriptor, candidatePath, expectedQueue, verification)
 	return verification, nil
+}
+
+func (m Manager) withCompatibleQueue(
+	ctx context.Context,
+	descriptor Descriptor,
+	kubeconfigPath, expectedQueue string,
+	verification Verification,
+) Verification {
+	expectedQueue = strings.TrimSpace(expectedQueue)
+	if expectedQueue == "" || expectedQueue == verification.Queue {
+		return verification
+	}
+	if slices.Contains(verification.CompatibleQueues, expectedQueue) &&
+		strings.TrimSpace(verification.QueueBackings[expectedQueue]) != "" {
+		return verification
+	}
+	if !verification.TeamBacked {
+		return verification
+	}
+	verifier, ok := m.Verifier.(compatibleQueueVerifier)
+	if !ok {
+		return verification
+	}
+	clusterQueue, err := verifier.VerifyCompatibleQueue(ctx, descriptor, kubeconfigPath, verification.Namespace, expectedQueue)
+	if err != nil {
+		return verification
+	}
+	if !slices.Contains(verification.CompatibleQueues, expectedQueue) {
+		verification.CompatibleQueues = append(verification.CompatibleQueues, expectedQueue)
+	}
+	if verification.QueueBackings == nil {
+		verification.QueueBackings = map[string]string{}
+	}
+	verification.QueueBackings[expectedQueue] = clusterQueue
+	return verification
 }
 
 var candidateChmod = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }

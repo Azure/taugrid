@@ -97,6 +97,7 @@ func TestLifecycleConnectionHonoursEnvContext(t *testing.T) {
 		namespace,
 		runContextExplicit(cmd),
 		cmd.Flags().Changed("namespace"),
+		false,
 		"",
 		ensurer,
 	)
@@ -143,6 +144,7 @@ func TestLifecycleVerbsReportDescriptorContextConflict(t *testing.T) {
 		flags.namespace,
 		lifecycleFlagsContextExplicit(cmd),
 		cmd.Flags().Changed("namespace"),
+		false,
 		"",
 		&fakeRunConnectionEnsurer{},
 	)
@@ -179,6 +181,7 @@ func TestLifecycleVerbsAcceptTypedContextOverDescriptor(t *testing.T) {
 		flags.namespace,
 		lifecycleFlagsContextExplicit(cmd),
 		cmd.Flags().Changed("namespace"),
+		false,
 		"",
 		&fakeRunConnectionEnsurer{},
 	)

@@ -78,7 +78,8 @@ func resolveServeProfileTarget(cmd *cobra.Command, options serveProfileOptions) 
 	}
 	p, selected, err := selectServeWorkloadProfile(
 		cmd.Context(), profile.NewClusterProvider(client), options.Name,
-		target.Namespace, target.Queue, target.ClusterQueue, options.ExplicitGPUs, options.ExplicitNodes, options.Kind,
+		placement.Workspace, target.Namespace, target.Queue, target.ClusterQueue,
+		options.ExplicitGPUs, options.ExplicitNodes, options.Kind,
 	)
 	if err != nil {
 		return serveProfileTarget{}, err
@@ -114,7 +115,8 @@ func resolveSnapshotServeProfile(cmd *cobra.Command, options serveProfileOptions
 		return serveProfileTarget{}, fmt.Errorf("load --workload-profile-snapshot: %w", err)
 	}
 	p, selected, err := selectServeWorkloadProfile(
-		cmd.Context(), provider, options.Name, namespace, "", "", options.ExplicitGPUs, options.ExplicitNodes, options.Kind,
+		cmd.Context(), provider, options.Name, "", namespace, "", "",
+		options.ExplicitGPUs, options.ExplicitNodes, options.Kind,
 	)
 	if err != nil {
 		return serveProfileTarget{}, err

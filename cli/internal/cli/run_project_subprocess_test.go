@@ -247,7 +247,7 @@ policy:
 			cache.ContextName != "aks-ai-runtime-flex" ||
 			cache.Namespace != "catalog-namespace" ||
 			cache.LocalQueue != "jobqueue" ||
-			cache.ClusterQueue != "gpu-cq" ||
+			cache.ClusterQueue != "tau-cq" ||
 			cache.RepositoryRoot != canonicalRoot ||
 			cache.DescriptorPath != filepath.Join(canonicalRoot, "connections", "shared.yaml") ||
 			cache.DescriptorDigest == "" ||
@@ -647,7 +647,7 @@ case " $* " in
         fi
         ;;
     esac
-    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1","defaults":{"outputRoot":"/data/projects/sample/runs"}},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"gpu-cq"}}}'
+    printf '%%s\n' '{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1","defaults":{"outputRoot":"/data/projects/sample/runs"}},"status":{"phase":"Ready","observedGeneration":1,"target":{"resolvedNamespace":%q},"queue":{"localQueue":"jobqueue","clusterQueue":"tau-cq"}}}'
     ;;
   *" get localqueue.kueue.x-k8s.io jobqueue "*)
     printf '%%s\n' 'localqueue.kueue.x-k8s.io/jobqueue'

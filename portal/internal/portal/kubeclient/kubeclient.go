@@ -25,6 +25,9 @@ var (
 	clusterQueueGVR = schema.GroupVersionResource{
 		Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "clusterqueues",
 	}
+	cohortGVR = schema.GroupVersionResource{
+		Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "cohorts",
+	}
 	workloadGVR = schema.GroupVersionResource{
 		Group: "kueue.x-k8s.io", Version: "v1beta2", Resource: "workloads",
 	}
@@ -111,6 +114,18 @@ func (c *Client) ListLocalQueues(ctx context.Context, namespace string) ([]byte,
 
 func (c *Client) ListClusterQueues(ctx context.Context) ([]byte, error) {
 	return c.listRaw(ctx, clusterQueueGVR, "")
+}
+
+func (c *Client) GetLocalQueue(ctx context.Context, namespace, name string) ([]byte, error) {
+	return c.getRaw(ctx, localQueueGVR, namespace, name)
+}
+
+func (c *Client) GetClusterQueue(ctx context.Context, name string) ([]byte, error) {
+	return c.getRaw(ctx, clusterQueueGVR, "", name)
+}
+
+func (c *Client) GetCohort(ctx context.Context, name string) ([]byte, error) {
+	return c.getRaw(ctx, cohortGVR, "", name)
 }
 
 func (c *Client) ListWorkloads(ctx context.Context, namespace string) ([]byte, error) {

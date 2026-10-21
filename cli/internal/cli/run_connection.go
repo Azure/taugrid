@@ -49,7 +49,7 @@ func lifecycleFlagsContextExplicit(cmd *cobra.Command) bool {
 }
 
 func (f *runLifecycleConnectionFlags) resolve(cmd *cobra.Command) (string, string, func(), error) {
-	return f.resolveWithEnsurer(cmd, defaultRunConnectionEnsurer(cmd))
+	return f.resolveWithEnsurer(cmd, defaultRunLifecycleConnectionManager(cmd))
 }
 
 func (f *runLifecycleConnectionFlags) resolveWithEnsurer(cmd *cobra.Command, underlying runConnectionEnsurer) (string, string, func(), error) {
@@ -68,8 +68,16 @@ func (f *runLifecycleConnectionFlags) resolveWithEnsurer(cmd *cobra.Command, und
 		lifecycleFlagsContextExplicit(cmd),
 		cmd.Flags().Changed("namespace"),
 		cmd.Flags().Changed("workspace"),
-		func(cmd *cobra.Command, kubeContext, namespace string, contextExplicit, namespaceExplicit bool) (string, string, func(), error) {
-			return resolveRunLifecycleConnectionUsing(cmd, kubeContext, namespace, contextExplicit, namespaceExplicit, ensurer)
+		func(cmd *cobra.Command, kubeContext, namespace string, contextExplicit, namespaceExplicit, workspaceRouting bool) (string, string, func(), error) {
+			return resolveRunLifecycleConnectionUsing(
+				cmd,
+				kubeContext,
+				namespace,
+				contextExplicit,
+				namespaceExplicit,
+				workspaceRouting,
+				ensurer,
+			)
 		},
 		func(cmd *cobra.Command, kubeContext, _ string, name string) (tauworkspace.Workspace, error) {
 			return fetchWorkspace(cmd, kubeContext, f.systemNamespace, name)
@@ -104,6 +112,7 @@ type runLifecycleBaseResolver func(
 	string,
 	bool,
 	bool,
+	bool,
 ) (string, string, func(), error)
 
 type runLifecycleWorkspaceFetcher func(
@@ -122,11 +131,18 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 ) (string, string, func(), error) {
 	workspaceName := strings.TrimSpace(workspace)
 	useWorkspace := workspaceExplicit && workspaceName != ""
+	if useWorkspace {
+		source, err := discoverRunLifecycleProjectSource(cmd)
+		if err != nil {
+			return "", "", nil, err
+		}
+		if err := validateWorkspaceSelection(source, "", workspaceName); err != nil {
+			return "", "", nil, err
+		}
+	}
 
 	routingNamespace := namespace
-	routingNamespaceExplicit := namespaceExplicit
 	if useWorkspace {
-		routingNamespaceExplicit = true
 		if strings.TrimSpace(routingNamespace) == "" {
 			routingNamespace = workspaceName
 		}
@@ -137,7 +153,8 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 		kubeContext,
 		routingNamespace,
 		contextExplicit,
-		routingNamespaceExplicit,
+		namespaceExplicit,
+		useWorkspace,
 	)
 	if err != nil {
 		return "", "", nil, err
@@ -150,14 +167,6 @@ func resolveRunLifecycleConnectionWithWorkspaceUsing(
 	if err != nil {
 		restore()
 		return "", "", nil, err
-	}
-	if !tauworkspace.Ready(workspaceStatus) {
-		restore()
-		return "", "", nil, fmt.Errorf(
-			"workspace %q is not Ready (phase=%s)",
-			workspaceStatus.Metadata.Name,
-			workspaceStatus.Status.Phase,
-		)
 	}
 	workspaceNamespace := firstNonEmpty(
 		workspaceTargetNamespace(workspaceStatus),
@@ -205,6 +214,52 @@ func defaultRunConnectionManager(cmd *cobra.Command) workspaceconnection.Manager
 	}
 }
 
+func defaultRunLifecycleConnectionManager(cmd *cobra.Command) workspaceconnection.Manager {
+	manager := defaultRunConnectionManager(cmd)
+	manager.AllowUnreadyWorkspace = true
+	manager.Verifier = workspaceconnection.KubectlVerifier{AllowUnreadyWorkspace: true}
+	return manager
+}
+
+func allowUnreadyWorkspaceVerification(ensurer runConnectionEnsurer) runConnectionEnsurer {
+	setVerifier := func(manager workspaceconnection.Manager) workspaceconnection.Manager {
+		manager.AllowUnreadyWorkspace = true
+		switch verifier := manager.Verifier.(type) {
+		case workspaceconnection.KubectlVerifier:
+			verifier.AllowUnreadyWorkspace = true
+			manager.Verifier = verifier
+		case *workspaceconnection.KubectlVerifier:
+			updated := *verifier
+			updated.AllowUnreadyWorkspace = true
+			manager.Verifier = &updated
+		}
+		return manager
+	}
+	switch manager := ensurer.(type) {
+	case workspaceconnection.Manager:
+		return setVerifier(manager)
+	case *workspaceconnection.Manager:
+		updated := setVerifier(*manager)
+		return &updated
+	default:
+		return ensurer
+	}
+}
+
+func connectionEnsurerForSource(
+	ensurer runConnectionEnsurer,
+	source runConnectionSource,
+) runConnectionEnsurer {
+	selected := strings.TrimSpace(source.Workspace)
+	discovery := descriptorFor(source)
+	if selected == "" ||
+		discovery == nil ||
+		selected == strings.TrimSpace(discovery.Descriptor.Workspace) {
+		return ensurer
+	}
+	return allowUnreadyWorkspaceVerification(ensurer)
+}
+
 func stdinIsTerminal(input io.Reader) bool {
 	file, ok := input.(*os.File)
 	return ok && term.IsTerminal(int(file.Fd()))
@@ -241,15 +296,24 @@ func applyLiveRunConnection(
 			return options, workspaceconnection.ActiveConnection{}, err
 		}
 	}
+	ensurer = connectionEnsurerForSource(ensurer, source)
 	connection, err := ensureRunConnection(ctx, ensurer, source)
 	if err != nil {
 		return options, workspaceconnection.ActiveConnection{}, err
 	}
-	if requested, connected := strings.TrimSpace(options.workspace), strings.TrimSpace(connection.Workspace); requested != "" && requested != connected {
+	expectedWorkspace := workspaceForSource(source, connection.Workspace)
+	if requested := strings.TrimSpace(options.workspace); requested != "" && requested != expectedWorkspace {
+		if strings.TrimSpace(source.Workspace) == "" {
+			return options, workspaceconnection.ActiveConnection{}, fmt.Errorf(
+				"run workspace %q conflicts with active repository workspace connection %q",
+				requested,
+				expectedWorkspace,
+			)
+		}
 		return options, workspaceconnection.ActiveConnection{}, fmt.Errorf(
-			"run workspace %q conflicts with active repository workspace connection %q",
+			"run workspace %q conflicts with repository workspace %q",
 			requested,
-			connected,
+			expectedWorkspace,
 		)
 	}
 	if requested, connected := strings.TrimSpace(options.kubeContext), strings.TrimSpace(connection.ContextName); requested != "" && connected != "" && requested != connected {
@@ -259,9 +323,25 @@ func applyLiveRunConnection(
 			connected,
 		)
 	}
-	options.workspace = connection.Workspace
+	connection = connectionForWorkspaceSelection(connection, expectedWorkspace)
+	options.workspace = expectedWorkspace
 	options.kubeContext = connection.ContextName
 	return options, connection, nil
+}
+
+func connectionForWorkspaceSelection(
+	connection workspaceconnection.ActiveConnection,
+	workspace string,
+) workspaceconnection.ActiveConnection {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" || workspace == strings.TrimSpace(connection.Workspace) {
+		return connection
+	}
+	connection.Workspace = workspace
+	connection.WorkspaceUID = ""
+	connection.Namespace = ""
+	connection.Queue = ""
+	return connection
 }
 
 func applyActivatedRunConnection(
@@ -271,7 +351,8 @@ func applyActivatedRunConnection(
 	required bool,
 	ensurer runConnectionEnsurer,
 ) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
-	if options.workspaceExplicit || options.kubeContextExplicit {
+	if options.kubeContextExplicit ||
+		(options.workspaceExplicit && strings.TrimSpace(source.Workspace) == "") {
 		if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, descriptorFor(source)); err != nil {
 			return options, workspaceconnection.ActiveConnection{}, err
 		}
@@ -283,6 +364,7 @@ func applyActivatedRunConnection(
 	if err := checkCatalogWorkspaceConflict(options, source, source.Discovery); err != nil {
 		return options, workspaceconnection.ActiveConnection{}, err
 	}
+	ensurer = connectionEnsurerForSource(ensurer, source)
 	connection, err := ensureRunConnection(ctx, ensurer, source)
 	if err != nil {
 		if !required && errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
@@ -290,7 +372,7 @@ func applyActivatedRunConnection(
 		}
 		return options, workspaceconnection.ActiveConnection{}, err
 	}
-	options.workspace = connection.Workspace
+	options.workspace = workspaceForSource(source, connection.Workspace)
 	options.kubeContext = connection.ContextName
 	return options, connection, nil
 }
@@ -299,7 +381,8 @@ func applyOfflineRunConnection(
 	options unresolvedRunOptions,
 	source runConnectionSource,
 ) (unresolvedRunOptions, workspaceconnection.ActiveConnection, error) {
-	if options.workspaceExplicit || options.kubeContextExplicit {
+	if options.kubeContextExplicit ||
+		(options.workspaceExplicit && strings.TrimSpace(source.Workspace) == "") {
 		if err := checkDescriptorContextConflict(options.kubeContext, options.kubeContextFromFlag, descriptorFor(source)); err != nil {
 			return options, workspaceconnection.ActiveConnection{}, err
 		}
@@ -324,7 +407,7 @@ func applyOfflineRunConnection(
 		return options, workspaceconnection.ActiveConnection{}, err
 	}
 	if options.workspace == "" {
-		options.workspace = discovery.Descriptor.Workspace
+		options.workspace = workspaceForSource(source, discovery.Descriptor.Workspace)
 	}
 	if options.kubeContext == "" {
 		options.kubeContext = discovery.Descriptor.Cluster.ContextName
@@ -336,7 +419,14 @@ func applyOfflineRunConnection(
 }
 
 func checkCatalogWorkspaceConflict(options unresolvedRunOptions, source runConnectionSource, discovery *workspaceconnection.Discovery) error {
-	if !source.Catalog || discovery == nil || options.workspace == "" || options.workspace == discovery.Descriptor.Workspace {
+	if !source.Catalog || options.workspace == "" {
+		return nil
+	}
+	expected := strings.TrimSpace(source.Workspace)
+	if expected == "" && discovery != nil {
+		expected = strings.TrimSpace(discovery.Descriptor.Workspace)
+	}
+	if expected == "" || options.workspace == expected {
 		return nil
 	}
 	project := ""
@@ -344,11 +434,51 @@ func checkCatalogWorkspaceConflict(options unresolvedRunOptions, source runConne
 		project = fmt.Sprintf(" for project %q", source.Project)
 	}
 	return fmt.Errorf(
-		"run config policy.workspace %q conflicts with catalog connection workspace %q%s",
+		"run config policy.workspace %q conflicts with catalog workspace %q%s",
 		options.workspace,
-		discovery.Descriptor.Workspace,
+		expected,
 		project,
 	)
+}
+
+func workspaceForSource(source runConnectionSource, fallback string) string {
+	if workspace := strings.TrimSpace(source.Workspace); workspace != "" {
+		return workspace
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func validateWorkspaceSelection(source runConnectionSource, policyWorkspace, flagWorkspace string) error {
+	policyWorkspace = strings.TrimSpace(policyWorkspace)
+	flagWorkspace = strings.TrimSpace(flagWorkspace)
+	projectWorkspace := strings.TrimSpace(source.Workspace)
+	if !source.Catalog || projectWorkspace == "" {
+		return nil
+	}
+	if policyWorkspace != "" && flagWorkspace != "" && policyWorkspace != flagWorkspace {
+		return fmt.Errorf(
+			"--workspace %q conflicts with run config policy.workspace %q",
+			flagWorkspace,
+			policyWorkspace,
+		)
+	}
+	if policyWorkspace != "" && policyWorkspace != projectWorkspace {
+		return fmt.Errorf(
+			"run config policy.workspace %q conflicts with catalog workspace %q for project %q",
+			policyWorkspace,
+			projectWorkspace,
+			source.Project,
+		)
+	}
+	if flagWorkspace != "" && flagWorkspace != projectWorkspace {
+		return fmt.Errorf(
+			"--workspace %q conflicts with catalog workspace %q for project %q",
+			flagWorkspace,
+			projectWorkspace,
+			source.Project,
+		)
+	}
+	return nil
 }
 
 func descriptorFor(source runConnectionSource) *workspaceconnection.Discovery {
@@ -413,13 +543,21 @@ func resolveRunLifecycleConnection(
 	contextExplicit bool,
 	namespaceExplicit bool,
 ) (string, string, func(), error) {
-	return resolveRunLifecycleConnectionUsing(cmd, kubeContext, namespace, contextExplicit, namespaceExplicit, defaultRunConnectionEnsurer(cmd))
+	return resolveRunLifecycleConnectionUsing(
+		cmd,
+		kubeContext,
+		namespace,
+		contextExplicit,
+		namespaceExplicit,
+		false,
+		defaultRunLifecycleConnectionManager(cmd),
+	)
 }
 
 func resolveRunLifecycleConnectionUsing(
 	cmd *cobra.Command,
 	kubeContext, namespace string,
-	contextExplicit, namespaceExplicit bool,
+	contextExplicit, namespaceExplicit, workspaceRouting bool,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	projectName := ""
@@ -436,6 +574,7 @@ func resolveRunLifecycleConnectionUsing(
 		namespace,
 		contextExplicit,
 		namespaceExplicit,
+		workspaceRouting,
 		projectName,
 		ensurer,
 	)
@@ -446,10 +585,27 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	kubeContext, namespace string,
 	contextExplicit bool,
 	namespaceExplicit bool,
+	workspaceRouting bool,
 	projectName string,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
-	if contextExplicit && kubeContext != "" {
+	if contextExplicit && kubeContext != "" && strings.TrimSpace(projectName) == "" {
+		source, err := discoverRunLifecycleConnectionSource(projectName, true)
+		if err == nil {
+			return resolveRunLifecycleConnectionFromSource(
+				cmd,
+				kubeContext,
+				namespace,
+				contextExplicit,
+				namespaceExplicit,
+				workspaceRouting,
+				source,
+				ensurer,
+			)
+		}
+		if !strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
+			return "", "", nil, err
+		}
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorForStartDir()); err != nil {
 			return "", "", nil, err
 		}
@@ -459,13 +615,30 @@ func resolveRunLifecycleConnectionWithEnsurer(
 		}
 		return kubeContext, ns, func() {}, nil
 	}
-	startDir, err := os.Getwd()
+	source, err := discoverRunLifecycleConnectionSource(projectName, contextExplicit && kubeContext != "")
 	if err != nil {
 		return "", "", nil, err
 	}
+	return resolveRunLifecycleConnectionFromSource(
+		cmd,
+		kubeContext,
+		namespace,
+		contextExplicit,
+		namespaceExplicit,
+		workspaceRouting,
+		source,
+		ensurer,
+	)
+}
+
+func discoverRunLifecycleConnectionSource(projectName string, allowUnassignedCatalog bool) (runConnectionSource, error) {
+	startDir, err := os.Getwd()
+	if err != nil {
+		return runConnectionSource{}, err
+	}
 	repository, err := projectcatalog.Discover(startDir)
 	if err != nil {
-		return "", "", nil, err
+		return runConnectionSource{}, err
 	}
 	source := runConnectionSource{
 		StartDir: startDir,
@@ -474,27 +647,59 @@ func resolveRunLifecycleConnectionWithEnsurer(
 	if repository.Catalog != nil {
 		project, err := repository.Catalog.SelectLifecycleProject(projectName, startDir)
 		if err != nil {
-			return "", "", nil, err
+			return runConnectionSource{}, err
 		}
 		source.Catalog = true
 		source.Project = project.Name
+		source.Workspace = project.Workspace
 		discovery, err := assignedCatalogProjectConnection(repository.Catalog, project)
 		if err != nil {
-			return "", "", nil, err
+			if allowUnassignedCatalog &&
+				strings.TrimSpace(project.Workspace) == "" &&
+				errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
+				return source, nil
+			}
+			return runConnectionSource{}, err
 		}
 		source.Discovery = discovery
 	} else if strings.TrimSpace(projectName) != "" {
-		return "", "", nil, fmt.Errorf("--project requires %s at the Git worktree root", projectcatalog.Filename)
+		return runConnectionSource{}, fmt.Errorf("--project requires %s at the Git worktree root", projectcatalog.Filename)
 	}
-	return resolveRunLifecycleConnectionFromSource(
-		cmd,
-		kubeContext,
-		namespace,
-		contextExplicit,
-		namespaceExplicit,
-		source,
-		ensurer,
-	)
+	return source, nil
+}
+
+func discoverRunLifecycleProjectSource(cmd *cobra.Command) (runConnectionSource, error) {
+	startDir, err := os.Getwd()
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	repository, err := projectcatalog.Discover(startDir)
+	if err != nil {
+		return runConnectionSource{}, err
+	}
+	if repository.Catalog == nil {
+		return runConnectionSource{}, nil
+	}
+	projectName := ""
+	if cmd.Flags().Lookup("project") != nil {
+		projectName, err = cmd.Flags().GetString("project")
+		if err != nil {
+			return runConnectionSource{}, fmt.Errorf("read inherited --project flag: %w", err)
+		}
+	}
+	project, err := repository.Catalog.SelectLifecycleProject(projectName, startDir)
+	if err != nil {
+		if strings.TrimSpace(projectName) == "" &&
+			strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
+			return runConnectionSource{}, nil
+		}
+		return runConnectionSource{}, err
+	}
+	return runConnectionSource{
+		Catalog:   true,
+		Project:   project.Name,
+		Workspace: project.Workspace,
+	}, nil
 }
 
 func resolveRunLifecycleConnectionFromSource(
@@ -502,12 +707,36 @@ func resolveRunLifecycleConnectionFromSource(
 	kubeContext, namespace string,
 	contextExplicit bool,
 	namespaceExplicit bool,
+	workspaceRouting bool,
 	source runConnectionSource,
 	ensurer runConnectionEnsurer,
 ) (string, string, func(), error) {
 	if contextExplicit && kubeContext != "" {
 		if err := checkDescriptorContextConflict(kubeContext, cmd.Flags().Changed("context"), descriptorFor(source)); err != nil {
 			return "", "", nil, err
+		}
+		if workspaceName := strings.TrimSpace(source.Workspace); workspaceName != "" {
+			placement, err := fetchLifecycleWorkspacePlacement(
+				cmd,
+				kubeContext,
+				systemNamespaceFromCommand(cmd),
+				workspaceName,
+				workspaceconnection.ActiveConnection{Workspace: workspaceName, ContextName: kubeContext},
+			)
+			if err != nil {
+				return "", "", nil, err
+			}
+			if explicitNamespace := strings.TrimSpace(namespace); namespaceExplicit &&
+				explicitNamespace != "" &&
+				explicitNamespace != placement.Namespace {
+				return "", "", nil, fmt.Errorf(
+					"namespace %q conflicts with TauWorkspace %q target namespace %q",
+					explicitNamespace,
+					placement.Workspace,
+					placement.Namespace,
+				)
+			}
+			return kubeContext, placement.Namespace, func() {}, nil
 		}
 		ns, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
 		if err != nil {
@@ -516,7 +745,7 @@ func resolveRunLifecycleConnectionFromSource(
 		return kubeContext, ns, func() {}, nil
 	}
 	if !source.Git {
-		if namespaceExplicit {
+		if namespaceExplicit || workspaceRouting {
 			ns, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
 			if err != nil {
 				return "", "", nil, err
@@ -536,18 +765,78 @@ func resolveRunLifecycleConnectionFromSource(
 		}
 		return "", "", nil, err
 	}
-	if !namespaceExplicit {
-		namespace = connection.Namespace
-	}
-	resolvedNamespace, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
-	if err != nil {
-		return "", "", nil, err
-	}
 	restore, err := useKubeconfig(connection.KubeconfigPath)
 	if err != nil {
 		return "", "", nil, err
 	}
+	if workspaceName := strings.TrimSpace(source.Workspace); workspaceName != "" {
+		selectedConnection := connectionForWorkspaceSelection(connection, workspaceName)
+		placement, placementErr := fetchLifecycleWorkspacePlacement(
+			cmd,
+			connection.ContextName,
+			systemNamespaceForConnection(cmd, connection),
+			workspaceName,
+			selectedConnection,
+		)
+		if placementErr != nil {
+			restore()
+			return "", "", nil, placementErr
+		}
+		if explicitNamespace := strings.TrimSpace(namespace); namespaceExplicit &&
+			explicitNamespace != "" &&
+			explicitNamespace != placement.Namespace {
+			restore()
+			return "", "", nil, fmt.Errorf(
+				"namespace %q conflicts with TauWorkspace %q target namespace %q",
+				explicitNamespace,
+				placement.Workspace,
+				placement.Namespace,
+			)
+		}
+		namespace = placement.Namespace
+	} else if !namespaceExplicit {
+		namespace = connection.Namespace
+	}
+	resolvedNamespace, err := resolveWorkloadNamespace(cmd, kubeContext, namespace)
+	if err != nil {
+		restore()
+		return "", "", nil, err
+	}
 	return connection.ContextName, resolvedNamespace, restore, nil
+}
+
+var runLifecycleWorkspaceFetcherOverride runLifecycleWorkspaceFetcher
+
+func fetchLifecycleWorkspacePlacement(
+	cmd *cobra.Command,
+	kubeContext, systemNamespace, workspaceName string,
+	connection workspaceconnection.ActiveConnection,
+) (workspacePlacement, error) {
+	fetch := fetchWorkspace
+	if runLifecycleWorkspaceFetcherOverride != nil {
+		fetch = runLifecycleWorkspaceFetcherOverride
+	}
+	workspaceStatus, err := fetch(cmd, kubeContext, systemNamespace, workspaceName)
+	if err != nil {
+		return workspacePlacement{}, err
+	}
+	return resolveExistingWorkspacePlacement(workspaceStatus, connection)
+}
+
+func fetchReadyWorkspacePlacement(
+	cmd *cobra.Command,
+	kubeContext, systemNamespace, workspaceName string,
+	connection workspaceconnection.ActiveConnection,
+) (workspacePlacement, error) {
+	fetch := fetchWorkspace
+	if runLifecycleWorkspaceFetcherOverride != nil {
+		fetch = runLifecycleWorkspaceFetcherOverride
+	}
+	workspaceStatus, err := fetch(cmd, kubeContext, systemNamespace, workspaceName)
+	if err != nil {
+		return workspacePlacement{}, err
+	}
+	return resolveWorkspacePlacement(workspaceStatus, connection)
 }
 
 func resolveWorkspaceControlPlaneConnection(
@@ -558,7 +847,7 @@ func resolveWorkspaceControlPlaneConnection(
 		cmd,
 		kubeContext,
 		namespace,
-		defaultRunConnectionEnsurer(cmd),
+		defaultRunLifecycleConnectionManager(cmd),
 	)
 }
 
@@ -567,19 +856,48 @@ func resolveWorkspaceControlPlaneConnectionWithEnsurer(
 	kubeContext, namespace string,
 	ensurer runConnectionEnsurer,
 ) (string, func(), error) {
-	resolvedContext, _, restore, err := resolveRunLifecycleConnectionWithEnsurer(
-		cmd,
-		kubeContext,
-		namespace,
-		runContextExplicit(cmd),
-		true,
-		"",
-		ensurer,
-	)
+	_ = namespace
+	explicitContext := runContextExplicit(cmd) && strings.TrimSpace(kubeContext) != ""
+	source, err := discoverRunLifecycleConnectionSource("", explicitContext)
+	if err != nil {
+		if explicitContext &&
+			strings.Contains(err.Error(), "lifecycle routing is ambiguous") {
+			if err := checkDescriptorContextConflict(
+				kubeContext,
+				cmd.Flags().Changed("context"),
+				descriptorForStartDir(),
+			); err != nil {
+				return "", nil, err
+			}
+			return kubeContext, func() {}, nil
+		}
+		return "", nil, err
+	}
+	if explicitContext {
+		if err := checkDescriptorContextConflict(
+			kubeContext,
+			cmd.Flags().Changed("context"),
+			descriptorFor(source),
+		); err != nil {
+			return "", nil, err
+		}
+		return kubeContext, func() {}, nil
+	}
+	if !source.Git {
+		return kubeContext, func() {}, nil
+	}
+	connection, err := ensureRunConnection(cmd.Context(), ensurer, source)
+	if err != nil {
+		if !source.Catalog && errors.Is(err, workspaceconnection.ErrDescriptorNotFound) {
+			return kubeContext, func() {}, nil
+		}
+		return "", nil, err
+	}
+	restore, err := useKubeconfig(connection.KubeconfigPath)
 	if err != nil {
 		return "", nil, err
 	}
-	return resolvedContext, restore, nil
+	return connection.ContextName, restore, nil
 }
 
 func resolveWorkloadDataConnection(cmd *cobra.Command, kubeContext, namespace string) (string, string, func(), error) {

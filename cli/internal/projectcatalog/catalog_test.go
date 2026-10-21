@@ -38,6 +38,19 @@ projects:
 	if _, err := Parse([]byte(valid)); err != nil {
 		t.Fatalf("valid catalog rejected: %v", err)
 	}
+	withWorkspace := strings.Replace(
+		valid,
+		"    connection: connections/alpha.yaml",
+		"    connection: connections/alpha.yaml\n    workspace: vision-training",
+		1,
+	)
+	spec, err := Parse([]byte(withWorkspace))
+	if err != nil {
+		t.Fatalf("workspace catalog rejected: %v", err)
+	}
+	if got := spec.Projects["alpha"].Workspace; got != "vision-training" {
+		t.Fatalf("workspace = %q", got)
+	}
 
 	tests := map[string]string{
 		"unknown top-level field": valid + "runs: []\n",
@@ -113,6 +126,12 @@ projects:
 		"multiple documents": valid + "---\nschema: tau.projects.v1\nprojects: {}\n",
 		"unsupported schema": strings.Replace(valid, Schema, "tau.projects.v2", 1),
 		"empty projects":     "schema: tau.projects.v1\nprojects: {}\n",
+		"invalid workspace": strings.Replace(
+			valid,
+			"    connection: connections/alpha.yaml",
+			"    connection: connections/alpha.yaml\n    workspace: Invalid_Workspace",
+			1,
+		),
 		"invalid name": strings.Replace(
 			valid,
 			"  alpha:",
@@ -314,8 +333,8 @@ func TestLoadDerivesTargetsAndAllowsSharedConnectionAndZeroTargets(t *testing.T)
 	writeFile(t, filepath.Join(root, "alpha", "tau.yaml"), "name: alpha-default\n")
 	mkdir(t, filepath.Join(root, "beta", "tau"))
 	writeCatalog(t, root, map[string]ProjectSpec{
-		"alpha": {Path: "alpha", Connection: "connections/shared.yaml"},
-		"beta":  {Path: "beta", Connection: "connections/shared.yaml"},
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "vision"},
+		"beta":  {Path: "beta", Connection: "connections/shared.yaml", Workspace: "language"},
 	})
 
 	catalog, err := Load(root)
@@ -323,6 +342,9 @@ func TestLoadDerivesTargetsAndAllowsSharedConnectionAndZeroTargets(t *testing.T)
 		t.Fatalf("Load: %v", err)
 	}
 	alpha := catalog.Projects["alpha"]
+	if alpha.Workspace != "vision" || catalog.Projects["beta"].Workspace != "language" {
+		t.Fatalf("catalog workspaces = %q, %q", alpha.Workspace, catalog.Projects["beta"].Workspace)
+	}
 	beta := catalog.Projects["beta"]
 	if got := alpha.Targets["train"]; got != filepath.Join(root, "alpha", "tau", "train.yaml") {
 		t.Fatalf("train target = %q", got)
@@ -778,6 +800,9 @@ func writeCatalog(t *testing.T, root string, projects map[string]ProjectSpec) {
 	for _, name := range names {
 		project := projects[name]
 		fmt.Fprintf(&builder, "  %s:\n    path: %s\n    connection: %s\n", name, project.Path, project.Connection)
+		if project.Workspace != "" {
+			fmt.Fprintf(&builder, "    workspace: %s\n", project.Workspace)
+		}
 	}
 	writeFile(t, filepath.Join(root, Filename), builder.String())
 }

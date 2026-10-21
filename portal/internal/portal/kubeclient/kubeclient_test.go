@@ -104,3 +104,40 @@ func TestListNodeMetricsUsesAggregatedMetricsAPI(t *testing.T) {
 		t.Fatalf("ListNodeMetrics returned invalid JSON: %s", data)
 	}
 }
+
+func TestQuotaGetsUsePinnedKueueV1Beta2Resources(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"Object","metadata":{"name":"quota"}}`))
+	}))
+	defer server.Close()
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := NewForDynamic(client)
+	if _, err := reader.GetLocalQueue(context.Background(), "vision", "jobqueue"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.GetClusterQueue(context.Background(), "tau-ws-vision"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.GetCohort(context.Background(), "tau-team-research"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/apis/kueue.x-k8s.io/v1beta2/namespaces/vision/localqueues/jobqueue",
+		"/apis/kueue.x-k8s.io/v1beta2/clusterqueues/tau-ws-vision",
+		"/apis/kueue.x-k8s.io/v1beta2/cohorts/tau-team-research",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("paths[%d] = %q, want %q", i, paths[i], want[i])
+		}
+	}
+}

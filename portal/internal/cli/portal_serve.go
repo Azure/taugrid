@@ -42,6 +42,7 @@ func newPortalServeCmd(storePath *string) *cobra.Command {
 	var (
 		kubeconfig     string
 		namespace      string
+		localQueue     string
 		jobsScopeMode  string
 		operatorScopes []string
 		clusterName    string
@@ -89,16 +90,18 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				ScopeMode:      portalapi.JobsScopeMode(jobsScopeMode),
 				OperatorScopes: parsedOperatorScopes,
 			}
-			rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions(namespace)
+			rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions(namespace, localQueue)
 			var nodesOpts portalapi.NodesOptions
+			var quotaOpts portalapi.QuotaOptions
 			if client, err := kubeclient.New(kubeconfig); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, and Runs boards disabled (no Kubernetes access): %v\n", err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: Jobs, Ray, Nodes, Runs, and Quota boards disabled (no Kubernetes access): %v\n", err)
 			} else {
 				jobsOpts.Reader = client
 				jobsOpts.Profiles = client
 				rayOpts.Reader = client
 				nodesOpts.Reader = client
 				runsOpts.Reader = client
+				quotaOpts.Reader = client
 			}
 			var clusterOpts portalapi.ClusterOptions
 			var costOpts portalapi.CostOptions
@@ -148,6 +151,7 @@ Kubernetes is unreachable the portal still serves every other board.`,
 				Nodes:              nodesOpts,
 				Runs:               runsOpts,
 				NodeUtil:           nodeUtilOpts,
+				Quota:              quotaOpts,
 				WorkspaceDirectory: workspaceDirectory,
 				Identity: portalapi.IdentityOptions{
 					UserHeader:   userHeader,
@@ -164,11 +168,12 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	addExpServeFlags(cmd, &opts, false)
 	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig for the Jobs board when running out-of-cluster (default: in-cluster ServiceAccount, then $KUBECONFIG)")
 	cmd.Flags().StringVarP(&namespace, "namespace", "n", "", "optional namespace for the Ray and Runs boards; empty reads cluster-wide and workspace directory entries override it")
+	cmd.Flags().StringVar(&localQueue, "local-queue", "", "LocalQueue backing the fixed workspace quota and run scope; workspace directory entries override it")
 	cmd.Flags().StringVar(&jobsScopeMode, "jobs-scope-mode", string(portalapi.JobsScopeDisabled), "computed Jobs board scope mode: disabled, workspace, or operator")
 	cmd.Flags().StringSliceVar(&operatorScopes, "jobs-operator-scope", nil, "trusted operator Jobs scope as team=namespace/localQueue (repeatable; operator mode only)")
 	cmd.Flags().StringVar(&clusterName, "cluster", "", "cluster scope for Kusto-backed boards (required when durable run history is configured without a workspace directory)")
 	cmd.Flags().StringVar(&costDatabase, "kusto-cost-database", "CostTracking", "Kusto database containing allocation-based GPU cost rollups")
-	cmd.Flags().StringVar(&directory, "workspace-directory", "", "metadata-only JSON workspace directory; enables trusted Entra identity headers and server-resolved workspace scope")
+	cmd.Flags().StringVar(&directory, "workspace-directory", "", "metadata-only JSON workspace directory; enables server-resolved workspace scope (identity required unless public cluster-wide entries are explicitly enabled)")
 	cmd.Flags().StringVar(&userHeader, "workspace-user-header", "", "trusted authenticated user header (default: X-MS-CLIENT-PRINCIPAL-NAME)")
 	cmd.Flags().StringVar(&groupsHeader, "workspace-groups-header", "", "trusted authenticated groups header (default: X-MS-CLIENT-PRINCIPAL-GROUPS; comma or semicolon separated)")
 	cmd.Flags().BoolVar(&historyEnabled, "run-history-enabled", false, "enable durable Kusto run history (requires a deployed lifecycle recorder)")
@@ -181,8 +186,8 @@ Kubernetes is unreachable the portal still serves every other board.`,
 	return cmd
 }
 
-func singleWorkspaceKubernetesBoardOptions(namespace string) (portalapi.RayOptions, portalapi.RunsOptions) {
-	return portalapi.RayOptions{Namespace: namespace}, portalapi.RunsOptions{Namespace: namespace}
+func singleWorkspaceKubernetesBoardOptions(namespace, localQueue string) (portalapi.RayOptions, portalapi.RunsOptions) {
+	return portalapi.RayOptions{Namespace: namespace}, portalapi.RunsOptions{Namespace: namespace, LocalQueue: localQueue}
 }
 
 func parseJobsOperatorScopes(values []string) ([]jobs.Scope, error) {

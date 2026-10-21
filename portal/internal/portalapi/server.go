@@ -30,6 +30,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/portal/links"
 	"github.com/Azure/taugrid/portal/internal/portal/nodes"
 	"github.com/Azure/taugrid/portal/internal/portal/nodeutil"
+	portalquota "github.com/Azure/taugrid/portal/internal/portal/quota"
 	"github.com/Azure/taugrid/portal/internal/portal/ray"
 	"github.com/Azure/taugrid/portal/internal/portal/workloadlogs"
 )
@@ -53,6 +54,7 @@ type Options struct {
 	Nodes              NodesOptions
 	Runs               RunsOptions
 	NodeUtil           NodeUtilOptions
+	Quota              QuotaOptions
 	WorkspaceDirectory WorkspaceDirectory
 	Identity           IdentityOptions
 	KueueViz           KueueVizOptions
@@ -89,6 +91,7 @@ type NodesOptions struct {
 type RunsOptions struct {
 	Reader       runs.Reader
 	Namespace    string
+	LocalQueue   string
 	History      runs.HistoryReader
 	HistoryTable string
 	HistoryLimit int
@@ -97,6 +100,10 @@ type RunsOptions struct {
 type NodeUtilOptions struct {
 	Querier kustoquery.Querier
 	Cluster string
+}
+
+type QuotaOptions struct {
+	Reader portalquota.Reader
 }
 
 type Server struct {
@@ -112,6 +119,7 @@ type Server struct {
 	nodes                 NodesOptions
 	runs                  RunsOptions
 	nodeUtil              NodeUtilOptions
+	quota                 QuotaOptions
 	workspaceDirectory    WorkspaceDirectory
 	identity              IdentityOptions
 	singleWorkspaceScope  WorkspaceScope
@@ -177,6 +185,7 @@ func NewServer(opts Options) (*Server, error) {
 		nodes:                 opts.Nodes,
 		runs:                  opts.Runs,
 		nodeUtil:              opts.NodeUtil,
+		quota:                 opts.Quota,
 		workspaceDirectory:    opts.WorkspaceDirectory,
 		identity:              normalizeIdentityOptions(opts.Identity),
 		kueueViz:              opts.KueueViz,
@@ -185,6 +194,7 @@ func NewServer(opts Options) (*Server, error) {
 			Name:              singleWorkspace,
 			Cluster:           singleWorkspaceCluster,
 			Namespace:         firstNonEmpty(opts.Runs.Namespace, opts.Ray.Namespace),
+			LocalQueue:        strings.TrimSpace(opts.Runs.LocalQueue),
 			Source:            opts.Stellar.Source,
 			AuthorizationMode: workspaceAuthorizationClusterWide,
 			ExperimentsURL:    "/stellar",
@@ -457,6 +467,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealth)
 	s.mux.HandleFunc("/api/portal/workspaces", s.handleWorkspaces)
 	s.mux.HandleFunc("/api/portal/overview", s.handleOverview)
+	s.mux.HandleFunc("/api/portal/quota", s.handleQuota)
 	s.mux.HandleFunc("/api/portal/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/portal/cluster", s.handleCluster)
 	s.mux.HandleFunc("/api/portal/cost", s.handleCost)

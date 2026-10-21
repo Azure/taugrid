@@ -20,11 +20,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/projectcatalog"
 	"github.com/Azure/taugrid/cli/internal/resume"
 	"github.com/Azure/taugrid/cli/internal/storage"
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
 	"github.com/Azure/taugrid/core/experiment"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/status"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -215,7 +217,16 @@ policy:
 	currentWorkspace.Spec.Target.Namespace = "catalog-namespace"
 	currentWorkspace.Spec.Defaults.OutputRoot = "/data/workspaces/sample"
 	currentWorkspace.Status.Target.ResolvedNamespace = "catalog-namespace"
-	currentWorkspace.Status.Queue.LocalQueue = "jobqueue"
+	currentWorkspace.Status.Queue.LocalQueue = "tau-ws-sample"
+	currentWorkspace.Status.Queue.ClusterQueue = "legacy-cq"
+	resolvedProfile := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
+	resolvedProfile.Name = "test-routing"
+	resolvedProfile.Applicability.Namespaces = []string{"catalog-namespace"}
+	resolvedProfile.Applicability.Teams = nil
+	resolvedProfile.Applicability.Lanes = nil
+	resolvedProfile.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "catalog-namespace", Name: "jobqueue", ClusterQueue: "legacy-cq",
+	}}
 	command := newResumeTestCommand(
 		func(*cobra.Command) runConnectionEnsurer { return ensurer },
 		resumeCommandHooks{
@@ -235,6 +246,13 @@ policy:
 				}
 				return currentWorkspace, nil
 			},
+			resolveProfile: func(ctx context.Context, options unresolvedRunOptions) (unresolvedRunOptions, error) {
+				return selectRunWorkloadProfile(
+					ctx,
+					options,
+					testRunProviderForResolved(t, 11, resolvedProfile),
+				)
+			},
 			validateTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
 				validateCalls++
 				job := resolvedJobRequestForTest(target)
@@ -245,7 +263,9 @@ policy:
 				if options.dryRun != "client" ||
 					options.workspace != "sample" ||
 					options.workspaceResultScope != "/data/workspaces/sample" ||
-					options.queue != "jobqueue" {
+					options.queue != "tau-ws-sample" ||
+					options.selectedWorkloadProfile == nil ||
+					options.selectedWorkloadProfile.ClusterQueue != "legacy-cq" {
 					t.Fatalf("preflight Job options = %#v", options)
 				}
 				return nil
@@ -595,6 +615,206 @@ policy:
 	}
 	if routing.TargetOptions.workspace != "legacy-workspace" {
 		t.Fatalf("config workspace was not preserved: %#v", routing.TargetOptions)
+	}
+}
+
+func TestResumeCatalogProjectResolvesSelectedWorkspaceNamespace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace:       "descriptor-workspace",
+		WorkspaceUID:    "descriptor-uid",
+		ContextName:     "catalog-context",
+		SystemNamespace: defaultSystemNamespace(),
+		KubeconfigPath:  filepath.Join(t.TempDir(), "kubeconfig"),
+		Namespace:       "descriptor-namespace",
+		Queue:           "descriptor-queue",
+	}}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "catalog-context" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"",
+		"",
+		false,
+		false,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if routing.KubeContext != "catalog-context" || routing.Namespace != "alpha-namespace" {
+		t.Fatalf("routing = %#v", routing)
+	}
+	if routing.TargetOptions.workspace != "alpha-workspace" {
+		t.Fatalf("catalog workspace was not propagated: %#v", routing.TargetOptions)
+	}
+}
+
+func TestResumeSelectedWorkspaceAllowsExpiredUnreadyDescriptorCache(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	installCachedRoutingConnection(t, root, "descriptor-namespace")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(&bytes.Buffer{})
+	command.SetErr(&bytes.Buffer{})
+	manager := defaultRunConnectionManager(command)
+	manager.Verifier = workspaceconnection.KubectlVerifier{
+		NewRunner: func(contextName, kubeconfigPath string) workspaceconnection.RawRunner {
+			if contextName != "taugrid-flex" || kubeconfigPath == "" {
+				t.Fatalf("verifier context=%q kubeconfig=%q", contextName, kubeconfigPath)
+			}
+			return rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+				joined := strings.Join(args, " ")
+				switch {
+				case joined == "-n tau-system get workspace.tau.azure.com sample -o json":
+					return `{"metadata":{"name":"sample","uid":"workspace-uid","generation":1},"spec":{"queue":"jobqueue","authorization":{"mode":"workspace-rbac"},"role":"tau-researcher-v1"},"status":{"phase":"Degraded","observedGeneration":1,"target":{"resolvedNamespace":"descriptor-namespace"},"queue":{"localQueue":"jobqueue","clusterQueue":"tau-cq"}}}`, nil
+				case joined == "-n descriptor-namespace get localqueue.kueue.x-k8s.io jobqueue -o name":
+					return "localqueue.kueue.x-k8s.io/jobqueue\n", nil
+				case strings.Contains(joined, " auth can-i "):
+					return "yes\n", nil
+				default:
+					return "", fmt.Errorf("unexpected verifier args: %s", joined)
+				}
+			})
+		},
+	}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "taugrid-flex" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"",
+		"",
+		false,
+		false,
+		manager,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if routing.KubeContext != "taugrid-flex" ||
+		routing.Namespace != "alpha-namespace" ||
+		routing.TargetOptions.workspace != "alpha-workspace" {
+		t.Fatalf("routing = %#v", routing)
+	}
+}
+
+func TestResumeCatalogProjectWithExplicitContextPropagatesWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml", Workspace: "alpha-workspace"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{}
+	runLifecycleWorkspaceFetcherOverride = func(
+		_ *cobra.Command,
+		kubeContext, namespace, name string,
+	) (tauworkspace.Workspace, error) {
+		if kubeContext != "taugrid-flex" || namespace != defaultSystemNamespace() || name != "alpha-workspace" {
+			t.Fatalf("fetch workspace context=%q namespace=%q name=%q", kubeContext, namespace, name)
+		}
+		return readyTestWorkspace("alpha-workspace", "alpha-uid", "alpha-namespace", "alpha-queue"), nil
+	}
+	t.Cleanup(func() { runLifecycleWorkspaceFetcherOverride = nil })
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"taugrid-flex",
+		"",
+		true,
+		false,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if ensurer.calls != 0 {
+		t.Fatalf("explicit context activated connection %d times", ensurer.calls)
+	}
+	if routing.KubeContext != "taugrid-flex" ||
+		routing.Namespace != "alpha-namespace" ||
+		routing.TargetOptions.workspace != "alpha-workspace" {
+		t.Fatalf("routing = %#v", routing)
+	}
+}
+
+func TestResumeUnboundCatalogProjectWithExplicitContextPreservesConfigWorkspace(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	writeRunRoutingCatalog(t, root, map[string]projectcatalog.ProjectSpec{
+		"alpha": {Path: "alpha", Connection: "connections/shared.yaml"},
+	})
+	config := filepath.Join(root, "alpha", "tau", "train.yaml")
+	writeRunRoutingFile(t, config, `name: resume-job
+policy:
+  workspace: config-workspace
+`)
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	ensurer := &fakeRunConnectionEnsurer{}
+
+	routing, restore, err := resolveResumeRouting(
+		command,
+		root,
+		"alpha",
+		config,
+		"taugrid-flex",
+		"config-namespace",
+		true,
+		true,
+		ensurer,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if ensurer.calls != 0 {
+		t.Fatalf("explicit context activated connection %d times", ensurer.calls)
+	}
+	if routing.KubeContext != "taugrid-flex" ||
+		routing.Namespace != "config-namespace" ||
+		routing.TargetOptions.workspace != "config-workspace" {
+		t.Fatalf("routing = %#v", routing)
 	}
 }
 
@@ -1087,6 +1307,105 @@ func TestResumeCleanup_InconclusivePrefetchStillUsesRediscovery(t *testing.T) {
 	}
 	if waitCalls != 2 {
 		t.Fatalf("expected inconclusive resume rechecks to keep waiting until the deadline, got %d waits", waitCalls)
+	}
+}
+
+func TestResumeOOM_FinalSelectorDeadlineRefusesReplacement(t *testing.T) {
+	zeroGPUs := 0
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: resume-job\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	var output strings.Builder
+	command.SetOut(&output)
+	command.SetErr(io.Discard)
+
+	runner := rawRunnerFunc(func(ctx context.Context, extraArgs []string, _ []byte) (string, error) {
+		switch fakeRawKey(extraArgs...) {
+		case fakeRawKey("-n", "ray", "delete", "rayjob.ray.io", "resume-job", "--ignore-not-found"):
+			return "rayjob.ray.io \"resume-job\" deleted\n", nil
+		case fakeRawKey("-n", "ray", "delete", "job", "resume-job", "--ignore-not-found"):
+			return "job.batch \"resume-job\" deleted\n", nil
+		case fakeRawKey("-n", "ray", "delete", "service", "resume-job-headless", "--ignore-not-found"):
+			return "", nil
+		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "-l", workloadmeta.LabelJob+"=resume-job", "-o", "json"):
+			<-ctx.Done()
+			return "", errors.New("kubectl get workloads: signal: killed")
+		default:
+			t.Fatalf("unexpected kubectl args: %v", extraArgs)
+			return "", nil
+		}
+	})
+
+	executeCalls := 0
+	err := runResumeCommand(
+		command,
+		"resume-job",
+		resumeRouting{
+			ConfigPath:  config,
+			KubeContext: "test-context",
+			Namespace:   "ray",
+			TargetOptions: runDispatchOptions{
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runComputeInput: runComputeInput{
+					runRayJobResources: runRayJobResources{workers: 1, gpusPerWorker: 1},
+					jobGPUs:            &zeroGPUs,
+				},
+			},
+		},
+		"/data/resume-job/checkpoints/checkpoint-42",
+		"",
+		true,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot("resume-job")
+				snapshot.Pods[0].OOMKilled = true
+				return snapshot, nil
+			},
+			validateTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				return nil
+			},
+			deleteOld: func(ctx context.Context, _, namespace, name string, out io.Writer) error {
+				return deleteWorkloadAndWaitForManagerCleanup(ctx, runner, name, namespace, out, managerCleanupOptions{
+					Timeout:  20 * time.Millisecond,
+					Interval: time.Second,
+				}, managerCleanupHooks{
+					fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+						return status.Snapshot{
+							Name:         name,
+							Namespace:    namespace,
+							JobFound:     true,
+							JobManagedBy: "kueue.x-k8s.io/multikueue",
+						}, nil
+					},
+					wait: func(context.Context, time.Duration) error { return nil },
+					now:  time.Now,
+				})
+			},
+			executeTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				executeCalls++
+				return nil
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected resume cleanup uncertainty to block replacement")
+	}
+	for _, want := range []string{
+		"deleting old workload: timed out after 20ms waiting to prove MultiKueue manager workload cleanup",
+		"failure reason: OOMKilled",
+		"checkpoint: /data/resume-job/checkpoints/checkpoint-42",
+	} {
+		if !strings.Contains(err.Error()+"\n"+output.String(), want) {
+			t.Fatalf("expected resume result to contain %q, error=%v output=%q", want, err, output.String())
+		}
+	}
+	if strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("expected context-killed selector query to use cleanup diagnostic, got %v", err)
+	}
+	if executeCalls != 0 {
+		t.Fatalf("uncertain cleanup submitted %d replacement workloads", executeCalls)
 	}
 }
 

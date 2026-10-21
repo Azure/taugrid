@@ -173,6 +173,32 @@ func TestResolveServeTargetUsesNamespaceOnlyToDisambiguate(t *testing.T) {
 	}
 }
 
+func TestResolveServeWorkspaceTargetAcceptsRetainedClientRoute(t *testing.T) {
+	runner := &serveQueueRunner{outputs: map[string]string{
+		serveQueueKey("auth", "can-i", "create", "deployments.apps", "-n", "team-namespace"):        "yes\n",
+		serveQueueKey("auth", "can-i", "get", "localqueues.kueue.x-k8s.io", "-n", "team-namespace"): "yes\n",
+		serveQueueKey("-n", "team-namespace", "get", "localqueue.kueue.x-k8s.io", "jobqueue", "-o", "json"): `{
+			"metadata": {"name": "jobqueue"},
+			"spec": {"clusterQueue": "legacy-cq"}
+		}`,
+	}}
+
+	target, err := resolveServeWorkspaceTarget(
+		context.Background(),
+		runner,
+		"team-namespace",
+		"jobqueue",
+		"legacy-cq",
+		"deployments.apps",
+	)
+	if err != nil {
+		t.Fatalf("resolveServeWorkspaceTarget: %v", err)
+	}
+	if target.Queue != "jobqueue" || target.ClusterQueue != "legacy-cq" {
+		t.Fatalf("target = %+v, want retained client route", target)
+	}
+}
+
 func TestResolveServeTargetRequiresConnectedRunner(t *testing.T) {
 	_, _, err := resolveServeTarget(context.Background(), nil, "", "deployments.apps")
 	if err == nil || !strings.Contains(err.Error(), "Kubernetes runner is required") {

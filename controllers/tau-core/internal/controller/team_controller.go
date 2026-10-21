@@ -199,7 +199,7 @@ func (r *TauTeamReconciler) validateTeamReservationsWithAdditional(
 		return err
 	}
 	for i := range workspaces.Items {
-		cohort, _, reservations, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
+		cohort, _, reservations, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
 		if err != nil {
 			return err
 		}
@@ -293,7 +293,7 @@ func (r *TauTeamReconciler) appliedTeamAllocation(
 		return nil, err
 	}
 	for i := range workspaces.Items {
-		appliedCohort, guarantees, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
+		appliedCohort, guarantees, _, _, err := r.appliedWorkspaceQueue(ctx, &workspaces.Items[i])
 		if err != nil {
 			return nil, err
 		}
@@ -337,18 +337,19 @@ func (r *TauTeamReconciler) sharedTeamQuotaForWorkspace(
 		return nil, err
 	}
 	proposedFound := false
+	accountedQueues := map[string]map[string]resource.Quantity{}
 	for i := range workspaces.Items {
 		workspace := &workspaces.Items[i]
 		if proposed != nil && workspace.Name == proposed.Name {
 			workspace = proposed
 			proposedFound = true
 		}
-		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining); err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, workspace, remaining, accountedQueues); err != nil {
 			return nil, err
 		}
 	}
 	if proposed != nil && !proposedFound {
-		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining); err != nil {
+		if err := r.subtractWorkspaceGuarantee(ctx, team, proposed, remaining, accountedQueues); err != nil {
 			return nil, err
 		}
 	}
@@ -364,22 +365,88 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 	team *tauv1alpha1.TauTeam,
 	workspace *tauv1alpha1.TauWorkspace,
 	remaining map[string]tauv1alpha1.TauResourceQuota,
+	accountedQueues map[string]map[string]resource.Quantity,
 ) error {
 	effective := map[string]resource.Quantity{}
+	queueIdentity := ""
 	if workspace.Spec.TeamRef != nil && workspace.Spec.TeamRef.Name == team.Name {
-		for _, quota := range workspace.Spec.Quota {
-			effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+		retainedQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.quotaReader(), workspace)
+		if err != nil {
+			return err
+		}
+		if !retained {
+			for _, quota := range workspace.Spec.Quota {
+				effective[quotaKey(quota)] = quota.NominalQuota.DeepCopy()
+			}
+		} else {
+			queue := newQueueObject(clusterQueueGVK)
+			if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: retainedQueue}, queue); err != nil {
+				return err
+			}
+			cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
+			if err != nil {
+				return fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
+			}
+			if strings.TrimSpace(cohort) == teamCohortName(team.Name) {
+				queueIdentity = queue.GetName()
+				if queue.GetUID() != "" {
+					queueIdentity = string(queue.GetUID())
+				}
+				guarantees, err := clusterQueueNominalQuota(queue)
+				if err != nil {
+					return err
+				}
+				managedKeys, found, err := managedQuotaKeys(queue)
+				if err != nil {
+					return err
+				}
+				if !found {
+					managedKeys = map[string]bool{}
+					for _, quota := range team.Spec.Quota {
+						managedKeys[quotaKey(quota)] = true
+					}
+				}
+				for key, quantity := range guarantees {
+					if !managedKeys[key] {
+						continue
+					}
+					effective[key] = quantity.DeepCopy()
+				}
+			}
 		}
 	}
-	appliedCohort, applied, err := r.appliedWorkspaceGuarantees(ctx, workspace)
+	appliedCohort, applied, appliedQueueIdentity, err := r.appliedWorkspaceGuarantees(ctx, workspace)
 	if err != nil {
 		return err
 	}
 	if appliedCohort == teamCohortName(team.Name) {
+		queueIdentity = appliedQueueIdentity
 		for key, quantity := range applied {
 			if desired, ok := effective[key]; !ok || quantity.Cmp(desired) > 0 {
 				effective[key] = quantity.DeepCopy()
 			}
+		}
+	}
+	if queueIdentity != "" {
+		accounted := accountedQueues[queueIdentity]
+		if accounted == nil {
+			accounted = map[string]resource.Quantity{}
+			accountedQueues[queueIdentity] = accounted
+		}
+		for key, guarantee := range effective {
+			if previous, ok := accounted[key]; ok {
+				if guarantee.Cmp(previous) <= 0 {
+					delete(effective, key)
+					continue
+				}
+				guarantee.Sub(previous)
+				effective[key] = guarantee
+			}
+			total := guarantee.DeepCopy()
+			if previous, ok := accounted[key]; ok {
+				total.Add(previous)
+			}
+			accounted[key] = total
 		}
 	}
 	for key, guarantee := range effective {
@@ -403,45 +470,82 @@ func (r *TauTeamReconciler) subtractWorkspaceGuarantee(
 	return nil
 }
 
+func resolvedWorkspaceQueueName(
+	ctx context.Context,
+	reader client.Reader,
+	workspace *tauv1alpha1.TauWorkspace,
+) (string, error) {
+	if queue := strings.TrimSpace(workspace.Spec.Queue); queue != "" {
+		return queue, nil
+	}
+	var cluster tauv1alpha1.TauCluster
+	if err := reader.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
+		return "", fmt.Errorf("resolve workspace %q default queue: %w", workspace.Name, err)
+	}
+	return strings.TrimSpace(cluster.Spec.WorkspaceDefaults.DefaultQueue), nil
+}
+
 func (r *TauTeamReconciler) appliedWorkspaceGuarantees(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) (string, map[string]resource.Quantity, error) {
-	cohort, guarantees, _, err := r.appliedWorkspaceQueue(ctx, workspace)
-	return cohort, guarantees, err
+) (string, map[string]resource.Quantity, string, error) {
+	cohort, guarantees, _, identity, err := r.appliedWorkspaceQueue(ctx, workspace)
+	return cohort, guarantees, identity, err
 }
 
 func (r *TauTeamReconciler) appliedWorkspaceQueue(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-) (string, map[string]resource.Quantity, map[string]resource.Quantity, error) {
+) (string, map[string]resource.Quantity, map[string]resource.Quantity, string, error) {
 	queue := newQueueObject(clusterQueueGVK)
 	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", nil, nil, nil
+			return "", nil, nil, "", nil
 		}
-		return "", nil, nil, err
+		return "", nil, nil, "", err
 	}
 	labels := queue.GetLabels()
 	if labels[labelManagedBy] != labelManagedByValue || labels[labelWorkspace] != workspace.Name {
-		return "", nil, nil, fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
+		return "", nil, nil, "", fmt.Errorf("ClusterQueue %q is not owned by workspace %q", queue.GetName(), workspace.Name)
 	}
 	if ownerUID := queue.GetAnnotations()[annotationOwnerUID]; ownerUID != "" && ownerUID != string(workspace.UID) {
-		return "", nil, nil, fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
+		return "", nil, nil, "", fmt.Errorf("ClusterQueue %q belongs to a different workspace UID %q", queue.GetName(), ownerUID)
 	}
 	applied, err := clusterQueueNominalQuota(queue)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, "", err
+	}
+	managedKeys, found, err := managedQuotaKeys(queue)
+	if err != nil {
+		return "", nil, nil, "", err
+	}
+	if found {
+		for key := range applied {
+			if !managedKeys[key] {
+				delete(applied, key)
+			}
+		}
 	}
 	reservations, err := clusterQueueReservations(queue)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, "", err
+	}
+	if found {
+		for key := range reservations {
+			if !managedKeys[key] {
+				delete(reservations, key)
+			}
+		}
 	}
 	cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
+		return "", nil, nil, "", fmt.Errorf("read ClusterQueue %q cohortName: %w", queue.GetName(), err)
 	}
-	return strings.TrimSpace(cohort), applied, reservations, nil
+	identity := queue.GetName()
+	if queue.GetUID() != "" {
+		identity = string(queue.GetUID())
+	}
+	return strings.TrimSpace(cohort), applied, reservations, identity, nil
 }
 
 func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.TauTeam) (ctrl.Result, error) {
@@ -458,7 +562,7 @@ func (r *TauTeamReconciler) finalizeTeam(ctx context.Context, team *tauv1alpha1.
 			return r.reportTeamStatus(ctx, team, false, tauv1alpha1.ConditionDeletionBlocked,
 				fmt.Sprintf("workspace %q still references this team", workspace.Name))
 		}
-		appliedCohort, _, err := r.appliedWorkspaceGuarantees(ctx, workspace)
+		appliedCohort, _, _, err := r.appliedWorkspaceGuarantees(ctx, workspace)
 		if err != nil {
 			return ctrl.Result{}, err
 		}

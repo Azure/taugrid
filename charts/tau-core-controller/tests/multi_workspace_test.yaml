@@ -1,0 +1,52 @@
+suite: Multi-workspace quota resources
+templates:
+  - templates/teams.yaml
+  - templates/workspaces.yaml
+tests:
+  - it: renders operator-declared teams and workspaces
+    set:
+      teams:
+        - name: vision
+          spec:
+            quota:
+              - flavor: taugrid-gpu-h200
+                resource: nvidia.com/gpu
+                nominalQuota: "32"
+      workspaces:
+        - name: vision-training
+          spec:
+            authorization:
+              mode: cluster-wide
+            queue: default
+            teamRef:
+              name: vision
+            target:
+              namespace: vision-training
+              createNamespace: true
+            quota:
+              - flavor: taugrid-gpu-h200
+                resource: nvidia.com/gpu
+                nominalQuota: "8"
+                borrowingLimit: "4"
+                lendingLimit: "0"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: vision
+        template: templates/teams.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.quota[0].nominalQuota
+          value: "32"
+        template: templates/teams.yaml
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: vision-training
+        template: templates/workspaces.yaml
+        documentIndex: 0
+      - equal:
+          path: spec.teamRef.name
+          value: vision
+        template: templates/workspaces.yaml
+        documentIndex: 0

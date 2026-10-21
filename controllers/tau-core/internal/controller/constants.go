@@ -39,6 +39,7 @@ const (
 	annotationV0Primary            = labelkeys.AnnotationV0Primary
 	annotationOwnerUID             = labelkeys.AnnotationOwnerUID
 	annotationAdoptionNamespaceUID = labelkeys.AnnotationAdoptionNamespaceUID
+	annotationManagedQuotaKeys     = labelkeys.AnnotationManagedQuotaKeys
 
 	workspaceFinalizer = labelkeys.FinalizerWorkspaceCleanup
 	teamFinalizer      = labelkeys.FinalizerTeamCleanup

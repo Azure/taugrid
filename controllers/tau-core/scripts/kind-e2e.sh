@@ -178,6 +178,16 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterQueue:
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: field is immutable
+              x-kubernetes-preserve-unknown-fields: true
           x-kubernetes-preserve-unknown-fields: true
     - name: v1beta2
       served: true
@@ -185,6 +195,16 @@ spec:
       schema:
         openAPIV3Schema:
           type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                clusterQueue:
+                  type: string
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: field is immutable
+              x-kubernetes-preserve-unknown-fields: true
           x-kubernetes-preserve-unknown-fields: true
 ---
 apiVersion: apiextensions.k8s.io/v1
@@ -198,6 +218,27 @@ spec:
     listKind: ClusterQueueList
     plural: clusterqueues
     singular: clusterqueue
+  scope: Cluster
+  versions:
+    - name: v1beta2
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cohorts.kueue.x-k8s.io
+spec:
+  group: kueue.x-k8s.io
+  names:
+    kind: Cohort
+    listKind: CohortList
+    plural: cohorts
+    singular: cohort
   scope: Cluster
   versions:
     - name: v1beta2
@@ -344,6 +385,7 @@ kubectl apply -f "${APP_BASE_DIR}/crds"
 kubectl wait --for=condition=Established \
   crd/clusters.tau.azure.com \
   crd/quotarequests.tau.azure.com \
+  crd/teams.tau.azure.com \
   crd/workspaces.tau.azure.com \
   --timeout="${WAIT_SECONDS}s"
 kubectl apply -k "${APP_BASE_DIR}"
@@ -627,6 +669,196 @@ if grep -qx StorageReady <<<"${workspace_conditions}"; then
 fi
 kubectl -n "${SYSTEM_NAMESPACE}" get "workspaces.tau.azure.com/${WORKSPACE_NAME}" \
   -o jsonpath='{.metadata.finalizers}' | grep -q "tau.azure.com/workspace-cleanup"
+
+echo "== reconciling one team with two concurrent workspaces =="
+cat >"${SCRATCH_DIR}/multi-workspace.yaml" <<YAML
+apiVersion: tau.azure.com/v1alpha1
+kind: TauTeam
+metadata:
+  name: kind-research
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  quota:
+    - flavor: h200
+      resource: nvidia.com/gpu
+      nominalQuota: "8"
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: kind-training
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  authorization:
+    mode: cluster-wide
+  teamRef:
+    name: kind-research
+  target:
+    namespace: kind-training
+    createNamespace: true
+  queue: default
+  quota:
+    - flavor: h200
+      resource: nvidia.com/gpu
+      nominalQuota: "4"
+      borrowingLimit: "2"
+      lendingLimit: "0"
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: kind-evaluation
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  authorization:
+    mode: cluster-wide
+  teamRef:
+    name: kind-research
+  target:
+    namespace: kind-evaluation
+    createNamespace: true
+  queue: default
+  quota:
+    - flavor: h200
+      resource: nvidia.com/gpu
+      nominalQuota: "2"
+      borrowingLimit: "0"
+      lendingLimit: "0"
+YAML
+kubectl apply --server-side --field-manager=tau-kind-e2e -f "${SCRATCH_DIR}/multi-workspace.yaml"
+
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  team_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get teams.tau.azure.com/kind-research -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  training_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-training -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  evaluation_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-evaluation -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  [[ "${team_phase}" == "Ready" && "${training_phase}" == "Ready" && "${evaluation_phase}" == "Ready" ]] && break
+  sleep 1
+done
+if [[ "${team_phase:-}" != "Ready" || "${training_phase:-}" != "Ready" || "${evaluation_phase:-}" != "Ready" ]]; then
+  echo "team-backed workspaces did not become Ready" >&2
+  kubectl -n "${SYSTEM_NAMESPACE}" get teams.tau.azure.com/kind-research -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-training -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-evaluation -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  exit 1
+fi
+kubectl get cohort.kueue.x-k8s.io/tau-team-kind-research \
+  -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources[0].nominalQuota}' | grep -qx 2
+kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training \
+  -o jsonpath='{.spec.cohortName}' | grep -qx tau-team-kind-research
+kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training \
+  -o jsonpath='{.spec.resourceGroups[0].flavors[0].resources[0].borrowingLimit}' | grep -qx 2
+kubectl -n kind-training get localqueue.kueue.x-k8s.io/tau-ws-kind-training \
+  -o jsonpath='{.spec.clusterQueue}' | grep -qx tau-ws-kind-training
+kubectl -n kind-evaluation get localqueue.kueue.x-k8s.io/tau-ws-kind-evaluation \
+  -o jsonpath='{.spec.clusterQueue}' | grep -qx tau-ws-kind-evaluation
+kubectl get namespace kind-training \
+  -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/default-local-queue}' | grep -qx tau-ws-kind-training
+kubectl get namespace kind-evaluation \
+  -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/default-local-queue}' | grep -qx tau-ws-kind-evaluation
+kubectl get namespace kind-training -o jsonpath='{.metadata.labels.tau\.azure\.com/team}' | grep -qx kind-research
+kubectl get namespace kind-evaluation -o jsonpath='{.metadata.labels.tau\.azure\.com/team}' | grep -qx kind-research
+
+echo "== preserving an existing workspace queue during team activation =="
+cat >"${SCRATCH_DIR}/migration-workspace.yaml" <<YAML
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: migration
+spec:
+  namespaceSelector: {}
+  resourceGroups:
+    - coveredResources: ["nvidia.com/gpu"]
+      flavors:
+        - name: h200
+          resources:
+            - name: nvidia.com/gpu
+              nominalQuota: 1
+---
+apiVersion: tau.azure.com/v1alpha1
+kind: TauWorkspace
+metadata:
+  name: kind-migration
+  namespace: ${SYSTEM_NAMESPACE}
+spec:
+  authorization:
+    mode: cluster-wide
+  target:
+    namespace: kind-migration
+    createNamespace: true
+  queue: migration
+YAML
+kubectl apply -f "${SCRATCH_DIR}/migration-workspace.yaml"
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  migration_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  migration_queue="$(kubectl -n kind-migration get localqueue.kueue.x-k8s.io/migration -o jsonpath='{.spec.clusterQueue}' 2>/dev/null || true)"
+  [[ "${migration_phase}" == "Ready" && "${migration_queue}" == "migration" ]] && break
+  sleep 1
+done
+[[ "${migration_phase:-}" == "Ready" ]]
+[[ "${migration_queue:-}" == "migration" ]]
+
+kubectl -n "${SYSTEM_NAMESPACE}" patch workspace.tau.azure.com/kind-migration --type=merge -p "$(cat <<JSON
+{
+  "spec": {
+    "teamRef": {"name": "kind-research"},
+    "quota": [{
+      "flavor": "h200",
+      "resource": "nvidia.com/gpu",
+      "nominalQuota": "1",
+      "borrowingLimit": "0",
+      "lendingLimit": "0"
+    }]
+  }
+}
+JSON
+)"
+deadline=$((SECONDS + WAIT_SECONDS))
+while (( SECONDS < deadline )); do
+  migration_phase="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+  migration_status_local_queue="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o jsonpath='{.status.queue.localQueue}' 2>/dev/null || true)"
+  migration_status_cluster_queue="$(kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o jsonpath='{.status.queue.clusterQueue}' 2>/dev/null || true)"
+  managed_migration_queue="$(kubectl -n kind-migration get localqueue.kueue.x-k8s.io/tau-ws-kind-migration -o jsonpath='{.spec.clusterQueue}' 2>/dev/null || true)"
+  namespace_migration_queue="$(kubectl get namespace kind-migration -o jsonpath='{.metadata.labels.kueue\.x-k8s\.io/default-local-queue}' 2>/dev/null || true)"
+  legacy_migration_queue="$(kubectl -n kind-migration get localqueue.kueue.x-k8s.io/migration -o jsonpath='{.spec.clusterQueue}' 2>/dev/null || true)"
+  managed_migration_cluster_queue="$(kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-migration -o name 2>/dev/null || true)"
+  [[ "${migration_phase}" == "Ready" &&
+    "${migration_status_local_queue}" == "migration" &&
+    "${migration_status_cluster_queue}" == "migration" &&
+    "${namespace_migration_queue}" == "tau-ws-kind-migration" &&
+    "${legacy_migration_queue}" == "migration" &&
+    "${managed_migration_queue}" == "migration" &&
+    -z "${managed_migration_cluster_queue}" ]] && break
+  sleep 1
+done
+if [[ "${migration_phase:-}" != "Ready" ||
+  "${migration_status_local_queue:-}" != "migration" ||
+  "${migration_status_cluster_queue:-}" != "migration" ||
+  "${namespace_migration_queue:-}" != "tau-ws-kind-migration" ||
+  "${legacy_migration_queue:-}" != "migration" ||
+  "${managed_migration_queue:-}" != "migration" ||
+  -n "${managed_migration_cluster_queue:-}" ]]; then
+  echo "existing workspace did not preserve its established queue contract" >&2
+  kubectl -n "${SYSTEM_NAMESPACE}" get workspaces.tau.azure.com/kind-migration -o yaml >&2 || true
+  kubectl -n kind-migration get localqueues.kueue.x-k8s.io -o yaml >&2 || true
+  kubectl get namespace kind-migration -o yaml >&2 || true
+  kubectl -n "${SYSTEM_NAMESPACE}" logs deployment/tau-core-controller --tail=200 >&2 || true
+  exit 1
+fi
+kubectl -n "${SYSTEM_NAMESPACE}" delete workspace.tau.azure.com kind-migration --wait=true --timeout="${WAIT_SECONDS}s"
+if kubectl -n kind-migration get localqueue.kueue.x-k8s.io/tau-ws-kind-migration >/dev/null 2>&1; then
+  echo "managed migration LocalQueue survived workspace finalization" >&2
+  exit 1
+fi
+
+kubectl -n "${SYSTEM_NAMESPACE}" delete workspace.tau.azure.com kind-training --wait=true --timeout="${WAIT_SECONDS}s"
+kubectl get namespace kind-training >/dev/null
+if kubectl get clusterqueue.kueue.x-k8s.io/tau-ws-kind-training >/dev/null 2>&1; then
+  echo "workspace ClusterQueue survived workspace finalization" >&2
+  exit 1
+fi
 
 echo "== RBAC boundary checks for the researcher subject =="
 kubectl auth can-i create jobs.batch -n "${TARGET_NAMESPACE}" --as=researcher@example.com --as-group="${WORKSPACE_GROUP}" | grep -qx yes
