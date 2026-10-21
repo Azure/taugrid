@@ -479,6 +479,7 @@ func (s *Server) routes() {
 	for _, p := range rayUnscopedPrefixes {
 		s.mux.HandleFunc(p, handleRayUnscoped)
 	}
+	s.mux.HandleFunc("/api/", handleAPIFallback)
 	s.mux.HandleFunc("/api/portal/nodes", s.handleNodes)
 	s.mux.HandleFunc("/api/portal/nodeutil", s.handleNodeUtil)
 	s.mux.HandleFunc("/api/portal/runs", s.handleRuns)
@@ -498,6 +499,14 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/stellar/", workspaceStellarHandler)
 	s.mux.Handle("/api/v1/stellar/", workspaceStellarHandler)
 	s.mux.Handle("/api/v2/stellar/", workspaceStellarHandler)
+}
+
+func handleAPIFallback(w http.ResponseWriter, r *http.Request) {
+	if rayUnscopedAPIPath(r.URL.Path) {
+		handleRayUnscoped(w, r)
+		return
+	}
+	writeJSONError(w, http.StatusNotFound, "not found")
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {

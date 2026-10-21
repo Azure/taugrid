@@ -117,6 +117,13 @@ func normalizeManagerCleanupHooks(hooks managerCleanupHooks) managerCleanupHooks
 	return hooks
 }
 
+func managerCleanupContextError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
+}
+
 func fetchManagerCleanupSnapshot(ctx context.Context, hooks managerCleanupHooks) (status.Snapshot, error) {
 	return fetchManagerCleanupStrictSnapshot(ctx, hooks, managerCleanupSnapshotWindow)
 }
@@ -134,10 +141,7 @@ func fetchManagerCleanupStrictSnapshot(ctx context.Context, hooks managerCleanup
 	fetchCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	snap, err := hooks.fetchSnapshot(fetchCtx)
-	if err == nil && fetchCtx.Err() != nil {
-		err = fetchCtx.Err()
-	}
-	return snap, err
+	return snap, managerCleanupContextError(fetchCtx, err)
 }
 
 func fetchManagerCleanupStrictSnapshotBefore(ctx context.Context, hooks managerCleanupHooks, deadline time.Time) (status.Snapshot, error) {
@@ -273,6 +277,9 @@ func waitForManagerWorkloadsDeleted(ctx context.Context, r kubeRawRunner, ns, ru
 			}
 			getCtx, cancel := context.WithTimeout(ctx, timeLeft)
 			_, err := r.Raw(getCtx, []string{"-n", ns, "get", "workloads.kueue.x-k8s.io", workloadName, "-o", "json"}, nil)
+			if err != nil {
+				err = managerCleanupContextError(getCtx, err)
+			}
 			cancel()
 			switch {
 			case err == nil:
@@ -403,6 +410,9 @@ func listManagerWorkloadNames(ctx context.Context, r kubeRawRunner, ns string, s
 		}
 		listCtx, cancel := context.WithTimeout(ctx, timeLeft)
 		out, err := r.Raw(listCtx, []string{"-n", ns, "get", "workloads.kueue.x-k8s.io", "-l", selector, "-o", "json"}, nil)
+		if err != nil {
+			err = managerCleanupContextError(listCtx, err)
+		}
 		cancel()
 		if err != nil {
 			return nil, err

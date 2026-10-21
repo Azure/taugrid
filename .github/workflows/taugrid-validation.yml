@@ -25,7 +25,7 @@ env:
 
 jobs:
   license-headers:
-    name: License headers
+    name: Repository metadata
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -34,6 +34,9 @@ jobs:
 
       - name: Verify license headers
         run: python3 scripts/check-license-headers.py
+
+      - name: Verify Go toolchain pins
+        run: make toolchain-pins
 
   release-detect:
     name: Release / Detect preparation
@@ -140,7 +143,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: .go-version
+          go-version-file: ${{ matrix.module == 'monitoring/gpu-health-checker' && 'monitoring/gpu-health-checker/go.mod' || '.go-version' }}
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: Set up Python
