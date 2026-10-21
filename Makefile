@@ -23,7 +23,7 @@ TAU_SDK_DIR := $(REPO_ROOT)/sdk/python/python
 TAU_SITE_DIR := $(REPO_ROOT)/site
 PYTHON ?= python3
 HOST_GOARCH := $(shell go env GOARCH)
-STATICCHECK_VERSION := v0.7.0
+STATICCHECK_VERSION := v0.8.2
 GO_COMMAND_FLAGS := -mod=readonly -buildvcs=false
 KIND_CLUSTER_NAME ?= taugrid-dev
 KIND_NAMESPACE ?= tau-system
@@ -105,6 +105,7 @@ test:
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh
 	bash scripts/ci/tests/image-build-contract_test.sh
+	bash scripts/ci/tests/go-runtime-default-contract_test.sh
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"
 	@cd $(CORE_DIR) && go test ./...

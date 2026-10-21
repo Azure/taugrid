@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - .go-version
       - .dockerignore
       - cli/**
       - controllers/tau-core/**
@@ -16,9 +17,13 @@ on:
       - images/gpu-metrics-collector/**
       - images/adx-mon/**
       - metrics/experiment-metrics-collector/**
+      - monitoring/gpu-health-checker/**
       - monitoring/gpu-metrics-collector/**
       - portal/**
+      - site/go.mod
+      - tests/e2e/go.mod
       - scripts/ci/tests/image-build-contract_test.sh
+      - scripts/ci/tests/go-runtime-default-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
       - scripts/lib/image-specs.sh
       - .github/workflows/taugrid-image-validation.yml
@@ -26,6 +31,7 @@ on:
     branches:
       - main
     paths:
+      - .go-version
       - .dockerignore
       - cli/**
       - controllers/tau-core/**
@@ -37,9 +43,13 @@ on:
       - images/gpu-metrics-collector/**
       - images/adx-mon/**
       - metrics/experiment-metrics-collector/**
+      - monitoring/gpu-health-checker/**
       - monitoring/gpu-metrics-collector/**
       - portal/**
+      - site/go.mod
+      - tests/e2e/go.mod
       - scripts/ci/tests/image-build-contract_test.sh
+      - scripts/ci/tests/go-runtime-default-contract_test.sh
       - scripts/ci/validate-image-build-contract.sh
       - scripts/lib/image-specs.sh
       - .github/workflows/taugrid-image-validation.yml
@@ -60,8 +70,30 @@ env:
   TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.73.0@sha256:7cced7cae583819fc7806d4cbc0dbbc7cad18b99f7d3e235192e6da8c091045c
 
 jobs:
+  go-runtime-default-contract:
+    name: Go runtime default contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Microsoft Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.27.3-1"
+          go-download-base-url: https://aka.ms/golang/release/latest
+          cache: false
+
+      - name: Verify Microsoft Go toolchain
+        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.3-1-microsoft"
+
+      - name: Validate Go runtime default contract
+        run: scripts/ci/tests/go-runtime-default-contract_test.sh
+
   image:
     name: Image / ${{ matrix.name }} / linux/${{ matrix.architecture }}
+    needs: go-runtime-default-contract
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
