@@ -10,12 +10,15 @@ Run locally (no torch/trl needed):
   python examples/cobol-cpt-grpo/06-grpo/test_reward.py
 """
 
+import json
 import os
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
-from unittest import mock
+import unittest.mock as mock
+from concurrent.futures import ThreadPoolExecutor
 
 
 os.environ.setdefault("WORLD_SIZE", "2")
@@ -55,6 +58,7 @@ for mod_name in [
 sys.path.insert(0, os.path.dirname(__file__))
 
 from train_grpo import (  # noqa: E402
+    TauGRPOMetricsCallback,
     _compilation_reward,
     _count_cobol_verbs,
     _count_noop_verbs,
@@ -64,6 +68,9 @@ from train_grpo import (  # noqa: E402
     _strip_non_code,
     _structural_reward,
     _try_compile,
+    compile_format,
+    load_prompts,
+    reward_fn,
 )
 
 
@@ -712,6 +719,174 @@ class TestScoreIntegration(unittest.TestCase):
         r_struct = _structural_reward(completion, 1024, 50)
         total = r_compile + r_struct
         self.assertEqual(total, 1.0)
+
+
+FIXED_PROGRAM = (
+    "       IDENTIFICATION DIVISION.\n"
+    "       PROGRAM-ID. FIXEDP.\n"
+    "       PROCEDURE DIVISION.\n" + "           DISPLAY 'X'.\n" * 6
+)
+
+
+def _ok(args, **kwargs):
+    return subprocess.CompletedProcess(args, 0, b"", b"")
+
+
+class TestCompileFormat(unittest.TestCase):
+    def test_normalizes_stage_05_values(self):
+        self.assertEqual(compile_format("free"), "free")
+        self.assertEqual(compile_format("fixed"), "fixed")
+        self.assertEqual(compile_format("fixed-copybook-only"), "fixed")
+        self.assertEqual(compile_format("free-copybook-only"), "free")
+
+    def test_missing_defaults_to_free(self):
+        self.assertEqual(compile_format(None), "free")
+        self.assertEqual(compile_format(""), "free")
+
+    def test_unknown_raises(self):
+        with self.assertRaises(ValueError):
+            compile_format("failed")
+
+    def test_try_compile_passes_format_flag(self):
+        with mock.patch("train_grpo.subprocess.run", side_effect=_ok) as run:
+            _try_compile("IDENTIFICATION DIVISION.", "fixed")
+            _try_compile("IDENTIFICATION DIVISION.")
+        self.assertEqual(run.call_args_list[0].args[0][2], "-fixed")
+        self.assertEqual(run.call_args_list[1].args[0][2], "-free")
+
+
+class TestLoadPromptsKeepsFormat(unittest.TestCase):
+    def _write(self, records):
+        f = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        with f:
+            for rec in records:
+                f.write(json.dumps(rec) + "\n")
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_preflight_compiles_each_record_in_its_format(self):
+        path = self._write(
+            [
+                {"text": FIXED_PROGRAM, "compile_fmt": "fixed"},
+                {
+                    "text": FIXED_PROGRAM.replace("FIXEDP", "FREEP"),
+                    "compile_fmt": "free",
+                },
+                {"text": FIXED_PROGRAM.replace("FIXEDP", "OLDREC")},
+            ]
+        )
+
+        def fixed_only(args, **kwargs):
+            rc = 0 if args[1] == "--version" or args[2] == "-fixed" else 1
+            return subprocess.CompletedProcess(args, rc, b"", b"")
+
+        with mock.patch("train_grpo.subprocess.run", side_effect=fixed_only):
+            prompts = load_prompts(path)
+        self.assertEqual([r["compile_fmt"] for r in prompts], ["fixed"])
+        self.assertIn("FIXEDP", prompts[0]["prompt"])
+
+    def test_without_preflight_returns_format(self):
+        path = self._write(
+            [{"text": FIXED_PROGRAM, "compile_fmt": "fixed-copybook-only"}]
+        )
+        with mock.patch("train_grpo.subprocess.run", side_effect=_ok):
+            prompts = load_prompts(path, preflight=False)
+        self.assertEqual(prompts[0]["compile_fmt"], "fixed")
+
+
+class TestRewardFnUsesFormat(unittest.TestCase):
+    def test_each_completion_compiled_in_its_prompt_format(self):
+        seen = []
+
+        def fake_compile(text, fmt="free"):
+            seen.append((text, fmt))
+            return 0, ""
+
+        with (
+            mock.patch("train_grpo.ProcessPoolExecutor", ThreadPoolExecutor),
+            mock.patch("train_grpo._try_compile", side_effect=fake_compile),
+        ):
+            rewards = reward_fn(
+                ["A", "B"],
+                ["           MOVE 1 TO X\n", "           MOVE 2 TO Y\n"],
+                compile_fmt=["fixed", "free"],
+            )
+        self.assertEqual(len(rewards), 2)
+        self.assertEqual(
+            sorted(seen),
+            [
+                ("A           MOVE 1 TO X\n", "fixed"),
+                ("B           MOVE 2 TO Y\n", "free"),
+            ],
+        )
+
+    def test_missing_format_column_defaults_to_free(self):
+        seen = []
+
+        def fake_compile(text, fmt="free"):
+            seen.append(fmt)
+            return 0, ""
+
+        with (
+            mock.patch("train_grpo.ProcessPoolExecutor", ThreadPoolExecutor),
+            mock.patch("train_grpo._try_compile", side_effect=fake_compile),
+        ):
+            reward_fn(["A"], ["           MOVE 1 TO X\n"])
+        self.assertEqual(seen, ["free"])
+
+
+class TestAlarmStopIsShared(unittest.TestCase):
+    def _step(self, cb, logs, agg, any_rank):
+        control = types.SimpleNamespace(should_training_stop=False)
+        state = types.SimpleNamespace(global_step=5)
+        with (
+            mock.patch("train_grpo._aggregate_reward_stats", return_value=agg),
+            mock.patch("train_grpo._any_rank", side_effect=any_rank) as synced,
+        ):
+            cb.on_log(None, state, control, logs=logs)
+        return control.should_training_stop, synced
+
+    def test_non_zero_rank_without_publisher_stops_on_local_alarm(self):
+        cb = TauGRPOMetricsCallback()
+        cb.kl_alarm_count = 9
+        stopped, synced = self._step(cb, {"kl": 6.0}, {}, lambda flag: flag)
+        self.assertTrue(stopped)
+        synced.assert_called_once_with(True)
+
+    def test_stops_when_another_rank_raised_the_alarm(self):
+        cb = TauGRPOMetricsCallback()
+        stopped, synced = self._step(
+            cb, {"kl": 0.1}, {"mean_verb_count": 10}, lambda flag: True
+        )
+        self.assertTrue(stopped)
+        synced.assert_called_once_with(False)
+
+    def test_no_alarm_keeps_training(self):
+        cb = TauGRPOMetricsCallback()
+        stopped, _ = self._step(
+            cb, {"kl": 0.1}, {"mean_verb_count": 10}, lambda flag: flag
+        )
+        self.assertFalse(stopped)
+
+    def test_only_publisher_rank_publishes(self):
+        publisher = mock.Mock()
+        self._step(
+            TauGRPOMetricsCallback(publisher), {"kl": 0.1}, {}, lambda flag: flag
+        )
+        publisher.publish.assert_called_once()
+        stopped, synced = self._step(
+            TauGRPOMetricsCallback(), {"kl": 0.1}, {}, lambda flag: flag
+        )
+        synced.assert_called_once()
+
+    def test_step_zero_skips_the_collective(self):
+        cb = TauGRPOMetricsCallback()
+        control = types.SimpleNamespace(should_training_stop=False)
+        with mock.patch("train_grpo._any_rank") as synced:
+            cb.on_log(
+                None, types.SimpleNamespace(global_step=0), control, logs={"kl": 9}
+            )
+        synced.assert_not_called()
 
 
 if __name__ == "__main__":

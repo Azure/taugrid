@@ -18,7 +18,7 @@ folder as the Ray `working_dir`.
 | [`02-data-prep/`](./02-data-prep/) | Job (CPU) | Extracts, deduplicates, filters, and splits the corpus into `prepared/train.jsonl` and `prepared/val.jsonl`. |
 | [`03-benchmarks/`](./03-benchmarks/) | Job (CPU) | Builds five eval suites from the validation split into `/data/datasets/cobol/eval`. |
 | [`04-cpt/`](./04-cpt/) | RayJob, 2 x 8 GPUs | Continued pretraining with DeepSpeed ZeRO-3 under Ray Train. |
-| [`05-rl-prompts/`](./05-rl-prompts/) | Job (CPU) | Masks paragraph bodies of programs that compile with `cobc` to produce `prepared/rl-prompts.jsonl`. |
+| [`05-rl-prompts/`](./05-rl-prompts/) | Job (CPU) | Masks paragraph bodies of programs that compile with `cobc` to produce `prepared/rl-prompts.jsonl`. Programs that share any 8-line window with the validation split are excluded. |
 | [`06-grpo/`](./06-grpo/) | RayJob, 2 x 8 GPUs | GRPO from the CPT checkpoint with a compiler reward and an in-cluster vLLM generation server. |
 | [`07-eval/`](./07-eval/) | RayJob, 1 x 8 GPUs | Runs the benchmarks with vLLM (TP=8) and compiles every generated program with GnuCOBOL. |
 
@@ -61,7 +61,8 @@ kubectl create secret generic hf-token --from-literal=token=<your-hf-read-token>
 
 `01-collect/tau-gated.yaml` maps that Secret to `HF_TOKEN` with
 `env_secret: {HF_TOKEN: hf-token:token}`. `collect-rl-data.sh` skips its gated
-steps when `HF_TOKEN` is unset. To include them, add the same `env_secret`
+steps when `HF_TOKEN` is unset. Both collect scripts exit nonzero if any step
+that runs fails, including a clone, or if no COBOL files are collected. To include them, add the same `env_secret`
 block to `01-collect/tau-rl.yaml`. `02-data-prep` picks up the gated outputs
 when they are present under `raw/`.
 
@@ -87,27 +88,41 @@ two GPU workers:
    `VLLM_SERVER_URL` and calls `train_grpo.main()`.
 
 TRL syncs updated weights from trainer rank 0 to the server over an NCCL group
-on TRL's group port (51216 in TRL 1.13.0). The reward has two parts:
+on TRL's group port (51216 in TRL 1.13.0). Stage 05 records whether each prompt
+compiles as free or fixed format; GRPO keeps that `compile_fmt` and uses the
+matching `cobc` flag for both the prompt preflight and the reward. The reward
+has two parts:
 
 - **Compile reward.** Each prompt plus completion is checked with
-  `cobc -fsyntax-only -free`. A clean compile scores 1.0 and a compile with
-  warnings scores 0.7. A `cobc` signal crash counts as a failed compile; a
-  timeout or a missing `cobc` raises.
+  `cobc -fsyntax-only` and `-free` or `-fixed`. A clean compile scores 1.0 and
+  a compile with warnings scores 0.7. A `cobc` signal crash counts as a failed
+  compile; a timeout or a missing `cobc` raises.
 - **Structural reward.** Penalizes degenerate completions (display-only
   bodies, no-op majorities, repeated statements, truncation). It adds a bonus
   when every `PERFORM` target is a paragraph defined in the completion.
 
 The defaults are K=4 samples per prompt at temperature 0.8, LR 5e-7, KL
-coefficient 0.05, and 3 epochs. `06-grpo/test_reward.py` covers the reward
-without a GPU.
+coefficient 0.05, and 3 epochs. Every trainer rank checks the KL and
+reward-hacking alarms, and the ranks combine their stop decisions so that all
+of them stop at the same step. Only rank 0 publishes metrics.
+`06-grpo/test_reward.py` covers the reward without a GPU.
 
 **Eval (`07-eval`).** One Ray task reserves a whole 8-GPU worker and runs
-`run_eval_vllm.main()` with greedy decoding (512 new tokens). The five suites
-are paragraph completion, copybook usage, program completion, perplexity, and
-structural validation. Compile scoring is format-aware: each generation is
-compiled with `cobc -free`, retried with `-fixed` if that fails, and both
-counts are reported. The headline compile score is out of 220 tasks: 70
-paragraph, 50 program, and 100 structural.
+`run_eval_vllm.main()` with greedy decoding (512 new tokens). It scores five
+suites:
+
+- Perplexity on held-out programs.
+- Paragraph completion and program completion: BLEU, edit distance, and
+  compilation.
+- Structural validation: structure checks and compilation.
+- Copybook usage: BLEU and edit distance only.
+
+Compile scoring is format-aware: each generation is compiled with `cobc -free`,
+retried with `-fixed` if that fails, and both counts are reported. The headline
+compile score is out of 220 tasks: 70 paragraph, 50 program, and 100
+structural. Before loading the model, the eval checks that `cobc --version`
+works and that all five suite files exist and are not empty. It fails if
+either check fails, and it fails if `cobc` disappears during the run.
 
 ## Hardware
 
@@ -198,20 +213,40 @@ For a short end-to-end check of the GPU stages, set `MAX_STEPS` in
 `04-cpt/tau.yaml` or `06-grpo/tau.yaml` (for example `MAX_STEPS: "5"`). A
 short CPT run produces a model that is not useful for GRPO.
 
-The driver tests run on a CPU-only machine with a local Ray install:
+The tests run on a CPU-only machine with CPU `torch` and a local Ray install:
 
 ```bash
+cd examples/cobol-cpt-grpo/03-benchmarks && python -m pytest test_build_benchmarks.py
+cd examples/cobol-cpt-grpo/05-rl-prompts && python -m pytest test_prepare_rl_prompts.py
 cd examples/cobol-cpt-grpo/06-grpo && python -m pytest test_reward.py
+cd examples/cobol-cpt-grpo/06-grpo && python -m pytest test_stop_sync.py
 cd examples/cobol-cpt-grpo/06-grpo && python -m pytest test_driver.py
 cd examples/cobol-cpt-grpo/04-cpt && python -m pytest test_continued_pretrain.py test_driver.py
-cd examples/cobol-cpt-grpo/07-eval && python -m pytest test_driver.py
+cd examples/cobol-cpt-grpo/07-eval && python -m pytest test_run_eval.py test_driver.py
 ```
 
 Run `test_reward.py` in its own process; it replaces `torch` and `trl` with
-stubs. `06-grpo/test_driver.py` starts a local Ray cluster and takes one to
-five minutes.
+stubs. `test_stop_sync.py` starts two CPU processes in a gloo group.
+`06-grpo/test_driver.py` starts a local Ray cluster and takes one to five
+minutes.
 
 ## Results
+
+The numbers in this section come from an earlier version of the pipeline that
+had two defects, both fixed in the code here:
+
+- Stage 05 did not exclude the validation split, so GRPO prompts included
+  validation programs. For up to 18/50 program-completion, 5/70 paragraph, and
+  19/100 structural tasks, the reference answer appears in a GRPO training
+  prompt. The reward only checks compilation, so GRPO never trained on those
+  answers. CPT is not affected.
+- GRPO compiled every prompt with `cobc -free`, so it dropped the 3,676 of
+  6,852 prompts (54%) that compile only in fixed format.
+
+The GRPO results and the GRPO gains below are therefore partly contaminated,
+and they come from half of the intended prompts. The CPT columns are not
+affected. Copybook usage was not scored at the time. GRPO and eval have not
+yet been rerun with the fixes.
 
 The GRPO model was evaluated with `07-eval` (greedy decoding, 512 new tokens,
 TP=8 on 8 H200):

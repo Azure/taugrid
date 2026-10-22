@@ -110,7 +110,6 @@ def collect_the_stack_v2():
             data_dir="data/cobol",
             split="train",
             token=token,
-            trust_remote_code=True,
         )
         print(f"  Loaded {len(ds)} records", flush=True)
 
@@ -137,7 +136,6 @@ def collect_the_stack_v2():
                 data_dir="data/cobol",
                 split="train[:5]",
                 token=token,
-                trust_remote_code=True,
             )
         )
         if has_content:

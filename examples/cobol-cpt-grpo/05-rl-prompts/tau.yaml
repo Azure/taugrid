@@ -13,6 +13,8 @@ runtime:
     RAW: /data/datasets/cobol/raw
     DATA_ROOT: /data/datasets/cobol
     OUT: /data/datasets/cobol/prepared
+    VAL: /data/datasets/cobol/prepared/val.jsonl
+    VAL_OVERLAP_LINES: "8"
     MAX_WORKERS: "8"
     MIN_BODY_LINES: "5"
     MAX_BODY_LINES: "200"

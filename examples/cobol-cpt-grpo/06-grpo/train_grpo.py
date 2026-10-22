@@ -53,6 +53,15 @@ SAVE_STEPS = int(os.environ.get("SAVE_STEPS", "50"))
 MAX_STEPS = os.environ.get("MAX_STEPS")
 HF_HOME = os.environ.get("HF_HOME", "/tmp/hf-cache")
 
+COMPILE_FORMAT_FLAGS = {"free": "-free", "fixed": "-fixed"}
+
+
+def compile_format(record_fmt):
+    fmt = (record_fmt or "free").split("-", 1)[0]
+    if fmt not in COMPILE_FORMAT_FLAGS:
+        raise ValueError(f"Unknown compile_fmt {record_fmt!r}")
+    return fmt
+
 
 def extract_prompt(text):
     upper = text.upper()
@@ -70,13 +79,13 @@ def extract_prompt(text):
     return prompt, body, len(body_lines)
 
 
-def _preflight_compilable(prompt, body):
-    """Check if prompt + reference body compiles cleanly (rc == 0).
-    Reject programs with missing copybooks — the compiler can't validate
-    the procedure body when dependencies are unresolved, so these produce
-    all-failure groups regardless of completion quality."""
+def _preflight_compilable(prompt, body, fmt="free"):
+    """Check if prompt + reference body compiles cleanly (rc == 0) in its
+    source format. Reject programs with missing copybooks — the compiler
+    can't validate the procedure body when dependencies are unresolved, so
+    these produce all-failure groups regardless of completion quality."""
     full = prompt + body
-    rc, _ = _try_compile(full)
+    rc, _ = _try_compile(full, fmt)
     return rc == 0
 
 
@@ -110,13 +119,13 @@ def load_prompts(
             prompt, body, body_len = extract_prompt(rec.get("text", ""))
             if prompt is None or body_len < min_body or body_len > max_body:
                 continue
-            candidates.append((prompt, body))
+            candidates.append((prompt, body, compile_format(rec.get("compile_fmt"))))
 
     if max_body_tokens and tokenizer:
         before = len(candidates)
         candidates = [
-            (p, b)
-            for p, b in candidates
+            (p, b, fmt)
+            for p, b, fmt in candidates
             if len(tokenizer.encode(b, add_special_tokens=False)) <= max_body_tokens
         ]
         if GLOBAL_RANK == 0 and len(candidates) < before:
@@ -127,18 +136,23 @@ def load_prompts(
             )
 
     if not preflight:
-        return [p for p, _ in candidates]
+        return [{"prompt": p, "compile_fmt": fmt} for p, _, fmt in candidates]
 
     prompts = []
     skipped = 0
-    for prompt, body in candidates:
-        if _preflight_compilable(prompt, body):
-            prompts.append(prompt)
+    for prompt, body, fmt in candidates:
+        if _preflight_compilable(prompt, body, fmt):
+            prompts.append({"prompt": prompt, "compile_fmt": fmt})
         else:
             skipped += 1
 
     if GLOBAL_RANK == 0:
-        print(f"  Preflight: {len(prompts)} compilable, {skipped} skipped", flush=True)
+        n_fixed = sum(r["compile_fmt"] == "fixed" for r in prompts)
+        print(
+            f"  Preflight: {len(prompts)} compilable ({len(prompts) - n_fixed} free, "
+            f"{n_fixed} fixed), {skipped} skipped",
+            flush=True,
+        )
     if not prompts:
         raise RuntimeError(
             f"No compilable prompts found in {path} — check compiler and data"
@@ -146,14 +160,15 @@ def load_prompts(
     return prompts
 
 
-def _try_compile(cobol_text):
+def _try_compile(cobol_text, fmt="free"):
+    flag = COMPILE_FORMAT_FLAGS[compile_format(fmt)]
     with tempfile.NamedTemporaryFile(suffix=".cbl", mode="w", delete=False) as f:
         f.write(cobol_text)
         f.flush()
         src = f.name
     try:
         result = subprocess.run(
-            ["cobc", "-fsyntax-only", "-free", src],
+            ["cobc", "-fsyntax-only", flag, src],
             capture_output=True,
             timeout=10,
         )
@@ -237,7 +252,6 @@ _NOOP_VERBS = re.compile(
     re.IGNORECASE,
 )
 
-_DISPLAY_ONLY_RE = re.compile(r"\bDISPLAY\b", re.IGNORECASE)
 _NON_DISPLAY_VERBS = re.compile(
     r"\b(?:ACCEPT|ADD|ALLOCATE|ALTER|CALL|CANCEL|CLOSE|COMPUTE|"
     r"DELETE|DIVIDE|EVALUATE|FREE|GO|IF|INITIALIZE|INSPECT|"
@@ -394,9 +408,9 @@ def _structural_reward(completion, max_gen_tokens, completion_n_tokens):
 
 
 def _score_one(args):
-    prompt, completion, max_gen_tokens, completion_n_tokens = args
+    prompt, completion, max_gen_tokens, completion_n_tokens, fmt = args
     full = prompt + completion
-    rc, stderr = _try_compile(full)
+    rc, stderr = _try_compile(full, fmt)
     r_compile = _compilation_reward(rc, stderr)
     r_struct = _structural_reward(completion, max_gen_tokens, completion_n_tokens)
     errors, warnings, copybook = _parse_cobc(stderr)
@@ -417,8 +431,9 @@ _reward_stats = {}
 _reward_tokenizer = None
 
 
-def reward_fn(prompts, completions, **kwargs):
-    """Compute rewards for a batch of (prompt, completion) pairs."""
+def reward_fn(prompts, completions, compile_fmt=None, **kwargs):
+    """Compute rewards for a batch of (prompt, completion) pairs, compiling
+    each in the format recorded for its prompt."""
     if _reward_tokenizer is not None:
         n_tokens = [
             len(_reward_tokenizer.encode(c, add_special_tokens=False))
@@ -426,7 +441,11 @@ def reward_fn(prompts, completions, **kwargs):
         ]
     else:
         n_tokens = [len(c) // 4 for c in completions]
-    args = [(p, c, MAX_GEN_LEN, nt) for p, c, nt in zip(prompts, completions, n_tokens)]
+    fmts = compile_fmt if compile_fmt is not None else ["free"] * len(prompts)
+    args = [
+        (p, c, MAX_GEN_LEN, nt, fmt)
+        for p, c, nt, fmt in zip(prompts, completions, n_tokens, fmts, strict=True)
+    ]
     with ProcessPoolExecutor(max_workers=min(8, len(args))) as pool:
         results = list(pool.map(_score_one, args))
 
@@ -468,59 +487,72 @@ class TauMetricsPublisher:
         os.replace(tmp, final)
 
 
-_REWARD_STAT_KEYS = [
-    "compile_rate",
-    "copybook_only_rate",
-    "trivial_rate",
-    "mean_verb_count",
-    "mean_noop_count",
-    "mean_errors",
-]
-
-
 def _aggregate_reward_stats():
     return dict(_reward_stats)
 
 
+def _any_rank(flag):
+    dist = torch.distributed
+    if not (dist.is_available() and dist.is_initialized()):
+        return flag
+    if dist.get_backend() == "nccl":
+        device = torch.device("cuda", torch.cuda.current_device())
+    else:
+        device = torch.device("cpu")
+    t = torch.tensor([1.0 if flag else 0.0], device=device)
+    dist.all_reduce(t, op=dist.ReduceOp.MAX)
+    return bool(t.item())
+
+
 class TauGRPOMetricsCallback(TrainerCallback):
-    def __init__(self, publisher):
+    """Installed on every rank. Rank 0 publishes metrics; every rank evaluates
+    the alarms and the stop decision is shared across ranks, so all ranks
+    leave the training loop together."""
+
+    def __init__(self, publisher=None):
         self.publisher = publisher
         self.kl_alarm_count = 0
         self.short_alarm_count = 0
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if not logs or state.global_step <= 0:
-            return
-        if GLOBAL_RANK != 0:
+        if state.global_step <= 0:
             return
 
         agg = _aggregate_reward_stats()
+        stop = self._check_alarms(logs, agg) if logs else False
 
-        metrics = {}
-        for k, v in logs.items():
-            if isinstance(v, (int, float)) and not math.isnan(v):
-                metrics[k] = v
+        if self.publisher is not None and logs:
+            metrics = {}
+            for k, v in logs.items():
+                if isinstance(v, (int, float)) and not math.isnan(v):
+                    metrics[k] = v
 
-        if agg:
-            metrics["reward/compile_rate"] = agg.get("compile_rate", 0)
-            metrics["reward/copybook_only_rate"] = agg.get("copybook_only_rate", 0)
-            metrics["reward/trivial_rate"] = agg.get("trivial_rate", 0)
-            metrics["gen/verb_count"] = agg.get("mean_verb_count", 0)
-            metrics["gen/noop_count"] = agg.get("mean_noop_count", 0)
-            metrics["gen/mean_errors"] = agg.get("mean_errors", 0)
+            if agg:
+                metrics["reward/compile_rate"] = agg.get("compile_rate", 0)
+                metrics["reward/copybook_only_rate"] = agg.get("copybook_only_rate", 0)
+                metrics["reward/trivial_rate"] = agg.get("trivial_rate", 0)
+                metrics["gen/verb_count"] = agg.get("mean_verb_count", 0)
+                metrics["gen/noop_count"] = agg.get("mean_noop_count", 0)
+                metrics["gen/mean_errors"] = agg.get("mean_errors", 0)
 
-        if metrics:
-            self.publisher.publish(state.global_step, metrics)
+            if metrics:
+                self.publisher.publish(state.global_step, metrics)
 
+        if _any_rank(stop):
+            control.should_training_stop = True
+
+    def _check_alarms(self, logs, agg):
+        stop = False
         kl = logs.get("kl", 0)
         if kl > 5.0:
             self.kl_alarm_count += 1
             if self.kl_alarm_count >= 10:
                 print(
-                    f"ALARM: KL divergence > 5.0 for 10 steps ({kl:.2f}). Stopping.",
+                    f"ALARM: KL divergence > 5.0 for 10 steps ({kl:.2f}) on rank "
+                    f"{GLOBAL_RANK}. Stopping.",
                     flush=True,
                 )
-                control.should_training_stop = True
+                stop = True
         else:
             self.kl_alarm_count = 0
 
@@ -529,12 +561,14 @@ class TauGRPOMetricsCallback(TrainerCallback):
             self.short_alarm_count += 1
             if self.short_alarm_count >= 20:
                 print(
-                    "ALARM: Mean verb count < 3 for 20 steps. Reward hacking. Stopping.",
+                    f"ALARM: Mean verb count < 3 for 20 steps on rank {GLOBAL_RANK}. "
+                    "Reward hacking. Stopping.",
                     flush=True,
                 )
-                control.should_training_stop = True
+                stop = True
         else:
             self.short_alarm_count = 0
+        return stop
 
 
 class MaxStepsCallback(TrainerCallback):
@@ -681,7 +715,7 @@ def main():
     global _reward_tokenizer
     if is_main:
         print("\nLoading tokenizer...", flush=True)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     _reward_tokenizer = tokenizer
@@ -697,14 +731,16 @@ def main():
         print(f"  Extracted {len(prompts)} prompts", flush=True)
 
     orig_count = len(prompts)
-    prompts = [p for p in prompts if len(tokenizer.encode(p)) <= MAX_PROMPT_LEN]
+    prompts = [
+        r for r in prompts if len(tokenizer.encode(r["prompt"])) <= MAX_PROMPT_LEN
+    ]
     if is_main and len(prompts) < orig_count:
         print(
             f"  Filtered {orig_count - len(prompts)} prompts exceeding {MAX_PROMPT_LEN} tokens",
             flush=True,
         )
 
-    dataset = Dataset.from_list([{"prompt": p} for p in prompts])
+    dataset = Dataset.from_list(prompts)
     if is_main:
         print(f"  Dataset size: {len(dataset)}", flush=True)
 
@@ -779,7 +815,7 @@ def main():
     training_args = GRPOConfig(**grpo_kwargs)
 
     publisher = TauMetricsPublisher(OUTPUT_DIR) if GLOBAL_RANK == 0 else None
-    metrics_cb = TauGRPOMetricsCallback(publisher) if publisher else None
+    metrics_cb = TauGRPOMetricsCallback(publisher)
     max_steps_cb = MaxStepsCallback(int(MAX_STEPS)) if MAX_STEPS else None
     callbacks = [cb for cb in [metrics_cb, max_steps_cb] if cb is not None]
 

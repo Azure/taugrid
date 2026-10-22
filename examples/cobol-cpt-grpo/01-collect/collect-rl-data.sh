@@ -9,14 +9,30 @@ RAW="${DATA_ROOT}/raw"
 LOGS="${DATA_ROOT}/logs"
 mkdir -p "${RAW}" "${LOGS}"
 
-log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "${LOGS}/collect-rl.log"; }
+LOG_FILE="${LOGS}/collect-rl.log"
+FAILED_STEPS=()
+
+log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" | tee -a "${LOG_FILE}"; }
 run_step() {
     local name="$1"; shift
     log "--- ${name} ---"
     if "$@"; then
         log "${name}: OK"
     else
-        log "${name}: FAILED (continuing)"
+        log "${name}: FAILED"
+        FAILED_STEPS+=("${name}")
+    fi
+}
+fail_if_incomplete() {
+    local records="$1"
+    if [ "${#FAILED_STEPS[@]}" -gt 0 ]; then
+        log "ERROR: ${#FAILED_STEPS[@]} required step(s) failed:"
+        printf '  %s\n' "${FAILED_STEPS[@]}" | tee -a "${LOG_FILE}"
+        exit 1
+    fi
+    if [ "${records}" -eq 0 ]; then
+        log "ERROR: collection produced no COBOL source files"
+        exit 1
     fi
 }
 
@@ -25,7 +41,8 @@ log "HF_TOKEN set: $([ -n "${HF_TOKEN:-}" ] && echo yes || echo NO)"
 SOURCE_LICENSES="${SOURCE_LICENSES:-permissive}"
 log "Source licenses: ${SOURCE_LICENSES}"
 
-pip install -q huggingface_hub==1.28.0 datasets==5.0.1 pandas==3.0.6 pyarrow==25.0.1 2>&1 | tail -3
+pip install -q huggingface_hub==1.28.0 datasets==5.0.1 pandas==3.0.6 pyarrow==25.0.1 2>&1 | tail -3 \
+    || { log "ERROR: pip install failed"; exit 1; }
 log "pip install done"
 
 collect_the_stack_v1() {
@@ -88,16 +105,16 @@ os.makedirs(src_dir, exist_ok=True)
 print("Loading bigcode/the-stack-v2-dedup COBOL...", flush=True)
 try:
     ds = load_dataset("bigcode/the-stack-v2-dedup", "COBOL", split="train",
-                       token=token, trust_remote_code=True)
+                       token=token)
 except Exception as e1:
     print(f"  Config 'COBOL' failed ({e1}), trying data_dir...", flush=True)
     try:
         ds = load_dataset("bigcode/the-stack-v2-dedup", data_dir="data/COBOL",
-                           split="train", token=token, trust_remote_code=True)
+                           split="train", token=token)
     except Exception as e2:
         print(f"  data_dir 'data/COBOL' failed ({e2}), trying lowercase...", flush=True)
         ds = load_dataset("bigcode/the-stack-v2-dedup", data_dir="data/cobol",
-                           split="train", token=token, trust_remote_code=True)
+                           split="train", token=token)
 
 print(f"  Loaded {len(ds)} records", flush=True)
 print(f"  Columns: {ds.column_names}", flush=True)
@@ -197,16 +214,14 @@ os.makedirs(src_dir, exist_ok=True)
 
 print("Loading zorse/zorse...", flush=True)
 try:
-    ds = load_dataset("zorse/zorse", split="train", trust_remote_code=True)
+    ds = load_dataset("zorse/zorse", split="train")
 except Exception:
     try:
-        ds_dict = load_dataset("zorse/zorse", trust_remote_code=True)
+        ds_dict = load_dataset("zorse/zorse")
         first_split = list(ds_dict.keys())[0]
         ds = ds_dict[first_split]
     except Exception as e:
         print(f"  Failed to load zorse/zorse: {e}", flush=True)
-        with open(os.path.join(out, "metadata.json"), "w") as f:
-            json.dump({"source": "zorse/zorse", "error": str(e)}, f, indent=2)
         raise
 
 print(f"  Loaded {len(ds)} records", flush=True)
@@ -261,7 +276,10 @@ clone_repo() {
         return 0
     fi
     log "  cloning ${dir}..."
-    git clone --depth 1 --single-branch "$url" "${GITHUB}/${dir}" 2>&1 | tail -1 || log "  WARN: failed to clone ${dir}"
+    if ! git clone --depth 1 --single-branch "$url" "${GITHUB}/${dir}" 2>&1 | tail -1; then
+        log "  FAILED to clone ${dir}"
+        FAILED_STEPS+=("clone ${dir}")
+    fi
 }
 
 clone_repo "https://github.com/uwol/proleap-cobol-parser.git"            "proleap"
@@ -311,6 +329,7 @@ collect_nist_from_oss4j() {
         log "NIST extracted: ${count} files from ${nist_src}"
     else
         log "NIST: could not find test directory in opensourcecobol4j"
+        return 1
     fi
 }
 if [ "${SOURCE_LICENSES}" = "all" ]; then
@@ -333,6 +352,7 @@ log "Total NEW COBOL source files: ${TOTAL_NEW}"
 
 TOTAL_ALL=$(find "${RAW}" -type f \( -iname '*.cbl' -o -iname '*.cob' -o -iname '*.cobol' -o -iname '*.cpy' \) 2>/dev/null | wc -l)
 log "Total ALL COBOL source files (old + new): ${TOTAL_ALL}"
+fail_if_incomplete "${TOTAL_NEW}"
 
 log "Rebuilding file index..."
 find "${RAW}" -type f \( -iname '*.cbl' -o -iname '*.cob' -o -iname '*.cobol' -o -iname '*.cpy' \) > "${DATA_ROOT}/source-file-index.txt"

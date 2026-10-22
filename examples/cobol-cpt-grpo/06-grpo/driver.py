@@ -29,6 +29,7 @@ stores its run metadata under OUTPUT_DIR/ray. The server is stopped when trainin
 returns or fails.
 """
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -99,11 +100,12 @@ class VLLMServer:
             try:
                 self._proc.wait(timeout=STOP_TIMEOUT_S)
             except subprocess.TimeoutExpired:
-                pass
-        try:
+                print(
+                    f"vLLM server still running after {STOP_TIMEOUT_S}s; killing it",
+                    flush=True,
+                )
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(self._proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
         self._proc.wait()
 
 

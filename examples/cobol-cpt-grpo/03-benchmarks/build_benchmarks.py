@@ -5,11 +5,12 @@
 """
 Build COBOL evaluation benchmarks from the prepared validation set.
 
-Reads val.jsonl and constructs four benchmark suites:
+Reads val.jsonl and constructs five benchmark suites:
   1. paragraph_completion — mask a PROCEDURE DIVISION paragraph body, predict it
   2. copybook_usage — given a copybook + partial program, predict field references
   3. program_completion — mask PROCEDURE DIVISION of a complete program
   4. perplexity — held-out complete programs for perplexity measurement
+  5. structural_validation — complete a PROCEDURE DIVISION that must compile
 
 Each benchmark is a JSONL file with prompt/reference/metadata fields.
 Writes to /data/datasets/cobol/eval/ on the PVC.
@@ -65,6 +66,12 @@ def split_divisions(text):
     return divisions
 
 
+def text_before_procedure_division(text):
+    """Return the original text before the first PROCEDURE DIVISION, in any case."""
+    proc_idx = text.upper().find("PROCEDURE DIVISION")
+    return text[:proc_idx] if proc_idx >= 0 else ""
+
+
 def extract_paragraphs(procedure_text):
     """Extract named paragraphs from PROCEDURE DIVISION text."""
     paragraphs = []
@@ -113,11 +120,7 @@ def build_paragraph_completion(records, max_tasks=200):
 
         proc_div_header = "       PROCEDURE DIVISION"
         proc_prefix = proc_text[: para["start"]]
-        non_proc = (
-            text.split("PROCEDURE DIVISION")[0]
-            if "PROCEDURE DIVISION" in text.upper()
-            else ""
-        )
+        non_proc = text_before_procedure_division(text)
 
         prompt = non_proc.rstrip() + "\n" + proc_div_header + proc_prefix
         prompt = prompt.rstrip() + "\n       " + para["name"] + ".\n"
@@ -204,7 +207,7 @@ def build_copybook_usage(records, max_tasks=100):
                 "Given this copybook:\n"
                 + cb_info["text"].strip()
                 + "\n\nAnd this partial COBOL program:\n"
-                + text.split("PROCEDURE DIVISION")[0].rstrip()
+                + text_before_procedure_division(text).rstrip()
                 + "\n       PROCEDURE DIVISION.\n"
                 + context_before.rstrip()
                 + "\n           [COMPLETE THE FOLLOWING LINES]\n"

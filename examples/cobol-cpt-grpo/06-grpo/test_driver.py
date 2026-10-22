@@ -33,7 +33,9 @@ import signal
 import sys
 import time
 
-port, delay, mode, out = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4]
+port, delay, mode, out, host = (
+    int(sys.argv[1]), float(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5]
+)
 with open(out, "w") as f:
     json.dump({"pid": os.getpid(), "cuda": os.environ.get("CUDA_VISIBLE_DEVICES")}, f)
 time.sleep(delay)
@@ -53,7 +55,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-http.server.HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+http.server.HTTPServer((host, port), Handler).serve_forever()
 """
 
 STUB_TRAIN_GRPO = """\
@@ -96,7 +98,7 @@ FAKE_MODULES = ("trl", "vllm", "transformers")
 
 def _free_port():
     with socket.socket() as s:
-        s.bind(("", 0))
+        s.bind((ray.util.get_node_ip_address(), 0))
         return s.getsockname()[1]
 
 
@@ -147,6 +149,7 @@ def _server_cmd(work_dir, port, delay, mode, record):
         str(delay),
         mode,
         str(record),
+        ray.util.get_node_ip_address(),
     ]
 
 

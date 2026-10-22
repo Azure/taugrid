@@ -9,8 +9,14 @@ Reads ~60K raw COBOL source files from the PVC, deduplicates, extracts
 PROCEDURE DIVISION prompts, compile-tests each with cobc, and writes
 an RL-ready JSONL.
 
+Programs that share any VAL_OVERLAP_LINES consecutive normalized lines with a
+val.jsonl program are excluded, because 03-benchmarks builds the eval suites
+from val.jsonl. The stage fails if val.jsonl is missing or empty, or if any
+written prompt still overlaps the validation split.
+
 Input:  /data/datasets/cobol/source-file-index.txt (rebuilt by 01-collect/collect-rl-data.sh)
         /data/datasets/cobol/raw/**/*.{cbl,cob,cpy}
+        /data/datasets/cobol/prepared/val.jsonl (from 02-data-prep)
 Output: /data/datasets/cobol/prepared/rl-prompts.jsonl
         /data/datasets/cobol/prepared/rl-prep-report.json
 
@@ -38,6 +44,8 @@ MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "8"))
 MIN_BODY_LINES = int(os.environ.get("MIN_BODY_LINES", "5"))
 MAX_BODY_LINES = int(os.environ.get("MAX_BODY_LINES", "200"))
 MAX_PROMPT_CHARS = int(os.environ.get("MAX_PROMPT_CHARS", "50000"))
+VAL_PATH = os.environ.get("VAL", os.path.join(OUT, "val.jsonl"))
+VAL_OVERLAP_LINES = int(os.environ.get("VAL_OVERLAP_LINES", "8"))
 
 os.makedirs(OUT, exist_ok=True)
 
@@ -52,6 +60,8 @@ EXEC_BLOCK_RE = re.compile(
 )
 
 COPY_STMT_RE = re.compile(r"^\s*COPY\s+\S+.*?\.\s*$", re.IGNORECASE | re.MULTILINE)
+
+WHITESPACE_RE = re.compile(r"\s+")
 
 stats = Counter()
 
@@ -93,6 +103,60 @@ def exact_dedup(texts_with_paths):
             unique.append((path, text))
     duped = len(texts_with_paths) - len(unique)
     return unique, duped
+
+
+def normalized_lines(text):
+    return [
+        WHITESPACE_RE.sub(" ", ln).strip().upper()
+        for ln in text.replace("\r", "").split("\n")
+        if ln.strip()
+    ]
+
+
+def line_windows(text, size):
+    lines = normalized_lines(text)
+    return {
+        hashlib.sha256("\n".join(lines[i : i + size]).encode()).hexdigest()
+        for i in range(max(0, len(lines) - size + 1))
+    }
+
+
+def load_val_windows(path, size):
+    if not os.path.isfile(path):
+        raise RuntimeError(f"{path} not found; run 02-data-prep first")
+    windows = set()
+    count = 0
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            windows |= line_windows(json.loads(line).get("text", ""), size)
+            count += 1
+    if not count or not windows:
+        raise RuntimeError(f"{path} has no validation programs")
+    return windows, count
+
+
+def overlaps_val(text, val_windows, size):
+    return not line_windows(text, size).isdisjoint(val_windows)
+
+
+def exclude_val_overlap(texts_with_paths, val_windows, size):
+    kept = [
+        (path, text)
+        for path, text in texts_with_paths
+        if not overlaps_val(text, val_windows, size)
+    ]
+    return kept, len(texts_with_paths) - len(kept)
+
+
+def assert_disjoint_from_val(records, val_windows, size):
+    leaked = [r["path"] for r in records if overlaps_val(r["text"], val_windows, size)]
+    if leaked:
+        raise RuntimeError(
+            f"{len(leaked)} RL prompts overlap the validation split, e.g. {leaked[0]}"
+        )
 
 
 def extract_prompt(text):
@@ -257,6 +321,9 @@ def main():
     subprocess.run(["cobc", "--version"], capture_output=True, check=True)
     log("cobc available")
 
+    val_windows, val_count = load_val_windows(VAL_PATH, VAL_OVERLAP_LINES)
+    log(f"Loaded {val_count} validation programs from {VAL_PATH}")
+
     file_paths = discover_files()
 
     log("Reading source files...")
@@ -274,6 +341,12 @@ def main():
 
     texts, duped = exact_dedup(texts)
     log(f"After exact dedup: {len(texts)} unique ({duped} duplicates removed)")
+
+    texts, val_overlap = exclude_val_overlap(texts, val_windows, VAL_OVERLAP_LINES)
+    log(
+        f"After validation-split exclusion: {len(texts)} remain "
+        f"({val_overlap} share {VAL_OVERLAP_LINES}+ lines with val.jsonl)"
+    )
 
     log(f"Processing {len(texts)} files with {MAX_WORKERS} workers...")
     results = []
@@ -305,6 +378,7 @@ def main():
         log(f"  {status}: {count}")
 
     ok_results = [r for r in results if r["status"] == "ok"]
+    assert_disjoint_from_val(ok_results, val_windows, VAL_OVERLAP_LINES)
     log(f"Writing {len(ok_results)} compilable programs to rl-prompts.jsonl...")
 
     out_path = os.path.join(OUT, "rl-prompts.jsonl")
@@ -329,7 +403,10 @@ def main():
         "total_files_discovered": len(file_paths),
         "total_read": len(texts) + duped,
         "exact_dupes_removed": duped,
-        "after_dedup": len(texts),
+        "after_dedup": len(texts) + val_overlap,
+        "val_overlap_removed": val_overlap,
+        "val_overlap_lines": VAL_OVERLAP_LINES,
+        "after_val_exclusion": len(texts),
         "status_counts": dict(stats.most_common()),
         "compilable_programs": len(ok_results),
         "output_file": out_path,

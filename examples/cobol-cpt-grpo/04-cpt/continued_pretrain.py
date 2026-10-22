@@ -212,7 +212,7 @@ def main():
 
     if is_main:
         print("\nLoading tokenizer...", flush=True)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -246,7 +246,6 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
         dtype=torch.bfloat16,
-        trust_remote_code=True,
         attn_implementation="sdpa",
         low_cpu_mem_usage=True,
     )

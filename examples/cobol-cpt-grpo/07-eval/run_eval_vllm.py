@@ -7,6 +7,9 @@ COBOL evaluation harness — vLLM backend for multi-GPU batch inference.
 
 Uses vLLM with tensor parallelism across all available GPUs on a node.
 All benchmark tasks are batched and processed concurrently.
+
+Before loading the model, main() fails unless every suite in REQUIRED_SUITES
+exists in EVAL_DIR with at least one task and `cobc --version` succeeds.
 """
 
 import json
@@ -31,6 +34,50 @@ os.makedirs(OUT, exist_ok=True)
 os.environ["HF_HOME"] = HF_HOME
 
 
+REQUIRED_SUITES = (
+    "perplexity",
+    "paragraph_completion",
+    "program_completion",
+    "structural_validation",
+    "copybook_usage",
+)
+
+
+def check_compiler():
+    try:
+        result = subprocess.run(
+            ["cobc", "--version"], capture_output=True, text=True, timeout=10
+        )
+    except FileNotFoundError:
+        raise RuntimeError("cobc not found; GnuCOBOL must be installed") from None
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("cobc --version timed out") from None
+    if result.returncode != 0:
+        raise RuntimeError(f"cobc --version exited with code {result.returncode}")
+    return result.stdout.splitlines()[0] if result.stdout else ""
+
+
+def load_required_suites(eval_dir):
+    suites = {}
+    problems = []
+    for name in REQUIRED_SUITES:
+        path = os.path.join(eval_dir, f"{name}.jsonl")
+        if not os.path.isfile(path):
+            problems.append(f"{path} is missing")
+            continue
+        tasks = load_jsonl(path)
+        if not tasks:
+            problems.append(f"{path} has no tasks")
+            continue
+        suites[name] = tasks
+    if problems:
+        raise RuntimeError(
+            "Benchmark suites are incomplete; run 03-benchmarks first: "
+            + "; ".join(problems)
+        )
+    return suites
+
+
 def load_jsonl(path):
     records = []
     if not os.path.isfile(path):
@@ -50,7 +97,7 @@ def eval_perplexity(tasks, max_length=4096):
     print(f"\n=== Perplexity Evaluation ({len(tasks)} docs) ===", flush=True)
     print("  Loading HF model for perplexity (single GPU)...", flush=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     n_gpus = torch.cuda.device_count()
     max_mem = {i: "17GiB" for i in range(n_gpus)}
     model = AutoModelForCausalLM.from_pretrained(
@@ -58,7 +105,6 @@ def eval_perplexity(tasks, max_length=4096):
         torch_dtype=torch.bfloat16,
         device_map="auto",
         max_memory=max_mem,
-        trust_remote_code=True,
     )
 
     total_nll = 0.0
@@ -305,7 +351,6 @@ def eval_compilation(tasks, generated_texts):
     print(f"\n=== Compilation Evaluation ({len(tasks)} tasks) ===", flush=True)
     compiled = 0
     failed = 0
-    skipped = 0
     fmt_counts = {"free": 0, "fixed": 0}
     results = []
 
@@ -313,8 +358,7 @@ def eval_compilation(tasks, generated_texts):
         full_text = task["prompt"] + gen_text
         success, errors, fmt_used = try_compile(full_text)
         if success is None:
-            skipped += 1
-            continue
+            raise RuntimeError(f"cobc not found while compiling task {task['id']}")
         if success:
             compiled += 1
             fmt_counts[fmt_used] += 1
@@ -337,14 +381,11 @@ def eval_compilation(tasks, generated_texts):
         f"  Format breakdown: {fmt_counts['free']} free, {fmt_counts['fixed']} fixed",
         flush=True,
     )
-    if skipped:
-        print(f"  Skipped (cobc not found): {skipped}", flush=True)
 
     return {
         "compilation_rate_pct": round(rate, 1),
         "compiled": compiled,
         "failed": failed,
-        "skipped": skipped,
         "compiled_free": fmt_counts["free"],
         "compiled_fixed": fmt_counts["fixed"],
         "details": results,
@@ -477,9 +518,14 @@ def main():
     print(f"  GPUs: {torch.cuda.device_count()}, TP size: {TP_SIZE}", flush=True)
     print(f"  Eval dir: {EVAL_DIR}", flush=True)
 
+    print(f"  Compiler: {check_compiler()}", flush=True)
+    suites = load_required_suites(EVAL_DIR)
+    for name in REQUIRED_SUITES:
+        print(f"  {name}: {len(suites[name])} tasks", flush=True)
+
     all_results = {"model": MODEL_ID, "backend": "vllm", "tp_size": TP_SIZE}
 
-    ppl_tasks = load_jsonl(os.path.join(EVAL_DIR, "perplexity.jsonl"))
+    ppl_tasks = suites["perplexity"]
     if ppl_tasks:
         ppl_results = eval_perplexity(ppl_tasks)
         all_results["perplexity"] = {
@@ -494,7 +540,6 @@ def main():
         model=MODEL_ID,
         tensor_parallel_size=TP_SIZE,
         dtype="bfloat16",
-        trust_remote_code=True,
         max_model_len=int(os.environ.get("MAX_MODEL_LEN", "32768")),
         gpu_memory_utilization=0.90,
         download_dir=HF_HOME,
@@ -502,7 +547,7 @@ def main():
     )
     print("  vLLM model loaded.", flush=True)
 
-    para_tasks = load_jsonl(os.path.join(EVAL_DIR, "paragraph_completion.jsonl"))
+    para_tasks = suites["paragraph_completion"]
     if para_tasks:
         print(
             f"\n--- Paragraph completion ({len(para_tasks)} tasks, max_tokens={MAX_NEW_TOKENS}) ---",
@@ -523,7 +568,7 @@ def main():
             for d in para_compile.get("details", []):
                 f.write(json.dumps(d) + "\n")
 
-    prog_tasks = load_jsonl(os.path.join(EVAL_DIR, "program_completion.jsonl"))
+    prog_tasks = suites["program_completion"]
     if prog_tasks:
         print(
             f"\n--- Program completion ({len(prog_tasks)} tasks, max_tokens=1024) ---",
@@ -544,7 +589,7 @@ def main():
             for d in prog_compile.get("details", []):
                 f.write(json.dumps(d) + "\n")
 
-    strv_tasks = load_jsonl(os.path.join(EVAL_DIR, "structural_validation.jsonl"))
+    strv_tasks = suites["structural_validation"]
     if strv_tasks:
         print(
             f"\n--- Structural validation ({len(strv_tasks)} tasks, max_tokens=1024) ---",
@@ -562,6 +607,16 @@ def main():
         with open(os.path.join(OUT, "structural_compilation_details.jsonl"), "w") as f:
             for d in strv_compile.get("details", []):
                 f.write(json.dumps(d) + "\n")
+
+    cpyb_tasks = suites["copybook_usage"]
+    print(
+        f"\n--- Copybook usage ({len(cpyb_tasks)} tasks, max_tokens={MAX_NEW_TOKENS}) ---",
+        flush=True,
+    )
+    cpyb_gen = batch_generate(llm, cpyb_tasks, max_new_tokens=MAX_NEW_TOKENS)
+    all_results["copybook_usage"] = eval_generation_quality(
+        cpyb_tasks, cpyb_gen, "copybook_usage"
+    )
 
     summary_path = os.path.join(OUT, "eval-summary.json")
     with open(summary_path, "w") as f:
@@ -606,6 +661,7 @@ def main():
         print(f"  Column Format: {sv['column_format_valid_pct']}%", flush=True)
         print(f"  PIC Accuracy: {sv['pic_accuracy_pct']}%", flush=True)
         print(f"  PERFORM Ref Accuracy: {sv['perform_ref_accuracy_pct']}%", flush=True)
+    print(f"  Copybook BLEU: {all_results['copybook_usage']['avg_bleu']}", flush=True)
 
 
 if __name__ == "__main__":

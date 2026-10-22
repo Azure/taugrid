@@ -54,6 +54,7 @@ def discover_files_from_index(raw_dir, data_root):
 
     if os.path.isfile(per_file_stats):
         print(f"  Reading file index from {per_file_stats}")
+        malformed = 0
         with open(per_file_stats, "r") as f:
             for line in f:
                 line = line.strip()
@@ -65,8 +66,10 @@ def discover_files_from_index(raw_dir, data_root):
                     if rel:
                         full = os.path.join(raw_dir, rel)
                         source_paths.append(full)
-                except (json.JSONDecodeError, KeyError):
-                    pass
+                except json.JSONDecodeError:
+                    malformed += 1
+        if malformed:
+            print(f"  WARNING: skipped {malformed} malformed lines in {per_file_stats}")
         print(f"  Found {len(source_paths)} source file paths from tokenizer index")
     elif os.path.isfile(file_index):
         print(f"  Reading file index from {file_index}")
@@ -185,8 +188,8 @@ def ingest_jsonl_from_paths(raw_dir, jsonl_paths):
                                 "dataset": source_name,
                             }
                         )
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as e:
+            print(f"  WARNING: skipped {jpath}: {e}")
     return records
 
 
