@@ -232,16 +232,20 @@ def test_malformed_applicability_fails_closed():
          "applicability": {"lanes": None}},
         {"name": "bad-label", "compute": {"workerCount": 1, "gpusPerWorker": 1},
          "applicability": {"teams": [""]}},
+        {"name": "bad-key", "compute": {"workerCount": 1, "gpusPerWorker": 1},
+         "applicability": {"team": ["research"]}},
     ])
     allowed, skipped = ready_profiles(
-        cluster, scope=ProfileScope(namespace="ray", team="research", lane="training")
+        cluster, scope=ProfileScope(namespace="ray", team="someone-else", lane="training")
     )
     assert [profile.name for profile in allowed] == ["global-cpu"]
+    assert "bad-key" not in {profile.name for profile in allowed}
     reasons = {item.name: item.reason for item in skipped}
     assert "malformed applicability" in reasons["bad-shape"]
     assert "malformed applicability.teams" in reasons["bad-team"]
     assert "malformed applicability.lanes" in reasons["bad-lane"]
     assert "malformed applicability.teams" in reasons["bad-label"]
+    assert "unknown key 'team'" in reasons["bad-key"]
 
 
 def test_render_pins_the_submitter_backoff_limit():
