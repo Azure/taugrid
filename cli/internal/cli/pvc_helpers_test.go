@@ -5,15 +5,19 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -46,6 +50,11 @@ func TestHelperPodYAML_RoundTrip(t *testing.T) {
 		PVCName:   "blob-training",
 		TTLSec:    60,
 		Script:    "cat 'foo'\n",
+		Placement: helperPodPlacement{
+			NodeSelector: map[string]string{"pool": "storage"},
+			Affinity:     &helperPodAffinity{NodeAffinity: map[string]any{"preferredDuringSchedulingIgnoredDuringExecution": []any{}}},
+			Tolerations:  []map[string]any{{"key": "storage", "operator": "Exists"}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("helperPodYAML: %v", err)
@@ -68,6 +77,9 @@ func TestHelperPodYAML_RoundTrip(t *testing.T) {
 	}
 	if len(got.Spec.Volumes) != 1 || got.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "blob-training" {
 		t.Errorf("volumes: %+v", got.Spec.Volumes)
+	}
+	if got.Spec.NodeSelector["pool"] != "storage" || got.Spec.Affinity == nil || len(got.Spec.Affinity.NodeAffinity) == 0 || len(got.Spec.Tolerations) != 1 {
+		t.Errorf("placement: %+v", got.Spec)
 	}
 }
 
@@ -105,6 +117,441 @@ func TestHelperPodYAML_ResistsYAMLInjection(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestHelperPodYAMLForPVCUsesNamespaceOnlyFallbackWhenPVReadForbidden(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return "", errors.New(`Error from server (Forbidden): persistentvolumes "pv-artifacts" is forbidden`)
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	raw, err := helperPodYAMLForPVC(context.Background(), runner, helperPodSpec{
+		Name:      "tau-get-artifacts",
+		Namespace: "team-a",
+		LabelApp:  "tau-pvc-get",
+		Image:     pvcHelperImage,
+		PVCName:   "artifacts",
+		TTLSec:    60,
+		Script:    "true",
+	})
+	if err != nil {
+		t.Fatalf("namespace-only fallback failed: %v", err)
+	}
+	var pod helperPodObject
+	if err := yaml.Unmarshal(raw, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Spec.NodeSelector != nil || pod.Spec.Affinity != nil || pod.Spec.Tolerations != nil {
+		t.Fatalf("namespace-only fallback placement = %#v, want scheduler-managed placement", pod.Spec)
+	}
+}
+
+func TestHelperPodYAMLForPVCUsesSchedulerFallbackWhenPVCReadForbidden(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if strings.Join(args, " ") != "-n team-a get pvc artifacts -o json" {
+			t.Fatalf("unexpected kubectl args: %v", args)
+		}
+		return "", errors.New(`Error from server (Forbidden): persistentvolumeclaims "artifacts" is forbidden`)
+	})
+
+	raw, err := helperPodYAMLForPVC(context.Background(), runner, helperPodSpec{
+		Name:      "tau-get-artifacts",
+		Namespace: "team-a",
+		LabelApp:  "tau-pvc-get",
+		Image:     pvcHelperImage,
+		PVCName:   "artifacts",
+		TTLSec:    60,
+		Script:    "true",
+	})
+	if err != nil {
+		t.Fatalf("PVC-read-denied fallback failed: %v", err)
+	}
+	var pod helperPodObject
+	if err := yaml.Unmarshal(raw, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Spec.NodeSelector != nil || pod.Spec.Affinity != nil || pod.Spec.Tolerations != nil {
+		t.Fatalf("PVC-read-denied placement = %#v, want scheduler-managed placement", pod.Spec)
+	}
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "artifacts" {
+		t.Fatalf("helper PVC reference = %#v, want artifacts", pod.Spec.Volumes)
+	}
+}
+
+func TestResolveHelperPodPlacementDoesNotHidePVCReadFailure(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if strings.Join(args, " ") != "-n team-a get pvc artifacts -o json" {
+			t.Fatalf("unexpected kubectl args: %v", args)
+		}
+		return "", errors.New("Unable to connect to the server: dial tcp: i/o timeout")
+	})
+
+	_, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err == nil || !strings.Contains(err.Error(), "read PVC team-a/artifacts") || !strings.Contains(err.Error(), "i/o timeout") {
+		t.Fatalf("PVC lookup failure = %v", err)
+	}
+}
+
+func TestResolveHelperPodPlacementFallsBackWhenCSINodeListForbidden(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"file.csi.azure.com"}}}`, nil
+		case "get csinode -o json":
+			return "", errors.New(`Error from server (Forbidden): csinodes.storage.k8s.io is forbidden`)
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatalf("CSINode-denied fallback failed: %v", err)
+	}
+	if got.NodeSelector != nil || got.Affinity != nil || got.Tolerations != nil {
+		t.Fatalf("CSINode-denied fallback placement = %#v, want scheduler-managed placement", got)
+	}
+}
+
+func TestResolveHelperPodPlacementDropsProducerComputePlacementForPortableCSI(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"file.csi.azure.com"}}}`, nil
+		case "get csinode -o json":
+			return `{"items":[
+				{"metadata":{"name":"cpu-storage"},"spec":{"drivers":[{"name":"file.csi.azure.com"}]}},
+				{"metadata":{"name":"gpu-scaled-down"},"spec":{"drivers":null}}
+			]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+	base := helperPodPlacement{
+		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "ndm-a100-v4"},
+		Tolerations: []map[string]any{
+			{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
+		},
+	}
+
+	raw, err := helperPodYAMLForPVC(context.Background(), runner, helperPodSpec{
+		Name:      "tau-get-artifacts",
+		Namespace: "team-a",
+		LabelApp:  "tau-pvc-get",
+		Image:     pvcHelperImage,
+		PVCName:   "artifacts",
+		TTLSec:    60,
+		Script:    "true",
+		Placement: base,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pod helperPodObject
+	if err := yaml.Unmarshal(raw, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Spec.NodeSelector != nil {
+		t.Fatalf("helper inherited producer nodeSelector: %#v", pod.Spec.NodeSelector)
+	}
+	if pod.Spec.Tolerations != nil {
+		t.Fatalf("helper inherited producer tolerations: %#v", pod.Spec.Tolerations)
+	}
+	nodeAffinity := pod.Spec.Affinity.NodeAffinity
+	required := nodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	terms := required["nodeSelectorTerms"].([]any)
+	term := terms[0].(map[string]any)
+	fields := term["matchFields"].([]any)
+	if len(fields) != 1 {
+		t.Fatalf("matchFields = %#v, want one CSI compatibility requirement", fields)
+	}
+	requirement := fields[0].(map[string]any)
+	if requirement["key"] != "metadata.name" || requirement["operator"] != "In" {
+		t.Fatalf("requirement = %#v", requirement)
+	}
+	if got := requirement["values"].([]any); !reflect.DeepEqual(got, []any{"cpu-storage"}) {
+		t.Fatalf("compatible nodes = %v, want [cpu-storage]", got)
+	}
+}
+
+func TestResolveHelperPodPlacementUsesPVNodeAffinityForLocalStorage(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"local":{"path":"/mnt/local"},"nodeAffinity":{"required":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"kubernetes.io/hostname","operator":"In","values":["storage-node"]}]}]}}}}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := got.Affinity.NodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	terms := required["nodeSelectorTerms"].([]any)
+	expressions := terms[0].(map[string]any)["matchExpressions"].([]any)
+	if expressions[0].(map[string]any)["key"] != "kubernetes.io/hostname" {
+		t.Fatalf("local PV affinity was not preserved: %#v", got)
+	}
+}
+
+func TestResolveHelperPodPlacementRejectsUnsafeLocalStorageWithoutNodeAffinity(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"hostPath":{"path":"/mnt/local"}}}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	_, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err == nil || !strings.Contains(err.Error(), "node-local") || !strings.Contains(err.Error(), "node affinity") {
+		t.Fatalf("unsafe local storage error = %v", err)
+	}
+}
+
+func TestResolveHelperPodPlacementConstrainsHeterogeneousCSI(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"blob.csi.azure.com"}}}`, nil
+		case "get csinode -o json":
+			return `{"items":[
+				{"metadata":{"name":"storage-b"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}},
+				{"metadata":{"name":"worker"},"spec":{"drivers":null}},
+				{"metadata":{"name":"storage-a"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}}
+			]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := got.Affinity.NodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	terms := required["nodeSelectorTerms"].([]any)
+	if len(terms) != 2 {
+		t.Fatalf("node selector terms = %d, want one OR term per compatible node", len(terms))
+	}
+	var nodeNames []string
+	for _, rawTerm := range terms {
+		fields := rawTerm.(map[string]any)["matchFields"].([]any)
+		values := fields[0].(map[string]any)["values"].([]string)
+		if len(values) != 1 {
+			t.Fatalf("metadata.name values = %v, want exactly one Kubernetes-valid value", values)
+		}
+		nodeNames = append(nodeNames, values[0])
+	}
+	if !reflect.DeepEqual(nodeNames, []string{"storage-a", "storage-b"}) {
+		t.Fatalf("compatible node terms = %v, want [storage-a storage-b]", nodeNames)
+	}
+}
+
+func TestResolveHelperPodPlacementIntersectsPVTopologyWithCompatibleNodes(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"blob.csi.azure.com"},"nodeAffinity":{"required":{"nodeSelectorTerms":[{"matchExpressions":[{"key":"topology.kubernetes.io/zone","operator":"In","values":["zone-a"]}]},{"matchExpressions":[{"key":"topology.kubernetes.io/zone","operator":"In","values":["zone-b"]}]}]}}}}`, nil
+		case "get csinode -o json":
+			return `{"items":[
+				{"metadata":{"name":"storage-b"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}},
+				{"metadata":{"name":"storage-a"},"spec":{"drivers":[{"name":"blob.csi.azure.com"}]}},
+				{"metadata":{"name":"worker"},"spec":{"drivers":null}}
+			]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	required := got.Affinity.NodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	terms := required["nodeSelectorTerms"].([]any)
+	if len(terms) != 4 {
+		t.Fatalf("node selector terms = %d, want 2 PV terms x 2 compatible nodes", len(terms))
+	}
+	var intersections []string
+	for _, rawTerm := range terms {
+		term := rawTerm.(map[string]any)
+		expressions := term["matchExpressions"].([]any)
+		zoneValues := expressions[0].(map[string]any)["values"].([]any)
+		fields := term["matchFields"].([]any)
+		nodeValues := fields[0].(map[string]any)["values"].([]string)
+		if len(nodeValues) != 1 {
+			t.Fatalf("metadata.name values = %v, want exactly one Kubernetes-valid value", nodeValues)
+		}
+		intersections = append(intersections, zoneValues[0].(string)+"/"+nodeValues[0])
+	}
+	want := []string{"zone-a/storage-a", "zone-a/storage-b", "zone-b/storage-a", "zone-b/storage-b"}
+	if !reflect.DeepEqual(intersections, want) {
+		t.Fatalf("PV/node intersections = %v, want %v", intersections, want)
+	}
+}
+
+func TestResolveHelperPodPlacementLeavesUniversallyRegisteredCSIUnconstrained(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch strings.Join(args, " ") {
+		case "-n team-a get pvc artifacts -o json":
+			return `{"spec":{"volumeName":"pv-artifacts"},"status":{"phase":"Bound"}}`, nil
+		case "get pv pv-artifacts -o json":
+			return `{"spec":{"csi":{"driver":"file.csi.azure.com"}}}`, nil
+		case "get csinode -o json":
+			return `{"items":[{"metadata":{"name":"node-a"},"spec":{"drivers":[{"name":"file.csi.azure.com"}]}},{"metadata":{"name":"node-b"},"spec":{"drivers":[{"name":"file.csi.azure.com"}]}}]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Affinity != nil {
+		t.Fatalf("portable storage gained affinity: %#v", got.Affinity)
+	}
+}
+
+func TestResolveHelperPodPlacementLeavesUnboundPVCForSchedulerBinding(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if strings.Join(args, " ") != "-n team-a get pvc artifacts -o json" {
+			t.Fatalf("unexpected kubectl args: %v", args)
+		}
+		return `{"spec":{"storageClassName":"portable"},"status":{"phase":"Pending"}}`, nil
+	})
+
+	got, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Affinity != nil {
+		t.Fatalf("unbound PVC gained affinity: %#v", got.Affinity)
+	}
+}
+
+func TestWaitForHelperPodTerminalIgnoresMixedFailedSchedulingReasons(t *testing.T) {
+	podReads := 0
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch {
+		case len(args) > 1 && args[0] == "get" && args[1] == "-n":
+			podReads++
+			if podReads == 1 {
+				return "Pending", nil
+			}
+			return "Succeeded", nil
+		case len(args) > 1 && args[0] == "get" && args[1] == "events":
+			return `{"items":[{"type":"Warning","reason":"FailedScheduling","message":"0/3 nodes are available: 1 didn't match Pod's node affinity/selector, 2 Insufficient cpu, 1 had untolerated taint"}]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	phase, err := waitForHelperPodTerminal(context.Background(), runner, "team-a", "tau-ls-run", 3*time.Second)
+	if err != nil || phase != "Succeeded" {
+		t.Fatalf("mixed scheduler warning became terminal: phase=%q err=%v", phase, err)
+	}
+}
+
+func TestWaitForHelperPodTerminalIgnoresStaleWarningAfterScheduling(t *testing.T) {
+	podReads := 0
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch {
+		case len(args) > 1 && args[0] == "get" && args[1] == "-n":
+			podReads++
+			switch podReads {
+			case 1:
+				return "Pending", nil
+			case 2:
+				return "Running", nil
+			default:
+				return "Succeeded", nil
+			}
+		case len(args) > 1 && args[0] == "get" && args[1] == "events":
+			return `{"items":[{"type":"Warning","reason":"FailedScheduling","message":"0/1 nodes are available: 1 didn't match Pod's node affinity/selector"}]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	phase, err := waitForHelperPodTerminal(context.Background(), runner, "team-a", "tau-ls-run", 4*time.Second)
+	if err != nil || phase != "Succeeded" {
+		t.Fatalf("stale scheduler warning became terminal: phase=%q err=%v", phase, err)
+	}
+}
+
+func TestWaitForHelperPodTerminalIncludesEventsAtTimeout(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch {
+		case len(args) > 1 && args[0] == "get" && args[1] == "-n":
+			return "Pending", nil
+		case len(args) > 1 && args[0] == "get" && args[1] == "events":
+			return `{"items":[{"type":"Warning","reason":"FailedMount","message":"driver name blob.csi.azure.com not found in the list of registered CSI drivers"},{"type":"Warning","reason":"FailedScheduling","message":"0/2 nodes are available: 2 Insufficient cpu"}]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	start := time.Now()
+	_, err := waitForHelperPodTerminal(context.Background(), runner, "team-a", "tau-ls-run", 20*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") || !strings.Contains(err.Error(), "FailedMount") || !strings.Contains(err.Error(), "FailedScheduling") {
+		t.Fatalf("timeout diagnostic = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("bounded timeout took %v", elapsed)
+	}
+}
+
+func TestWaitForHelperPodTerminalUsesFailedPhaseAsTerminal(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		switch {
+		case len(args) > 1 && args[0] == "get" && args[1] == "-n":
+			return "Failed", nil
+		case len(args) > 1 && args[0] == "get" && args[1] == "events":
+			return `{"items":[{"type":"Warning","reason":"FailedMount","message":"mount failed after retries"}]}`, nil
+		default:
+			t.Fatalf("unexpected kubectl args: %v", args)
+			return "", nil
+		}
+	})
+
+	phase, err := waitForHelperPodTerminal(context.Background(), runner, "team-a", "tau-ls-run", 10*time.Second)
+	if phase != "Failed" || err == nil || !strings.Contains(err.Error(), "FailedMount") {
+		t.Fatalf("failed phase result: phase=%q err=%v", phase, err)
 	}
 }
 

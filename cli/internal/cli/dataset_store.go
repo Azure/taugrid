@@ -97,7 +97,8 @@ func deletePVCFile(ctx context.Context, kubeContext, namespace, runName, pvcName
 		podName = podName[:60]
 	}
 	script := fmt.Sprintf("rm -f %s\n", shellSingleQuote(path))
-	podYAML, err := helperPodYAML(helperPodSpec{
+	r := kube.New(kubeContext)
+	podYAML, err := helperPodYAMLForPVC(ctx, r, helperPodSpec{
 		Name:      podName,
 		Namespace: namespace,
 		LabelApp:  "tau-pvc-rm",
@@ -109,7 +110,6 @@ func deletePVCFile(ctx context.Context, kubeContext, namespace, runName, pvcName
 	if err != nil {
 		return fmt.Errorf("render helper pod: %w", err)
 	}
-	r := kube.New(kubeContext)
 	if _, err := r.Raw(ctx, []string{"apply", "-n", namespace, "-f", "-"}, podYAML); err != nil {
 		return fmt.Errorf("create helper pod: %w", err)
 	}

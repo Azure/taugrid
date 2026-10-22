@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -161,7 +162,8 @@ if ! command -v base64 >/dev/null 2>&1; then
 fi
 base64 %s
 `, shellSingleQuote(path), pvcHelperNotFoundMarker, pvcHelperBase64MissingMarker, shellSingleQuote(path))
-	podYAML, err := helperPodYAML(helperPodSpec{
+	r := kube.New(kubeContext)
+	podYAML, err := helperPodYAMLForPVC(ctx, r, helperPodSpec{
 		Name:      podName,
 		Namespace: namespace,
 		LabelApp:  "tau-pvc-get",
@@ -174,7 +176,6 @@ base64 %s
 		return nil, fmt.Errorf("render helper pod: %w", err)
 	}
 
-	r := kube.New(kubeContext)
 	if _, err := r.Raw(ctx, []string{"apply", "-n", namespace, "-f", "-"}, podYAML); err != nil {
 		return nil, fmt.Errorf("create helper pod: %w", err)
 	}
@@ -238,7 +239,8 @@ func fetchPVCListWithMode(ctx context.Context, kubeContext, namespace, runName, 
 		return nil, err
 	}
 	completionMarker := pvcHelperListCompleteMarker + ":" + podName
-	podYAML, err := helperPodYAML(helperPodSpec{
+	r := kube.New(kubeContext)
+	podYAML, err := helperPodYAMLForPVC(ctx, r, helperPodSpec{
 		Name:      podName,
 		Namespace: namespace,
 		LabelApp:  "tau-pvc-list",
@@ -256,7 +258,6 @@ func fetchPVCListWithMode(ctx context.Context, kubeContext, namespace, runName, 
 		return nil, fmt.Errorf("render helper pod: %w", err)
 	}
 
-	r := kube.New(kubeContext)
 	if _, err := r.Raw(ctx, []string{"apply", "-n", namespace, "-f", "-"}, podYAML); err != nil {
 		return nil, fmt.Errorf("create helper pod: %w", err)
 	}
@@ -404,7 +405,8 @@ fi
 echo "TAU_ARTIFACT_NOT_FOUND" >&2
 exit 2
 `, shellSingleQuote(artifactPath), expectedFileCount)
-	podYAML, err := helperPodYAML(helperPodSpec{
+	r := kube.New(kubeContext)
+	podYAML, err := helperPodYAMLForPVC(ctx, r, helperPodSpec{
 		Name:      podName,
 		Namespace: namespace,
 		LabelApp:  "tau-artifact-probe",
@@ -417,7 +419,6 @@ exit 2
 		return fmt.Errorf("render helper pod: %w", err)
 	}
 
-	r := kube.New(kubeContext)
 	if _, err := r.Raw(ctx, []string{"apply", "-n", namespace, "-f", "-"}, podYAML); err != nil {
 		return fmt.Errorf("create helper pod: %w", err)
 	}
@@ -463,6 +464,17 @@ type helperPodSpec struct {
 	TTLSec     int
 	Script     string
 	ScriptArgs []string
+	Placement  helperPodPlacement
+}
+
+type helperPodPlacement struct {
+	NodeSelector map[string]string  `json:"nodeSelector,omitempty"`
+	Affinity     *helperPodAffinity `json:"affinity,omitempty"`
+	Tolerations  []map[string]any   `json:"tolerations,omitempty"`
+}
+
+type helperPodAffinity struct {
+	NodeAffinity map[string]any `json:"nodeAffinity,omitempty" yaml:"nodeAffinity,omitempty"`
 }
 
 type helperPodObjMeta struct {
@@ -496,6 +508,9 @@ type helperPodVolume struct {
 type helperPodPodSpec struct {
 	RestartPolicy         string               `yaml:"restartPolicy"`
 	ActiveDeadlineSeconds int                  `yaml:"activeDeadlineSeconds"`
+	NodeSelector          map[string]string    `yaml:"nodeSelector,omitempty"`
+	Affinity              *helperPodAffinity   `yaml:"affinity,omitempty"`
+	Tolerations           []map[string]any     `yaml:"tolerations,omitempty"`
 	Containers            []helperPodContainer `yaml:"containers"`
 	Volumes               []helperPodVolume    `yaml:"volumes"`
 }
@@ -524,6 +539,9 @@ func helperPodYAML(s helperPodSpec) ([]byte, error) {
 		Spec: helperPodPodSpec{
 			RestartPolicy:         "Never",
 			ActiveDeadlineSeconds: s.TTLSec,
+			NodeSelector:          s.Placement.NodeSelector,
+			Affinity:              s.Placement.Affinity,
+			Tolerations:           s.Placement.Tolerations,
 			Containers: []helperPodContainer{{
 				Name:    "helper",
 				Image:   s.Image,
@@ -543,7 +561,167 @@ func helperPodYAML(s helperPodSpec) ([]byte, error) {
 	return yaml.Marshal(pod)
 }
 
-func waitForHelperPodTerminal(ctx context.Context, r *kube.Runner, namespace, podName string, timeout time.Duration) (string, error) {
+func helperPodYAMLForPVC(ctx context.Context, r kubeRawRunner, s helperPodSpec) ([]byte, error) {
+	placement, err := resolveHelperPodPlacement(ctx, r, s.Namespace, s.PVCName)
+	if err != nil {
+		return nil, err
+	}
+	s.Placement = placement
+	return helperPodYAML(s)
+}
+
+func resolveHelperPodPlacement(
+	ctx context.Context,
+	r kubeRawRunner,
+	namespace, pvcName string,
+) (helperPodPlacement, error) {
+	pvcNamespace, err := requireWorkloadNamespace(namespace)
+	if err != nil {
+		return helperPodPlacement{}, err
+	}
+	rawPVC, err := r.Raw(ctx, []string{"-n", pvcNamespace, "get", "pvc", pvcName, "-o", "json"}, nil)
+	if err != nil {
+		if helperPlacementDiscoveryDenied(err) {
+			return helperPodPlacement{}, nil
+		}
+		return helperPodPlacement{}, fmt.Errorf("read PVC %s/%s for helper placement: %w", pvcNamespace, pvcName, err)
+	}
+	var pvc pvcDoc
+	if err := json.Unmarshal([]byte(rawPVC), &pvc); err != nil {
+		return helperPodPlacement{}, fmt.Errorf("parse PVC %s/%s for helper placement: %w", pvcNamespace, pvcName, err)
+	}
+	if pvc.Spec.VolumeName == "" {
+		return helperPodPlacement{}, nil
+	}
+	rawPV, err := r.Raw(ctx, []string{"get", "pv", pvc.Spec.VolumeName, "-o", "json"}, nil)
+	if err != nil {
+		if helperPlacementDiscoveryDenied(err) {
+			return helperPodPlacement{}, nil
+		}
+		return helperPodPlacement{}, fmt.Errorf("read bound PV %q for PVC %s/%s helper placement: %w", pvc.Spec.VolumeName, pvcNamespace, pvcName, err)
+	}
+	var pv pvDoc
+	if err := json.Unmarshal([]byte(rawPV), &pv); err != nil {
+		return helperPodPlacement{}, fmt.Errorf("parse bound PV %q for PVC %s/%s helper placement: %w", pvc.Spec.VolumeName, pvcNamespace, pvcName, err)
+	}
+	placement, err := helperPlacementFromPV(pvcName, pv)
+	if err != nil {
+		return helperPodPlacement{}, err
+	}
+	if pv.Spec.CSI == nil {
+		return placement, nil
+	}
+	driver := strings.TrimSpace(pv.Spec.CSI.Driver)
+	if driver == "" {
+		return helperPodPlacement{}, fmt.Errorf("PVC helper %q is backed by a CSI volume with no driver name; cannot determine safe helper placement", pvcName)
+	}
+	driversByNode, err := listCSINodeDrivers(ctx, r)
+	if err != nil {
+		if helperPlacementDiscoveryDenied(err) {
+			return placement, nil
+		}
+		return helperPodPlacement{}, err
+	}
+	compatible := make([]string, 0, len(driversByNode))
+	for nodeName, drivers := range driversByNode {
+		if drivers[driver] {
+			compatible = append(compatible, nodeName)
+		}
+	}
+	sort.Strings(compatible)
+	if len(compatible) == 0 {
+		return helperPodPlacement{}, fmt.Errorf(
+			"PVC helper %q is backed by CSI driver %q, but that driver is not registered on any node",
+			pvcName,
+			driver,
+		)
+	}
+	if len(compatible) == len(driversByNode) {
+		return placement, nil
+	}
+	addRequiredNodeNames(&placement, compatible)
+	return placement, nil
+}
+
+func helperPlacementFromPV(pvcName string, pv pvDoc) (helperPodPlacement, error) {
+	placement := helperPodPlacement{}
+	var terms []map[string]any
+	if pv.Spec.NodeAffinity != nil && pv.Spec.NodeAffinity.Required != nil {
+		terms = pv.Spec.NodeAffinity.Required.NodeSelectorTerms
+	}
+	if len(terms) > 0 {
+		rawTerms := make([]any, 0, len(terms))
+		for _, term := range terms {
+			rawTerms = append(rawTerms, term)
+		}
+		placement.Affinity = &helperPodAffinity{
+			NodeAffinity: map[string]any{
+				"requiredDuringSchedulingIgnoredDuringExecution": map[string]any{
+					"nodeSelectorTerms": rawTerms,
+				},
+			},
+		}
+	}
+	if (len(pv.Spec.Local) > 0 || len(pv.Spec.HostPath) > 0) && len(terms) == 0 {
+		return helperPodPlacement{}, fmt.Errorf(
+			"PVC helper %q uses node-local storage without PV node affinity; cannot determine a safe node for the helper pod",
+			pvcName,
+		)
+	}
+	return placement, nil
+}
+
+func helperPlacementDiscoveryDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "forbidden") ||
+		strings.Contains(message, "unauthorized") ||
+		strings.Contains(message, "cannot get resource") ||
+		strings.Contains(message, "cannot list resource")
+}
+
+func addRequiredNodeNames(placement *helperPodPlacement, nodeNames []string) {
+	if placement.Affinity == nil {
+		placement.Affinity = &helperPodAffinity{}
+	}
+	nodeAffinity := placement.Affinity.NodeAffinity
+	if nodeAffinity == nil {
+		nodeAffinity = map[string]any{}
+		placement.Affinity.NodeAffinity = nodeAffinity
+	}
+	required, _ := nodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)
+	if required == nil {
+		required = map[string]any{}
+		nodeAffinity["requiredDuringSchedulingIgnoredDuringExecution"] = required
+	}
+	terms, _ := required["nodeSelectorTerms"].([]any)
+	if len(terms) == 0 {
+		terms = []any{map[string]any{}}
+	}
+	expanded := make([]any, 0, len(terms)*len(nodeNames))
+	for _, rawTerm := range terms {
+		source, _ := rawTerm.(map[string]any)
+		for _, nodeName := range nodeNames {
+			term := make(map[string]any, len(source)+1)
+			for key, value := range source {
+				term[key] = value
+			}
+			matchFields, _ := source["matchFields"].([]any)
+			fields := append([]any(nil), matchFields...)
+			term["matchFields"] = append(fields, map[string]any{
+				"key":      "metadata.name",
+				"operator": "In",
+				"values":   []string{nodeName},
+			})
+			expanded = append(expanded, term)
+		}
+	}
+	required["nodeSelectorTerms"] = expanded
+}
+
+func waitForHelperPodTerminal(ctx context.Context, r kubeRawRunner, namespace, podName string, timeout time.Duration) (string, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -556,16 +734,58 @@ func waitForHelperPodTerminal(ctx context.Context, r *kube.Runner, namespace, po
 		}, nil)
 		if err == nil {
 			phase := strings.TrimSpace(out)
-			if phase == "Succeeded" || phase == "Failed" {
+			if phase == "Succeeded" {
+				return phase, nil
+			}
+			if phase == "Failed" {
+				if diagnostic := helperPodEventDiagnostic(waitCtx, r, namespace, podName); diagnostic != "" {
+					return phase, fmt.Errorf("helper pod failed: %s", diagnostic)
+				}
 				return phase, nil
 			}
 		}
 		select {
 		case <-waitCtx.Done():
+			if diagnostic := helperPodEventDiagnostic(ctx, r, namespace, podName); diagnostic != "" {
+				return "", fmt.Errorf("%w; pod events: %s", waitCtx.Err(), diagnostic)
+			}
 			return "", waitCtx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+func helperPodEventDiagnostic(ctx context.Context, r kubeRawRunner, namespace, podName string) string {
+	out, err := r.Raw(ctx, []string{
+		"get", "events", "-n", namespace,
+		"--field-selector", "involvedObject.kind=Pod,involvedObject.name=" + podName,
+		"-o", "json",
+	}, nil)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return ""
+	}
+	var events struct {
+		Items []struct {
+			Type    string `json:"type"`
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &events); err != nil {
+		return ""
+	}
+	var diagnostics []string
+	for _, event := range events.Items {
+		if !strings.EqualFold(event.Type, "Warning") {
+			continue
+		}
+		detail := strings.TrimSpace(event.Reason + ": " + event.Message)
+		if detail == ":" {
+			continue
+		}
+		diagnostics = append(diagnostics, detail)
+	}
+	return strings.Join(diagnostics, "; ")
 }
 
 func shellSingleQuote(s string) string {

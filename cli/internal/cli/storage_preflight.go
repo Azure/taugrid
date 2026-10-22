@@ -35,6 +35,13 @@ type pvDoc struct {
 		CSI *struct {
 			Driver string `json:"driver"`
 		} `json:"csi"`
+		Local        json.RawMessage `json:"local"`
+		HostPath     json.RawMessage `json:"hostPath"`
+		NodeAffinity *struct {
+			Required *struct {
+				NodeSelectorTerms []map[string]any `json:"nodeSelectorTerms"`
+			} `json:"required"`
+		} `json:"nodeAffinity"`
 	} `json:"spec"`
 }
 
