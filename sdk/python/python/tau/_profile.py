@@ -111,6 +111,20 @@ def _normalize_list(values: Any, normalize) -> Tuple[str, ...]:
     return tuple(sorted({normalize(item) for item in values if str(item or "").strip()}))
 
 
+def _normalize_scope_list(values: Any, normalize) -> Optional[Tuple[str, ...]]:
+    if not isinstance(values, (list, tuple)):
+        return None
+    normalized = set()
+    for item in values:
+        if not isinstance(item, str):
+            return None
+        value = normalize(item)
+        if not value:
+            return None
+        normalized.add(value)
+    return tuple(sorted(normalized))
+
+
 # --------------------------------------------------------------------------
 # Readiness — mirrors provider.requireProfileReady / requireCondition.
 # --------------------------------------------------------------------------
@@ -338,9 +352,15 @@ def ready_profiles(
         if failure is not None:
             skipped.append(SkippedProfile(name=name, reason=failure))
             continue
-        applicability = item.get("applicability") or {}
+        applicability = item.get("applicability") if "applicability" in item else {}
         if not isinstance(applicability, dict):
-            applicability = {}
+            skipped.append(
+                SkippedProfile(
+                    name=name,
+                    reason="malformed applicability: expected a mapping",
+                )
+            )
+            continue
         # Every dimension is checked, including one the caller scope does not
         # identify. An unknown caller value cannot select capacity a profile
         # reserves for a specific namespace, team, or lane: that is the
@@ -352,7 +372,12 @@ def ready_profiles(
             ("team", scope.team, "teams", normalize_label),
             ("lane", scope.lane, "lanes", normalize_label),
         ):
-            allowed = _normalize_list(applicability.get(key), normalize)
+            if key not in applicability:
+                continue
+            allowed = _normalize_scope_list(applicability.get(key), normalize)
+            if allowed is None:
+                denied = f"has malformed applicability.{key}: expected a list"
+                break
             if not allowed:
                 continue  # an empty list is global
             if value is None:
