@@ -221,6 +221,29 @@ def test_applicability_is_enforced_for_namespace_and_team():
     assert "does not authorize team" in {i.name: i.reason for i in skipped_wrong}["team-a-gpu"]
 
 
+def test_malformed_applicability_fails_closed():
+    cluster = ready_cluster([
+        {"name": "global-cpu", "compute": {"workerCount": 1, "gpusPerWorker": 0}},
+        {"name": "bad-shape", "compute": {"workerCount": 1, "gpusPerWorker": 1},
+         "applicability": ["research"]},
+        {"name": "bad-team", "compute": {"workerCount": 1, "gpusPerWorker": 1},
+         "applicability": {"teams": "research"}},
+        {"name": "bad-lane", "compute": {"workerCount": 1, "gpusPerWorker": 1},
+         "applicability": {"lanes": None}},
+        {"name": "bad-label", "compute": {"workerCount": 1, "gpusPerWorker": 1},
+         "applicability": {"teams": [""]}},
+    ])
+    allowed, skipped = ready_profiles(
+        cluster, scope=ProfileScope(namespace="ray", team="research", lane="training")
+    )
+    assert [profile.name for profile in allowed] == ["global-cpu"]
+    reasons = {item.name: item.reason for item in skipped}
+    assert "malformed applicability" in reasons["bad-shape"]
+    assert "malformed applicability.teams" in reasons["bad-team"]
+    assert "malformed applicability.lanes" in reasons["bad-lane"]
+    assert "malformed applicability.teams" in reasons["bad-label"]
+
+
 def test_render_pins_the_submitter_backoff_limit():
     """KubeRay 1.6 moved the submitter Job retry count to submitterConfig.
 

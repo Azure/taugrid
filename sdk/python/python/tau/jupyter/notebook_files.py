@@ -141,6 +141,8 @@ def read_selected(directory: Path, names: Iterable[str]) -> Dict[str, bytes]:
         if name != Path(name).name or name in (".", "..") or "\\" in name:
             raise FileSelectionError(f"{name!r} is not a flat file name in the notebook directory")
         path = base / name
+        if _skip(path):
+            raise FileSelectionError(f"{name!r} is not eligible to be embedded")
         # Refuse a link before ``is_file`` follows it. A symlink in the notebook
         # directory could point at anything the server identity can read, and
         # the highest-value target is the pod's projected service-account token;
