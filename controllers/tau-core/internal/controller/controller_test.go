@@ -1397,22 +1397,52 @@ func TestWorkspaceDeletePreservesNamespaceMetadataForDifferentOwnerUID(t *testin
 
 func TestWorkspaceDeletePreservesNamespaceRoutingMetadataForExternalQueueWorkloads(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		status    map[string]any
-		wantBlock bool
+		name           string
+		workloadStatus map[string]any
+		queueStatus    tauv1alpha1.WorkspaceQueueStatus
+		teamRef        *tauv1alpha1.TauClusterObjectReference
+		wantBlock      bool
 	}{
-		{name: "pending", wantBlock: true},
+		{
+			name: "pending",
+			queueStatus: tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue:      "jobqueue",
+				ClusterQueue:    "jobqueue",
+				ClusterQueueUID: "jobqueue-uid",
+			},
+			wantBlock: true,
+		},
 		{
 			name: "admitted",
-			status: map[string]any{
+			workloadStatus: map[string]any{
 				"admission": map[string]any{"clusterQueue": "jobqueue"},
+			},
+			queueStatus: tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue:      "jobqueue",
+				ClusterQueue:    "jobqueue",
+				ClusterQueueUID: "jobqueue-uid",
+			},
+			wantBlock: true,
+		},
+		{name: "pending with empty queue status", wantBlock: true},
+		{
+			name:    "pending on compatibility alias",
+			teamRef: &tauv1alpha1.TauClusterObjectReference{Name: "vision"},
+			queueStatus: tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue:   workspaceClusterQueueName("aurora"),
+				ClusterQueue: workspaceClusterQueueName("aurora"),
 			},
 			wantBlock: true,
 		},
 		{
 			name: "finished",
-			status: map[string]any{
+			workloadStatus: map[string]any{
 				"conditions": []any{map[string]any{"type": "Finished", "status": "True"}},
+			},
+			queueStatus: tauv1alpha1.WorkspaceQueueStatus{
+				LocalQueue:      "jobqueue",
+				ClusterQueue:    "jobqueue",
+				ClusterQueueUID: "jobqueue-uid",
 			},
 		},
 	} {
@@ -1425,12 +1455,9 @@ func TestWorkspaceDeletePreservesNamespaceRoutingMetadataForExternalQueueWorkloa
 			workspace.DeletionTimestamp = &now
 			workspace.Spec.Target.CreateNamespace = false
 			workspace.Spec.Queue = "jobqueue"
+			workspace.Spec.TeamRef = test.teamRef
 			workspace.Status.Target.ResolvedNamespace = workspace.Name
-			workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
-				LocalQueue:      "jobqueue",
-				ClusterQueue:    "jobqueue",
-				ClusterQueueUID: "jobqueue-uid",
-			}
+			workspace.Status.Queue = test.queueStatus
 			namespace := testNamespace(workspace.Name)
 			namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
 			localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
@@ -1448,8 +1475,8 @@ func TestWorkspaceDeletePreservesNamespaceRoutingMetadataForExternalQueueWorkloa
 			workload.SetName("training")
 			workload.SetNamespace(namespace.Name)
 			workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
-			if test.status != nil {
-				workload.Object["status"] = test.status
+			if test.workloadStatus != nil {
+				workload.Object["status"] = test.workloadStatus
 			}
 			c := fake.NewClientBuilder().
 				WithScheme(testScheme(t)).
@@ -1498,6 +1525,71 @@ func TestWorkspaceDeletePreservesNamespaceRoutingMetadataForExternalQueueWorkloa
 				}
 			}
 		})
+	}
+}
+
+func TestLegacyWorkspaceDeletePreservesRoutingMetadataWithEmptyQueueStatus(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationV0Primary: "true"}
+	now := metav1.Now()
+	workspace.DeletionTimestamp = &now
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.Queue = "jobqueue"
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	namespace.Annotations = nil
+	localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+	localQueue.SetAnnotations(nil)
+	clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+	clusterQueue.Object["spec"] = map[string]any{
+		"namespaceSelector": map[string]any{
+			"matchExpressions": []any{map[string]any{
+				"key":      labelWorkspace,
+				"operator": "Exists",
+			}},
+		},
+	}
+	workload := newQueueObject(workloadGVK)
+	workload.SetName("training")
+	workload.SetNamespace(namespace.Name)
+	workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, localQueue, clusterQueue, workload).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	var cleanupErr error
+	for range 4 {
+		if _, err := reconciler.Reconcile(ctx, request); err != nil {
+			cleanupErr = err
+			break
+		}
+	}
+	if cleanupErr == nil || !strings.Contains(cleanupErr.Error(), "before removing namespace routing metadata") {
+		t.Fatalf("Reconcile() error = %v, want routing metadata retention after ownership migration", cleanupErr)
+	}
+	var gotNamespace corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(namespace), &gotNamespace); err != nil {
+		t.Fatal(err)
+	}
+	if gotNamespace.Labels[labelWorkspace] != workspace.Name ||
+		gotNamespace.Annotations[annotationOwnerUID] != string(workspace.UID) {
+		t.Fatalf("legacy deletion removed migrated routing metadata: labels=%#v annotations=%#v", gotNamespace.Labels, gotNamespace.Annotations)
+	}
+	var remaining tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining.Status.Queue != (tauv1alpha1.WorkspaceQueueStatus{}) {
+		t.Fatalf("legacy deletion unexpectedly populated queue status: %#v", remaining.Status.Queue)
+	}
+	if !controllerutil.ContainsFinalizer(&remaining, workspaceFinalizer) {
+		t.Fatal("workspace finalizer was removed while migrated routing metadata remained in use")
 	}
 }
 

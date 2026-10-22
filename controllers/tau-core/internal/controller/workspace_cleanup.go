@@ -123,10 +123,6 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 	workspace *tauv1alpha1.TauWorkspace,
 	namespace *corev1.Namespace,
 ) (bool, string, error) {
-	establishedLocalQueue := strings.TrimSpace(workspace.Status.Queue.LocalQueue)
-	if establishedLocalQueue == "" {
-		return false, "", nil
-	}
 	workloads := &unstructured.UnstructuredList{}
 	workloads.SetGroupVersionKind(schema.GroupVersionKind{
 		Group: workloadGVK.Group, Version: workloadGVK.Version, Kind: workloadGVK.Kind + "List",
@@ -156,11 +152,12 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 		if err != nil {
 			return false, "", fmt.Errorf("read Workload %s queueName: %w", client.ObjectKeyFromObject(workload), err)
 		}
-		if !found || strings.TrimSpace(queueName) != establishedLocalQueue {
+		queueName = strings.TrimSpace(queueName)
+		if !found || queueName == "" {
 			continue
 		}
 		localQueue := newQueueObject(localQueueGVK)
-		localQueueKey := client.ObjectKey{Name: establishedLocalQueue, Namespace: namespace.Name}
+		localQueueKey := client.ObjectKey{Name: queueName, Namespace: namespace.Name}
 		if err := r.apiReader().Get(ctx, localQueueKey, localQueue); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -223,7 +220,7 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 		return true, fmt.Sprintf(
 			"waiting for Workload %s using retained LocalQueue %q and ClusterQueue %q before removing namespace routing metadata",
 			client.ObjectKeyFromObject(workload),
-			establishedLocalQueue,
+			queueName,
 			clusterQueueName,
 		), nil
 	}
