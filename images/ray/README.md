@@ -15,7 +15,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
 | **C/C++ toolchain** | gcc, g++, ninja-build, python3-devel — needed by flashinfer JIT and vLLM extensions at runtime |
 | **GNU Wget 1.x** | Built from source to replace Azure Linux 3's wget2, which breaks KubeRay exec-based health probes on dual-stack pods |
-| **CA certificate bundles** | Azure Linux `ca-certificates` 3.0.0-19.azl3 or newer and Python `certifi` 2026.10.19 or newer; `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` use Azure Linux's system bundle |
+| **CA certificate bundles** | Full Azure Linux `ca-certificates` package installed from the pinned base images and Python `certifi` 2026.10.19 or newer; `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` use Azure Linux's system bundle |
 
 The image runs as the `nonroot` user and exposes Ray's default ports:
 
@@ -119,7 +119,6 @@ combined manifest list at `$(IMG)` itself.
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
 | `AZURELINUX_CORE_IMAGE` | Azure Linux core 3.0.20261022 manifest digest | Core base image used to build GNU Wget |
 | `AZURELINUX_PYTHON_IMAGE` | Azure Linux Python 3.12.15 20261022 manifest digest | Runtime base image; override together with `PYTHON_VERSION` |
-| `CA_CERTIFICATES_MIN_VERSION` | `3.0.0-19.azl3` | Minimum Azure Linux trust-store package containing the eMudhra/emSign remediation |
 | `CERTIFI_MIN_VERSION` | `2026.10.19` | Minimum Python CA bundle containing the eMudhra/emSign remediation |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
 | `ACR_REGISTRY` | *(required for `docker-push`)* | Backing ACR hostname for producer-side multi-arch pushes; consumers use MCR |
@@ -151,11 +150,10 @@ contributor PRs must not publish images.
 A source fix alone does not repair an already-published image. CA trust-store
 changes require fresh multi-architecture builds, publication under new
 immutable tags or digests, and workload rollout so nodes do not reuse affected
-cached images. Build targets pull the pinned base manifests and the
-minimum-version arguments invalidate pre-remediation package layers. The
-default base image references are pinned to the remediated October 22
-multi-architecture manifest digests; release owners must update the tag and
-digest together when rebasing.
+cached images. Build targets pull the pinned base manifests, which invalidates
+pre-remediation operating-system layers. The default base image references are
+pinned to the remediated October 22 multi-architecture manifest digests;
+release owners must update the tag and digest together when rebasing.
 
 ## Testing
 
@@ -171,7 +169,7 @@ digest together when rebasing.
 8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
 9. NCCL (`libnccl`) is loadable
 10. `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` resolve to Azure Linux's loadable system bundle
-11. Azure Linux `ca-certificates` and Python `certifi` meet the remediated minimum versions
+11. The full Azure Linux `ca-certificates` package is installed and Python `certifi` meets the remediated minimum version
 12. System and Python bundles exclude the compromised eMudhra/emSign trust paths
 
 These smoke tests do not exercise Serve deployment or request handling.

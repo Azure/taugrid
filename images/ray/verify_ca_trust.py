@@ -23,22 +23,11 @@ def bundle_fingerprints(path: Path) -> set[str]:
     return fingerprints
 
 
-def rpm_version_compare(actual: str, minimum: str) -> int:
-    expression = f'%{{lua: print(rpm.vercmp("{actual}", "{minimum}"))}}'
-    result = subprocess.run(
-        ["rpm", "--eval", expression],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return int(result.stdout)
-
-
 def numeric_version(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split("."))
 
 
-minimum_ca_version, minimum_certifi_version = sys.argv[1:3]
+minimum_certifi_version = sys.argv[1]
 system_bundle = Path("/etc/pki/tls/certs/ca-bundle.crt")
 
 for name in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "PIP_CERT"):
@@ -53,10 +42,6 @@ actual_ca_version = subprocess.run(
     capture_output=True,
     text=True,
 ).stdout
-if rpm_version_compare(actual_ca_version, minimum_ca_version) < 0:
-    raise RuntimeError(
-        f"ca-certificates {actual_ca_version} is older than {minimum_ca_version}"
-    )
 
 actual_certifi_version = version("certifi")
 if numeric_version(actual_certifi_version) < numeric_version(minimum_certifi_version):
