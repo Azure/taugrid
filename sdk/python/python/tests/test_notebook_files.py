@@ -131,6 +131,15 @@ def test_read_selected_refuses_files_the_picker_skips(tmp_path):
             read_selected(root, directory, [name])
 
 
+def test_read_selected_refuses_files_the_picker_skips(tmp_path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+
+    for name in (".hidden", "image.png"):
+        with pytest.raises(FileSelectionError):
+            read_selected(directory, [name])
+
+
 def test_read_selected_refuses_missing_and_oversize_files(tmp_path):
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
