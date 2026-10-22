@@ -581,6 +581,9 @@ func resolveHelperPodPlacement(
 	}
 	rawPVC, err := r.Raw(ctx, []string{"-n", pvcNamespace, "get", "pvc", pvcName, "-o", "json"}, nil)
 	if err != nil {
+		if helperPlacementDiscoveryDenied(err) {
+			return helperPodPlacement{}, nil
+		}
 		return helperPodPlacement{}, fmt.Errorf("read PVC %s/%s for helper placement: %w", pvcNamespace, pvcName, err)
 	}
 	var pvc pvcDoc

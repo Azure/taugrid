@@ -154,6 +154,52 @@ func TestHelperPodYAMLForPVCUsesNamespaceOnlyFallbackWhenPVReadForbidden(t *test
 	}
 }
 
+func TestHelperPodYAMLForPVCUsesSchedulerFallbackWhenPVCReadForbidden(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if strings.Join(args, " ") != "-n team-a get pvc artifacts -o json" {
+			t.Fatalf("unexpected kubectl args: %v", args)
+		}
+		return "", errors.New(`Error from server (Forbidden): persistentvolumeclaims "artifacts" is forbidden`)
+	})
+
+	raw, err := helperPodYAMLForPVC(context.Background(), runner, helperPodSpec{
+		Name:      "tau-get-artifacts",
+		Namespace: "team-a",
+		LabelApp:  "tau-pvc-get",
+		Image:     pvcHelperImage,
+		PVCName:   "artifacts",
+		TTLSec:    60,
+		Script:    "true",
+	})
+	if err != nil {
+		t.Fatalf("PVC-read-denied fallback failed: %v", err)
+	}
+	var pod helperPodObject
+	if err := yaml.Unmarshal(raw, &pod); err != nil {
+		t.Fatal(err)
+	}
+	if pod.Spec.NodeSelector != nil || pod.Spec.Affinity != nil || pod.Spec.Tolerations != nil {
+		t.Fatalf("PVC-read-denied placement = %#v, want scheduler-managed placement", pod.Spec)
+	}
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "artifacts" {
+		t.Fatalf("helper PVC reference = %#v, want artifacts", pod.Spec.Volumes)
+	}
+}
+
+func TestResolveHelperPodPlacementDoesNotHidePVCReadFailure(t *testing.T) {
+	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
+		if strings.Join(args, " ") != "-n team-a get pvc artifacts -o json" {
+			t.Fatalf("unexpected kubectl args: %v", args)
+		}
+		return "", errors.New("Unable to connect to the server: dial tcp: i/o timeout")
+	})
+
+	_, err := resolveHelperPodPlacement(context.Background(), runner, "team-a", "artifacts")
+	if err == nil || !strings.Contains(err.Error(), "read PVC team-a/artifacts") || !strings.Contains(err.Error(), "i/o timeout") {
+		t.Fatalf("PVC lookup failure = %v", err)
+	}
+}
+
 func TestResolveHelperPodPlacementFallsBackWhenCSINodeListForbidden(t *testing.T) {
 	runner := rawRunnerFunc(func(_ context.Context, args []string, _ []byte) (string, error) {
 		switch strings.Join(args, " ") {
