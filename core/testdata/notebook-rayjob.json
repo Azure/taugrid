@@ -1,0 +1,306 @@
+{
+  "apiVersion": "ray.io/v1",
+  "kind": "RayJob",
+  "metadata": {
+    "annotations": {
+      "tau.azure.com/payload-digest": "89feed1fab3b52888f4dccdba0d7468f00a0eb818c82b5dfbc480aae2261d47c",
+      "tau.azure.com/tau-cluster-generation": "7",
+      "tau.azure.com/workload-profile": "notebook-cpu",
+      "tau.azure.com/workload-profile-set-hash": "sha256:fixture-profile-set"
+    },
+    "labels": {
+      "kueue.x-k8s.io/queue-name": "namespace-q",
+      "tau.azure.com/managed-by": "tau",
+      "tau.azure.com/profile": "notebook-cpu",
+      "tau.azure.com/run-id": "nb-demo",
+      "tau.azure.com/team": "research",
+      "tau.azure.com/workload-kind": "rayjob"
+    },
+    "name": "nb-demo",
+    "namespace": "ray"
+  },
+  "spec": {
+    "entrypoint": "bash -lc 'set -eu\nif [ -s /script/requirements.txt ]; then python3 -m pip install --quiet --no-cache-dir -r /script/requirements.txt || python3 -m pip install --quiet --no-cache-dir --user -r /script/requirements.txt; fi\nPATH=\"$(python3 -m site --user-base)/bin:$PATH\"; export PATH\ncd /data\npython3 /script/_tau_runner.py --notebook analysis.ipynb\n'",
+    "rayClusterSpec": {
+      "headGroupSpec": {
+        "rayStartParams": {
+          "num-cpus": "0",
+          "num-gpus": "0"
+        },
+        "template": {
+          "metadata": {},
+          "spec": {
+            "containers": [
+              {
+                "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+                "name": "ray-head",
+                "resources": {
+                  "limits": {
+                    "cpu": "4",
+                    "memory": "16Gi"
+                  },
+                  "requests": {
+                    "cpu": "2",
+                    "memory": "8Gi"
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/script",
+                    "name": "script",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/data",
+                    "name": "data"
+                  },
+                  {
+                    "mountPath": "/mnt",
+                    "name": "tau-hot"
+                  },
+                  {
+                    "mountPath": "/dev/shm",
+                    "name": "dshm"
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "command": [
+                  "python3",
+                  "-c",
+                  "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = base64.b64decode(raw_b64)\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nraw = gzip.decompress(raw)\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
+                ],
+                "env": [
+                  {
+                    "name": "TAU_PAYLOAD_B64",
+                    "value": "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"
+                  },
+                  {
+                    "name": "TAU_PAYLOAD_DIGEST",
+                    "value": "89feed1fab3b52888f4dccdba0d7468f00a0eb818c82b5dfbc480aae2261d47c"
+                  },
+                  {
+                    "name": "TAU_PAYLOAD_TARGET_DIR",
+                    "value": "/script"
+                  }
+                ],
+                "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+                "name": "tau-payload",
+                "resources": {
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "128Mi"
+                  },
+                  "requests": {
+                    "cpu": "10m",
+                    "memory": "32Mi"
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/script",
+                    "name": "script"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "emptyDir": {},
+                "name": "script"
+              },
+              {
+                "emptyDir": {},
+                "name": "data"
+              },
+              {
+                "emptyDir": {},
+                "name": "tau-hot"
+              },
+              {
+                "emptyDir": {
+                  "medium": "Memory",
+                  "sizeLimit": "16Gi"
+                },
+                "name": "dshm"
+              }
+            ]
+          }
+        }
+      },
+      "rayVersion": "2.56.0",
+      "workerGroupSpecs": [
+        {
+          "groupName": "notebook-workers",
+          "rayStartParams": {
+            "num-gpus": "0"
+          },
+          "replicas": 1,
+          "template": {
+            "metadata": {},
+            "spec": {
+              "containers": [
+                {
+                  "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+                  "name": "ray-worker",
+                  "resources": {
+                    "limits": {
+                      "cpu": "4",
+                      "memory": "8Gi"
+                    },
+                    "requests": {
+                      "cpu": "4",
+                      "memory": "8Gi"
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "mountPath": "/data",
+                      "name": "data"
+                    },
+                    {
+                      "mountPath": "/mnt",
+                      "name": "tau-hot"
+                    },
+                    {
+                      "mountPath": "/dev/shm",
+                      "name": "dshm"
+                    }
+                  ]
+                }
+              ],
+              "volumes": [
+                {
+                  "emptyDir": {},
+                  "name": "data"
+                },
+                {
+                  "emptyDir": {},
+                  "name": "tau-hot"
+                },
+                {
+                  "emptyDir": {
+                    "medium": "Memory",
+                    "sizeLimit": "16Gi"
+                  },
+                  "name": "dshm"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "shutdownAfterJobFinishes": true,
+    "submissionMode": "K8sJobMode",
+    "submitterConfig": {
+      "backoffLimit": 0
+    },
+    "submitterPodTemplate": {
+      "spec": {
+        "containers": [
+          {
+            "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+            "name": "submitter",
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "1Gi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/script",
+                "name": "script",
+                "readOnly": true
+              },
+              {
+                "mountPath": "/data",
+                "name": "data"
+              },
+              {
+                "mountPath": "/mnt",
+                "name": "tau-hot"
+              },
+              {
+                "mountPath": "/dev/shm",
+                "name": "dshm"
+              }
+            ]
+          }
+        ],
+        "initContainers": [
+          {
+            "command": [
+              "python3",
+              "-c",
+              "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = base64.b64decode(raw_b64)\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nraw = gzip.decompress(raw)\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
+            ],
+            "env": [
+              {
+                "name": "TAU_PAYLOAD_B64",
+                "value": "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"
+              },
+              {
+                "name": "TAU_PAYLOAD_DIGEST",
+                "value": "89feed1fab3b52888f4dccdba0d7468f00a0eb818c82b5dfbc480aae2261d47c"
+              },
+              {
+                "name": "TAU_PAYLOAD_TARGET_DIR",
+                "value": "/script"
+              }
+            ],
+            "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+            "name": "tau-payload",
+            "resources": {
+              "limits": {
+                "cpu": "250m",
+                "memory": "128Mi"
+              },
+              "requests": {
+                "cpu": "10m",
+                "memory": "32Mi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/script",
+                "name": "script"
+              }
+            ]
+          }
+        ],
+        "restartPolicy": "Never",
+        "volumes": [
+          {
+            "emptyDir": {},
+            "name": "script"
+          },
+          {
+            "emptyDir": {},
+            "name": "data"
+          },
+          {
+            "emptyDir": {},
+            "name": "tau-hot"
+          },
+          {
+            "emptyDir": {
+              "medium": "Memory",
+              "sizeLimit": "16Gi"
+            },
+            "name": "dshm"
+          }
+        ]
+      }
+    },
+    "suspend": true,
+    "ttlSecondsAfterFinished": 600
+  }
+}
