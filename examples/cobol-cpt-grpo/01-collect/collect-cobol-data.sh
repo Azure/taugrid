@@ -141,10 +141,10 @@ PYEOF
 run_step "Evaluation benchmarks" collect_eval_benchmarks
 
 collect_xcobol() {
-    mkdir -p "${RAW}/x-cobol"
-    curl -fsSL "https://zenodo.org/api/records/14269462/files-archive" -o "${RAW}/x-cobol/x-cobol-v2.zip" || return 1
-    (cd "${RAW}/x-cobol" && unzip -qo x-cobol-v2.zip -d extracted) || return 1
-    find "${RAW}/x-cobol/extracted" -name '*.zip' -exec sh -c 'unzip -qo "$1" -d "$(dirname "$1")/$(basename "$1" .zip)"' _ {} \;
+    mkdir -p "${RAW}/x-cobol/extracted"
+    curl -fsSL "https://zenodo.org/api/records/14269462/files/COBOL_Files.zip/content" -o "${RAW}/x-cobol/extracted/COBOL_Files.zip" || return 1
+    echo "9b97b2b77f025a11895730580965bc79ab3d715f9922ab79c0a67e30068c6e6d  ${RAW}/x-cobol/extracted/COBOL_Files.zip" | sha256sum -c - || return 1
+    (cd "${RAW}/x-cobol/extracted" && unzip -qo COBOL_Files.zip -d COBOL_Files) || return 1
     XCOUNT=$(find ${RAW}/x-cobol/extracted -type f \( -iname '*.cbl' -o -iname '*.cob' -o -iname '*.cobol' -o -iname '*.cpy' \) 2>/dev/null | wc -l)
     log "X-COBOL: ${XCOUNT} COBOL files"
     if [ "${XCOUNT}" -eq 0 ]; then
@@ -204,17 +204,12 @@ log "GitHub repos: ${TOTAL_GH} COBOL files total"
 collect_nist() {
     mkdir -p "${RAW}/nist"
     if [ ! -f "${RAW}/nist/newcob.val" ]; then
-        curl -L --max-redirs 5 "https://sourceforge.net/projects/gnucobol/files/nist/nist_2013-10-10.tar.gz/download" \
-            -o "${RAW}/nist/nist.tar.gz"
-        if file "${RAW}/nist/nist.tar.gz" | grep -q "gzip"; then
-            cd "${RAW}/nist" && tar xzf nist.tar.gz
-        else
-            log "NIST: downloaded file is not a valid gzip (likely redirect page), trying alternate URL"
-            curl -L "https://master.dl.sourceforge.net/project/gnucobol/nist/nist_2013-10-10.tar.gz" \
-                -o "${RAW}/nist/nist.tar.gz"
-            cd "${RAW}/nist" && tar xzf nist.tar.gz
-        fi
+        curl -fsSL "https://downloads.sourceforge.net/project/gnucobol/nist/newcob.val.tar.gz" -o "${RAW}/nist/newcob.val.tar.gz" || return 1
+        echo "e4513f26a9b38911f7bf882fe3d3339a80b45cabc2caf85eb3055b0f5ce87ee0  ${RAW}/nist/newcob.val.tar.gz" | sha256sum -c - || return 1
+        tar xzf "${RAW}/nist/newcob.val.tar.gz" -C "${RAW}/nist" || return 1
     fi
+    [ -s "${RAW}/nist/newcob.val" ] || return 1
+    log "NIST: newcob.val $(wc -l < "${RAW}/nist/newcob.val") lines"
 }
 run_step "NIST COBOL85 test suite" collect_nist
 
