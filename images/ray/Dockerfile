@@ -2,11 +2,15 @@
 # Licensed under the MIT License.
 
 ARG PYTHON_VERSION
+ARG CA_CERTIFICATES_MIN_VERSION=3.0.0-19.azl3
+ARG CERTIFI_MIN_VERSION=2026.10.19
 
 FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS wget-builder
+ARG CA_CERTIFICATES_MIN_VERSION
 ARG WGET_VERSION=1.25.0
-RUN tdnf install -y gcc glibc-devel kernel-headers binutils make tar \
-        openssl-devel ca-certificates gawk && tdnf clean all
+RUN tdnf install -y "ca-certificates>=${CA_CERTIFICATES_MIN_VERSION}" \
+        gcc glibc-devel kernel-headers binutils make tar openssl-devel gawk \
+    && tdnf clean all
 RUN curl -sL -o /tmp/wget.tar.gz \
         "https://ftp.gnu.org/gnu/wget/wget-${WGET_VERSION}.tar.gz" \
     && tar xzf /tmp/wget.tar.gz -C /tmp
@@ -18,15 +22,20 @@ FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION} AS base
 
 ARG RAY_VERSION
 ARG CUDA_VERSION
+ARG CA_CERTIFICATES_MIN_VERSION
+ARG CERTIFI_MIN_VERSION
 
 COPY --from=wget-builder /tmp/wget-*/src/wget /usr/bin/wget
 
-RUN tdnf install -y ca-certificates which gcc gcc-c++ binutils glibc-devel kernel-headers \
+RUN tdnf install -y "ca-certificates>=${CA_CERTIFICATES_MIN_VERSION}" \
+        which gcc gcc-c++ binutils glibc-devel kernel-headers \
         ninja-build python3-devel \
-        rdma-core libibverbs librdmacm && tdnf clean all
+        rdma-core libibverbs librdmacm \
+    && tdnf clean all
 
 ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 ENV CURL_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt
+ENV PIP_CERT=/etc/pki/tls/certs/ca-bundle.crt
 
 RUN CUDA_PKG_VERSION=$(echo "${CUDA_VERSION}" | tr '.' '-') \
     && NVARCH=$(case "$(uname -m)" in x86_64) echo x86_64;; aarch64) echo sbsa;; *) echo unsupported && exit 1;; esac) \
@@ -49,6 +58,7 @@ ENV CUDA_HOME="/usr/local/cuda"
 ENV LIBRARY_PATH="/usr/local/cuda/lib64/stubs"
 
 RUN pip install --no-cache-dir \
+    "certifi>=${CERTIFI_MIN_VERSION}" \
     "ray[default]==${RAY_VERSION}" \
     "ray[data]==${RAY_VERSION}" \
     "ray[serve]==${RAY_VERSION}" \

@@ -15,7 +15,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | **RDMA userspace** | rdma-core, libibverbs, librdmacm — enables NCCL InfiniBand transport on IB-capable nodes (e.g. H200/NDR) |
 | **C/C++ toolchain** | gcc, g++, ninja-build, python3-devel — needed by flashinfer JIT and vLLM extensions at runtime |
 | **GNU Wget 1.x** | Built from source to replace Azure Linux 3's wget2, which breaks KubeRay exec-based health probes on dual-stack pods |
-| **CA certificate bundle** | `SSL_CERT_FILE` / `CURL_CA_BUNDLE` pinned to Azure Linux's cert bundle so native (non-Python/Rust) TLS clients, e.g. pyarrow's C++ `AzureFileSystem`, resolve certs correctly |
+| **CA certificate bundles** | Azure Linux `ca-certificates` 3.0.0-19.azl3 or newer and Python `certifi` 2026.10.19 or newer; `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` use Azure Linux's system bundle |
 
 The image runs as the `nonroot` user and exposes Ray's default ports:
 
@@ -29,9 +29,10 @@ The image runs as the `nonroot` user and exposes Ray's default ports:
 
 ```
 images/ray/
-├── Dockerfile       # Multi-stage build: GNU Wget builder → final Ray image
-├── Makefile         # Build, test, and push targets
-├── versions.json    # Version matrix: Python × Ray × CUDA combos to build
+├── Dockerfile          # Multi-stage build: GNU Wget builder → final Ray image
+├── Makefile            # Build, test, and push targets
+├── versions.json       # Version matrix: Python × Ray × CUDA combos to build
+├── verify_ca_trust.py  # Trust-store version and compromised-root regression check
 └── README.md
 ```
 
@@ -116,6 +117,8 @@ combined manifest list at `$(IMG)` itself.
 | `PYTHON_VERSION` | `3.12` | Python version for the base image |
 | `RAY_VERSION` | `2.58.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
+| `CA_CERTIFICATES_MIN_VERSION` | `3.0.0-19.azl3` | Minimum Azure Linux trust-store package containing the eMudhra/emSign remediation |
+| `CERTIFI_MIN_VERSION` | `2026.10.19` | Minimum Python CA bundle containing the eMudhra/emSign remediation |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
 | `ACR_REGISTRY` | *(required for `docker-push`)* | Backing ACR hostname for producer-side multi-arch pushes; consumers use MCR |
 | `PLATFORMS` | `linux/amd64,linux/arm64` | Architectures for the `docker-push` multi-arch build |
@@ -143,9 +146,11 @@ that this image has been rebuilt or published. ADO release owners must build
 and test both architectures and publish through the approved ACR-to-MCR process;
 contributor PRs must not publish images.
 
-A source fix alone does not repair an already-published image. Issue #206
-requires publication of the corrected image and a RayService rollout check
-against its digest before the runtime incident can be considered resolved.
+A source fix alone does not repair an already-published image. CA trust-store
+changes require fresh multi-architecture builds, publication under new
+immutable tags or digests, and workload rollout so nodes do not reuse affected
+cached images. Build targets pull current base manifests and the minimum-version
+arguments invalidate pre-remediation package layers.
 
 ## Testing
 
@@ -160,7 +165,9 @@ against its digest before the runtime incident can be considered resolved.
 7. GNU Wget 1.x is installed (not wget2)
 8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
 9. NCCL (`libnccl`) is loadable
-10. `SSL_CERT_FILE`/`CURL_CA_BUNDLE` are set and resolve to a valid, loadable CA bundle
+10. `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` resolve to Azure Linux's loadable system bundle
+11. Azure Linux `ca-certificates` and Python `certifi` meet the remediated minimum versions
+12. System and Python bundles exclude the compromised eMudhra/emSign trust paths
 
 These smoke tests do not exercise Serve deployment or request handling.
 Release validation must separately cover Serve startup and RayService rollout;
