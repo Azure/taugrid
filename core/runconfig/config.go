@@ -21,6 +21,7 @@ import (
 	offloadcontract "github.com/Azure/taugrid/core/metricsoffload"
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -221,6 +222,45 @@ type Compute struct {
 	WorkerMemReq    string `yaml:"worker_memory_request"`
 	WorkerCPULimit  string `yaml:"worker_cpu_limit"`
 	WorkerMemLimit  string `yaml:"worker_memory_limit"`
+}
+
+func (c Compute) ValidateResourceQuantities() error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "compute.cpu_request", value: c.CPURequest},
+		{name: "compute.memory_request", value: c.MemoryRequest},
+		{name: "compute.cpu_limit", value: c.CPULimit},
+		{name: "compute.memory_limit", value: c.MemoryLimit},
+		{name: "compute.head_cpu_request", value: c.HeadCPURequest},
+		{name: "compute.head_memory_request", value: c.HeadMemRequest},
+		{name: "compute.head_cpu_limit", value: c.HeadCPULimit},
+		{name: "compute.head_memory_limit", value: c.HeadMemLimit},
+		{name: "compute.worker_cpu_request", value: c.WorkerCPUReq},
+		{name: "compute.worker_memory_request", value: c.WorkerMemReq},
+		{name: "compute.worker_cpu_limit", value: c.WorkerCPULimit},
+		{name: "compute.worker_memory_limit", value: c.WorkerMemLimit},
+	} {
+		if err := ValidateResourceQuantity(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ValidateResourceQuantity(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid Kubernetes resource quantity", field, value)
+	}
+	if quantity.Sign() < 0 {
+		return fmt.Errorf("%s must be >= 0, got %q", field, value)
+	}
+	return nil
 }
 
 type Policy struct {
@@ -465,6 +505,9 @@ func (p managedConfigProjection) config() Config {
 func (c Config) ValidateDirect() error {
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
+	}
+	if err := c.Compute.ValidateResourceQuantities(); err != nil {
+		return err
 	}
 	if err := c.Resilience.Validate(); err != nil {
 		return err

@@ -1155,7 +1155,7 @@ func TestRenderUsesExplicitCPUResourceOverrides(t *testing.T) {
 		Resources: Resources{
 			CPURequest:    "500m",
 			MemoryRequest: "1Gi",
-			CPULimit:      "1",
+			CPULimit:      "1.5",
 			MemoryLimit:   "2Gi",
 		},
 	})
@@ -1169,14 +1169,54 @@ func TestRenderUsesExplicitCPUResourceOverrides(t *testing.T) {
 	head := cluster["headGroupSpec"].(map[string]any)
 	headPod := head["template"].(map[string]any)["spec"].(map[string]any)
 	headContainer := headPod["containers"].([]any)[0].(map[string]any)
-	if got := asYAML(t, headContainer["resources"]); !strings.Contains(got, "cpu: 500m") || !strings.Contains(got, "memory: 1Gi") || !strings.Contains(got, "cpu: \"1\"") || !strings.Contains(got, "memory: 2Gi") {
+	if got := asYAML(t, headContainer["resources"]); !strings.Contains(got, "cpu: 500m") || !strings.Contains(got, "memory: 1Gi") || !strings.Contains(got, "cpu: \"1.5\"") || !strings.Contains(got, "memory: 2Gi") {
 		t.Fatalf("head resources missing overrides:\n%s", got)
 	}
 	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)
 	workerPod := worker["template"].(map[string]any)["spec"].(map[string]any)
 	workerContainer := workerPod["containers"].([]any)[0].(map[string]any)
-	if got := asYAML(t, workerContainer["resources"]); !strings.Contains(got, "cpu: 500m") || !strings.Contains(got, "memory: 1Gi") || !strings.Contains(got, "cpu: \"1\"") || !strings.Contains(got, "memory: 2Gi") {
+	if got := asYAML(t, workerContainer["resources"]); !strings.Contains(got, "cpu: 500m") || !strings.Contains(got, "memory: 1Gi") || !strings.Contains(got, "cpu: \"1.5\"") || !strings.Contains(got, "memory: 2Gi") {
 		t.Fatalf("worker resources missing overrides:\n%s", got)
+	}
+}
+
+func TestRenderRejectsInvalidResourceOverrides(t *testing.T) {
+	tests := []struct {
+		name      string
+		resources Resources
+		wantField string
+	}{
+		{
+			name:      "common memory limit",
+			resources: Resources{MemoryLimit: "banana"},
+			wantField: "compute.memory_limit",
+		},
+		{
+			name:      "head CPU request",
+			resources: Resources{Head: ResourceOverrides{CPURequest: "-1"}},
+			wantField: "compute.head_cpu_request",
+		},
+		{
+			name:      "worker memory limit",
+			resources: Resources{Worker: ResourceOverrides{MemoryLimit: "-1Gi"}},
+			wantField: "compute.worker_memory_limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Render(Options{
+				Name:          "invalid-resources",
+				Namespace:     "tau",
+				ScriptName:    "prepare.py",
+				Script:        []byte("print('prep')\n"),
+				Workers:       1,
+				GPUsPerWorker: 0,
+				Resources:     tt.resources,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.wantField) {
+				t.Fatalf("Render error = %v, want field %s", err, tt.wantField)
+			}
+		})
 	}
 }
 

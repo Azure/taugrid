@@ -200,6 +200,22 @@ func (o Options) validate() error {
 	if o.GPUsPerWorker < 0 || o.GPUsPerWorker > 8 {
 		return fmt.Errorf("gpus per worker must be 0..8, got %d", o.GPUsPerWorker)
 	}
+	if err := (runconfig.Compute{
+		CPURequest:     o.Resources.CPURequest,
+		MemoryRequest:  o.Resources.MemoryRequest,
+		CPULimit:       o.Resources.CPULimit,
+		MemoryLimit:    o.Resources.MemoryLimit,
+		HeadCPURequest: o.Resources.Head.CPURequest,
+		HeadMemRequest: o.Resources.Head.MemoryRequest,
+		HeadCPULimit:   o.Resources.Head.CPULimit,
+		HeadMemLimit:   o.Resources.Head.MemoryLimit,
+		WorkerCPUReq:   o.Resources.Worker.CPURequest,
+		WorkerMemReq:   o.Resources.Worker.MemoryRequest,
+		WorkerCPULimit: o.Resources.Worker.CPULimit,
+		WorkerMemLimit: o.Resources.Worker.MemoryLimit,
+	}).ValidateResourceQuantities(); err != nil {
+		return err
+	}
 	for _, pkg := range o.RuntimePip {
 		if strings.TrimSpace(pkg) == "" || pkg != strings.TrimSpace(pkg) {
 			return fmt.Errorf("runtime pip packages must not be empty or have surrounding whitespace")
