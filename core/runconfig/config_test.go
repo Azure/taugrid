@@ -55,6 +55,33 @@ func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	}
 }
 
+func TestValidateDirectResilience(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   Resilience
+		wantErr string
+	}{
+		{name: "defaults"},
+		{name: "zero retries", value: Resilience{MaxRetries: 0}},
+		{name: "positive retries with default reasons", value: Resilience{MaxRetries: 1}},
+		{name: "supported reasons", value: Resilience{MaxRetries: 1, RetryOn: []string{"Preempted", "Evicted", "OOMKilled"}}},
+		{name: "case insensitive reason", value: Resilience{MaxRetries: 1, RetryOn: []string{"preempted"}}},
+		{name: "negative retries", value: Resilience{MaxRetries: -1}, wantErr: "resilience.max_retries must be >= 0"},
+		{name: "unsupported reason", value: Resilience{MaxRetries: 1, RetryOn: []string{"NetworkLost"}}, wantErr: `resilience.retry_on contains unsupported reason "NetworkLost"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Config{Resilience: tt.value}).ValidateDirect()
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("ValidateDirect() unexpected error: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("ValidateDirect() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestRunTTLSecondsAfterFinished(t *testing.T) {
 	cfg, err := parse([]byte(`name: short-retention
 engine: job
