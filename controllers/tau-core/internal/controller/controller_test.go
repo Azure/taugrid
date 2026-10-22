@@ -2818,6 +2818,109 @@ func TestUnmigratedWorkspaceRetargetMigratesHistoryBeforeDeletion(t *testing.T) 
 	}
 }
 
+func TestWorkspaceRetargetPreservesOldWorkloadIdentityWhileExternalQueueWorkloadDrains(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	workspace.Spec.Target.Namespace = "new-target"
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Phase = tauv1alpha1.WorkspacePhaseReady
+	workspace.Status.Target.ResolvedNamespace = "old-target"
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "jobqueue",
+		ClusterQueueUID: "jobqueue-uid",
+	}
+	oldNamespace := testNamespace("old-target")
+	oldNamespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	oldNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	newNamespace := testNamespace("new-target")
+	newNamespace.Labels = map[string]string{labelWorkspace: workspace.Name}
+	newNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	account := testServiceAccount(oldNamespace.Name, workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "training",
+			Namespace: oldNamespace.Name,
+			UID:       types.UID("training-job-uid"),
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					ServiceAccountName: account.Name,
+					RestartPolicy:      corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:    "trainer",
+						Image:   "example.invalid/trainer",
+						Command: []string{"train"},
+					}},
+				},
+			},
+		},
+	}
+	localQueue := testLocalQueue(oldNamespace.Name, "jobqueue", "jobqueue")
+	localQueue.SetAnnotations(nil)
+	clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+	clusterQueue.Object["spec"] = map[string]any{
+		"namespaceSelector": map[string]any{
+			"matchExpressions": []any{map[string]any{
+				"key":      labelWorkspace,
+				"operator": "Exists",
+			}},
+		},
+	}
+	workload := newQueueObject(workloadGVK)
+	workload.SetName("job-training")
+	workload.SetNamespace(oldNamespace.Name)
+	workload.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: batchv1.SchemeGroupVersion.String(),
+		Kind:       "Job",
+		Name:       job.Name,
+		UID:        job.UID,
+	}})
+	workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, oldNamespace, newNamespace, account, job, localQueue, clusterQueue, workload).
+		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() during retarget drain = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
+		t.Fatalf("old workload identity was removed before Workload drain: %v", err)
+	}
+	var waiting tauv1alpha1.TauWorkspace
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Status.Target.ResolvedNamespace != oldNamespace.Name {
+		t.Fatalf("resolved namespace = %q, want old target retained during drain", waiting.Status.Target.ResolvedNamespace)
+	}
+
+	workload.Object["status"] = map[string]any{"conditions": []any{
+		map[string]any{"type": "Finished", "status": "True"},
+	}}
+	if err := c.Update(ctx, workload); err != nil {
+		t.Fatal(err)
+	}
+	reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 3)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("old workload identity survived completed retarget: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Status.Target.ResolvedNamespace != newNamespace.Name {
+		t.Fatalf("resolved namespace = %q, want completed retarget %q", waiting.Status.Target.ResolvedNamespace, newNamespace.Name)
+	}
+}
+
 func TestUnmigratedWorkspaceWithoutDefaultMigratesHistoryBeforeDeletion(t *testing.T) {
 	ctx := context.Background()
 	scheme := testScheme(t)

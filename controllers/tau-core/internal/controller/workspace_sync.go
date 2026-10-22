@@ -103,9 +103,17 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 	}
 	previousNamespace := workspace.Status.Target.ResolvedNamespace
 	previousAccessReady := true
-	if err := r.cleanupOwnedNamespaceAccess(ctx, workspace, targetNamespace, keepServiceAccount); err != nil {
-		previousAccessReady = false
-		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+	if previousNamespace != "" && previousNamespace != targetNamespace {
+		if err := r.waitForNamespaceRoutingMetadataDrain(ctx, workspace, previousNamespace); err != nil {
+			previousAccessReady = false
+			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "NamespaceCleanupFailed", err.Error(), workspace.Generation))
+		}
+	}
+	if previousAccessReady {
+		if err := r.cleanupOwnedNamespaceAccess(ctx, workspace, targetNamespace, keepServiceAccount); err != nil {
+			previousAccessReady = false
+			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+		}
 	}
 
 	currentTargetReady := namespaceReady && rbacReady && rbacErr == nil && queueReady && previousAccessReady
