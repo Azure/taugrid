@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1-azurelinux3.0 AS builder
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1-azurelinux3.0@sha256:f611aba17edb544de685c05b0418e341fb7ef0227ea6f6ec11b10dc6fbd982f1 AS builder
 
 ENV GOTOOLCHAIN=go1.27.3 \
     MS_GOTOOLCHAIN_ALLOW_NON_LOCAL=1
@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags "-s -w -X github.com/Azure/taugrid/core/version.Version=${VERSION} -X github.com/Azure/taugrid/core/version.Commit=${COMMIT} -X github.com/Azure/taugrid/core/version.Date=${DATE} -X=runtime.godebugDefault=ms_tlsmldsacert=0" \
     -o /taugrid-metrics-collector ./cmd/taugrid-metrics-collector
 
-FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
+FROM mcr.microsoft.com/azurelinux/distroless/base:3.0@sha256:6b85a86416a29cdcfd404e9fbd9c5ef49cc0612882cecc702535dcac39c9446c
 
 COPY --from=builder /taugrid-metrics-collector /usr/local/bin/taugrid-metrics-collector
 USER 65532:65532

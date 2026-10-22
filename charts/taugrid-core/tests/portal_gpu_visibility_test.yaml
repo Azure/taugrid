@@ -16,7 +16,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.5
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.6
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --gpu-consumers-enabled
