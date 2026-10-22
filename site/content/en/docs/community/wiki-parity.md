@@ -17,9 +17,11 @@ responsibility rather than an automated synchronization claim.
 - Current maturity.
 - Last joint review date.
 
-The pull request documentation pipeline validates that mapped site pages exist
-and parity metadata is structurally valid. The consolidated Azure DevOps
-pipeline additionally enforces review age on the Monday parity-only schedule.
+The GitHub documentation validation and Pages deployment pipelines validate that
+mapped site pages exist and parity metadata is structurally valid without
+blocking on review age. The consolidated Azure DevOps pipeline additionally
+enforces review age on the Monday parity-only schedule. Local `make -C site check`
+also enforces the 90-day review-age limit by default.
 
 When user-facing behavior or maturity changes:
 
