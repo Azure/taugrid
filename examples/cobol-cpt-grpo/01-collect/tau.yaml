@@ -10,7 +10,7 @@ experiment:
 runtime:
   image: python:3.11.17-bookworm@sha256:c255868cf24d6ca01031d262fa952f59b108b96776625f3d7f1af85d5f28e26a
   env:
-    RAW: /data/datasets/cobol/raw
+    DATA_ROOT: /data/datasets/cobol
     HF_HOME: /tmp/hf-cache
     SOURCE_LICENSES: permissive
 

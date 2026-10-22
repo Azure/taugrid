@@ -4,8 +4,8 @@
 
 set -uo pipefail
 
-DATA_ROOT="/data/datasets/cobol"
-RAW="${DATA_ROOT}/raw"
+DATA_ROOT="${DATA_ROOT:-/data/datasets/cobol}"
+export RAW="${DATA_ROOT}/raw"
 LOGS="${DATA_ROOT}/logs"
 mkdir -p "${RAW}" "${LOGS}"
 
