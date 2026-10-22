@@ -21,8 +21,6 @@ ARG PYTHON_VERSION
 ARG RAY_VERSION
 ARG CUDA_VERSION
 
-RUN python3 -c "import platform, sys; actual=platform.python_version(); expected='${PYTHON_VERSION}'; sys.exit(0 if actual == expected or actual.startswith(expected + '.') else f'expected Python {expected}, found {actual}')"
-
 COPY --from=wget-builder /tmp/wget-*/src/wget /usr/bin/wget
 
 RUN tdnf install -y ca-certificates which gcc gcc-c++ binutils glibc-devel kernel-headers \

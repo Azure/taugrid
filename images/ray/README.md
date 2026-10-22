@@ -7,7 +7,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | Component | Details |
 |-----------|---------|
 | **Base OS** | Azure Linux 3 core 20261022 and Python 3.12.15 images pinned by multi-architecture manifest digest |
-| **Python** | 3.12.15 selected by `PYTHON_VERSION=3.12` and enforced against the pinned base digest |
+| **Python** | 3.12.15 selected by `PYTHON_VERSION=3.12` through the pinned digest mapping |
 | **Ray** | 2.58.0 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
 | **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1+ includes the upstream protobuf 7 compatibility fix |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
