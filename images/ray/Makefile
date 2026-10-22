@@ -5,9 +5,6 @@ IMAGE    := ray
 PYTHON_VERSION ?= 3.12
 RAY_VERSION    ?= 2.58.0
 CUDA_VERSION   ?= 13.0
-AZURELINUX_CORE_IMAGE ?= mcr.microsoft.com/azurelinux/base/core:3.0.20261022@sha256:bd88359666e3f20296e7fe639a480dfd3c3c8eba299b21f26e4560353e21a656
-AZURELINUX_PYTHON_IMAGE ?= mcr.microsoft.com/azurelinux/base/python:3.12.15-1-azl3.0.20261022@sha256:9343005b72a7cc34847dcb8d09bb8a0c145311eff88c151c60d9c4904edaf6e9
-CERTIFI_MIN_VERSION ?= 2026.10.19
 GIT_SHA        ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 TAG            ?= py$(PYTHON_VERSION)-ray$(RAY_VERSION)-cuda$(CUDA_VERSION)-$(GIT_SHA)
 SOURCE_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo dev)
@@ -19,22 +16,15 @@ PUSH_IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 PLATFORMS ?= linux/amd64,linux/arm64
 ARCH ?=
 
-BUILD_ARGS = \
-	--build-arg RAY_VERSION=$(RAY_VERSION) \
-	--build-arg CUDA_VERSION=$(CUDA_VERSION) \
-	--build-arg AZURELINUX_CORE_IMAGE=$(AZURELINUX_CORE_IMAGE) \
-	--build-arg AZURELINUX_PYTHON_IMAGE=$(AZURELINUX_PYTHON_IMAGE) \
-	--build-arg CERTIFI_MIN_VERSION=$(CERTIFI_MIN_VERSION) \
-	--build-arg SOURCE_REVISION=$(SOURCE_REVISION)
-
 .PHONY: all docker-build docker-push docker-push-arch docker-push-manifest test clean
 
 all: docker-build test docker-push
 
 docker-build:
 	docker buildx build \
-		--pull \
-		$(BUILD_ARGS) \
+		--build-arg RAY_VERSION=$(RAY_VERSION) \
+		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
+		--build-arg SOURCE_REVISION=$(SOURCE_REVISION) \
 		--tag $(IMG) \
 		--load \
 		.
@@ -46,8 +36,9 @@ CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_R
 docker-push:
 	@test -n "$(ACR_REGISTRY)" || { echo "ACR_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	docker buildx build \
-		--pull \
-		$(BUILD_ARGS) \
+		--build-arg RAY_VERSION=$(RAY_VERSION) \
+		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
+		--build-arg SOURCE_REVISION=$(SOURCE_REVISION) \
 		--platform $(PLATFORMS) \
 		--tag $(PUSH_IMG) \
 		$(CACHE_ARGS) \
@@ -63,8 +54,9 @@ docker-push-arch:
 	@test "$(origin IMG)" = "command line" -o "$(origin IMG)" = "environment" || \
 		{ echo "IMG must be set explicitly (e.g. IMG=<registry>/ray:<tag>)" >&2; exit 1; }
 	docker buildx build \
-		--pull \
-		$(BUILD_ARGS) \
+		--build-arg RAY_VERSION=$(RAY_VERSION) \
+		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
+		--build-arg SOURCE_REVISION=$(SOURCE_REVISION) \
 		--platform linux/$(ARCH) \
 		--tag $(IMG)-$(ARCH) \
 		$(CACHE_ARGS) \
@@ -124,8 +116,7 @@ test:
 		echo "PASS: NCCL (libnccl) is loadable" || \
 		{ echo "FAIL: NCCL not found — multi-GPU collective communications will not work"; exit 1; }
 	@echo "=== Verifying CA trust configuration ==="
-	@docker run --rm -i $(IMG) python3 - \
-		"$(CERTIFI_MIN_VERSION)" < verify_ca_trust.py 2>&1 && \
+	@docker run --rm -i $(IMG) python3 - < verify_ca_trust.py 2>&1 && \
 		echo "PASS: system and Python trust stores exclude the compromised eMudhra/emSign paths" || \
 		{ echo "FAIL: CA trust remediation validation failed"; exit 1; }
 

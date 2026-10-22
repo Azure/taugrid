@@ -5,7 +5,6 @@ import hashlib
 import os
 import ssl
 import subprocess
-import sys
 from importlib.metadata import version
 from pathlib import Path
 
@@ -27,7 +26,6 @@ def numeric_version(value: str) -> tuple[int, ...]:
     return tuple(int(part) for part in value.split("."))
 
 
-minimum_certifi_version = sys.argv[1]
 system_bundle = Path("/etc/pki/tls/certs/ca-bundle.crt")
 
 for name in ("SSL_CERT_FILE", "CURL_CA_BUNDLE", "PIP_CERT"):
@@ -44,9 +42,9 @@ actual_ca_version = subprocess.run(
 ).stdout
 
 actual_certifi_version = version("certifi")
-if numeric_version(actual_certifi_version) < numeric_version(minimum_certifi_version):
+if numeric_version(actual_certifi_version) < numeric_version("2026.10.19"):
     raise RuntimeError(
-        f"certifi {actual_certifi_version} is older than {minimum_certifi_version}"
+        f"certifi {actual_certifi_version} is older than 2026.10.19"
     )
 
 system_distrusted = {

@@ -7,7 +7,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | Component | Details |
 |-----------|---------|
 | **Base OS** | Azure Linux 3 core 20261022 and Python 3.12.15 images pinned by multi-architecture manifest digest |
-| **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
+| **Python** | 3.12.15 from the pinned Azure Linux base image |
 | **Ray** | 2.58.0 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
 | **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1+ includes the upstream protobuf 7 compatibility fix |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
@@ -29,10 +29,10 @@ The image runs as the `nonroot` user and exposes Ray's default ports:
 
 ```
 images/ray/
-├── Dockerfile          # Multi-stage build: GNU Wget builder → final Ray image
-├── Makefile            # Build, test, and push targets
-├── versions.json       # Version matrix: Python × Ray × CUDA combos to build
-├── verify_ca_trust.py  # Trust-store version and compromised-root regression check
+├── Dockerfile       # Multi-stage build: GNU Wget builder → final Ray image
+├── Makefile         # Build, test, and push targets
+├── versions.json    # Version matrix: Python × Ray × CUDA combos to build
+├── verify_ca_trust.py
 └── README.md
 ```
 
@@ -64,18 +64,20 @@ Add the combination to `versions.json`, preserving older entries. When changing
 the default, move `"default": true` to the new entry and update `RAY_VERSION`
 in the Makefile. Pass each non-default combination explicitly to the Makefile's
 build and test targets, and coordinate matrix consumption with the ADO release
-owner.
+owner. Changing Python also requires updating the pinned Python `FROM`
+reference and `PYTHON_VERSION` together.
 
 ## Building
 
-Version defaults are defined in the `Makefile` and can be overridden:
+Ray and CUDA version defaults are defined in the `Makefile` and can be
+overridden. The Python base image is pinned directly in the Dockerfile.
 
 ```bash
 # Build single-arch image and load into local Docker
 make docker-build
 
 # Build with custom versions
-make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.58.0 CUDA_VERSION=13.0
+make docker-build RAY_VERSION=2.58.0 CUDA_VERSION=13.0
 
 # Run image smoke tests
 make test
@@ -117,9 +119,6 @@ combined manifest list at `$(IMG)` itself.
 | `PYTHON_VERSION` | `3.12` | Expected runtime Python version and image-tag component |
 | `RAY_VERSION` | `2.58.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
-| `AZURELINUX_CORE_IMAGE` | Azure Linux core 3.0.20261022 manifest digest | Core base image used to build GNU Wget |
-| `AZURELINUX_PYTHON_IMAGE` | Azure Linux Python 3.12.15 20261022 manifest digest | Runtime base image; override together with `PYTHON_VERSION` |
-| `CERTIFI_MIN_VERSION` | `2026.10.19` | Minimum Python CA bundle containing the eMudhra/emSign remediation |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
 | `ACR_REGISTRY` | *(required for `docker-push`)* | Backing ACR hostname for producer-side multi-arch pushes; consumers use MCR |
 | `PLATFORMS` | `linux/amd64,linux/arm64` | Architectures for the `docker-push` multi-arch build |
@@ -150,10 +149,10 @@ contributor PRs must not publish images.
 A source fix alone does not repair an already-published image. CA trust-store
 changes require fresh multi-architecture builds, publication under new
 immutable tags or digests, and workload rollout so nodes do not reuse affected
-cached images. Build targets pull the pinned base manifests, which invalidates
-pre-remediation operating-system layers. The default base image references are
-pinned to the remediated October 22 multi-architecture manifest digests;
-release owners must update the tag and digest together when rebasing.
+cached images. Builds use pinned base manifests, which invalidates
+pre-remediation operating-system layers. The base image references are pinned
+directly in the Dockerfile to the remediated October 22 multi-architecture
+manifest digests.
 
 ## Testing
 
