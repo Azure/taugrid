@@ -80,22 +80,11 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 	workspace *tauv1alpha1.TauWorkspace,
 	namespaceName string,
 ) error {
-	if reservedNamespaceReason(namespaceName, systemNamespace(r.SystemNamespace)) != "" {
-		return nil
-	}
-	var namespace corev1.Namespace
-	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: namespaceName}, &namespace); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
+	namespace, err := r.workspaceNamespaceForMetadataCleanup(ctx, workspace, namespaceName)
+	if err != nil || namespace == nil {
 		return err
 	}
-	if namespace.Labels[labelWorkspace] != workspace.Name ||
-		namespace.Annotations[annotationOwnerUID] != string(workspace.UID) ||
-		workspace.UID == "" {
-		return nil
-	}
-	inUse, message, err := r.namespaceRoutingMetadataInUse(ctx, workspace, &namespace)
+	inUse, message, err := r.namespaceRoutingMetadataInUse(ctx, workspace, namespace)
 	if err != nil {
 		return err
 	}
@@ -115,7 +104,49 @@ func (r *TauWorkspaceReconciler) cleanupStaleNamespaceMetadata(
 		delete(namespace.Annotations, annotationResultScope)
 		delete(namespace.Annotations, annotationOwnerUID)
 	}
-	return r.Update(ctx, &namespace)
+	return r.Update(ctx, namespace)
+}
+
+func (r *TauWorkspaceReconciler) workspaceNamespaceForMetadataCleanup(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespaceName string,
+) (*corev1.Namespace, error) {
+	if reservedNamespaceReason(namespaceName, systemNamespace(r.SystemNamespace)) != "" {
+		return nil, nil
+	}
+	var namespace corev1.Namespace
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: namespaceName}, &namespace); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if namespace.Labels[labelWorkspace] != workspace.Name ||
+		namespace.Annotations[annotationOwnerUID] != string(workspace.UID) ||
+		workspace.UID == "" {
+		return nil, nil
+	}
+	return &namespace, nil
+}
+
+func (r *TauWorkspaceReconciler) waitForNamespaceRoutingMetadataDrain(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespaceName string,
+) error {
+	namespace, err := r.workspaceNamespaceForMetadataCleanup(ctx, workspace, namespaceName)
+	if err != nil || namespace == nil {
+		return err
+	}
+	inUse, message, err := r.namespaceRoutingMetadataInUse(ctx, workspace, namespace)
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return errors.New(message)
+	}
+	return nil
 }
 
 func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
@@ -228,6 +259,13 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 }
 
 func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
+	targetNamespace := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace)
+	if targetNamespace == "" {
+		targetNamespace = resolvedNamespace(workspace)
+	}
+	if err := r.waitForNamespaceRoutingMetadataDrain(ctx, workspace, targetNamespace); err != nil {
+		return err
+	}
 	if err := r.cleanupStaleTargetRBAC(ctx, workspace, "", "", false); err != nil {
 		return err
 	}
@@ -242,10 +280,6 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	}
 	if err := r.cleanupSystemReaderRBAC(ctx, workspace); err != nil {
 		return err
-	}
-	targetNamespace := strings.TrimSpace(workspace.Status.Target.ResolvedNamespace)
-	if targetNamespace == "" {
-		targetNamespace = resolvedNamespace(workspace)
 	}
 	return r.cleanupStaleNamespaceMetadata(ctx, workspace, targetNamespace)
 }

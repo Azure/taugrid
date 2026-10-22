@@ -1528,6 +1528,97 @@ func TestWorkspaceDeletePreservesNamespaceRoutingMetadataForExternalQueueWorkloa
 	}
 }
 
+func TestWorkspaceDeletePreservesWorkloadIdentityWhileExternalQueueWorkloadDrains(t *testing.T) {
+	ctx := context.Background()
+	workspace := testWorkspace("aurora")
+	workspace.Finalizers = []string{workspaceFinalizer}
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	now := metav1.Now()
+	workspace.DeletionTimestamp = &now
+	workspace.Spec.Target.CreateNamespace = false
+	workspace.Spec.Queue = "jobqueue"
+	workspace.Status.Target.ResolvedNamespace = workspace.Name
+	workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+		LocalQueue:      "jobqueue",
+		ClusterQueue:    "jobqueue",
+		ClusterQueueUID: "jobqueue-uid",
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	account := testServiceAccount(namespace.Name, workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "training",
+			Namespace: namespace.Name,
+			UID:       types.UID("training-job-uid"),
+		},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					ServiceAccountName: account.Name,
+					RestartPolicy:      corev1.RestartPolicyNever,
+					Containers: []corev1.Container{{
+						Name:    "trainer",
+						Image:   "example.invalid/trainer",
+						Command: []string{"train"},
+					}},
+				},
+			},
+		},
+	}
+	localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+	localQueue.SetAnnotations(nil)
+	clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+	clusterQueue.Object["spec"] = map[string]any{
+		"namespaceSelector": map[string]any{
+			"matchExpressions": []any{map[string]any{
+				"key":      labelWorkspace,
+				"operator": "Exists",
+			}},
+		},
+	}
+	workload := newQueueObject(workloadGVK)
+	workload.SetName("job-training")
+	workload.SetNamespace(namespace.Name)
+	workload.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: batchv1.SchemeGroupVersion.String(),
+		Kind:       "Job",
+		Name:       job.Name,
+		UID:        job.UID,
+	}})
+	workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(workspace, namespace, account, job, localQueue, clusterQueue, workload).
+		Build()
+	reconciler := newTestWorkspaceReconciler(c)
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+
+	if _, err := reconciler.Reconcile(ctx, request); err == nil ||
+		!strings.Contains(err.Error(), "before removing namespace routing metadata") {
+		t.Fatalf("Reconcile() error = %v, want workload drain wait", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
+		t.Fatalf("workspace workload identity was removed before Workload drain: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(job), &batchv1.Job{}); err != nil {
+		t.Fatalf("pending Job was removed during Workload drain: %v", err)
+	}
+
+	workload.Object["status"] = map[string]any{"conditions": []any{
+		map[string]any{"type": "Finished", "status": "True"},
+	}}
+	if err := c.Update(ctx, workload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reconciler.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile() after Workload drain = %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("workspace workload identity survived after Workload drain: %v", err)
+	}
+}
+
 func TestLegacyWorkspaceDeletePreservesRoutingMetadataWithEmptyQueueStatus(t *testing.T) {
 	ctx := context.Background()
 	workspace := testWorkspace("aurora")
