@@ -47,6 +47,7 @@ READY_CONDITION = "Ready"
 
 #: Kubernetes condition statuses.
 _CONDITION_TRUE = "True"
+_APPLICABILITY_KEYS = frozenset({"namespaces", "teams", "lanes"})
 
 
 class NoTauClusterFound(Exception):
@@ -358,6 +359,15 @@ def ready_profiles(
                 SkippedProfile(
                     name=name,
                     reason="malformed applicability: expected a mapping",
+                )
+            )
+            continue
+        unknown_keys = [key for key in applicability if key not in _APPLICABILITY_KEYS]
+        if unknown_keys:
+            skipped.append(
+                SkippedProfile(
+                    name=name,
+                    reason=f"has malformed applicability: unknown key {unknown_keys[0]!r}",
                 )
             )
             continue
