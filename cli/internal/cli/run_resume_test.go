@@ -350,6 +350,55 @@ func TestResumeObservesExistingWorkloadBeforeReplacementProfileApplicabilityFail
 	}
 }
 
+func TestRunResumeReconstructsDottedJobName(t *testing.T) {
+	zeroGPUs := 0
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: train.v1\nengine: job\nentrypoint: train.py\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	var replacementName string
+	err := runResumeCommand(
+		command,
+		"train.v1",
+		resumeRouting{
+			ConfigPath:  config,
+			KubeContext: "test-context",
+			Namespace:   "ray",
+			TargetOptions: runDispatchOptions{
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runComputeInput:  runComputeInput{jobGPUs: &zeroGPUs},
+			},
+		},
+		"/data/train.v1/checkpoints",
+		"client",
+		true,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot("train.v1")
+				snapshot.Events = []status.Event{{Reason: "Evicted"}}
+				return snapshot, nil
+			},
+			executeTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
+				replacement := resolvedJobRequestForTest(target)
+				if replacement == nil {
+					t.Fatal("resume did not reconstruct a direct Job")
+				}
+				replacementName = replacement.Name
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementName != "train.v1" {
+		t.Fatalf("replacement name = %q, want train.v1", replacementName)
+	}
+}
+
 func TestRunResumePreservesMetricsSessionFromFailedJob(t *testing.T) {
 	zeroGPUs := 0
 	config := filepath.Join(t.TempDir(), "tau.yaml")
@@ -1307,6 +1356,105 @@ func TestResumeCleanup_InconclusivePrefetchStillUsesRediscovery(t *testing.T) {
 	}
 	if waitCalls != 2 {
 		t.Fatalf("expected inconclusive resume rechecks to keep waiting until the deadline, got %d waits", waitCalls)
+	}
+}
+
+func TestResumeOOM_FinalSelectorDeadlineRefusesReplacement(t *testing.T) {
+	zeroGPUs := 0
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: resume-job\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	var output strings.Builder
+	command.SetOut(&output)
+	command.SetErr(io.Discard)
+
+	runner := rawRunnerFunc(func(ctx context.Context, extraArgs []string, _ []byte) (string, error) {
+		switch fakeRawKey(extraArgs...) {
+		case fakeRawKey("-n", "ray", "delete", "rayjob.ray.io", "resume-job", "--ignore-not-found"):
+			return "rayjob.ray.io \"resume-job\" deleted\n", nil
+		case fakeRawKey("-n", "ray", "delete", "job", "resume-job", "--ignore-not-found"):
+			return "job.batch \"resume-job\" deleted\n", nil
+		case fakeRawKey("-n", "ray", "delete", "service", "resume-job-headless", "--ignore-not-found"):
+			return "", nil
+		case fakeRawKey("-n", "ray", "get", "workloads.kueue.x-k8s.io", "-l", workloadmeta.LabelJob+"=resume-job", "-o", "json"):
+			<-ctx.Done()
+			return "", errors.New("kubectl get workloads: signal: killed")
+		default:
+			t.Fatalf("unexpected kubectl args: %v", extraArgs)
+			return "", nil
+		}
+	})
+
+	executeCalls := 0
+	err := runResumeCommand(
+		command,
+		"resume-job",
+		resumeRouting{
+			ConfigPath:  config,
+			KubeContext: "test-context",
+			Namespace:   "ray",
+			TargetOptions: runDispatchOptions{
+				runDispatchInput: runDispatchInput{engine: "job"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runComputeInput: runComputeInput{
+					runRayJobResources: runRayJobResources{workers: 1, gpusPerWorker: 1},
+					jobGPUs:            &zeroGPUs,
+				},
+			},
+		},
+		"/data/resume-job/checkpoints/checkpoint-42",
+		"",
+		true,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot("resume-job")
+				snapshot.Pods[0].OOMKilled = true
+				return snapshot, nil
+			},
+			validateTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				return nil
+			},
+			deleteOld: func(ctx context.Context, _, namespace, name string, out io.Writer) error {
+				return deleteWorkloadAndWaitForManagerCleanup(ctx, runner, name, namespace, out, managerCleanupOptions{
+					Timeout:  20 * time.Millisecond,
+					Interval: time.Second,
+				}, managerCleanupHooks{
+					fetchSnapshot: func(context.Context) (status.Snapshot, error) {
+						return status.Snapshot{
+							Name:         name,
+							Namespace:    namespace,
+							JobFound:     true,
+							JobManagedBy: "kueue.x-k8s.io/multikueue",
+						}, nil
+					},
+					wait: func(context.Context, time.Duration) error { return nil },
+					now:  time.Now,
+				})
+			},
+			executeTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				executeCalls++
+				return nil
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected resume cleanup uncertainty to block replacement")
+	}
+	for _, want := range []string{
+		"deleting old workload: timed out after 20ms waiting to prove MultiKueue manager workload cleanup",
+		"failure reason: OOMKilled",
+		"checkpoint: /data/resume-job/checkpoints/checkpoint-42",
+	} {
+		if !strings.Contains(err.Error()+"\n"+output.String(), want) {
+			t.Fatalf("expected resume result to contain %q, error=%v output=%q", want, err, output.String())
+		}
+	}
+	if strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("expected context-killed selector query to use cleanup diagnostic, got %v", err)
+	}
+	if executeCalls != 0 {
+		t.Fatalf("uncertain cleanup submitted %d replacement workloads", executeCalls)
 	}
 }
 

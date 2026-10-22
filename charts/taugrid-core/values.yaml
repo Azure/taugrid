@@ -178,6 +178,7 @@ portal:
   store: ""
   cluster: ""
   workspace: taugrid-default
+  localQueue: ""
   workspaceDirectory:
     enabled: false
     # Allow browser workspace switching without per-user identity only for
@@ -195,6 +196,8 @@ portal:
   access:
     mode: cluster-internal
     externalURL: ""
+  gpuConsumers:
+    enabled: false
   entraAuth:
     enabled: false
     tenantID: ""

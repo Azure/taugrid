@@ -248,6 +248,21 @@
   .workload-gauge.warm .workload-gauge-track > span { background: #d97706; }
   .workload-gauge.critical .workload-gauge-track > span { background: var(--warn); }
   .disabled-link { color: var(--accent); font-size: 13px; opacity: .5; cursor: not-allowed; }
+  .gpu-inventory { margin-top: 8px; }
+  .gpu-summary {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin: 12px 0; border: 1px solid var(--line); background: #f8fafc;
+  }
+  .gpu-summary > div { min-width: 0; padding: 13px 15px; border-right: 1px solid var(--line); }
+  .gpu-summary > div:last-child { border-right: 0; }
+  .gpu-summary span, .gpu-summary small { display: block; color: var(--muted); }
+  .gpu-summary span { font-size: 10px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+  .gpu-summary strong { display: block; margin-top: 5px; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .gpu-summary small { margin-top: 3px; font-size: 10px; }
+  .gpu-owner { display: grid; gap: 3px; min-width: 170px; }
+  .gpu-owner strong { overflow-wrap: anywhere; }
+  .gpu-owner > span { color: var(--muted); font-size: 11px; }
+  .gpu-owner > span.warn { color: var(--warn); }
   .overview-dashboard { margin-top: 6px; }
   .overview-metrics {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -426,6 +441,9 @@
     .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .overview-metric:nth-child(2) { border-right: 0; }
     .overview-metric:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+    .gpu-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .gpu-summary > div:nth-child(2) { border-right: 0; }
+    .gpu-summary > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
     .overview-flow { grid-template-columns: 1fr; }
     .overview-fleet-stage, .overview-queue { border-right: 0; border-bottom: 1px solid var(--line); }
     .overview-fleet-stage::after, .overview-queue::after { top: auto; right: 24px; bottom: -7px; }
@@ -457,6 +475,9 @@
     .overview-metrics { grid-template-columns: 1fr; }
     .overview-metric, .overview-metric:nth-child(2) { border-right: 0; border-bottom: 1px solid var(--line); }
     .overview-metric:last-child { border-bottom: 0; }
+    .gpu-summary { grid-template-columns: 1fr; }
+    .gpu-summary > div, .gpu-summary > div:nth-child(2) { border-right: 0; border-bottom: 1px solid var(--line); }
+    .gpu-summary > div:last-child { border-bottom: 0; }
     .overview-map > header { flex-direction: column; }
     .overview-sites { grid-template-columns: 1fr; }
   }

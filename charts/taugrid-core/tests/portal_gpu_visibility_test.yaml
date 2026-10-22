@@ -1,0 +1,160 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+suite: Portal GPU visibility contract
+templates:
+  - templates/portal.yaml
+tests:
+  - it: keeps fleet GPU consumers disabled for the default legacy image
+    set:
+      portal.enabled: true
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.5
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-consumers-enabled
+
+  - it: does not assume a custom image supports fleet GPU consumers
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-consumers-enabled
+
+  - it: enables fleet GPU consumers for an explicitly compatible authenticated image
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.gpuConsumers.enabled: true
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --gpu-consumers-enabled
+
+  - it: rejects fleet GPU consumers without authenticated proxy access
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.gpuConsumers.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: portal.gpuConsumers.enabled=true requires portal.access.mode=authenticated-proxy
+
+  - it: preserves fixed workspace and operator scope arguments
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.gpuConsumers.enabled: true
+      portal.workspace: research
+      portal.localQueue: research-queue
+      portal.jobs.scopeMode: operator
+      portal.jobs.operatorScopes:
+        - team: team-a
+          namespace: namespace-a
+          localQueue: jobqueue
+      portal.access.mode: authenticated-proxy
+      portal.access.externalURL: https://portal.example.com
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - portal
+            - serve
+            - --addr
+            - 0.0.0.0:8080
+            - --source
+            - kusto
+            - --workspace
+            - research
+            - --gpu-consumers-enabled
+            - --local-queue
+            - research-queue
+            - --jobs-scope-mode
+            - operator
+            - --jobs-operator-scope
+            - team-a=namespace-a/jobqueue
+            - --kusto-cost-database
+            - CostTracking
+            - --kusto-ingestion
+            - remote-write
+
+  - it: grants the exact read-only Kubernetes inventory permissions
+    set:
+      portal.enabled: true
+      portal.image.tag: test
+      portal.rbac.create: true
+      portal.serviceAccount.create: true
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["apps"]
+            resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["batch"]
+            resources: ["jobs"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["ray.io"]
+            resources: ["rayjobs", "rayclusters", "rayservices"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kueue.x-k8s.io"]
+            resources: ["localqueues", "clusterqueues", "cohorts", "workloads"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods/exec"]
+            verbs: ["get", "list", "watch"]

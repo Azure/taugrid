@@ -72,6 +72,12 @@ func rayReadRouteAllowed(method, upstreamPath string, websocket bool) bool {
 		len(parts) == 3 && parts[0] == "api" && parts[1] == "jobs" && parts[2] != ""
 }
 
+func rayUnscopedAPIPath(upstreamPath string) bool {
+	return upstreamPath == "/api/authenticate" ||
+		rayReadRouteAllowed(http.MethodGet, upstreamPath, false) ||
+		rayReadRouteAllowed(http.MethodGet, upstreamPath, true)
+}
+
 func handleRayProfilingDisabled(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

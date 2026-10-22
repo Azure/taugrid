@@ -51,6 +51,8 @@ type Options struct {
 	AKSCluster          string
 	KubeContext         string
 	SystemNamespace     string
+	AuthorizationMode   string
+	RequiredRole        string
 	ACRName             string
 	UpstreamRepo        string
 	UpstreamRef         string
@@ -228,6 +230,39 @@ func normalizeOptions(opts Options) (Options, error) {
 	if opts.SystemNamespace == "" {
 		opts.SystemNamespace = tauworkspace.SystemNamespace
 	}
+	opts.AuthorizationMode = strings.TrimSpace(opts.AuthorizationMode)
+	opts.RequiredRole = strings.TrimSpace(opts.RequiredRole)
+	hasWorkspaceConnection := opts.Workspace != "<your-workspace>" && opts.KubeContext != ""
+	if !hasWorkspaceConnection && (opts.AuthorizationMode != "" || opts.RequiredRole != "") {
+		return Options{}, errors.New("--authorization-mode requires --workspace with --kube-context or AKS connection flags")
+	}
+	if hasWorkspaceConnection {
+		switch opts.AuthorizationMode {
+		case tauworkspace.AuthorizationModeClusterWide:
+			if opts.RequiredRole != "" {
+				return Options{}, errors.New("required role must be omitted for cluster-wide authorization")
+			}
+		case tauworkspace.AuthorizationModeWorkspaceRBAC:
+			if opts.RequiredRole == "" {
+				opts.RequiredRole = tauworkspace.DefaultResearcherRole
+			}
+			if !tauworkspace.IsResearcherRole(opts.RequiredRole) {
+				return Options{}, fmt.Errorf(
+					"required role must be %q or %q",
+					tauworkspace.DefaultResearcherRole,
+					tauworkspace.LegacyResearcherRole,
+				)
+			}
+		case "":
+			return Options{}, errors.New("--authorization-mode is required for connected scaffold generation")
+		default:
+			return Options{}, fmt.Errorf(
+				"--authorization-mode must be one of: %s, %s",
+				tauworkspace.AuthorizationModeClusterWide,
+				tauworkspace.AuthorizationModeWorkspaceRBAC,
+			)
+		}
+	}
 	opts.ACRName = strings.TrimSpace(opts.ACRName)
 
 	switch opts.Template {
@@ -317,8 +352,8 @@ func buildTemplateData(opts Options) templateData {
 		AccessMethod:           accessMethod,
 		AKSResourceID:          aksResourceID,
 		MinTauVersion:          minTauVersion(version.Version),
-		AuthorizationMode:      tauworkspace.AuthorizationModeWorkspaceRBAC,
-		RequiredRole:           tauworkspace.DefaultResearcherRole,
+		AuthorizationMode:      opts.AuthorizationMode,
+		RequiredRole:           opts.RequiredRole,
 		UsesDPR:                opts.Template == TemplateDPR,
 	}
 }

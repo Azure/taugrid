@@ -16,6 +16,8 @@
 {{- $access := default dict $portal.access -}}
 {{- $accessMode := lower (trim (default "cluster-internal" $access.mode)) -}}
 {{- $externalURL := trim (default "" $access.externalURL) -}}
+{{- $gpuConsumers := default dict $portal.gpuConsumers -}}
+{{- $gpuConsumersEnabled := default false $gpuConsumers.enabled -}}
 {{- $externalURLParts := dict -}}
 {{- if $externalURL -}}
 {{- $externalURLParts = urlParse $externalURL -}}
@@ -71,6 +73,9 @@
 {{- end -}}
 {{- if and (eq $accessMode "authenticated-proxy") (not $externalURL) -}}
 {{- fail "portal.access.mode=authenticated-proxy requires portal.access.externalURL" -}}
+{{- end -}}
+{{- if and $gpuConsumersEnabled (ne $accessMode "authenticated-proxy") -}}
+{{- fail "portal.gpuConsumers.enabled=true requires portal.access.mode=authenticated-proxy" -}}
 {{- end -}}
 {{- if and $externalURL (or (ne (get $externalURLParts "scheme") "https") (not (get $externalURLParts "hostname")) (get $externalURLParts "userinfo") (get $externalURLParts "query") (get $externalURLParts "fragment")) -}}
 {{- fail "portal.access.externalURL must be an HTTPS URL with a host and without credentials, query, or fragment" -}}
@@ -172,7 +177,7 @@ rules:
     resources: ["nodes"]
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
-    resources: ["daemonsets"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["localqueues", "clusterqueues", "cohorts", "workloads"]
@@ -294,6 +299,13 @@ spec:
             - {{ $source | quote }}
             - --workspace
             - {{ default "default" $portal.workspace | quote }}
+            {{- if $gpuConsumersEnabled }}
+            - --gpu-consumers-enabled
+            {{- end }}
+            {{- with $portal.localQueue }}
+            - --local-queue
+            - {{ . | quote }}
+            {{- end }}
             {{- with $portal.store }}
             - --store
             - {{ . | quote }}

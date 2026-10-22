@@ -1,5 +1,5 @@
 # Stage 1: Build with MSFT Go (Debian-based) for FIPS compliance
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1 AS builder
 # TODO: change default to v0.2.0 once adx-mon team tags a release
 ARG ADX_MON_VERSION=main
 ARG TARGETOS
@@ -15,14 +15,14 @@ RUN git clone --depth 1 --branch ${ADX_MON_VERSION} \
 WORKDIR /code
 
 # Build collector with FIPS crypto
-# GOEXPERIMENT=systemcrypto: routes TLS/crypto through system OpenSSL (FIPS 140-2/3)
-# CGO_ENABLED=1: required for libsystemd (sdjournal/dlopen) and systemcrypto
+# CGO_ENABLED=1: required for libsystemd (sdjournal/dlopen) and system crypto
 RUN test -n "${TARGETOS}" && test -n "${TARGETARCH}" && \
-    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -buildvcs=false \
     -ldflags="-X 'github.com/Azure/adx-mon/pkg/version.Version=${ADX_MON_VERSION}' \
               -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(git rev-parse HEAD)' \
-              -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" \
+              -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)' \
+              -X=runtime.godebugDefault=ms_tlsmldsacert=0" \
     -o ./bin/collector ./cmd/collector
 
 # Stage 2: systemd-libs source (Azure Linux) for runtime libsystemd.so

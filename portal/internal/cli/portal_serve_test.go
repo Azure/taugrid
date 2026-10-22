@@ -27,6 +27,21 @@ func TestPortalRunHistoryIsExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestPortalGPUConsumersAreExplicitlyEnabled(t *testing.T) {
+	cmd := newPortalCmd()
+	serve, _, err := cmd.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := serve.Flags().Lookup("gpu-consumers-enabled")
+	if flag == nil {
+		t.Fatal("portal serve is missing --gpu-consumers-enabled")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--gpu-consumers-enabled default = %q, want false", flag.DefValue)
+	}
+}
+
 func TestPortalHasNoCatalogReadSourceMigrationSwitch(t *testing.T) {
 	cmd := newPortalCmd()
 	serve, _, err := cmd.Find([]string{"serve"})
@@ -70,6 +85,9 @@ func TestPortalJobsScopeDefaultsFailClosed(t *testing.T) {
 	}
 	if got := serve.Flags().Lookup("namespace").DefValue; got != "" {
 		t.Fatalf("--namespace default = %q, want empty for cluster-wide Ray/Runs reads", got)
+	}
+	if got := serve.Flags().Lookup("local-queue").DefValue; got != "" {
+		t.Fatalf("--local-queue default = %q, want empty", got)
 	}
 	if flag := serve.Flags().Lookup("policy"); flag != nil {
 		t.Fatalf("portal serve still exposes removed --policy flag: %#v", flag)
@@ -118,9 +136,14 @@ func TestPortalServeKeepsRunningWithoutKubernetesCredentials(t *testing.T) {
 }
 
 func TestSingleWorkspaceKubernetesBoardsShareNamespace(t *testing.T) {
-	rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions("tau-default")
-	if rayOpts.Namespace != "tau-default" || runsOpts.Namespace != "tau-default" {
-		t.Fatalf("board namespaces = ray %q, runs %q; want tau-default", rayOpts.Namespace, runsOpts.Namespace)
+	rayOpts, runsOpts := singleWorkspaceKubernetesBoardOptions("tau-default", "jobqueue")
+	if rayOpts.Namespace != "tau-default" || runsOpts.Namespace != "tau-default" || runsOpts.LocalQueue != "jobqueue" {
+		t.Fatalf(
+			"board scope = ray namespace %q, runs namespace %q, LocalQueue %q; want tau-default/tau-default/jobqueue",
+			rayOpts.Namespace,
+			runsOpts.Namespace,
+			runsOpts.LocalQueue,
+		)
 	}
 }
 

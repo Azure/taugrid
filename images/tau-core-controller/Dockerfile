@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS microsoft-go
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1 AS microsoft-go
 
-ARG MICROSOFT_GO_COMMIT=5e399a544ddb40d8ae13d077b10dc9a91d8b36e1
+ARG MICROSOFT_GO_COMMIT=9f24672a32abfcdd8266343e9ea1f1f1cbe3aaf6
 
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
@@ -19,10 +19,9 @@ RUN git init \
     && git -C go am /tmp/microsoft-go/patches/[0-9][0-9][0-9][0-9]-*.patch \
     && cd go/src \
     && GOROOT_BOOTSTRAP=/usr/local/go ./make.bash \
-    && ../bin/go version | grep -F "go1.26.9" \
-    && GOEXPERIMENT=systemcrypto ../bin/go env GOEXPERIMENT | grep -Fx "systemcrypto"
+    && ../bin/go version | grep -F "go1.27.3"
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.9-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1 AS builder
 
 COPY --from=microsoft-go /tmp/microsoft-go/go /usr/local/microsoft-go
 ENV GOROOT=/usr/local/microsoft-go \
@@ -44,8 +43,8 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
-    go build -buildvcs=false -ldflags '-s -w' -o /tau-core-controller ./cmd/controller
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -buildvcs=false -ldflags '-s -w -X=runtime.godebugDefault=ms_tlsmldsacert=0' -o /tau-core-controller ./cmd/controller
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0
 

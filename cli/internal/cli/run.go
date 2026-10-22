@@ -333,6 +333,9 @@ func resolveDirectRunTarget(o unresolvedRunOptions, name string) (resolvedRunTar
 	if err != nil {
 		return nil, err
 	}
+	if err := runconfig.ValidateRunName(name, string(engine), o.nodes); err != nil {
+		return nil, err
+	}
 	if err := validateDirectMetricsOffloadDispatch(o, engine); err != nil {
 		return nil, err
 	}
