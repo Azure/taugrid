@@ -1565,6 +1565,73 @@ func TestRender_DevicePluginDoesNotUseClaims(t *testing.T) {
 	}
 }
 
+func TestRenderRejectsInvalidResourceQuantities(t *testing.T) {
+	tests := []struct {
+		name      string
+		profile   profile.Profile
+		options   Options
+		wantField string
+	}{
+		{
+			name:      "direct CPU override",
+			profile:   trainProfile(),
+			options:   Options{Name: "j", Namespace: "tau", Command: []string{"true"}, CPURequest: "-1"},
+			wantField: "compute.cpu_request",
+		},
+		{
+			name: "profile ephemeral storage",
+			profile: func() profile.Profile {
+				p := trainProfile()
+				p.Resources.Requests["ephemeral-storage"] = "banana"
+				return p
+			}(),
+			options:   Options{Name: "j", Namespace: "tau", Command: []string{"true"}},
+			wantField: "profile.resources.requests.ephemeral-storage",
+		},
+		{
+			name: "profile extended resource",
+			profile: func() profile.Profile {
+				p := trainProfile()
+				p.Resources.Limits = map[string]any{}
+				p.Resources.Limits["example.com/accelerator"] = "-1"
+				return p
+			}(),
+			options:   Options{Name: "j", Namespace: "tau", Command: []string{"true"}},
+			wantField: "profile.resources.limits.example.com/accelerator",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Render(tt.profile, tt.options)
+			if err == nil || !strings.Contains(err.Error(), tt.wantField) {
+				t.Fatalf("Render error = %v, want field %s", err, tt.wantField)
+			}
+		})
+	}
+}
+
+func TestRenderPreservesValidEphemeralAndExtendedResourceQuantities(t *testing.T) {
+	p := trainProfile()
+	p.Resources.Limits = map[string]any{}
+	p.Resources.Requests["ephemeral-storage"] = "1Gi"
+	p.Resources.Limits["ephemeral-storage"] = "2Gi"
+	p.Resources.Requests["example.com/accelerator"] = "1"
+	p.Resources.Limits["example.com/accelerator"] = "1"
+	out, err := Render(p, Options{Name: "j", Namespace: "tau", Command: []string{"true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	limits := resources["limits"].(map[string]any)
+	if requests["ephemeral-storage"] != "1Gi" || limits["ephemeral-storage"] != "2Gi" {
+		t.Fatalf("ephemeral-storage quantities changed: requests=%v limits=%v", requests, limits)
+	}
+	if fmt.Sprint(requests["example.com/accelerator"]) != "1" || fmt.Sprint(limits["example.com/accelerator"]) != "1" {
+		t.Fatalf("extended resource quantities changed: requests=%v limits=%v", requests, limits)
+	}
+}
+
 func envFromContainer(t *testing.T, m map[string]any) map[string]string {
 	t.Helper()
 	pod := m["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)

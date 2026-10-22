@@ -1082,6 +1082,70 @@ runtime:
 	}
 }
 
+func TestRunConfigValidationRejectsInvalidResourceQuantitiesBeforeRendering(t *testing.T) {
+	tests := []struct {
+		name      string
+		engine    string
+		compute   string
+		wantField string
+	}{
+		{
+			name:      "negative Job CPU request",
+			engine:    "job",
+			compute:   `cpu_request: "-1"`,
+			wantField: "compute.cpu_request",
+		},
+		{
+			name:      "malformed Job memory limit",
+			engine:    "job",
+			compute:   `memory_limit: banana`,
+			wantField: "compute.memory_limit",
+		},
+		{
+			name:      "negative Ray head CPU request",
+			engine:    "rayjob",
+			compute:   `head_cpu_request: "-1"`,
+			wantField: "compute.head_cpu_request",
+		},
+		{
+			name:      "malformed Ray worker memory limit",
+			engine:    "rayjob",
+			compute:   `worker_memory_limit: banana`,
+			wantField: "compute.worker_memory_limit",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			config := filepath.Join(dir, "tau.yaml")
+			body := fmt.Sprintf(`name: invalid-quantity
+engine: %s
+entrypoint: train.py
+compute:
+  %s
+`, tt.engine, tt.compute)
+			if err := os.WriteFile(config, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			validate := NewRoot()
+			validate.SetOut(&bytes.Buffer{})
+			validate.SetErr(&bytes.Buffer{})
+			validate.SetArgs([]string{"run", "validate", "--config", config})
+			if err := validate.Execute(); err == nil || !strings.Contains(err.Error(), tt.wantField) {
+				t.Fatalf("tau run validate error = %v, want field %s", err, tt.wantField)
+			}
+
+			dryRun := newConnectedRunConfigTestCommand(t, []string{"run", "--config", config, "--dry-run=client"})
+			dryRun.SetOut(&bytes.Buffer{})
+			dryRun.SetErr(&bytes.Buffer{})
+			if err := dryRun.Execute(); err == nil || !strings.Contains(err.Error(), tt.wantField) {
+				t.Fatalf("client dry-run error = %v, want field %s", err, tt.wantField)
+			}
+		})
+	}
+}
+
 func TestRunConfigValidateRejectsTorchrunShellEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "train.sh"), []byte("#!/usr/bin/env bash\necho train\n"), 0o755); err != nil {
