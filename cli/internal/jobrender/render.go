@@ -293,6 +293,9 @@ func (o Options) validate() error {
 	if o.Name == "" {
 		return errors.New("Options.Name is required")
 	}
+	if err := runconfig.ValidateRunName(o.Name, runconfig.EngineJob, o.Nodes); err != nil {
+		return err
+	}
 	if o.Namespace == "" {
 		return errors.New("Options.Namespace is required")
 	}
@@ -344,9 +347,6 @@ func (o Options) validate() error {
 	}
 	if o.Nodes > 1 && o.Launcher != "torchrun" {
 		return fmt.Errorf("nodes > 1 requires launcher=torchrun (got launcher=%q)", o.Launcher)
-	}
-	if o.Nodes > 1 && len(o.Name)+len(HeadlessSuffix) > 63 {
-		return fmt.Errorf("job name %q is too long for multi-node: %q must fit DNS label limit (63 chars); max name length is %d", o.Name, o.Name+HeadlessSuffix, 63-len(HeadlessSuffix))
 	}
 	if o.Launcher == "torchrun" {
 		reserved := []string{"MASTER_ADDR", "MASTER_PORT"}

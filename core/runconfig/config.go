@@ -22,6 +22,7 @@ import (
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Config struct {
@@ -136,6 +137,48 @@ func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
 		return NormalizedRDMA{}
 	}
 	return NormalizedRDMA{Enabled: true}
+}
+
+const (
+	MaxJobRunNameLength          = validation.DNS1123LabelMaxLength
+	MaxMultiNodeJobRunNameLength = 54
+	MaxRayJobRunNameLength       = 47
+)
+
+func ValidateRunName(value, engine string, nodes int) error {
+	if value == "" {
+		return nil
+	}
+	normalizedEngine, err := NormalizeEngine(engine)
+	if err != nil {
+		return err
+	}
+	switch normalizedEngine {
+	case "", EngineJob:
+		if nodes > 1 {
+			if problems := validation.IsDNS1123Label(value); len(problems) > 0 {
+				return fmt.Errorf("run name %q for a multi-node Job must be a valid Kubernetes DNS label: %s", value, strings.Join(problems, "; "))
+			}
+			if len(value) > MaxMultiNodeJobRunNameLength {
+				return fmt.Errorf("run name %q is too long for multi-node Job dispatch: the generated headless Service name must fit the 63-character DNS label limit; maximum run name length is %d", value, MaxMultiNodeJobRunNameLength)
+			}
+			return nil
+		}
+		if problems := validation.IsDNS1123Subdomain(value); len(problems) > 0 {
+			return fmt.Errorf("run name %q for a Job must be a valid Kubernetes DNS subdomain: %s", value, strings.Join(problems, "; "))
+		}
+		if len(value) > MaxJobRunNameLength {
+			return fmt.Errorf("run name %q is too long for a Job: maximum length is %d", value, MaxJobRunNameLength)
+		}
+	case EngineRayJob:
+		if problems := validation.IsDNS1123Label(value); len(problems) > 0 {
+			return fmt.Errorf("run name %q for a RayJob must be a valid Kubernetes DNS label: %s", value, strings.Join(problems, "; "))
+		}
+		if len(value) > MaxRayJobRunNameLength {
+			return fmt.Errorf("run name %q is too long for a RayJob: KubeRay supports at most %d characters", value, MaxRayJobRunNameLength)
+		}
+	}
+	return nil
 }
 
 const SecurityModeRestricted = "restricted"

@@ -34,14 +34,14 @@ type FieldInfo struct {
 
 var fieldCatalog = map[string]FieldInfo{
 	"schema_version": {Status: statusReserved, Description: "Reserved for SDK-generated managed workflow manifests; not part of the direct tau run config contract."},
-	"name":           {Status: statusSupported, Description: "Stable run or workload name. When omitted, a positional tau run NAME may provide it."},
+	"name":           {Status: statusSupported, Description: "Stable run or workload name. Validation depends on the execution target: single-node Jobs use the Kubernetes DNS-subdomain syntax with a 63-character limit, multi-node Jobs use a DNS label with a 54-character limit, and RayJobs use a DNS label with a 47-character limit. When omitted, a positional tau run NAME may provide it."},
 	"engine":         {Status: statusSupported, Description: "Selects the workload kind when Tau cannot infer it.", Values: []string{"job", "rayjob"}, DeprecatedValues: []string{"ray"}},
 	"entrypoint":     {Status: statusSupported, Description: "Script path for the workload, resolved relative to the config file."},
 	"script":         {Status: statusSupported, Description: "Alias for entrypoint."},
 	"image":          {Status: statusSupported, Description: "Container image override when runtime.image is not set."},
 
 	"run":                            {Status: statusSupported, Description: "Nested aliases for run identity and entrypoint fields."},
-	"run.name":                       {Status: statusSupported, Description: "Nested stable run or workload name."},
+	"run.name":                       {Status: statusSupported, Description: "Nested stable run or workload name. Validation depends on the execution target and matches the top-level name contract."},
 	"run.engine":                     {Status: statusSupported, Description: "Nested workload-kind selector.", Values: []string{"job", "rayjob"}, DeprecatedValues: []string{"ray"}},
 	"run.entrypoint":                 {Status: statusSupported, Description: "Nested workload script path, resolved relative to the config file."},
 	"run.script":                     {Status: statusSupported, Description: "Alias for run.entrypoint."},

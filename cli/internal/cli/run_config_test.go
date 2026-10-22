@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"github.com/spf13/cobra"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func TestPortalRayStellarExampleUsesCanonicalExperimentIdentity(t *testing.T) {
@@ -1054,6 +1055,112 @@ compute:
 	out := executeTauCommand(t, []string{"run", "validate", "--config", config})
 	if !strings.Contains(out, config+" is valid") {
 		t.Fatalf("validate output = %q", out)
+	}
+}
+
+func TestRunConfigValidateRunName(t *testing.T) {
+	tests := []struct {
+		name    string
+		runName string
+		engine  string
+		nodes   int
+		nested  bool
+		wantErr bool
+	}{
+		{name: "dotted Job", runName: "train.v1", engine: "job"},
+		{name: "nested dotted Job", runName: "train.v1", engine: "job", nested: true},
+		{name: "Job maximum", runName: strings.Repeat("a", 63), engine: "job"},
+		{name: "Job dotted maximum", runName: strings.Repeat("a", 31) + "." + strings.Repeat("b", 31), engine: "job"},
+		{name: "Job over maximum", runName: strings.Repeat("a", 64), engine: "job", wantErr: true},
+		{name: "Job double dot", runName: "train..v1", engine: "job", wantErr: true},
+		{name: "uppercase", runName: "Fuzz-R2-B2-033", engine: "job", wantErr: true},
+		{name: "leading hyphen", runName: "-fuzz-r2-b2-034", engine: "job", wantErr: true},
+		{name: "trailing hyphen", runName: "fuzz-r2-b2-034-", engine: "job", wantErr: true},
+		{name: "multi-node maximum", runName: strings.Repeat("a", 54), engine: "job", nodes: 2},
+		{name: "multi-node over maximum", runName: strings.Repeat("a", 55), engine: "job", nodes: 2, wantErr: true},
+		{name: "multi-node dotted", runName: "train.v1", engine: "job", nodes: 2, wantErr: true},
+		{name: "RayJob maximum", runName: strings.Repeat("a", 47), engine: "rayjob"},
+		{name: "RayJob over maximum", runName: strings.Repeat("a", 48), engine: "rayjob", wantErr: true},
+		{name: "RayJob dotted", runName: "train.v1", engine: "rayjob", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			config := filepath.Join(dir, "tau.yaml")
+			nameField := fmt.Sprintf("name: %s\n", tt.runName)
+			if tt.nested {
+				nameField = fmt.Sprintf("run:\n  name: %s\n", tt.runName)
+			}
+			execution := ""
+			if tt.nodes > 0 {
+				execution = fmt.Sprintf("execution:\n  nodes: %d\n  launcher: torchrun\n", tt.nodes)
+			}
+			compute := "  gpus: 0\n"
+			if tt.engine == "rayjob" {
+				compute = "  workers: 1\n  gpus_per_worker: 0\n"
+			}
+			raw := fmt.Sprintf("%sengine: %s\nentrypoint: train.py\ncompute:\n%s%s", nameField, tt.engine, compute, execution)
+			if err := os.WriteFile(config, []byte(raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := NewRoot()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"run", "validate", "--config", config})
+			err := cmd.Execute()
+			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "run name")) {
+				t.Fatalf("expected run name error, got %v", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validate %q: %v", tt.runName, err)
+			}
+		})
+	}
+}
+
+func TestRunConfigClientRenderPreservesDottedJobName(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "train.py")
+	if err := os.WriteFile(script, []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: train.v1
+engine: job
+entrypoint: train.py
+runtime:
+  image: python:3.12
+compute:
+  gpus: 0
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rendered := executeTauConfigDryRun(t, []string{"run", "--config", config, "--dry-run=client"})
+	var manifest map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &manifest); err != nil {
+		t.Fatalf("parse rendered Job: %v\n%s", err, rendered)
+	}
+	metadata := manifest["metadata"].(map[string]any)
+	if metadata["name"] != "train.v1" {
+		t.Fatalf("metadata.name = %v, want train.v1", metadata["name"])
+	}
+	if problems := validation.IsDNS1123Subdomain(metadata["name"].(string)); len(problems) > 0 {
+		t.Fatalf("rendered Job name is invalid: %v", problems)
+	}
+	for location, labels := range map[string]map[string]any{
+		"Job": metadata["labels"].(map[string]any),
+		"Pod": manifest["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["labels"].(map[string]any),
+	} {
+		for key, raw := range labels {
+			value := raw.(string)
+			if problems := validation.IsValidLabelValue(value); len(problems) > 0 {
+				t.Fatalf("%s label %s=%q is invalid: %v", location, key, value, problems)
+			}
+		}
+	}
+	if got := metadata["labels"].(map[string]any)[workloadmeta.LabelRunID]; got != "train.v1" {
+		t.Fatalf("%s = %v, want train.v1", workloadmeta.LabelRunID, got)
 	}
 }
 
