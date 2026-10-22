@@ -32,7 +32,6 @@ images/ray/
 ├── Dockerfile       # Multi-stage build: GNU Wget builder → final Ray image
 ├── Makefile         # Build, test, and push targets
 ├── versions.json    # Version matrix: Python × Ray × CUDA combos to build
-├── verify_ca_trust.py
 └── README.md
 ```
 
@@ -168,9 +167,8 @@ manifest digests.
 7. GNU Wget 1.x is installed (not wget2)
 8. RDMA userspace libraries (`ibverbs`, `rdmacm`, `mlx5`) are loadable
 9. NCCL (`libnccl`) is loadable
-10. `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` resolve to Azure Linux's loadable system bundle
-11. The full Azure Linux `ca-certificates` package is installed and Python `certifi` meets the remediated minimum version
-12. System and Python bundles exclude the compromised eMudhra/emSign trust paths
+10. `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `PIP_CERT` resolve to loadable system and Python bundles
+11. System and Python bundles exclude the compromised eMudhra/emSign trust paths
 
 These smoke tests do not exercise Serve deployment or request handling.
 Release validation must separately cover Serve startup and RayService rollout;
