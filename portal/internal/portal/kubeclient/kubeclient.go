@@ -9,6 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -51,6 +52,15 @@ var (
 	}
 	rayClusterGVR = schema.GroupVersionResource{
 		Group: "ray.io", Version: "v1", Resource: "rayclusters",
+	}
+	replicaSetGVR = schema.GroupVersionResource{
+		Group: "apps", Version: "v1", Resource: "replicasets",
+	}
+	deploymentGVR = schema.GroupVersionResource{
+		Group: "apps", Version: "v1", Resource: "deployments",
+	}
+	statefulSetGVR = schema.GroupVersionResource{
+		Group: "apps", Version: "v1", Resource: "statefulsets",
 	}
 	podGVR = schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "pods",
@@ -148,12 +158,36 @@ func (c *Client) ListDaemonSets(ctx context.Context) ([]byte, error) {
 	return c.listRaw(ctx, daemonSetGVR, "")
 }
 
+func (c *Client) ListDaemonSetsInNamespace(ctx context.Context, namespace string) ([]byte, error) {
+	return c.listRaw(ctx, daemonSetGVR, namespace)
+}
+
 func (c *Client) ListJobs(ctx context.Context, namespace string) ([]byte, error) {
 	return c.listRaw(ctx, jobGVR, namespace)
 }
 
 func (c *Client) ListRayJobs(ctx context.Context, namespace string) ([]byte, error) {
 	return c.listRaw(ctx, rayJobGVR, namespace)
+}
+
+func (c *Client) ListRayServices(ctx context.Context, namespace string) ([]byte, error) {
+	return c.listRaw(ctx, rayServiceGVR, namespace)
+}
+
+func (c *Client) ListRayClusters(ctx context.Context, namespace string) ([]byte, error) {
+	return c.listRaw(ctx, rayClusterGVR, namespace)
+}
+
+func (c *Client) ListReplicaSets(ctx context.Context, namespace string) ([]byte, error) {
+	return c.listRaw(ctx, replicaSetGVR, namespace)
+}
+
+func (c *Client) ListDeployments(ctx context.Context, namespace string) ([]byte, error) {
+	return c.listRaw(ctx, deploymentGVR, namespace)
+}
+
+func (c *Client) ListStatefulSets(ctx context.Context, namespace string) ([]byte, error) {
+	return c.listRaw(ctx, statefulSetGVR, namespace)
 }
 
 func (c *Client) ListPods(ctx context.Context, namespace string) ([]byte, error) {
@@ -215,13 +249,30 @@ func (c *Client) listRaw(ctx context.Context, gvr schema.GroupVersionResource, n
 	if namespace != "" {
 		ri = c.dyn.Resource(gvr).Namespace(namespace)
 	}
-	list, err := ri.List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("list %s.%s: %w", gvr.Resource, gvr.Group, err)
+	const pageSize = int64(500)
+	const maxPages = 100
+	var combined *unstructured.UnstructuredList
+	continueToken := ""
+	for page := 0; page < maxPages; page++ {
+		list, err := ri.List(ctx, metav1.ListOptions{Limit: pageSize, Continue: continueToken})
+		if err != nil {
+			return nil, fmt.Errorf("list %s.%s: %w", gvr.Resource, gvr.Group, err)
+		}
+		if combined == nil {
+			combined = list.DeepCopy()
+			combined.Items = nil
+		}
+		combined.Items = append(combined.Items, list.Items...)
+		continueToken = list.GetContinue()
+		if continueToken == "" {
+			combined.SetContinue("")
+			combined.SetRemainingItemCount(nil)
+			data, err := combined.MarshalJSON()
+			if err != nil {
+				return nil, fmt.Errorf("marshal %s.%s: %w", gvr.Resource, gvr.Group, err)
+			}
+			return data, nil
+		}
 	}
-	data, err := list.MarshalJSON()
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s.%s: %w", gvr.Resource, gvr.Group, err)
-	}
-	return data, nil
+	return nil, fmt.Errorf("list %s.%s exceeded %d pages", gvr.Resource, gvr.Group, maxPages)
 }

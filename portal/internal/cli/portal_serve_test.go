@@ -27,6 +27,21 @@ func TestPortalRunHistoryIsExplicitlyEnabled(t *testing.T) {
 	}
 }
 
+func TestPortalGPUConsumersAreExplicitlyEnabled(t *testing.T) {
+	cmd := newPortalCmd()
+	serve, _, err := cmd.Find([]string{"serve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flag := serve.Flags().Lookup("gpu-consumers-enabled")
+	if flag == nil {
+		t.Fatal("portal serve is missing --gpu-consumers-enabled")
+	}
+	if flag.DefValue != "false" {
+		t.Fatalf("--gpu-consumers-enabled default = %q, want false", flag.DefValue)
+	}
+}
+
 func TestPortalHasNoCatalogReadSourceMigrationSwitch(t *testing.T) {
 	cmd := newPortalCmd()
 	serve, _, err := cmd.Find([]string{"serve"})

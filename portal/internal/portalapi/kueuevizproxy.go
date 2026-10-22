@@ -53,7 +53,9 @@ func (s *Server) proxyToKueueVizRewrite(w http.ResponseWriter, r *http.Request, 
 	target := &url.URL{Scheme: "http", Host: kueueVizServiceHost(s.kueueViz.Namespace, svcName)}
 	proxy := &httputil.ReverseProxy{
 		Transport: s.kueueVizTransport(),
-		Director: func(req *http.Request) {
+		Rewrite: func(proxyReq *httputil.ProxyRequest) {
+			proxyReq.SetXForwarded()
+			req := proxyReq.Out
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
 			req.Host = target.Host

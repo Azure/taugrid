@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.26.10-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1 AS builder
 ARG ADX_MON_VERSION=main
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,11 +11,12 @@ RUN git clone --depth 1 --branch ${ADX_MON_VERSION} \
     https://github.com/Azure/adx-mon.git /code
 WORKDIR /code
 
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOEXPERIMENT=systemcrypto \
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
     go build -buildvcs=false \
     -ldflags="-X 'github.com/Azure/adx-mon/pkg/version.Version=${ADX_MON_VERSION}' \
               -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(git rev-parse HEAD)' \
-              -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)'" \
+              -X 'github.com/Azure/adx-mon/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)' \
+              -X=runtime.godebugDefault=ms_tlsmldsacert=0" \
     -o ./bin/alerter ./cmd/alerter
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0

@@ -161,6 +161,13 @@ export function useBoard<T>(
     refetchInterval,
   });
 }
+export function useGlobalBoard<T>(path: string, enabled = true) {
+  return useQuery({
+    queryKey: ['global-board', path],
+    queryFn: ({ signal }) => fetchJSON<T>(path, signal),
+    enabled,
+  });
+}
 export function prefetchBoardPaths(
   client: QueryClient,
   scope: WorkspaceScope,

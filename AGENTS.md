@@ -29,7 +29,7 @@ Each component can also be built and tested from its own directory:
 cd cli
 make build        # produces bin/tau and bin/tau-gen
 make test         # go test ./...
-make lint         # go vet + gofmt + staticcheck v0.7.0
+make lint         # go vet + gofmt + staticcheck v0.8.2
 make test-kind-e2e      # Kind-based smoke test
 make test-integration   # integration tests (requires built binary, 15m timeout)
 ```
@@ -46,7 +46,7 @@ go vet ./...
 cd portal
 make build    # builds React assets and bin/taugrid-portal; requires Node.js 22 + npm
 make test     # Go tests
-make lint     # frontend typecheck + go vet + gofmt + staticcheck v0.7.0
+make lint     # frontend typecheck + go vet + gofmt + staticcheck v0.8.2
 make frontend-dev    # Vite development server
 make frontend-build  # regenerate checked-in internal/portalapi/assets
 ```
@@ -202,8 +202,9 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 
 ## Conventions
 
-- Go toolchain: 1.26.10 (see `.go-version`); modules require Go 1.26.5
-- Linting: staticcheck v0.7.0 for cli/core/portal; golangci-lint for monitoring modules
+- Go toolchain: 1.27.3 (see `.go-version`); modules require Go 1.27.2; Microsoft Go builders and release pipelines use 1.27.3-1
+- Shipped Go binaries embed `ms_tlsmldsacert=0` to avoid TLS resets from middleboxes that reject ML-DSA certificate signature advertisements; preserve the `runtime.godebugDefault` linker assignment
+- Linting: staticcheck v0.8.2 for cli/core/portal; golangci-lint v2.14.0 for monitoring modules
 - `staticcheck.conf` at repo root disables specific style checks (ST1000, ST1003, ST1005, ST1016, ST1020-ST1023, S1016) — do not re-enable without fixing all findings
 - Python: requires 3.10+, lint with ruff
 - Do not add comments to source code, tests, scripts, configuration, or manifests. Express intent through clear names, types, structure, tests, and documentation. Preserve only required legal notices and compiler or tool directives such as shebangs, build tags, generated-file markers, cgo preambles, and narrowly scoped lint suppressions.

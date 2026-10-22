@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { useBoard } from './data';
 import { BoardResult, Empty, KV, Note, PageTitle, ScopedLink, Subtabs, Table, TrackingLink, text } from './components';
+import { WorkspaceGPUWorkloads } from './GPUVisibility';
 import type { JobDetail, Ray, RayHistory, Run, Runs, SourceDiagnostic, WorkloadLogSnapshot } from './types';
 
 const kubeHint = ' — start the portal with Kubernetes access (in-cluster ServiceAccount or --kubeconfig).';
@@ -52,8 +53,10 @@ function HistoryDiagnostic({ state, diagnostic, ray = false }: { state?: string;
 }
 export function RunsBoard() {
   const query = useBoard<Runs>('/api/portal/runs');
-  return <><div className="page-head"><div><PageTitle title="Jobs">Tau-managed training and inference workloads.</PageTitle></div>
+  return <><div className="page-head"><div><PageTitle title="Tau Workloads">Tau-managed training and inference workloads.</PageTitle></div>
     <button className="btn-primary" disabled title="Submission from the portal is coming soon — the portal is read-only today.">+ Submit new</button></div>
+    <WorkspaceGPUWorkloads/>
+    <section aria-labelledby="run-history"><h2 id="run-history">Runs and history</h2>
     <BoardResult query={query} label="Jobs board" hint={kubeHint}>{snap => {
       const runs = snap.runs || [];
       const groups = [
@@ -70,7 +73,7 @@ export function RunsBoard() {
                 <div className="meta"><span>age {text(r.age)}</span><span>Experiment: </span><TrackingLink run={r}/></div></div>)}</div>}
           </section>)}<Note>Progress, ETA, and training metrics will be available in a future update.</Note></>}
       </>;
-    }}</BoardResult></>;
+    }}</BoardResult></section></>;
 }
 export function JobDetailBoard() {
   const { resourceUID = '' } = useParams();
