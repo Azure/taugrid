@@ -1764,6 +1764,52 @@ policy:
 	}
 }
 
+func TestRunConfigRejectsInvalidResilience(t *testing.T) {
+	tests := []struct {
+		name       string
+		resilience string
+		want       string
+	}{
+		{
+			name: "negative retries",
+			resilience: `resilience:
+  max_retries: -1
+`,
+			want: "resilience.max_retries must be >= 0",
+		},
+		{
+			name: "unsupported reason",
+			resilience: `resilience:
+  max_retries: 1
+  retry_on: [NetworkLost]
+`,
+			want: `resilience.retry_on contains unsupported reason "NetworkLost"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			config := filepath.Join(dir, "tau.yaml")
+			raw := "name: retry-test\nengine: job\nentrypoint: train.sh\n" + tt.resilience
+			if err := os.WriteFile(config, []byte(raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			validate := NewRoot()
+			validate.SetOut(&bytes.Buffer{})
+			validate.SetErr(&bytes.Buffer{})
+			validate.SetArgs([]string{"run", "validate", "--config", config})
+			if err := validate.Execute(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("tau run validate error = %v, want %q", err, tt.want)
+			}
+
+			if err := executeTauConfigError(t, raw); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("tau run --dry-run=client error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveRunTargetCarriesManagedRayMetricsAndOutput(t *testing.T) {
 	o := defaultRunDispatchOptions()
 	o.engine = "rayjob"

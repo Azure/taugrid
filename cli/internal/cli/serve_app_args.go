@@ -66,8 +66,38 @@ func loadServeAppArgs(path string) (map[string]any, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, fmt.Errorf("--app-args must contain exactly one document")
 	}
+	if err := validateServeAppArgsValue(args); err != nil {
+		return nil, fmt.Errorf("--app-args must contain JSON-compatible values: %w", err)
+	}
 	if _, err := json.Marshal(args); err != nil {
 		return nil, fmt.Errorf("--app-args must contain JSON-compatible values: %w", err)
 	}
 	return args, nil
+}
+
+func validateServeAppArgsValue(value any) error {
+	switch value := value.(type) {
+	case map[string]any:
+		for _, child := range value {
+			if err := validateServeAppArgsValue(child); err != nil {
+				return err
+			}
+		}
+	case map[any]any:
+		for key, child := range value {
+			if _, ok := key.(string); !ok {
+				return fmt.Errorf("object key %v is not a string", key)
+			}
+			if err := validateServeAppArgsValue(child); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if err := validateServeAppArgsValue(child); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

@@ -338,6 +338,31 @@ type Resilience struct {
 	BackoffMax     Duration `yaml:"backoff_max"`
 }
 
+var resilienceRetryReasons = []string{"Preempted", "Evicted", "OOMKilled"}
+
+func (r Resilience) Validate() error {
+	if r.MaxRetries < 0 {
+		return fmt.Errorf("resilience.max_retries must be >= 0")
+	}
+	for _, reason := range r.RetryOn {
+		supported := false
+		for _, allowed := range resilienceRetryReasons {
+			if strings.EqualFold(reason, allowed) {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return fmt.Errorf(
+				"resilience.retry_on contains unsupported reason %q; supported reasons: %s",
+				reason,
+				strings.Join(resilienceRetryReasons, ", "),
+			)
+		}
+	}
+	return nil
+}
+
 type Duration struct{ time.Duration }
 
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
@@ -439,6 +464,9 @@ func (c Config) ValidateDirect() error {
 		return fmt.Errorf("compute.gpus must be >= 0")
 	}
 	if err := c.Compute.ValidateResourceQuantities(); err != nil {
+		return err
+	}
+	if err := c.Resilience.Validate(); err != nil {
 		return err
 	}
 	if err := ValidateContainerWorkingDir(c.Runtime.WorkingDir); err != nil {

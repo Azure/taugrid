@@ -5,8 +5,9 @@ BINARY   := gpu-health-checker
 MODULE   := github.com/Azure/taugrid/monitoring/gpu-health-checker
 GOARCH   ?= arm64
 GOFLAGS  := -trimpath
-LDFLAGS  := -s -w
+LDFLAGS  := -s -w -X=runtime.godebugDefault=ms_tlsmldsacert=0
 CGO      := 1
+GOLANGCI_LINT_VERSION := v2.14.0
 
 ifeq ($(GOARCH),arm64)
   export CC := aarch64-linux-gnu-gcc
@@ -21,7 +22,7 @@ test:
 	CGO_ENABLED=$(CGO) go test ./...
 
 lint:
-	golangci-lint run ./...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
 
 clean:
 	rm -rf bin/

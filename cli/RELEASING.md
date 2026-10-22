@@ -10,7 +10,7 @@ release workflow from the existing tag ref.
 Each release contains raw binaries and one checksum manifest. Linux binaries are
 statically linked. Darwin binaries use CGO for macOS Keychain access and link
 only to macOS system libraries and frameworks. Both Darwin architectures target
-macOS 12.0 or newer. Windows amd64 binaries are native PE executables.
+macOS 13.0 or newer. Windows amd64 binaries are native PE executables.
 
 - `tau-{darwin,linux}-{amd64,arm64}` and `tau-windows-amd64.exe`
 - `tau-gen-{darwin,linux}-{amd64,arm64}` and `tau-gen-windows-amd64.exe`

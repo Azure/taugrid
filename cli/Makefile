@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: build install test test-installer test-installer-windows test-kind-e2e lint clean verify-release-inputs release-binaries release-assets
+.PHONY: build install test test-installer test-installer-windows test-kind-e2e lint clean verify-release-inputs verify-release-toolchain release-binaries release-assets
 
 BINARY := tau
 GEN_BINARY := tau-gen
@@ -11,13 +11,15 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/Azure/taugrid/core/version
-LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE)
+GODEBUG_LDFLAG := -X=runtime.godebugDefault=ms_tlsmldsacert=0
+MICROSOFT_GO_TOOLSET := go1.27.3-1-microsoft
+LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE) $(GODEBUG_LDFLAG)
 BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 
-STATICCHECK_VERSION := v0.7.0
+STATICCHECK_VERSION := v0.8.2
 RELEASE_DIR := bin/release
 RELEASE_TARGETS := darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64
-DARWIN_MIN_VERSION := 12.0
+DARWIN_MIN_VERSION := 13.0
 DARWIN_CGO_CFLAGS := -O2 -g -mmacosx-version-min=$(DARWIN_MIN_VERSION)
 DARWIN_CGO_LDFLAGS := -mmacosx-version-min=$(DARWIN_MIN_VERSION)
 PYTHON_WHEEL ?=
@@ -63,7 +65,11 @@ verify-release-inputs:
 	@test "$$(go env GOHOSTOS)" = "darwin" || \
 	  { echo "release builds require macOS because Darwin token-cache support requires CGO" >&2; exit 1; }
 
-release-binaries: verify-release-inputs
+verify-release-toolchain:
+	@go version -m "$$(command -v go)" | grep -Fq "microsoft_toolset_version=$(MICROSOFT_GO_TOOLSET)" || \
+	  { echo "release builds require Microsoft Go $(MICROSOFT_GO_TOOLSET)" >&2; exit 1; }
+
+release-binaries: verify-release-inputs verify-release-toolchain
 	@test -n "$(RELEASE_DIR)" || { echo "RELEASE_DIR must not be empty" >&2; exit 1; }
 	@rm -rf "$(RELEASE_DIR)"
 	@mkdir -p "$(RELEASE_DIR)"

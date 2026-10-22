@@ -4246,7 +4246,7 @@ runtime:
 	}
 }
 
-const sizeLimitScriptExtraBytes = 48500
+const sizeLimitScriptExtraBytes = 48850
 
 func renderSizeLimitProbe(t *testing.T, manifestPadBytes int) ([]byte, error) {
 	t.Helper()

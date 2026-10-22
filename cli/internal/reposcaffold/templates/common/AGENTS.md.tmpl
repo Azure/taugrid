@@ -7,7 +7,7 @@ This repo is a Tau Python research workspace scaffold. Keep local research code 
 - `TauWorkspace` owns access, queue, namespace, and status; it does not own storage.
 - This repo owns Python source, local `uv` setup, image build context, Tau run configs, and experiment-specific data/PVC/secret references.
 - `tau/workspace.connection.yaml` is the non-secret platform handoff. Do **not** add `policy.workspace` to `tau/*.yaml`.
-{{if .HasWorkspaceConnection}}- The descriptor requires `{{.AuthorizationMode}}` authorization and role `{{.RequiredRole}}`.
+{{if .HasWorkspaceConnection}}- The descriptor requires `{{.AuthorizationMode}}` authorization{{if .RequiredRole}} and role `{{.RequiredRole}}`{{end}}.
 {{else}}- This scaffold is not connected yet. The platform owner must add `tau/workspace.connection.yaml` before cluster runs.
 {{end}}
 - Build and push the project image, write the published tag or digest back with `scripts/configure.sh`, validate, then run.

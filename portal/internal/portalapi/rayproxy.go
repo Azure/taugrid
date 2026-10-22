@@ -23,7 +23,6 @@ const rayWorkspaceProxyPrefix = "/api/portal/ray/workspaces/"
 const rayDashboardPort = "8265"
 
 var rayUnscopedPrefixes = []string{
-	"/api/",
 	"/static/",
 	"/nodes",
 	"/logical/",
@@ -115,14 +114,16 @@ func (s *Server) proxyToHead(w http.ResponseWriter, r *http.Request, ns, svcName
 	target.RawQuery = query.Encode()
 	proxy := &httputil.ReverseProxy{
 		Transport: s.rayTransport(),
-		Director: func(req *http.Request) {
+		Rewrite: func(proxyReq *httputil.ProxyRequest) {
+			proxyReq.SetXForwarded()
+			req := proxyReq.Out
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
 			req.Host = target.Host
 			req.URL.Path = upstreamPath
 			req.URL.RawPath = ""
 			req.URL.RawQuery = target.RawQuery
-			token, _ := req.Cookie(rayAuthCookieName(prefix))
+			token, _ := proxyReq.In.Cookie(rayAuthCookieName(prefix))
 			req.Header.Del("Cookie")
 			if req.Method != http.MethodPost || upstreamPath != "/api/authenticate" {
 				req.Header.Del("Authorization")
