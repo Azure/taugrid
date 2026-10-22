@@ -396,6 +396,26 @@ For a direct standalone `taugrid-core` installation, Portal is disabled by defau
   Without the RBAC, those boards return 502 with the API server's forbidden
   error and the rest of the portal still serves; 503 is reserved for a portal
   that could not build a Kubernetes client at all.
+- **GPU visibility** has two deliberately different authorization surfaces.
+  `/api/portal/workspace-gpu-workloads` remains fail-closed: the server must
+  resolve an authorized workspace namespace and LocalQueue before listing
+  Tau-managed GPU workloads. `/api/portal/gpu-consumers` is cluster-wide and is
+  disabled by default for compatibility with Portal images that predate the
+  endpoint. Set `portal.gpuConsumers.enabled=true` only when the configured
+  Portal image supports `--gpu-consumers-enabled`; the chart also requires
+  `portal.access.mode=authenticated-proxy`.
+  Every user admitted by that trusted proxy can see the same metadata-only
+  inventory, including unmanaged owners. It remains disabled in
+  `cluster-internal` mode. The Portal API does not perform a second user
+  authentication check because the built-in Entra proxy intentionally forwards
+  no identity headers. The underlying ClusterIP Service is therefore part of
+  the trusted in-cluster deployment boundary and must not be exposed directly
+  to untrusted tenants or external clients. The Portal ServiceAccount needs read-only list access
+  to Pods, Jobs, ReplicaSets, Deployments, StatefulSets, DaemonSets, RayJobs,
+  RayServices, RayClusters, and Kueue Workloads. The endpoint does not expose
+  container images, commands, environment, arbitrary labels or annotations,
+  logs, events, or Secrets. Canonical owner names are exposed; for a standalone
+  Pod, the Pod is the canonical owner and its name is included.
 
 `portal.jobs.scopeMode` is omitted from the rendered command by default, and
 Portal binaries default the board to `disabled`, so the board stays off until an
@@ -474,6 +494,7 @@ Minimum configuration:
 |---|---|
 | `portal.access.mode` | `authenticated-proxy` |
 | `portal.access.externalURL` | HTTPS origin with no port, query, or path |
+| `portal.gpuConsumers.enabled` | `true` only with a Portal image that supports `--gpu-consumers-enabled` |
 | `portal.entraAuth.tenantID`, `.clientID` | Single-tenant Entra Web app UUIDs |
 | `portal.entraAuth.cookieSecret` | Existing release-namespace Secret with a random 32-byte key |
 | `portal.entraAuth.gatewayClassName`, `.issuerRef` | Existing Gateway controller and cert-manager issuer |

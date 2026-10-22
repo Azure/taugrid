@@ -196,6 +196,8 @@ portal:
   access:
     mode: cluster-internal
     externalURL: ""
+  gpuConsumers:
+    enabled: false
   entraAuth:
     enabled: false
     tenantID: ""

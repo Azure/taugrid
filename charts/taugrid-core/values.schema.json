@@ -16,6 +16,13 @@
             "externalURL": { "type": "string" }
           }
         },
+        "gpuConsumers": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        },
         "workspaceDirectory": {
           "type": "object",
           "additionalProperties": true,

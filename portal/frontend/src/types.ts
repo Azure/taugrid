@@ -170,3 +170,40 @@ export interface WorkloadLogSnapshot extends Scoped {
   pod: string; container: string; previous: boolean; content: string;
   tailLines: number; limitBytes: number; truncated: boolean; redactionApplied: boolean;
 }
+export interface GPUResourceQuantity { name: string; count: number }
+export interface GPUInventoryDiagnostic { code: string; message: string }
+export interface GPUInventorySource {
+  source: string; state: 'ready' | 'forbidden' | 'unavailable' | 'invalid'; message?: string;
+}
+export interface GPUWorkload {
+  namespace: string;
+  owner: {
+    kind: string; name: string; uid?: string; resolution: string;
+    rawOwnerKind?: string; rawOwnerName?: string; rawOwnerUid?: string;
+  };
+  managed: boolean;
+  queue?: string; workspace?: string; team?: string; runId?: string;
+  lane?: string; profile?: string; gpuClass?: string;
+  podCount: number; readyPods: number; pendingPods: number; boundPods: number;
+  phases: { pending: number; running: number };
+  nodes: string[];
+  resources: GPUResourceQuantity[];
+  pendingResources: GPUResourceQuantity[];
+  boundResources: GPUResourceQuantity[];
+  requestedFullGpus: number; pendingFullGpus: number; boundFullGpus: number;
+  countUnknown: boolean; countUnknownPods: number;
+  diagnostics: GPUInventoryDiagnostic[];
+  detail?: { resourceUid: string; path: string };
+}
+export interface GPUInventory extends Scoped {
+  generatedAt: string;
+  summary: {
+    workloads: number; pods: number; readyPods: number; pendingPods: number; boundPods: number;
+    requestedFullGpus: number; pendingFullGpus: number; boundFullGpus: number; countUnknownPods: number;
+  };
+  workloads: GPUWorkload[];
+  partial: boolean;
+  truncated: boolean;
+  sources: GPUInventorySource[];
+  state?: 'ready' | 'no_data';
+}
