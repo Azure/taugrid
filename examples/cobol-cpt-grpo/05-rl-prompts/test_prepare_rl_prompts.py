@@ -10,6 +10,8 @@ Needs no cobc and no GPU:
 import importlib.util
 import json
 import os
+import subprocess
+from unittest import mock
 
 import pytest
 
@@ -114,3 +116,31 @@ def test_load_val_windows_fails_without_validation_programs(prep, tmp_path, cont
         val_path.write_text(contents)
     with pytest.raises(RuntimeError):
         prep.load_val_windows(str(val_path), 8)
+
+
+@pytest.mark.parametrize(
+    "stderr, expected",
+    [
+        ("", False),
+        ("cobc: unrecognized option '-fmissing-period=ok'", False),
+        ("x.cbl:3: error: COPY book 'FOO' not found", True),
+        (
+            "x.cbl:3: error: COPY book 'FOO' not found\nx.cbl:9: error: 'X' is not defined",
+            False,
+        ),
+    ],
+)
+def test_copybook_only_needs_only_missing_copybook_errors(prep, stderr, expected):
+    assert prep.is_copybook_only_error(stderr) is expected
+
+
+def test_check_compiler_fails_on_rejected_flags(prep):
+    rejected = subprocess.CompletedProcess(
+        [], 1, b"", b"cobc: unrecognized option '-fmissing-period=ok'"
+    )
+    with mock.patch.object(prep.subprocess, "run", return_value=rejected):
+        with pytest.raises(RuntimeError, match="free-format preflight failed"):
+            prep.check_compiler()
+    ok = subprocess.CompletedProcess([], 0, b"", b"")
+    with mock.patch.object(prep.subprocess, "run", return_value=ok):
+        prep.check_compiler()

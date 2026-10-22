@@ -61,6 +61,14 @@ EXEC_BLOCK_RE = re.compile(
 
 COPY_STMT_RE = re.compile(r"^\s*COPY\s+\S+.*?\.\s*$", re.IGNORECASE | re.MULTILINE)
 
+PREFLIGHT_PROGRAM = (
+    "       IDENTIFICATION DIVISION.\n"
+    "       PROGRAM-ID. PREFLIGHT.\n"
+    "       PROCEDURE DIVISION.\n"
+    "           DISPLAY 'OK'.\n"
+    "           STOP RUN.\n"
+)
+
 WHITESPACE_RE = re.compile(r"\s+")
 
 stats = Counter()
@@ -202,7 +210,6 @@ def try_compile_free(cobol_text):
                 "-frelax-syntax-checks",
                 "-frelax-level-hierarchy",
                 "-fmissing-statement=ok",
-                "-fmissing-period=ok",
                 "-w",
                 src,
             ],
@@ -236,7 +243,6 @@ def try_compile_fixed(cobol_text):
                 "-frelax-syntax-checks",
                 "-frelax-level-hierarchy",
                 "-fmissing-statement=ok",
-                "-fmissing-period=ok",
                 "-w",
                 src,
             ],
@@ -257,14 +263,17 @@ def try_compile_fixed(cobol_text):
 
 
 def is_copybook_only_error(stderr):
-    if not stderr.strip():
-        return False
-    for line in stderr.splitlines():
-        low = line.lower()
-        if "error:" in low:
-            if "copy" not in low or "not found" not in low:
-                return False
-    return True
+    errors = [ln.lower() for ln in stderr.splitlines() if "error:" in ln.lower()]
+    return bool(errors) and all("copy" in ln and "not found" in ln for ln in errors)
+
+
+def check_compiler():
+    for name, compile_fn in [("free", try_compile_free), ("fixed", try_compile_fixed)]:
+        rc, stderr = compile_fn(PREFLIGHT_PROGRAM)
+        if rc != 0:
+            raise RuntimeError(
+                f"cobc {name}-format preflight failed (rc={rc}): {stderr.strip()[:500]}"
+            )
 
 
 def compile_check(text):
@@ -320,8 +329,11 @@ def main():
     log(f"RAW={RAW}, OUT={OUT}, workers={MAX_WORKERS}")
     log(f"Body lines: {MIN_BODY_LINES}-{MAX_BODY_LINES}")
 
-    subprocess.run(["cobc", "--version"], capture_output=True, check=True)
-    log("cobc available")
+    version = subprocess.run(
+        ["cobc", "--version"], capture_output=True, text=True, check=True
+    ).stdout.splitlines()[0]
+    check_compiler()
+    log(f"{version} compiles the preflight program in free and fixed format")
 
     val_windows, val_count = load_val_windows(VAL_PATH, VAL_OVERLAP_LINES)
     log(f"Loaded {val_count} validation programs from {VAL_PATH}")
