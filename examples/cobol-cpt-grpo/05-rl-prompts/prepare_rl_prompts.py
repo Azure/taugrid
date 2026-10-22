@@ -147,6 +147,7 @@ def exclude_val_overlap(texts_with_paths, val_windows, size):
         (path, text)
         for path, text in texts_with_paths
         if not overlaps_val(text, val_windows, size)
+        and not overlaps_val(prepare_text(text), val_windows, size)
     ]
     return kept, len(texts_with_paths) - len(kept)
 
@@ -180,6 +181,11 @@ def strip_exec_blocks(text):
 
 def strip_copy_stmts(text):
     return COPY_STMT_RE.sub("", text)
+
+
+def prepare_text(raw_text):
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n").rstrip()
+    return strip_copy_stmts(strip_exec_blocks(text))
 
 
 def try_compile_free(cobol_text):
@@ -279,11 +285,7 @@ def process_one(path_and_text):
     path, raw_text = path_and_text
     result = {"path": path, "status": None}
 
-    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
-    text = text.rstrip()
-
-    text_stripped = strip_exec_blocks(text)
-    text_stripped = strip_copy_stmts(text_stripped)
+    text_stripped = prepare_text(raw_text)
 
     prompt, body, body_lines = extract_prompt(text_stripped)
     if prompt is None:

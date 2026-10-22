@@ -77,6 +77,21 @@ def test_exclude_val_overlap_drops_programs_sharing_a_window(prep, tmp_path):
     assert [p for p, _ in kept] == ["short.cbl", "clean.cbl"]
 
 
+def test_exclude_val_overlap_checks_text_after_copy_stripping(prep, tmp_path):
+    val_path = tmp_path / "prepared" / "val.jsonl"
+    _write_val(val_path, [_program("VALPROG", SHARED)])
+    windows, _ = prep.load_val_windows(str(val_path), 8)
+
+    split = _program(
+        "SPLIT", OTHER[:2] + SHARED[:4] + ["           COPY FOO."] + SHARED[4:8]
+    )
+    assert not prep.overlaps_val(split, windows, 8)
+    assert prep.overlaps_val(prep.prepare_text(split), windows, 8)
+    kept, removed = prep.exclude_val_overlap([("split.cbl", split)], windows, 8)
+    assert removed == 1
+    assert kept == []
+
+
 def test_assert_disjoint_raises_on_overlap(prep, tmp_path):
     val_path = tmp_path / "prepared" / "val.jsonl"
     _write_val(val_path, [_program("VALPROG", SHARED)])
