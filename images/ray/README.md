@@ -7,7 +7,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 | Component | Details |
 |-----------|---------|
 | **Base OS** | Azure Linux 3 core 20261022 and Python 3.12.15 images pinned by multi-architecture manifest digest |
-| **Python** | 3.12.15 from the pinned Azure Linux base image |
+| **Python** | 3.12.15 selected by `PYTHON_VERSION=3.12` and enforced against the pinned base digest |
 | **Ray** | 2.58.0 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
 | **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1+ includes the upstream protobuf 7 compatibility fix |
 | **CUDA toolkit** | nvcc, ptxas, nvrtc, nvvm/libdevice, libcurand-devel (from NVIDIA RHEL 9 repos) |
@@ -65,19 +65,20 @@ the default, move `"default": true` to the new entry and update `RAY_VERSION`
 in the Makefile. Pass each non-default combination explicitly to the Makefile's
 build and test targets, and coordinate matrix consumption with the ADO release
 owner. Changing Python also requires updating the pinned Python `FROM`
-reference and `PYTHON_VERSION` together.
+digest mapping in the Makefile.
 
 ## Building
 
-Ray and CUDA version defaults are defined in the `Makefile` and can be
-overridden. The Python base image is pinned directly in the Dockerfile.
+Version defaults are defined in the `Makefile` and can be overridden. The
+Makefile selects the pinned base digest for `PYTHON_VERSION` and rejects
+versions without a digest mapping.
 
 ```bash
 # Build single-arch image and load into local Docker
 make docker-build
 
 # Build with custom versions
-make docker-build RAY_VERSION=2.58.0 CUDA_VERSION=13.0
+make docker-build PYTHON_VERSION=3.12 RAY_VERSION=2.58.0 CUDA_VERSION=13.0
 
 # Run image smoke tests
 make test
@@ -116,7 +117,7 @@ combined manifest list at `$(IMG)` itself.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PYTHON_VERSION` | `3.12` | Expected runtime Python version and image-tag component |
+| `PYTHON_VERSION` | `3.12` | Python base tag and expected runtime version; must have a pinned digest mapping |
 | `RAY_VERSION` | `2.58.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |

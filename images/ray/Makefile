@@ -5,6 +5,12 @@ IMAGE    := ray
 PYTHON_VERSION ?= 3.12
 RAY_VERSION    ?= 2.58.0
 CUDA_VERSION   ?= 13.0
+python_base_digest_3.12 := sha256:9343005b72a7cc34847dcb8d09bb8a0c145311eff88c151c60d9c4904edaf6e9
+python_base_digest = $(python_base_digest_$(1))
+override PYTHON_BASE_DIGEST := $(call python_base_digest,$(PYTHON_VERSION))
+ifeq ($(PYTHON_BASE_DIGEST),)
+$(error no pinned Azure Linux Python digest for PYTHON_VERSION=$(PYTHON_VERSION))
+endif
 GIT_SHA        ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 TAG            ?= py$(PYTHON_VERSION)-ray$(RAY_VERSION)-cuda$(CUDA_VERSION)-$(GIT_SHA)
 SOURCE_REVISION ?= $(shell git rev-parse HEAD 2>/dev/null || echo dev)
@@ -22,6 +28,8 @@ all: docker-build test docker-push
 
 docker-build:
 	docker buildx build \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg PYTHON_BASE_DIGEST=$(PYTHON_BASE_DIGEST) \
 		--build-arg RAY_VERSION=$(RAY_VERSION) \
 		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
 		--build-arg SOURCE_REVISION=$(SOURCE_REVISION) \
@@ -36,6 +44,8 @@ CACHE_ARGS := $(if $(CACHE_REPO),--cache-from type=registry$(comma)ref=$(CACHE_R
 docker-push:
 	@test -n "$(ACR_REGISTRY)" || { echo "ACR_REGISTRY is required for producer-side pushes" >&2; exit 1; }
 	docker buildx build \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg PYTHON_BASE_DIGEST=$(PYTHON_BASE_DIGEST) \
 		--build-arg RAY_VERSION=$(RAY_VERSION) \
 		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
 		--build-arg SOURCE_REVISION=$(SOURCE_REVISION) \
@@ -54,6 +64,8 @@ docker-push-arch:
 	@test "$(origin IMG)" = "command line" -o "$(origin IMG)" = "environment" || \
 		{ echo "IMG must be set explicitly (e.g. IMG=<registry>/ray:<tag>)" >&2; exit 1; }
 	docker buildx build \
+		--build-arg PYTHON_VERSION=$(PYTHON_VERSION) \
+		--build-arg PYTHON_BASE_DIGEST=$(PYTHON_BASE_DIGEST) \
 		--build-arg RAY_VERSION=$(RAY_VERSION) \
 		--build-arg CUDA_VERSION=$(CUDA_VERSION) \
 		--build-arg SOURCE_REVISION=$(SOURCE_REVISION) \

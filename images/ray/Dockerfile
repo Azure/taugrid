@@ -1,6 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+ARG PYTHON_VERSION=3.12
+ARG PYTHON_BASE_DIGEST=sha256:9343005b72a7cc34847dcb8d09bb8a0c145311eff88c151c60d9c4904edaf6e9
+
 FROM mcr.microsoft.com/azurelinux/base/core:3.0.20261022@sha256:bd88359666e3f20296e7fe639a480dfd3c3c8eba299b21f26e4560353e21a656 AS wget-builder
 ARG WGET_VERSION=1.25.0
 RUN tdnf install -y gcc glibc-devel kernel-headers binutils make tar \
@@ -12,10 +15,13 @@ WORKDIR /tmp/wget-${WGET_VERSION}
 RUN ./configure --with-ssl=openssl --disable-nls --quiet \
     && make -j"$(nproc)" --quiet
 
-FROM mcr.microsoft.com/azurelinux/base/python:3.12.15-1-azl3.0.20261022@sha256:9343005b72a7cc34847dcb8d09bb8a0c145311eff88c151c60d9c4904edaf6e9 AS base
+FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION}@${PYTHON_BASE_DIGEST} AS base
 
+ARG PYTHON_VERSION
 ARG RAY_VERSION
 ARG CUDA_VERSION
+
+RUN python3 -c "import platform, sys; actual=platform.python_version(); expected='${PYTHON_VERSION}'; sys.exit(0 if actual == expected or actual.startswith(expected + '.') else f'expected Python {expected}, found {actual}')"
 
 COPY --from=wget-builder /tmp/wget-*/src/wget /usr/bin/wget
 
