@@ -19,8 +19,7 @@ RUN git init \
     && git -C go am /tmp/microsoft-go/patches/[0-9][0-9][0-9][0-9]-*.patch \
     && cd go/src \
     && GOROOT_BOOTSTRAP=/usr/local/go ./make.bash \
-    && ../bin/go version | grep -F "go1.27.3" \
-    && GOEXPERIMENT=systemcrypto ../bin/go env GOEXPERIMENT | grep -Fx "systemcrypto"
+    && ../bin/go version | grep -F "go1.27.3"
 
 FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1 AS builder
 
@@ -44,7 +43,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -buildvcs=false -ldflags '-s -w -X=runtime.godebugDefault=ms_tlsmldsacert=0' -o /tau-core-controller ./cmd/controller
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0

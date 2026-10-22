@@ -11,7 +11,7 @@ RUN git clone --depth 1 --branch ${ADX_MON_VERSION} \
     https://github.com/Azure/adx-mon.git /code
 WORKDIR /code
 
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 GOEXPERIMENT=systemcrypto \
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
     go build -buildvcs=false \
     -ldflags="-X 'github.com/Azure/adx-mon/pkg/version.Version=${ADX_MON_VERSION}' \
               -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(git rev-parse HEAD)' \

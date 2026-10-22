@@ -15,10 +15,9 @@ RUN git clone --depth 1 --branch ${ADX_MON_VERSION} \
 WORKDIR /code
 
 # Build collector with FIPS crypto
-# GOEXPERIMENT=systemcrypto: routes TLS/crypto through system OpenSSL (FIPS 140-2/3)
-# CGO_ENABLED=1: required for libsystemd (sdjournal/dlopen) and systemcrypto
+# CGO_ENABLED=1: required for libsystemd (sdjournal/dlopen) and system crypto
 RUN test -n "${TARGETOS}" && test -n "${TARGETARCH}" && \
-    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOEXPERIMENT=systemcrypto \
+    CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -buildvcs=false \
     -ldflags="-X 'github.com/Azure/adx-mon/pkg/version.Version=${ADX_MON_VERSION}' \
               -X 'github.com/Azure/adx-mon/pkg/version.GitCommit=$(git rev-parse HEAD)' \

@@ -50,6 +50,14 @@ readonly -a MICROSOFT_GO_PIPELINE_FILES=(
   ".pipelines/taugrid-unbounded-stable-nightly.yml"
 )
 
+readonly -a SYSTEM_CRYPTO_BUILD_FILES=(
+  "images/tau-core-controller/Dockerfile"
+  "images/adx-mon/Dockerfile.alerter"
+  "images/adx-mon/Dockerfile.collector"
+  "images/adx-mon/Dockerfile.ingestor"
+  "images/adx-mon/Dockerfile.operator"
+)
+
 test "$(cat "${REPO_ROOT}/.go-version")" = "${GO_TOOLCHAIN_VERSION}"
 grep -Fq "MICROSOFT_GO_TOOLSET := ${MICROSOFT_GO_TOOLSET}" "${REPO_ROOT}/cli/Makefile"
 grep -Fq "DARWIN_MIN_VERSION := 13.0" "${REPO_ROOT}/cli/Makefile"
@@ -66,6 +74,20 @@ for file in "${MICROSOFT_GO_PIPELINE_FILES[@]}"; do
   grep -Fq "1.27.3-1" "${REPO_ROOT}/${file}"
   grep -Fq "goDownloadUrl: https://aka.ms/golang/release/latest" "${REPO_ROOT}/${file}"
 done
+
+for file in "${SYSTEM_CRYPTO_BUILD_FILES[@]}"; do
+  if grep -Eq "GOEXPERIMENT=(systemcrypto|nosystemcrypto)" "${REPO_ROOT}/${file}"; then
+    exit 1
+  fi
+  if grep -Fq "MS_GO_NOSYSTEMCRYPTO=1" "${REPO_ROOT}/${file}"; then
+    exit 1
+  fi
+done
+
+grep -Fq "MS_GO_NOSYSTEMCRYPTO=1" "${REPO_ROOT}/images/gpu-metrics-collector/Dockerfile"
+if grep -Eq "GOEXPERIMENT=(systemcrypto|nosystemcrypto|none)" "${REPO_ROOT}/images/gpu-metrics-collector/Dockerfile"; then
+  exit 1
+fi
 
 PROBE_DIR="$(mktemp -d)"
 readonly PROBE_DIR
