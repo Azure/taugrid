@@ -6,7 +6,7 @@ A multi-arch (amd64/arm64) container image based on [Azure Linux 3](https://gith
 
 | Component | Details |
 |-----------|---------|
-| **Base OS** | Azure Linux 3 (`mcr.microsoft.com/azurelinux/base/python`) |
+| **Base OS** | Azure Linux 3 core 20261022 and Python 3.12.15 images pinned by multi-architecture manifest digest |
 | **Python** | 3.12 (configurable via `PYTHON_VERSION`) |
 | **Ray** | 2.58.0 build target — `ray[default]`, `ray[data]`, `ray[serve]` |
 | **protobuf** | Resolved by Ray's dependencies without an image-specific upper bound; Ray 2.56.1+ includes the upstream protobuf 7 compatibility fix |
@@ -114,9 +114,11 @@ combined manifest list at `$(IMG)` itself.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PYTHON_VERSION` | `3.12` | Python version for the base image |
+| `PYTHON_VERSION` | `3.12` | Expected runtime Python version and image-tag component |
 | `RAY_VERSION` | `2.58.0` | Ray version to install via pip |
 | `CUDA_VERSION` | `13.0` | CUDA toolkit version (converted to dash form for NVIDIA RPM packages internally) |
+| `AZURELINUX_CORE_IMAGE` | Azure Linux core 3.0.20261022 manifest digest | Core base image used to build GNU Wget |
+| `AZURELINUX_PYTHON_IMAGE` | Azure Linux Python 3.12.15 20261022 manifest digest | Runtime base image; override together with `PYTHON_VERSION` |
 | `CA_CERTIFICATES_MIN_VERSION` | `3.0.0-19.azl3` | Minimum Azure Linux trust-store package containing the eMudhra/emSign remediation |
 | `CERTIFI_MIN_VERSION` | `2026.10.19` | Minimum Python CA bundle containing the eMudhra/emSign remediation |
 | `IMG` | `mcr.microsoft.com/aks/ai-runtime/ray:<tag>` | Fully-qualified destination tag used by `docker-build`, `test`, `clean`, `docker-push-arch`, and `docker-push-manifest` |
@@ -149,8 +151,11 @@ contributor PRs must not publish images.
 A source fix alone does not repair an already-published image. CA trust-store
 changes require fresh multi-architecture builds, publication under new
 immutable tags or digests, and workload rollout so nodes do not reuse affected
-cached images. Build targets pull current base manifests and the minimum-version
-arguments invalidate pre-remediation package layers.
+cached images. Build targets pull the pinned base manifests and the
+minimum-version arguments invalidate pre-remediation package layers. The
+default base image references are pinned to the remediated October 22
+multi-architecture manifest digests; release owners must update the tag and
+digest together when rebasing.
 
 ## Testing
 

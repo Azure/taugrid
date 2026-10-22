@@ -1,11 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-ARG PYTHON_VERSION
+ARG AZURELINUX_CORE_IMAGE=mcr.microsoft.com/azurelinux/base/core:3.0.20261022@sha256:bd88359666e3f20296e7fe639a480dfd3c3c8eba299b21f26e4560353e21a656
+ARG AZURELINUX_PYTHON_IMAGE=mcr.microsoft.com/azurelinux/base/python:3.12.15-1-azl3.0.20261022@sha256:9343005b72a7cc34847dcb8d09bb8a0c145311eff88c151c60d9c4904edaf6e9
 ARG CA_CERTIFICATES_MIN_VERSION=3.0.0-19.azl3
 ARG CERTIFI_MIN_VERSION=2026.10.19
 
-FROM mcr.microsoft.com/azurelinux/base/core:3.0 AS wget-builder
+FROM ${AZURELINUX_CORE_IMAGE} AS wget-builder
 ARG CA_CERTIFICATES_MIN_VERSION
 ARG WGET_VERSION=1.25.0
 RUN tdnf install -y "ca-certificates>=${CA_CERTIFICATES_MIN_VERSION}" \
@@ -18,7 +19,7 @@ WORKDIR /tmp/wget-${WGET_VERSION}
 RUN ./configure --with-ssl=openssl --disable-nls --quiet \
     && make -j"$(nproc)" --quiet
 
-FROM mcr.microsoft.com/azurelinux/base/python:${PYTHON_VERSION} AS base
+FROM ${AZURELINUX_PYTHON_IMAGE} AS base
 
 ARG RAY_VERSION
 ARG CUDA_VERSION
