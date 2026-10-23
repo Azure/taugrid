@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM --platform=$BUILDPLATFORM docker.io/library/node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS frontend
+FROM --platform=$BUILDPLATFORM docker.io/library/node:26.11.1-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567 AS frontend
 
 WORKDIR /app/portal/frontend
 COPY portal/frontend/package.json portal/frontend/package-lock.json ./
