@@ -89,13 +89,12 @@ raw_b64 = os.environ["TAU_PAYLOAD_B64"]
 want_digest = os.environ["TAU_PAYLOAD_DIGEST"]
 target_dir = os.environ["TAU_PAYLOAD_TARGET_DIR"]
 
-raw = base64.b64decode(raw_b64)
+raw = gzip.decompress(base64.b64decode(raw_b64))
 got_digest = hashlib.sha256(raw).hexdigest()
 if got_digest != want_digest:
     sys.stderr.write("tau-payload: integrity check failed: digest=%s want=%s\\n" % (got_digest, want_digest))
     sys.exit(1)
 
-raw = gzip.decompress(raw)
 envelope = json.loads(raw)
 if envelope.get("version") != 2:
     sys.stderr.write("tau-payload: unsupported envelope version %r\\n" % (envelope.get("version"),))
@@ -160,7 +159,7 @@ def encode(files: Mapping[str, bytes]) -> EncodedPayload:
     return EncodedPayload(
         files=checked,
         encoded=encoded,
-        digest=hashlib.sha256(compressed).hexdigest(),
+        digest=hashlib.sha256(raw).hexdigest(),
         decoded_bytes=decoded_bytes,
         compressed_bytes=len(compressed),
         env_entry_bytes=env_entry_bytes,
@@ -170,14 +169,14 @@ def encode(files: Mapping[str, bytes]) -> EncodedPayload:
 def decode(encoded: str, digest: str) -> Dict[str, bytes]:
     """Reverse encode(), verifying the digest and envelope version."""
     try:
-        transported = base64.b64decode(encoded, validate=True)
+        raw = gzip.decompress(base64.b64decode(encoded, validate=True))
     except Exception as exc:
         raise PayloadInvalid(f"payload is not valid base64: {exc}") from exc
-    got = hashlib.sha256(transported).hexdigest()
+    got = hashlib.sha256(raw).hexdigest()
     if got != digest:
         raise PayloadInvalid(f"payload integrity check failed: digest={got} want={digest}")
     try:
-        envelope = json.loads(gzip.decompress(transported).decode("utf-8"))
+        envelope = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         raise PayloadInvalid(f"payload envelope is not decodable: {exc}") from exc
     if envelope.get("version") != ENVELOPE_VERSION:
