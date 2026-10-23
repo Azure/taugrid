@@ -133,6 +133,193 @@ CI runs on every PR to main (`.github/workflows/taugrid-validation.yml`). It bui
 
 Key CI settings: `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`. Tests run with `-count=1` (no caching). The controller module uses `-race`.
 
+## Review and Validation Discipline (Required)
+
+The full layer matrix, per-layer commands and the known environment-specific
+failures live in [docs/TESTING.md](docs/TESTING.md). The rules below are
+mandatory for every change.
+
+1. **Syntax checks are not validation, and execution is.** `node --check` (or
+   importing a module without running it) has passed files that threw at module
+   load. Any harness, script, or lifecycle change must be *executed*, and any
+   lifecycle logic must have a mocked-API test that runs it. Mocked transports
+   are acceptable; a syntax check is not.
+2. **Read the diff with the review stance, not a shape list.** A list of defect
+   shapes is what one round of review happened to produce; `scripts/ci/check-review-patterns.py`
+   matched those shapes and passed on a tree that still held eighteen defects.
+   Ask these questions in order, then use the class list below as a fast
+   cross-check. [skills/taugrid-review/SKILL.md](skills/taugrid-review/SKILL.md)
+   is the full statement.
+   - **Follow the denial path to the operation that executes it.** Find every
+     decision that something is not allowed and follow it to the write it guards,
+     then ask where that decision's inputs came from. An authorization input read
+     out of the object being authorized authorizes everything. Enumerate the
+     alternate callers: authentication is not authorization.
+   - **Find the owner of the final emitted result.** For each value that leaves
+     the change, name who owns the complete result, including wrappers and
+     metadata added after the obvious path. A resolved value replaced by a later
+     `or <fallback>` is the common failure.
+   - **Trace every current consumer of a shared contract.** Emitting the label
+     that makes a consumer *discover* a record while omitting the labels it uses
+     to *identify* it is worse than emitting nothing.
+   - **Exercise the real entry path.** A test that calls a helper is not evidence
+     that the shipped path works. A shell re-splits a value a Python test
+     asserted as a string.
+   - **Make assertions mean something.** For each pass condition, ask what would
+     make it true while the change is broken, and add a negative control.
+
+   The classes one round produced, still worth a cross-check:
+   a. initialization order / temporal dead zone (a value derived from another
+      value declared later);
+   b. a constant duplicated across files that must agree (version pins, limits,
+      defaults, producer/consumer strings);
+   c. a client capability assumed but absent on the supported dependency floor;
+   d. a reopened or retried resource that reports success after the first
+      attempt failed;
+   e. narrowing a value that participates in identity or dedup (truncating,
+      lowercasing, normalizing, rounding);
+   f. an assertion that a failure message can satisfy. A pass condition must
+      key on evidence the thing under test worked, never on a token that an
+      error string also contains. `run-embed-e2e` asserted /TauGrid/ and the
+      proxy's own banner says "TauGrid portal proxy could not reach ...", so
+      the harness reported PASS while the iframe showed an error page. When a
+      layer cannot obtain its evidence, report it as untested or fail it -
+      never as a pass.
+3. **Every review comment gets a reply that states the evidence** (command,
+   output, `file:line`). Any claim about the repository must be verified against
+   the target branch (`git show origin/main:<path>`, `git ls-tree origin/main`),
+   never against whatever checkout happens to be current. A stale-checkout
+   search is not evidence about the branch under review. Cited paths and line
+   numbers must be verifiable with `git show origin/main:<path>`; a citation to
+   a file that does not exist on the target branch is a fabricated citation,
+   not a typo.
+
+### The mechanical half of the discipline
+
+Rules that are only written down get skipped, because a diff reads as correct
+when the same author checks it. `scripts/ci/check-review-patterns.py` runs in
+the `review-patterns` CI job and in `make test`, and it fails the build for the
+detectable subset of the classes above:
+
+- 2a — every `tools/*.mjs` harness is imported in a child `node` process with
+  `TEMP`, `LOCALAPPDATA` and the `PLAYWRIGHT_*` variables deleted from
+  `process.env`, and must import without throwing and without printing. This is
+  the TDZ and module-load-throw check; a syntax check cannot do it.
+- 2b — a dependency pin and the assertion about that pin, in one workflow file,
+  must agree; and every `go.mod` built by an image must not require a Go version
+  above that image's `golang:` tag. The `go` directive is a minimum language
+  version, not the CI toolchain pin (see `.go-version`).
+- 2c — the bounded reader has exactly one production implementation:
+  `read1(` may appear only in `sdk/python/python/tau/_kube_io.py`. Every
+  consumer routes through it.
+- 2d — every emitted KubeRay `submitterConfig` pins `backoffLimit` to 0, so a
+  retried submitter Job cannot report success after a failure.
+- 2e — the metric identity key folds full-precision `wall_time`, so same-tag
+  same-step points cannot collide in the dedup view.
+- 2f — a browser harness pass condition must key on evidence; a condition whose
+  only tokens are the product name fails.
+- A `file:line` citation in `docs/` that resolves to nothing fails the build.
+
+The stance above is only partly mechanical. The checks that encode it, and the
+defect mode each one holds open:
+
+- **Denial path.** No authorization scope (or any other permission input) is
+  built from a value resolved out of the object being authorized
+  (`authorization-input-provenance`); every Jupyter handler that reads or writes
+  cluster state carries a permission call beyond `@web.authenticated`, on itself
+  or on a shared mixin it inherits (`handler-authorization-required`).
+- **Owner of the final result.** A renderer that resolves a workload profile
+  renders that profile's resolved queue rather than a fallback
+  (`resolved-value-not-discarded`); a directory created per request is tracked
+  and released on success, failure, and close (`staging-resource-disposal`).
+- **Consumer contract.** A workload that stamps `managed-by` also stamps the
+  `run-id` and `workload-kind` that `cli/internal/runhistory` reads
+  (`run-metadata-contract-complete`).
+- **Real entry path.** A multi-line entrypoint or command is quoted, heredoc'd,
+  or base64-framed before it reaches a shell (`entrypoint-shell-framed`); an
+  image that `docs/` names as a runtime dependency is built or triggered by a
+  workflow (`images-built-in-ci`).
+- **Current state, not history.** A terminal state is decided from the current
+  status field, never from an attempt counter that stays positive across a retry
+  (`terminal-state-from-current-state`).
+
+Run it locally before pushing:
+
+```bash
+python scripts/ci/check-review-patterns.py             # check this tree
+python scripts/ci/check-review-patterns.py --self-test # prove each check can fail
+```
+
+Every check ships with a fixture that reintroduces its defect and asserts the
+check fails; `--self-test` runs them. Adding a rule here without a check is a
+signal that the rule is advisory; add the check or say why it cannot be
+mechanical.
+
+**The expected-failure ledger.** A check whose defect is still present in the
+tree is listed in `EXPECTED_FAILURES` in the script. It still runs, still fails,
+and still prints its findings; it does not block the build. The ledger is a
+list of open defects, not a place to park an inconvenient check: delete an entry
+when the defect is fixed, and the check becomes a hard failure again. An expected
+failure documents a defect; it does not prevent it, so keep the list short.
+
+**Still review-only.** These stay a reviewer's job, and the checker must not
+pretend otherwise:
+
+- a client capability that is absent on the dependency floor (2c) needs the
+  floor job to install the lowest supported dependency and a test that drives
+  the code through it — the checker only proves there is one implementation, not
+  that it works on the floor;
+- a retry that reports success (2d) can only be proven where the retry actually
+  happens; the checker guards the renderer pin, and the live stage in
+  `docs/TESTING.md` is what proves KubeRay honours it;
+- whether a default is *supported* by current-consumer evidence (a feature
+  assumed enabled while its config defaults off), whether docs describe the
+  behavior the code actually implements, and whether an assertion verifies
+  meaning rather than shape are judgements. `--scope-report` and the checks
+  narrow where to look; they cannot make the call.
+
+### Reviewing a change you did not write
+
+The rules above are for the author. These are for the reviewer, and each one
+exists because a review round in this repository went the other way.
+
+- **The author's green run is the weakest evidence in the diff.** A checker
+  written from one round's defect shapes reported 10/10 pass on a tree that still
+  held eighteen reviewer-found defects. Treat "all checks pass" as a hypothesis:
+  ask what would have to be true for the check to pass while the change is
+  broken, and say so when the answer is "anything".
+- **Try to break a claimed fix; do not just read its test.** A test written by
+  the author of the fix encodes that author's belief about the defect. Reproduce
+  the original defect against the fixed tree, and exercise the adjacent path the
+  fix did not consider - the other caller, the other handler, the list path as
+  well as the submit path.
+- **Enumerate the class, not the instance.** The most common failure here is
+  fixing the occurrence in front of you. A module-load throw was fixed in one
+  harness while a second kept the same pattern; a duplicated reader was fixed in
+  the SDK while a tool kept its own copy. When a defect is reported, grep for its
+  shape across the tree before calling it fixed, and say what you searched for.
+- **A fix that introduces a defect of the class it fixed is the expected
+  outcome, not bad luck.** It happened three times in one session. Re-run the
+  class check over the fix itself, not only over the original.
+- **Verify a written artifact with the tool that consumes it.** A `.gitignore`
+  change reported as fixed was in fact broken twice, because it was checked by
+  reading the file. Prove it with the consumer instead: `git check-ignore`,
+  `git apply --check`, the parser, the shell.
+- **Audit every new check for a vacuous pass.** A check with no subject, or whose
+  subject is excluded by an incidental mention elsewhere in the file, passes for
+  the wrong reason and is worse than no check - it buys confidence it has not
+  earned. Instrument the check's own selector to confirm it finds what it claims
+  to, then revert the guarded defect in a scratch tree and confirm the check
+  fires.
+- **Be precise about what is proven.** Write "mechanically constrained and
+  unit/mocked-verified" when that is what you have, and reserve "verified" for a
+  claim the tree can demonstrate. Name the layers that cannot run in the current
+  environment - a live cluster, a dependency floor, a third-party interpolation -
+  as things a maintainer must not rely on, rather than leaving them implied.
+- **One owner per file.** When more than one author or agent is editing the same
+  tree, assign files explicitly. Concurrent edits to one file produce work that
+  belongs to neither author and cannot be reviewed.
+
 ## TauGrid Release Version Bump
 
 TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
