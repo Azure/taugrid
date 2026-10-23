@@ -119,8 +119,9 @@ suites:
 
 Compile scoring is format-aware: each generation is compiled with `cobc -free`,
 retried with `-fixed` if that fails, and both counts are reported. The headline
-compile score is out of 220 tasks: 70 paragraph, 50 program, and 100
-structural. Before loading the model, the eval checks that `cobc --version`
+compile score sums the paragraph, program, and structural tasks. Stage 03 caps
+these at 200, 50, and 100, so the total depends on the corpus. Before loading
+the model, the eval checks that `cobc --version`
 works and that all five suite files exist and are not empty. It fails if
 either check fails, and it fails if `cobc` disappears during the run. It also
 tokenizes every generation prompt and sets aside any prompt that cannot fit in
@@ -236,56 +237,39 @@ minutes.
 
 ## Results
 
-The numbers in this section come from an earlier version of the pipeline that
-had two defects, both fixed in the code here:
+All three models below were scored by one `07-eval` RayJob each (greedy
+decoding, 512 new tokens, `MAX_MODEL_LEN` 32768, TP=8 on 8 H200) on the same
+benchmarks. The pipeline ran end to end from this example with
+`SOURCE_LICENSES=permissive` and no gated datasets:
 
-- Stage 05 did not exclude the validation split, so GRPO prompts included
-  validation programs. For up to 18/50 program-completion, 5/70 paragraph, and
-  19/100 structural tasks, the reference answer appears in a GRPO training
-  prompt. The reward only checks compilation, so GRPO never trained on those
-  answers. CPT is not affected.
-- GRPO compiled every prompt with `cobc -free`, so it dropped the 3,676 of
-  6,852 prompts (54%) that compile only in fixed format.
+- CPT: 60 steps (3 epochs) from `Qwen/Qwen2.5-Coder-32B`. Eval loss was
+  0.523 at step 25 and 0.507 at step 60.
+- GRPO: 162 steps (3 epochs) from the CPT checkpoint. The compile preflight
+  kept 1,762 prompts, 918 free format and 844 fixed format.
+- Benchmarks: 62 paragraph, 50 program, 100 structural, and 78 copybook tasks,
+  plus 158 held-out programs for perplexity. Three prompts did not fit in the
+  context and were set aside for every model: one paragraph task (51,129
+  tokens) and two copybook tasks (55,731 and 59,490 tokens). The compile score
+  is out of the remaining 211 tasks.
 
-The GRPO results and the GRPO gains below are therefore partly contaminated,
-and they come from half of the intended prompts. The CPT columns are not
-affected. Copybook usage was not scored at the time. GRPO and eval have not
-yet been rerun with the fixes.
-
-The GRPO model was evaluated with `07-eval` (greedy decoding, 512 new tokens,
-TP=8 on 8 H200):
-
-| Metric | GRPO model |
-| --- | --- |
-| Compile, overall | **64/220** |
-| Compile, paragraph completion | 18/70 (7 free + 11 fixed) |
-| Compile, program completion | 18/50 |
-| Compile, structural validation | 28/100 (16 free + 12 fixed) |
-| COBOL perplexity | 1.49 |
-| BLEU, paragraph / program | 0.155 / 0.190 |
-| PERFORM reference accuracy | 41.8% |
-| Column formatting | 72.0% |
-| PIC clause accuracy | 98.9% |
-
-The checkpoint was trained with an earlier Job-based launch of the same CPT
-and GRPO code. Running the `07-eval` RayJob on that checkpoint reproduced
-every number above exactly.
-
-A full rerun with every stage launched from this example scored lower. The
-Job-based CPT column is the checkpoint that the GRPO model above started from.
-
-
-| Metric | Job-based CPT | RayJob CPT | RayJob GRPO |
+| Metric | Base | CPT | GRPO |
 | --- | --- | --- | --- |
-| Compile, overall | 58/220 | 53/220 | 57/220 |
-| Compile, paragraph completion | 16/70 | 14/70 | 14/70 |
-| Compile, program completion | 16/50 | 18/50 | 18/50 |
-| Compile, structural validation | 26/100 | 21/100 | 25/100 |
-| COBOL perplexity | 1.49 | 1.48 | 1.48 |
-| PERFORM reference accuracy | 40.4% | 27.3% | 28.1% |
+| Compile, overall | 50/211 | **89/211** | 88/211 |
+| Compile, paragraph completion | 16/61 (6 free + 10 fixed) | 24/61 (9 + 15) | 25/61 (9 + 16) |
+| Compile, program completion | 13/50 (8 + 5) | 20/50 (12 + 8) | 20/50 (11 + 9) |
+| Compile, structural validation | 21/100 (11 + 10) | 45/100 (23 + 22) | 43/100 (22 + 21) |
+| COBOL perplexity | 1.90 | 1.54 | 1.54 |
+| BLEU, paragraph / program | 0.130 / 0.056 | 0.176 / 0.096 | 0.180 / 0.099 |
+| Edit distance, paragraph / program | 0.677 / 0.661 | 0.632 / 0.632 | 0.632 / 0.623 |
+| PERFORM reference accuracy | 15.9% | 40.7% | 34.6% |
+| Column formatting | 74.0% | 80.0% | 78.0% |
+| PIC clause accuracy | 98.5% | 98.5% | 98.5% |
+| Division structure | 100% | 100% | 100% |
+| BLEU / edit distance, copybook usage | 0.013 / 0.883 | 0.035 / 0.843 | 0.038 / 0.849 |
 
-All three columns were scored with the same `07-eval` RayJob. GRPO adds a
-similar amount on either CPT checkpoint (+4 on the RayJob CPT, +6 on the
-Job-based CPT), so the gap comes from CPT. The cause is not yet known. The
-training image moved to newer `transformers` and DeepSpeed releases than the
-Job-based run used.
+CPT accounts for nearly all of the improvement over the base model: compiles
+rise from 50 to 89, perplexity falls from 1.90 to 1.54, and PERFORM reference
+accuracy more than doubles. GRPO does not improve on CPT on these benchmarks.
+Its compile count and BLEU are within one task or a few thousandths of CPT,
+and its PERFORM reference accuracy is 6.1 points lower even though the
+structural reward includes a PERFORM bonus.
