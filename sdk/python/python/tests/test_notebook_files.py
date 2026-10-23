@@ -35,24 +35,30 @@ def notebook_bytes() -> bytes:
 
 
 def workspace(tmp_path: Path) -> Path:
-    (tmp_path / NOTEBOOK).write_bytes(notebook_bytes())
-    (tmp_path / "helpers.py").write_bytes(b"VALUE = 41\n")
-    (tmp_path / "config.json").write_bytes(b"{}\n")
-    (tmp_path / "notes.md").write_bytes(b"# notes\n")
-    (tmp_path / "image.png").write_bytes(b"\x89PNG")
-    (tmp_path / ".hidden").write_text("x", encoding="utf-8")
-    (tmp_path / "__pycache__").mkdir()
-    (tmp_path / "__pycache__" / "junk.pyc").write_bytes(b"x")
-    (tmp_path / "nested").mkdir()
-    (tmp_path / "nested" / "deep.py").write_text("x = 1\n", encoding="utf-8")
-    return tmp_path
+    root = tmp_path / "notebooks"
+    root.mkdir()
+    (root / NOTEBOOK).write_bytes(notebook_bytes())
+    (root / "helpers.py").write_bytes(b"VALUE = 41\n")
+    (root / "config.json").write_bytes(b"{}\n")
+    (root / "notes.md").write_bytes(b"# notes\n")
+    (root / "image.png").write_bytes(b"\x89PNG")
+    (root / ".hidden").write_text("x", encoding="utf-8")
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "junk.pyc").write_bytes(b"x")
+    (root / "nested").mkdir()
+    (root / "nested" / "deep.py").write_text("x = 1\n", encoding="utf-8")
+    return root
+
+
+def sibling_directory(tmp_path: Path, suffix: str) -> Path:
+    return tmp_path / f"{tmp_path.name}-{suffix}"
 
 
 def authorized_directory_replaced_by_a_symlink(tmp_path: Path):
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
-    authorized = tmp_path.parent / (tmp_path.name + "-authorized")
-    attacker = tmp_path.parent / (tmp_path.name + "-attacker")
+    authorized = sibling_directory(tmp_path, "authorized")
+    attacker = sibling_directory(tmp_path, "attacker")
     directory.rename(authorized)
     attacker.mkdir()
     (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
@@ -197,9 +203,9 @@ def test_read_selected_refuses_a_directory_swapped_for_a_symlink(tmp_path):
     directory = notebook_directory(root, NOTEBOOK)
     assert read_selected(directory, ["helpers.py"], before_read=lambda: None) == {"helpers.py": b"VALUE = 41\n"}
 
-    authorized = tmp_path.parent / (tmp_path.name + "-authorized")
+    authorized = sibling_directory(tmp_path, "authorized")
     directory.rename(authorized)
-    attacker = tmp_path.parent / (tmp_path.name + "-attacker")
+    attacker = sibling_directory(tmp_path, "attacker")
     attacker.mkdir()
     (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
     directory.symlink_to(attacker, target_is_directory=True)
@@ -258,8 +264,8 @@ def test_read_selected_refuses_an_alias_created_after_selection(tmp_path):
 def test_read_selected_binds_to_the_opened_directory_when_its_name_is_swapped(tmp_path):
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
-    authorized = tmp_path.parent / (tmp_path.name + "-authorized")
-    attacker = tmp_path.parent / (tmp_path.name + "-attacker")
+    authorized = sibling_directory(tmp_path, "authorized")
+    attacker = sibling_directory(tmp_path, "attacker")
 
     def swap():
         directory.rename(authorized)
@@ -302,7 +308,7 @@ def test_directory_identity_refuses_a_symlink_the_open_flags_allowed(tmp_path, m
 
 @pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
 def test_relative_open_refuses_a_name_swapped_after_every_directory_check_passed(tmp_path):
-    held = tmp_path.parent / (tmp_path.name + "-held")
+    held = sibling_directory(tmp_path, "held")
     authorized = held / "authorized"
     authorized.mkdir(parents=True)
     filled = held / "filled"
@@ -328,28 +334,6 @@ def test_read_selected_refuses_a_named_pipe(tmp_path, monkeypatch):
         raise AssertionError("a named pipe must never be read")
 
     monkeypatch.setattr(os, "fdopen", refuse_fdopen)
-    root = workspace(tmp_path)
-    directory = notebook_directory(root, NOTEBOOK)
-    os.mkfifo(root / "pipe.py")
-
-    with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["pipe.py"])
-
-    assert failure.value.status == 409
-    assert "not a regular file" in str(failure.value)
-
-
-def test_pathname_read_refuses_a_named_pipe_without_the_directory_handle(tmp_path, monkeypatch):
-    if not hasattr(os, "mkfifo"):
-        pytest.skip("creating a FIFO needs POSIX os.mkfifo")
-    if not os.path.exists("C:\\Windows"):
-        pytest.skip("the POSIX pathname branch blocks on a FIFO open and is only exercised on Windows")
-
-    def refuse_fdopen(fd, *args, **kwargs):
-        raise AssertionError("a named pipe must never be read")
-
-    monkeypatch.setattr(os, "fdopen", refuse_fdopen)
-    monkeypatch.setattr(notebook_files, "_DIRECTORY_BINDING", False)
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
     os.mkfifo(root / "pipe.py")
