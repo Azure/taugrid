@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from tau._backend import KubernetesBackend
-from tau._notebook_pkg import MAX_INPUT_BYTES, StagedPayload
+from tau._notebook_pkg import DEFAULT_CELL_TIMEOUT_SECONDS, MAX_INPUT_BYTES, StagedPayload
 from tau._notebook_submit import build_plan, submit_plan
 from tau._render import GPU_EXECUTION_LOCAL, Profile
 from tau.widgets.embed import EmbedView, PortalProxy, experiment_path, iframe_html, ray_dashboard_path, run_view_path, same_origin
@@ -254,6 +254,7 @@ class TauGridPanel:
         env: Optional[dict] = None,
         env_secret: Optional[dict] = None,
         input_cap: int = MAX_INPUT_BYTES,
+        cell_timeout_seconds: int = DEFAULT_CELL_TIMEOUT_SECONDS,
     ) -> Any:
         """Submit the current notebook as a Kueue-admitted RayJob.
 
@@ -298,6 +299,7 @@ class TauGridPanel:
                 team=team, lane=lane, gpu_execution=gpu_execution,
                 pip=runtime_pip, env=env, env_secret=env_secret, input_cap=input_cap,
                 staging_dir=staging_dir,
+                cell_timeout_seconds=cell_timeout_seconds,
             )
             handle = submit_plan(client=self.client, plan=plan, backend=backend)
         except BaseException:

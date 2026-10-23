@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 
 from tau._backend import KubernetesBackend, SubmittedRun
-from tau._notebook_pkg import MAX_INPUT_BYTES, NotebookInvalid, StagedPayload, package
+from tau._notebook_pkg import (
+    DEFAULT_CELL_TIMEOUT_SECONDS,
+    MAX_INPUT_BYTES,
+    NotebookInvalid,
+    StagedPayload,
+    package,
+)
 from tau._payload import MAX_DECODED_BYTES, MAX_ENV_ENTRY_BYTES, PayloadTooLarge
 from tau._profile import (
     DEFAULT_QUEUE_FALLBACK,
@@ -219,6 +225,7 @@ def build_plan(
     team: Optional[str] = None,
     lane: Optional[str] = None,
     gpu_execution: str = GPU_EXECUTION_LOCAL,
+    cell_timeout_seconds: int = DEFAULT_CELL_TIMEOUT_SECONDS,
 ) -> SubmitPlan:
     """Resolve everything the submission needs, without writing to the cluster.
 
@@ -251,7 +258,8 @@ def build_plan(
 
     try:
         staged = package(
-        notebook_bytes, staging_dir=staging_dir, input_cap=input_cap, extra_files=extra_files
+        notebook_bytes, staging_dir=staging_dir, input_cap=input_cap, extra_files=extra_files,
+        cell_timeout_seconds=cell_timeout_seconds,
     )
     except NotebookInvalid as exc:
         raise SubmitError(f"cannot submit this notebook: {exc}") from exc

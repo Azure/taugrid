@@ -40,6 +40,11 @@ DISTRIBUTED_TARGET_ENV = _render.TARGET_DIR_ENV
 DISTRIBUTED_DEFAULT_TARGET = _render.TARGET_DIR
 DISTRIBUTED_ARCHIVE_NAME = _render.PROJECT_ARCHIVE_NAME
 
+#: Bounded cell timeout the executed-notebook runner emits when none is given.
+DEFAULT_CELL_TIMEOUT_SECONDS = 600
+#: Upper bound on a configured cell timeout, so a value never becomes unbounded.
+MAX_CELL_TIMEOUT_SECONDS = 24 * 60 * 60
+
 
 
 class NotebookInvalid(Exception):
@@ -171,7 +176,7 @@ def prepare_notebook(notebook_bytes: bytes) -> Tuple[bytes, List[str]]:
     return json.dumps(notebook, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), dropped
 
 
-def _runner_script() -> str:
+def _runner_script(cell_timeout_seconds: int = DEFAULT_CELL_TIMEOUT_SECONDS) -> str:
     return (
         "#!/usr/bin/env python3\n"
         "import importlib\n"
@@ -186,6 +191,7 @@ def _runner_script() -> str:
         "DISTRIBUTED_TARGET_ENV = " + repr(DISTRIBUTED_TARGET_ENV) + "\n"
         "DISTRIBUTED_DEFAULT_TARGET = " + repr(DISTRIBUTED_DEFAULT_TARGET) + "\n"
         "DISTRIBUTED_ARCHIVE_NAME = " + repr(DISTRIBUTED_ARCHIVE_NAME) + "\n"
+        "CELL_TIMEOUT_SECONDS = " + repr(cell_timeout_seconds) + "\n"
         "REMOTE_KERNEL_NAME = 'python3'\n"
         "def main() -> int:\n"
         "    here = Path(__file__).resolve().parent\n"
@@ -256,7 +262,7 @@ def _runner_script() -> str:
         "    # own kernelspec, so a notebook saved against a local virtualenv asks\n"
         "    # the runtime image for a kernel it does not have and fails before any\n"
         "    # cell executes. The image ships the standard 'python3' kernel.\n"
-        "    ep = StreamingExecutor(timeout=600, kernel_name=REMOTE_KERNEL_NAME)\n"
+        "    ep = StreamingExecutor(timeout=CELL_TIMEOUT_SECONDS, kernel_name=REMOTE_KERNEL_NAME)\n"
         "    ep.preprocess(raw, {'metadata': {'path': str(work)}})\n"
         "    out = work / 'analysis.executed.ipynb'\n"
         "    nbformat.write(raw, out, version=4)\n"
@@ -265,6 +271,15 @@ def _runner_script() -> str:
         "if __name__ == '__main__':\n"
         "    raise SystemExit(main())\n"
     )
+
+
+def _validate_cell_timeout(value: object) -> None:
+    if type(value) is not int or value < 1 or value > MAX_CELL_TIMEOUT_SECONDS:
+        raise NotebookInvalid(
+            f"cell_timeout_seconds must be an integer between 1 and {MAX_CELL_TIMEOUT_SECONDS}; "
+            f"got {value!r}. A cell timeout always stays bounded, so a long cell needs a larger "
+            "finite value rather than an unbounded one."
+        )
 
 
 def _context_manifest(notebook_bytes: bytes, prepared: bytes, dropped: List[str]) -> bytes:
@@ -287,6 +302,7 @@ def package(
     staging_dir: Path | None = None,
     input_cap: int = MAX_INPUT_BYTES,
     extra_files: Dict[str, bytes] | None = None,
+    cell_timeout_seconds: int = DEFAULT_CELL_TIMEOUT_SECONDS,
 ) -> StagedPayload:
     """Stage the prepared notebook plus runner and encode the embedded payload.
 
@@ -294,9 +310,14 @@ def package(
     They ride the same envelope, so the transport caps apply to them too: encode
     raises PayloadTooLarge with the byte math when the selection does not fit.
 
+    cell_timeout_seconds bounds how long one executed cell may run. It stays
+    finite and positive: an unbounded or non-positive value is refused rather
+    than passed to nbconvert, whose ``timeout=-1`` means "no timeout".
+
     Raises NotebookInvalid for a malformed notebook and PayloadTooLarge when the
     prepared payload exceeds the CLI transport caps.
     """
+    _validate_cell_timeout(cell_timeout_seconds)
     if len(notebook_bytes) > input_cap:
         raise PayloadTooLarge(
             f"saved notebook is {len(notebook_bytes)} bytes, above the {input_cap}-byte local "
@@ -304,7 +325,7 @@ def package(
         )
 
     prepared, dropped = prepare_notebook(notebook_bytes)
-    runner_bytes = _runner_script().encode("utf-8")
+    runner_bytes = _runner_script(cell_timeout_seconds).encode("utf-8")
     manifest = _context_manifest(notebook_bytes, prepared, dropped)
     files = {NOTEBOOK_NAME: prepared, RUNNER_NAME: runner_bytes, CONTEXT_NAME: manifest}
     included: List[str] = []
@@ -348,6 +369,8 @@ __all__ = [
     "validate_notebook",
     "classify_launcher_cell",
     "MAX_INPUT_BYTES",
+    "DEFAULT_CELL_TIMEOUT_SECONDS",
+    "MAX_CELL_TIMEOUT_SECONDS",
     "RUNNER_NAME",
     "NOTEBOOK_NAME",
     "CONTEXT_NAME",
