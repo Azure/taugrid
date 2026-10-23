@@ -85,7 +85,13 @@ def extract_paragraphs(procedure_text):
         body = procedure_text[start:end].rstrip()
         if body.strip():
             paragraphs.append(
-                {"name": name, "body": body, "start": match.start(), "end": end}
+                {
+                    "name": name,
+                    "body": body,
+                    "start": match.start(),
+                    "body_end": start + len(body),
+                    "end": end,
+                }
             )
     return paragraphs
 
@@ -95,6 +101,7 @@ def build_paragraph_completion(records, max_tasks=200):
 
     Prompt: everything before the paragraph body (divisions + paragraph name)
     Reference: the paragraph body
+    Suffix: the untouched procedure text after the body, appended for compilation
     """
     tasks = []
     for rec in records:
@@ -135,14 +142,10 @@ def build_paragraph_completion(records, max_tasks=200):
                 "paragraph_name": para["name"],
                 "prompt": prompt,
                 "reference": reference,
+                "suffix": proc_text[para["body_end"] :],
                 "reference_lines": len(
                     [ln for ln in reference.split("\n") if ln.strip()]
                 ),
-                "stop_at": [
-                    "\n       " + p["name"] + "."
-                    for p in paragraphs
-                    if p["name"] != para["name"]
-                ][:5],
             }
         )
 
@@ -268,6 +271,7 @@ def build_program_completion(records, max_tasks=50):
                 "source": rec.get("source", ""),
                 "prompt": prompt,
                 "reference": reference,
+                "reference_text": text,
                 "reference_lines": len(proc_lines),
                 "total_program_lines": rec.get("line_count", 0),
             }

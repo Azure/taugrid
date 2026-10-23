@@ -118,12 +118,26 @@ suites:
 - Copybook usage: BLEU and edit distance only.
 
 Compile scoring is format-aware: each generation is compiled with `cobc -free`,
-retried with `-fixed` if that fails, and both counts are reported. The headline
-compile score sums the paragraph, program, and structural tasks. Stage 03 caps
-these at 200, 50, and 100, so the total depends on the corpus. Before loading
-the model, the eval checks that `cobc --version`
-works and that all five suite files exist and are not empty. It fails if
-either check fails, and it fails if `cobc` disappears during the run. It also
+retried with `-fixed` if that fails, and both counts are reported. A paragraph
+completion is cut at the first paragraph header it starts. It is then compiled
+with the rest of the original procedure appended, so a `PERFORM` of a later
+paragraph resolves; BLEU and edit distance score only the cut completion. The
+headline compile score sums the paragraph, program, and structural tasks.
+Stage 03 caps these at 200, 50, and 100, so the total depends on the corpus.
+
+Many source programs do not compile on their own, for example because a
+copybook is missing. Each compile suite therefore also compiles the reference
+in place of the generation: the paragraph prompt, reference, and appended
+procedure, or the original program for program and structural tasks.
+`reference_compiled` counts the tasks that compile that way, and
+`compiled_where_reference_compiles` counts the generations that compile on
+those tasks.
+
+Before loading the model, the eval checks that `cobc --version` works and that
+all five suite files exist, are not empty, and have the fields the current
+stage 03 writes. It fails if any check fails, and it fails if `cobc`
+disappears during the run. Rerun `03-benchmarks` after updating this example.
+It also
 tokenizes every generation prompt and sets aside any prompt that cannot fit in
 `MAX_MODEL_LEN` (32768) together with its output budget. Set-aside task IDs are
 listed under `excluded_over_context` in `eval-summary.json`, and the run fails
@@ -227,15 +241,24 @@ cd examples/cobol-cpt-grpo/06-grpo && python -m pytest test_reward.py
 cd examples/cobol-cpt-grpo/06-grpo && python -m pytest test_stop_sync.py
 cd examples/cobol-cpt-grpo/06-grpo && python -m pytest test_driver.py
 cd examples/cobol-cpt-grpo/04-cpt && python -m pytest test_continued_pretrain.py test_driver.py
-cd examples/cobol-cpt-grpo/07-eval && python -m pytest test_run_eval.py test_driver.py
+cd examples/cobol-cpt-grpo/07-eval && python -m pytest test_run_eval.py
+cd examples/cobol-cpt-grpo/07-eval && python -m pytest test_driver.py
 ```
 
 Run `test_reward.py` in its own process; it replaces `torch` and `trl` with
-stubs. `test_stop_sync.py` starts two CPU processes in a gloo group.
+stubs. Run `07-eval/test_driver.py` apart from `test_run_eval.py`; it checks
+that the driver process never imports `torch`, which `test_run_eval.py` does.
+With GnuCOBOL on `PATH`, `test_run_eval.py` also compiles a reference
+completion for a paragraph that performs a later one. `test_stop_sync.py` starts two CPU processes in a gloo group.
 `06-grpo/test_driver.py` starts a local Ray cluster and takes one to five
 minutes.
 
 ## Results
+
+These results predate the paragraph compile fix described under Eval: paragraph
+completions were compiled without the rest of the procedure, and no reference
+compile counts were recorded. The paragraph and overall compile rows will
+change when the eval is rerun.
 
 All three models below were scored by one `07-eval` RayJob each (greedy
 decoding, 512 new tokens, `MAX_MODEL_LEN` 32768, TP=8 on 8 H200) on the same

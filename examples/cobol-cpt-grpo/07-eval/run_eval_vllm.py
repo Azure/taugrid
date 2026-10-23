@@ -9,7 +9,12 @@ Uses vLLM with tensor parallelism across all available GPUs on a node.
 All benchmark tasks are batched and processed concurrently.
 
 Before loading the model, main() fails unless every suite in REQUIRED_SUITES
-exists in EVAL_DIR with at least one task and `cobc --version` succeeds.
+exists in EVAL_DIR with at least one task that has the fields in REQUIRED_FIELDS
+and `cobc --version` succeeds.
+
+Paragraph completions are cut at the next paragraph header and compiled with
+the rest of the original procedure appended. Each compile suite also reports
+how many tasks compile with the reference in place of the generation.
 """
 
 import json
@@ -42,6 +47,16 @@ REQUIRED_SUITES = (
     "structural_validation",
     "copybook_usage",
 )
+
+REQUIRED_FIELDS = {
+    "perplexity": ("id", "text"),
+    "paragraph_completion": ("id", "prompt", "reference", "suffix"),
+    "program_completion": ("id", "prompt", "reference", "reference_text"),
+    "structural_validation": ("id", "prompt", "reference_text"),
+    "copybook_usage": ("id", "prompt", "reference"),
+}
+
+PARA_RE = re.compile(r"^       (\d{4}-[A-Z0-9-]+|[A-Z][A-Z0-9-]*)\.\s*$", re.MULTILINE)
 
 GENERATION_BUDGETS = {
     "paragraph_completion": MAX_NEW_TOKENS,
@@ -102,6 +117,12 @@ def load_required_suites(eval_dir):
         tasks = load_jsonl(path)
         if not tasks:
             problems.append(f"{path} has no tasks")
+            continue
+        missing = sorted(
+            {f for task in tasks for f in REQUIRED_FIELDS[name] if f not in task}
+        )
+        if missing:
+            problems.append(f"{path} tasks lack {', '.join(missing)}")
             continue
         suites[name] = tasks
     if problems:
@@ -349,6 +370,7 @@ def _compile_once(src_path, fmt_flag):
             ["cobc", "-fsyntax-only", fmt_flag, src_path],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=10,
         )
         success = result.returncode == 0
@@ -381,28 +403,42 @@ def try_compile(cobol_text):
         os.unlink(src_path)
 
 
-def eval_compilation(tasks, generated_texts):
+def cut_at_next_paragraph(text):
+    """Keep a paragraph completion up to the first paragraph header it starts."""
+    match = PARA_RE.search(text)
+    return text[: match.start()] if match else text
+
+
+def eval_compilation(tasks, generated_texts, reference_texts):
     print(f"\n=== Compilation Evaluation ({len(tasks)} tasks) ===", flush=True)
     compiled = 0
     failed = 0
+    reference_compiled = 0
+    compiled_where_reference_compiles = 0
     fmt_counts = {"free": 0, "fixed": 0}
     results = []
 
-    for task, gen_text in zip(tasks, generated_texts):
-        full_text = task["prompt"] + gen_text
+    for task, gen_text, ref_text in zip(tasks, generated_texts, reference_texts):
+        full_text = task["prompt"] + gen_text + task.get("suffix", "")
         success, errors, fmt_used = try_compile(full_text)
-        if success is None:
+        ref_success, _, _ = try_compile(ref_text)
+        if success is None or ref_success is None:
             raise RuntimeError(f"cobc not found while compiling task {task['id']}")
         if success:
             compiled += 1
             fmt_counts[fmt_used] += 1
         else:
             failed += 1
+        if ref_success:
+            reference_compiled += 1
+            if success:
+                compiled_where_reference_compiles += 1
 
         results.append(
             {
                 "id": task["id"],
                 "compiled": success,
+                "reference_compiled": ref_success,
                 "errors": errors[:500] if errors else "",
                 "format": fmt_used,
             }
@@ -415,6 +451,11 @@ def eval_compilation(tasks, generated_texts):
         f"  Format breakdown: {fmt_counts['free']} free, {fmt_counts['fixed']} fixed",
         flush=True,
     )
+    print(
+        f"  Reference compiles: {reference_compiled}/{total}; generation compiles "
+        f"on {compiled_where_reference_compiles} of those",
+        flush=True,
+    )
 
     return {
         "compilation_rate_pct": round(rate, 1),
@@ -422,6 +463,8 @@ def eval_compilation(tasks, generated_texts):
         "failed": failed,
         "compiled_free": fmt_counts["free"],
         "compiled_fixed": fmt_counts["fixed"],
+        "reference_compiled": reference_compiled,
+        "compiled_where_reference_compiles": compiled_where_reference_compiles,
         "details": results,
     }
 
@@ -600,13 +643,21 @@ def main():
             f"\n--- Paragraph completion ({len(para_tasks)} tasks, max_tokens={MAX_NEW_TOKENS}) ---",
             flush=True,
         )
-        para_gen = batch_generate(llm, para_tasks, max_new_tokens=MAX_NEW_TOKENS)
+        para_gen = [
+            cut_at_next_paragraph(g)
+            for g in batch_generate(llm, para_tasks, max_new_tokens=MAX_NEW_TOKENS)
+        ]
         para_quality = eval_generation_quality(
             para_tasks, para_gen, "paragraph_completion"
         )
         all_results["paragraph_completion"] = para_quality
         para_compile = eval_compilation(
-            [{"id": t["id"], "prompt": t["prompt"]} for t in para_tasks], para_gen
+            [
+                {"id": t["id"], "prompt": t["prompt"], "suffix": t["suffix"]}
+                for t in para_tasks
+            ],
+            para_gen,
+            [t["prompt"] + t["reference"] + t["suffix"] for t in para_tasks],
         )
         all_results["paragraph_compilation"] = {
             k: v for k, v in para_compile.items() if k != "details"
@@ -627,7 +678,9 @@ def main():
         )
         all_results["program_completion"] = prog_quality
         prog_compile = eval_compilation(
-            [{"id": t["id"], "prompt": t["prompt"]} for t in prog_tasks], prog_gen
+            [{"id": t["id"], "prompt": t["prompt"]} for t in prog_tasks],
+            prog_gen,
+            [t["reference_text"] for t in prog_tasks],
         )
         all_results["program_compilation"] = {
             k: v for k, v in prog_compile.items() if k != "details"
@@ -646,7 +699,9 @@ def main():
         strv_results = eval_structural(strv_tasks, strv_gen)
         all_results["structural_validation"] = strv_results["summary"]
         strv_compile = eval_compilation(
-            [{"id": t["id"], "prompt": t["prompt"]} for t in strv_tasks], strv_gen
+            [{"id": t["id"], "prompt": t["prompt"]} for t in strv_tasks],
+            strv_gen,
+            [t["reference_text"] for t in strv_tasks],
         )
         all_results["structural_compilation"] = {
             k: v for k, v in strv_compile.items() if k != "details"
