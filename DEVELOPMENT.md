@@ -133,6 +133,11 @@ SBOM generation, vulnerability scanning, and promotion to MCR.
 
 ## Portable Integration Tests
 
+See [docs/TESTING.md](docs/TESTING.md) for the layer matrix: what unit,
+mocked-API, offline integration, live-cluster and browser E2E each prove and do
+not prove, the command to run each, prerequisites, and the known
+environment-specific failures (including the Windows `WinError 193` class).
+
 Prefer offline rendering, unit tests, and Kind for pull-request validation.
 Tests must not require an Azure subscription, a persistent Microsoft cluster,
 private network access, or repository secrets unless they are explicitly marked
@@ -161,9 +166,14 @@ GPU and AKS validation supplements portable tests; it does not replace them.
 
 ## Before Opening a Pull Request
 
-- Run all component checks relevant to your change.
+- Run all component checks relevant to your change, using
+  [docs/TESTING.md](docs/TESTING.md) to pick the layer.
 - Review the diff for secrets, private endpoints, internal identifiers, and
   unrelated changes.
+- Run the five-class defect review pass in
+  [AGENTS.md](AGENTS.md#review-and-validation-discipline-required) before
+  pushing: initialization order, duplicated constants, unsupported-floor
+  capabilities, retried-success reporting, and identity/dedup narrowing.
 - Update documentation and examples for public behavior changes.
 - Explain compatibility and migration impact.
 - Confirm new dependencies are publicly obtainable and license-compatible.
