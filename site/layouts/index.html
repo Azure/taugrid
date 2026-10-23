@@ -29,6 +29,36 @@
     </div>
   </section>
 
+  <section class="tau-section" aria-labelledby="walkthrough">
+    <div class="tau-section__inner">
+      <div class="tau-section__heading">
+        <h2 id="walkthrough">Compute wherever you can get it</h2>
+        <p>Watch an 80-second introduction to TauGrid: from fragmented GPU capacity to topology-aware placement, robot training, and saved evidence.</p>
+      </div>
+      <figure class="tau-walkthrough">
+        <video
+          controls
+          playsinline
+          preload="none"
+          width="1920"
+          height="1080"
+          poster="{{ "images/taugrid-walkthrough.jpg" | relURL }}"
+          aria-label="TauGrid technical walkthrough"
+          aria-describedby="tau-walkthrough-description"
+        >
+          <source src="{{ "videos/taugrid-walkthrough.mp4" | relURL }}" type="video/mp4">
+          Your browser does not support embedded video.
+          <a href="{{ "videos/taugrid-walkthrough.mp4" | relURL }}">Download the TauGrid video (MP4, 12 MB)</a>.
+        </video>
+        <figcaption id="tau-walkthrough-description">
+          80 seconds, silent, with on-screen explanations. Illustrative robotics and infrastructure animation, not a live training run.
+          Cloud provisioning and node joining remain prerequisites.
+          <a href="{{ "videos/taugrid-walkthrough.mp4" | relURL }}">Download MP4 (12 MB)</a>.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
   <section class="tau-section" aria-labelledby="reader-paths">
     <div class="tau-section__inner">
       <div class="tau-section__heading">
