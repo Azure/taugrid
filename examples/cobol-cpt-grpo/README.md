@@ -122,7 +122,11 @@ retried with `-fixed` if that fails, and both counts are reported. The headline
 compile score is out of 220 tasks: 70 paragraph, 50 program, and 100
 structural. Before loading the model, the eval checks that `cobc --version`
 works and that all five suite files exist and are not empty. It fails if
-either check fails, and it fails if `cobc` disappears during the run.
+either check fails, and it fails if `cobc` disappears during the run. It also
+tokenizes every generation prompt and sets aside any prompt that cannot fit in
+`MAX_MODEL_LEN` (32768) together with its output budget. Set-aside task IDs are
+listed under `excluded_over_context` in `eval-summary.json`, and the run fails
+if a suite has no task left.
 
 ## Hardware
 

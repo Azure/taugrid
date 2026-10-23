@@ -27,6 +27,7 @@ EVAL_DIR = os.environ.get("EVAL_DIR", "/data/datasets/cobol/eval")
 MODEL_ID = os.environ.get("MODEL_ID", "Qwen/Qwen2.5-Coder-32B")
 OUT = os.environ.get("OUT", "/data/datasets/cobol/eval/results/baseline")
 MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS", "512"))
+MAX_MODEL_LEN = int(os.environ.get("MAX_MODEL_LEN", "32768"))
 TP_SIZE = int(os.environ.get("TP_SIZE", str(torch.cuda.device_count())))
 HF_HOME = os.environ.get("HF_HOME", "/tmp/hf-cache")
 
@@ -41,6 +42,39 @@ REQUIRED_SUITES = (
     "structural_validation",
     "copybook_usage",
 )
+
+GENERATION_BUDGETS = {
+    "paragraph_completion": MAX_NEW_TOKENS,
+    "program_completion": 1024,
+    "structural_validation": 1024,
+    "copybook_usage": MAX_NEW_TOKENS,
+}
+
+
+def fit_to_context(suites, tokenizer, max_model_len):
+    """Set aside generation tasks whose prompt plus output budget exceeds the context."""
+    excluded = {}
+    emptied = []
+    for name, budget in GENERATION_BUDGETS.items():
+        limit = max_model_len - budget
+        kept = []
+        too_long = []
+        for task in suites[name]:
+            n_tokens = len(tokenizer(task["prompt"])["input_ids"])
+            if n_tokens > limit:
+                too_long.append({"id": task["id"], "prompt_tokens": n_tokens})
+            else:
+                kept.append(task)
+        if too_long:
+            excluded[name] = {"prompt_token_limit": limit, "tasks": too_long}
+        if not kept:
+            emptied.append(name)
+        suites[name] = kept
+    if emptied:
+        raise RuntimeError(
+            f"No task fits in max_model_len={max_model_len} for: {', '.join(emptied)}"
+        )
+    return excluded
 
 
 def check_compiler():
@@ -520,10 +554,23 @@ def main():
 
     print(f"  Compiler: {check_compiler()}", flush=True)
     suites = load_required_suites(EVAL_DIR)
-    for name in REQUIRED_SUITES:
-        print(f"  {name}: {len(suites[name])} tasks", flush=True)
+    from transformers import AutoTokenizer
 
-    all_results = {"model": MODEL_ID, "backend": "vllm", "tp_size": TP_SIZE}
+    excluded = fit_to_context(
+        suites, AutoTokenizer.from_pretrained(MODEL_ID), MAX_MODEL_LEN
+    )
+    for name in REQUIRED_SUITES:
+        dropped = len(excluded.get(name, {}).get("tasks", []))
+        note = f" ({dropped} over the context limit set aside)" if dropped else ""
+        print(f"  {name}: {len(suites[name])} tasks{note}", flush=True)
+
+    all_results = {
+        "model": MODEL_ID,
+        "backend": "vllm",
+        "tp_size": TP_SIZE,
+        "max_model_len": MAX_MODEL_LEN,
+        "excluded_over_context": excluded,
+    }
 
     ppl_tasks = suites["perplexity"]
     if ppl_tasks:
@@ -540,7 +587,7 @@ def main():
         model=MODEL_ID,
         tensor_parallel_size=TP_SIZE,
         dtype="bfloat16",
-        max_model_len=int(os.environ.get("MAX_MODEL_LEN", "32768")),
+        max_model_len=MAX_MODEL_LEN,
         gpu_memory_utilization=0.90,
         download_dir=HF_HOME,
         distributed_executor_backend="mp",

@@ -7,8 +7,9 @@ vllm is replaced with a stub, so this needs CPU torch only:
   python -m pytest examples/cobol-cpt-grpo/07-eval/test_run_eval.py -v
 
 Checks that a missing or empty suite and a missing or broken cobc fail the run
-before any model is loaded, and that a cobc that disappears mid-run fails instead
-of counting tasks as skipped.
+before any model is loaded, that a cobc that disappears mid-run fails instead
+of counting tasks as skipped, and that prompts too long for the model context are
+set aside and recorded, failing the run if a suite is left empty.
 """
 
 import importlib.util
@@ -100,3 +101,63 @@ def test_compilation_fails_when_cobc_disappears(run_eval):
     ):
         with pytest.raises(RuntimeError, match="cobc not found while compiling"):
             run_eval.eval_compilation([{"id": "t1", "prompt": "X"}], ["Y"])
+
+
+def _fake_tokenizer(text):
+    return {"input_ids": text.split()}
+
+
+def _suites_with_prompts(run_eval, lengths):
+    return {
+        name: [
+            {"id": f"{name}-{n}", "prompt": " ".join(["w"] * n)}
+            for n in lengths.get(name, [10])
+        ]
+        for name in run_eval.REQUIRED_SUITES
+    }
+
+
+def test_fit_to_context_sets_aside_prompts_over_each_budget(run_eval):
+    budgets = run_eval.GENERATION_BUDGETS
+    max_len = 2048
+    para_limit = max_len - budgets["paragraph_completion"]
+    prog_limit = max_len - budgets["program_completion"]
+    suites = _suites_with_prompts(
+        run_eval,
+        {
+            "paragraph_completion": [para_limit, para_limit + 1],
+            "program_completion": [prog_limit + 1, 10],
+        },
+    )
+    excluded = run_eval.fit_to_context(suites, _fake_tokenizer, max_len)
+    assert [t["id"] for t in suites["paragraph_completion"]] == [
+        f"paragraph_completion-{para_limit}"
+    ]
+    assert [t["id"] for t in suites["program_completion"]] == ["program_completion-10"]
+    assert excluded == {
+        "paragraph_completion": {
+            "prompt_token_limit": para_limit,
+            "tasks": [
+                {
+                    "id": f"paragraph_completion-{para_limit + 1}",
+                    "prompt_tokens": para_limit + 1,
+                }
+            ],
+        },
+        "program_completion": {
+            "prompt_token_limit": prog_limit,
+            "tasks": [
+                {
+                    "id": f"program_completion-{prog_limit + 1}",
+                    "prompt_tokens": prog_limit + 1,
+                }
+            ],
+        },
+    }
+    assert len(suites["perplexity"]) == 1
+
+
+def test_fit_to_context_fails_when_a_suite_is_emptied(run_eval):
+    suites = _suites_with_prompts(run_eval, {"copybook_usage": [5000]})
+    with pytest.raises(RuntimeError, match="copybook_usage"):
+        run_eval.fit_to_context(suites, _fake_tokenizer, 2048)
