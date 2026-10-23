@@ -293,6 +293,19 @@ func TestControllerVersionUsesTauAnnotation(t *testing.T) {
 	}
 }
 
+func TestControllerVersionPrefersProducingTauVersion(t *testing.T) {
+	metadata := testMetadata("train")
+	metadata.Annotations[workloadmeta.AnnotationTauVersion] = "v0.4.5"
+	metadata.Annotations[workloadmeta.AnnotationControllerVerion] = "v0.3.0"
+
+	source := &fakeSource{jobs: []Job{{Metadata: metadata, Active: 1}}}
+	record := terminalRecord(t, source)
+
+	if record.ControllerVersion != "v0.4.5" {
+		t.Errorf("ControllerVersion = %q, want v0.4.5 from %s", record.ControllerVersion, workloadmeta.AnnotationTauVersion)
+	}
+}
+
 func TestTransientPodFailureDoesNotOverwriteRecordedEvidence(t *testing.T) {
 	source := failedJobSource([]Pod{
 		jobPod("train-abc", ContainerState{Name: "trainer", Terminated: true, ExitCode: 42, Reason: "Error"}),
