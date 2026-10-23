@@ -146,6 +146,7 @@ tauCluster:
     - name: azure.workspace.cpu
       description: CPU-only workspace jobs without GPUs.
       applicability:
+        lanes: [cpu]
         namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
       gpusPerWorker: 0
       workerCount: 1

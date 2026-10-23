@@ -68,8 +68,9 @@ tests:
           value: 0
       - notExists:
           path: spec.workloadProfiles[0].applicability.teams
-      - notExists:
+      - equal:
           path: spec.workloadProfiles[0].applicability.lanes
+          value: [cpu]
 
   - it: renders built-in workload profiles for a custom workspace namespace
     set:
