@@ -228,8 +228,8 @@ for every workload using `adx-required`.
 
 Release owners must publish immutable `tau`, `taugrid-portal`, and
 `taugrid-metrics-collector` images from the same reviewed source stack. The
-coordinated 0.4.5 chart train also references a publishable
-`tau-core-controller:0.4.5` artifact even though this telemetry change does not
+coordinated 0.4.6 chart train also references a publishable
+`tau-core-controller:0.4.6` artifact even though this telemetry change does not
 modify the controller binary's source dependencies. Hand consumers the
 collector digest, tested ADX endpoint, database, ServiceAccount subject, and
 non-secret identity client ID. The collector is a `tau run` workload sidecar,
