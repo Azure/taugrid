@@ -122,7 +122,7 @@ retried with `-fixed` if that fails, and both counts are reported. A paragraph
 completion is cut at the first paragraph header it starts. It is then compiled
 with the rest of the original procedure appended, so a `PERFORM` of a later
 paragraph resolves; BLEU and edit distance score only the cut completion. The
-headline compile score sums the paragraph, program, and structural tasks.
+total compile count sums the paragraph, program, and structural tasks.
 Stage 03 caps these at 200, 50, and 100, so the total depends on the corpus.
 
 Many source programs do not compile on their own, for example because a
@@ -258,15 +258,10 @@ minutes.
 
 ## Results
 
-These results predate the paragraph compile fix described under Eval: paragraph
-completions were compiled without the rest of the procedure, and no reference
-compile counts were recorded. The paragraph and overall compile rows will
-change when the eval is rerun.
-
 All three models below were scored by one `07-eval` RayJob each (greedy
-decoding, 512 new tokens, `MAX_MODEL_LEN` 32768, TP=8 on 8 H200) on the same
-benchmarks. The pipeline ran end to end from this example with
-`SOURCE_LICENSES=permissive` and no gated datasets:
+decoding, 512 new tokens, `MAX_MODEL_LEN` 32768, TP=8 on 8 H200, GnuCOBOL
+3.1.2) on the same benchmarks. The pipeline ran end to end from this example
+with `SOURCE_LICENSES=permissive` and no gated datasets:
 
 - CPT: 60 steps (3 epochs) from `Qwen/Qwen2.5-Coder-32B`. Eval loss was
   0.523 at step 25 and 0.507 at step 60.
@@ -275,27 +270,47 @@ benchmarks. The pipeline ran end to end from this example with
 - Benchmarks: 62 paragraph, 50 program, 100 structural, and 78 copybook tasks,
   plus 158 held-out programs for perplexity. Three prompts did not fit in the
   context and were set aside for every model: one paragraph task (51,129
-  tokens) and two copybook tasks (55,731 and 59,490 tokens). The compile score
-  is out of the remaining 211 tasks.
+  tokens) and two copybook tasks (55,731 and 59,490 tokens).
 
 | Metric | Base | CPT | GRPO |
 | --- | --- | --- | --- |
-| Compile, overall | 50/211 | **89/211** | 88/211 |
-| Compile, paragraph completion | 16/61 (6 free + 10 fixed) | 24/61 (9 + 15) | 25/61 (9 + 16) |
-| Compile, program completion | 13/50 (8 + 5) | 20/50 (12 + 8) | 20/50 (11 + 9) |
-| Compile, structural validation | 21/100 (11 + 10) | 45/100 (23 + 22) | 43/100 (22 + 21) |
 | COBOL perplexity | 1.90 | 1.54 | 1.54 |
-| BLEU, paragraph / program | 0.130 / 0.056 | 0.176 / 0.096 | 0.180 / 0.099 |
-| Edit distance, paragraph / program | 0.677 / 0.661 | 0.632 / 0.632 | 0.632 / 0.623 |
-| PERFORM reference accuracy | 15.9% | 40.7% | 34.6% |
-| Column formatting | 74.0% | 80.0% | 78.0% |
+| BLEU, paragraph / program | 0.196 / 0.060 | 0.246 / 0.096 | 0.249 / 0.098 |
+| Edit distance, paragraph / program | 0.566 / 0.667 | 0.497 / 0.632 | 0.502 / 0.623 |
+| BLEU / edit distance, copybook usage | 0.013 / 0.884 | 0.036 / 0.842 | 0.038 / 0.848 |
+| PERFORM reference accuracy | 27.1% | 39.8% | 35.4% |
+| Column formatting | 75.0% | 78.0% | 79.0% |
 | PIC clause accuracy | 98.5% | 98.5% | 98.5% |
 | Division structure | 100% | 100% | 100% |
-| BLEU / edit distance, copybook usage | 0.013 / 0.883 | 0.035 / 0.843 | 0.038 / 0.849 |
 
-CPT accounts for nearly all of the improvement over the base model: compiles
-rise from 50 to 89, perplexity falls from 1.90 to 1.54, and PERFORM reference
-accuracy more than doubles. GRPO does not improve on CPT on these benchmarks.
-Its compile count and BLEU are within one task or a few thousandths of CPT,
-and its PERFORM reference accuracy is 6.1 points lower even though the
-structural reward includes a PERFORM bonus.
+Compile counts, with the generations that compile on tasks whose reference
+compiles in parentheses:
+
+| Suite | Tasks | Reference | Empty generation | Base | CPT | GRPO |
+| --- | --- | --- | --- | --- | --- | --- |
+| Paragraph completion | 61 | 30 | 31 | 17 (16) | 22 (20) | 23 (22) |
+| Program completion | 50 | 28 | 34 | 11 (10) | 20 (17) | 20 (17) |
+| Structural validation | 100 | 52 | 68 | 26 (23) | 44 (36) | 42 (33) |
+| Total | 211 | 110 | 133 | 54 (49) | 86 (73) | 85 (72) |
+
+An empty generation compiles on more tasks than any model and than the
+reference, because `cobc -fsyntax-only` accepts an empty body while a
+reference can contain statements that fail on their own. No model reaches
+that floor in any suite. These compile counts show how often a generation
+adds a compile error; they do not show that a model writes code that
+compiles. Compare models on perplexity, BLEU, edit distance, and the
+structural checks.
+
+CPT accounts for nearly all of the improvement over the base model:
+perplexity falls from 1.90 to 1.54, paragraph BLEU rises from 0.196 to 0.246,
+and PERFORM reference accuracy rises from 27.1% to 39.8%. GRPO does not
+improve on CPT on these benchmarks. Its BLEU and edit distance are within a
+few thousandths of CPT, and its PERFORM reference accuracy is 4.4 points
+lower even though the structural reward includes a PERFORM bonus.
+
+Greedy decoding at TP=8 is not exactly reproducible between runs. An earlier
+run of the same base model on the same program and structural tasks measured
+13/50 program compiles and 15.9% PERFORM reference accuracy, against 11/50
+and 27.1% here, and 13 of its 50 program generations scored a different
+BLEU. Treat differences of a few tasks or a few points between models as
+within run-to-run variation.
