@@ -131,11 +131,11 @@ def test_files_handler_authorizes_a_path_derived_resource(tmp_path):
 
     handler = _FakeFilesHandler(root, path="sub/" + NOTEBOOK)
     asyncio.run(server.FilesHandler.get(handler))
-    assert ("read", "taugrid:files:sub") in handler.authorizer.calls
+    assert ("read", "taugrid:files/sub") in handler.authorizer.calls
 
     handler2 = _FakeFilesHandler(root, path="other/" + NOTEBOOK)
     asyncio.run(server.FilesHandler.get(handler2))
-    assert ("read", "taugrid:files:other") in handler2.authorizer.calls
+    assert ("read", "taugrid:files/other") in handler2.authorizer.calls
 
     # A per-directory policy can therefore deny one directory without the other.
     denying = _RecordingAuthorizer(allow=False)
@@ -156,7 +156,7 @@ def test_files_handler_still_refuses_a_path_outside_the_root(tmp_path):
         asyncio.run(server.FilesHandler.get(handler))
     assert failure.value.status_code == 400
     assert handler.response is None
-    assert not [call for call in handler.authorizer.calls if call[1].startswith("taugrid:files")]
+    assert not [call for call in handler.authorizer.calls if call[1].startswith("taugrid:files/")]
 
 
 # -- DEFECT C: the POST paths must authorize the directory they read ---------
@@ -167,7 +167,7 @@ def test_files_handler_still_refuses_a_path_outside_the_root(tmp_path):
 # namespace. The tests below allow the namespace and deny the directory, which is
 # exactly the policy the reviewer asked for, and assert no read happens.
 
-FILES_RESOURCE = "taugrid:files:notebooks"
+FILES_RESOURCE = "taugrid:files/notebooks"
 
 
 class _NamespaceOnlyAuthorizer:

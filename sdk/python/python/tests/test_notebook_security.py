@@ -248,7 +248,7 @@ def test_files_handler_lists_the_directory_it_authorized(tmp_path, monkeypatch):
     handler = _FilesHandlerStub(root, "a/analysis.ipynb")
     asyncio.run(server.FilesHandler.get(handler))
 
-    assert ("read", "taugrid:files:a") in handler.authorizer.calls
+    assert ("read", "taugrid:files/a") in handler.authorizer.calls
     names = [row["name"] for row in handler.response["files"]]
     assert names == ["from-a.py"]
     assert resolutions == ["a/analysis.ipynb"]
