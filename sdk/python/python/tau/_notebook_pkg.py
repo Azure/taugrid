@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from tau._payload import EncodedPayload, PayloadTooLarge, encode
+import tau._render as _render
 
 #: Local parse guard on the raw saved notebook (not a transport budget).
 MAX_INPUT_BYTES = 10 * 1024 * 1024
@@ -35,6 +36,9 @@ MAX_INPUT_BYTES = 10 * 1024 * 1024
 RUNNER_NAME = "_tau_runner.py"
 NOTEBOOK_NAME = "analysis.ipynb"
 CONTEXT_NAME = "_tau_notebook_context.json"
+DISTRIBUTED_TARGET_ENV = _render.TARGET_DIR_ENV
+DISTRIBUTED_DEFAULT_TARGET = _render.TARGET_DIR
+DISTRIBUTED_ARCHIVE_NAME = _render.PROJECT_ARCHIVE_NAME
 
 
 
@@ -170,11 +174,18 @@ def prepare_notebook(notebook_bytes: bytes) -> Tuple[bytes, List[str]]:
 def _runner_script() -> str:
     return (
         "#!/usr/bin/env python3\n"
+        "import importlib\n"
+        "import importlib.util\n"
         "import os\n"
         "import shutil\n"
         "import sys\n"
+        "import zipfile\n"
         "from pathlib import Path\n"
         "RESERVED = {'analysis.ipynb', '_tau_runner.py', '_tau_notebook_context.json'}\n"
+        "HEAD_ONLY = ('analysis.ipynb', '_tau_runner.py', '_tau_notebook_context.json')\n"
+        "DISTRIBUTED_TARGET_ENV = " + repr(DISTRIBUTED_TARGET_ENV) + "\n"
+        "DISTRIBUTED_DEFAULT_TARGET = " + repr(DISTRIBUTED_DEFAULT_TARGET) + "\n"
+        "DISTRIBUTED_ARCHIVE_NAME = " + repr(DISTRIBUTED_ARCHIVE_NAME) + "\n"
         "REMOTE_KERNEL_NAME = 'python3'\n"
         "def main() -> int:\n"
         "    here = Path(__file__).resolve().parent\n"
@@ -198,13 +209,40 @@ def _runner_script() -> str:
         "    # itself stays in /script and is executed with /data as its directory.\n"
         "    work.mkdir(parents=True, exist_ok=True)\n"
         "    staged = []\n"
+        "    companion_modules = []\n"
         "    for item in sorted(here.iterdir()):\n"
         "        if item.is_file() and item.name not in RESERVED and not item.name.startswith('.'):\n"
         "            shutil.copyfile(item, work / item.name)\n"
         "            staged.append(item.name)\n"
+        "            if item.suffix in ('.py', '.pyc'):\n"
+        "                companion_modules.append(item)\n"
         "    if staged:\n"
         "        joined = ', '.join(staged)\n"
         "        print(f'tg-runner: staged {len(staged)} file(s) into {work}: {joined}', flush=True)\n"
+        "    # Workers can never read this head-local directory. When the RayJob\n"
+        "    # distributes the payload, the same files ship as a runtime_env\n"
+        "    # working_dir archive every node resolves at DISTRIBUTED_TARGET_ENV.\n"
+        "    distributed_root = Path(os.environ.get(DISTRIBUTED_TARGET_ENV, ''))\n"
+        "    if distributed_root.is_dir():\n"
+        "        bundled = []\n"
+        "        head_only = ('analysis.ipynb', '_tau_runner.py', '_tau_notebook_context.json')\n"
+        "        with zipfile.ZipFile(distributed_root / DISTRIBUTED_ARCHIVE_NAME, 'w', zipfile.ZIP_DEFLATED) as bundle:\n"
+        "            for item in sorted(distributed_root.iterdir()):\n"
+        "                if item.name in head_only or item.suffix in ('.zip', '.pyc') or item.name.startswith('.'):\n"
+        "                    continue\n"
+        "                if item.is_file():\n"
+        "                    bundle.write(item, item.name)\n"
+        "                    bundled.append(item.name)\n"
+        "        print(f'tg-runner: distributed {len(bundled)} file(s) as {DISTRIBUTED_ARCHIVE_NAME}', flush=True)\n"
+        "    # A selected module resolves before the runner imports ray, so a helper\n"
+        "    # that itself imports ray cannot shadow the real package.\n"
+        "    for module_source in companion_modules:\n"
+        "        module_spec = importlib.util.spec_from_file_location(module_source.stem, module_source)\n"
+        "        if module_spec is None or module_spec.loader is None:\n"
+        "            continue\n"
+        "        module = importlib.util.module_from_spec(module_spec)\n"
+        "        sys.modules[module_source.stem] = module\n"
+        "        module_spec.loader.exec_module(module)\n"
         "    raw = nbformat.read(nb, as_version=4)\n"
         "    class StreamingExecutor(nbconvert.preprocessors.ExecutePreprocessor):\n"
         "        def process_message(self, msg, cell, cell_index):\n"

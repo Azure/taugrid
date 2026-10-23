@@ -168,6 +168,11 @@ GPU_TOLERATIONS = (
 _SECRET_REF_RE = re.compile(r"^[^\s:]+:[^\s:]+$")
 _RAY_VERSION_RE = re.compile(r"-ray((\d+)\.(\d+)\.\d+)")
 _SUPPORTED_RUNTIME_KEYS = {"pip"}
+#: Mirrors the CLI's projectArchiveFilename. Ray resolves a file:// working_dir on
+#: every node separately, so this is the one path the head and its workers agree on.
+PROJECT_ARCHIVE_NAME = "_tau_project.zip"
+PROJECT_ARCHIVE_PATH = f"{TARGET_DIR}/{PROJECT_ARCHIVE_NAME}"
+TARGET_DIR_ENV = "TAU_PAYLOAD_TARGET_DIR"
 
 
 class UnsupportedShape(ValueError):
@@ -309,10 +314,17 @@ def render_rayjob(
     if profile.gpus_per_worker:
         worker_pod["tolerations"] = [dict(toleration) for toleration in GPU_TOLERATIONS]
 
+    worker_distribution = payload if gpu_execution == GPU_EXECUTION_RAY else None
     if payload is not None:
         head_pod["initContainers"] = [_payload_init_container(image, payload)]
         head_pod["volumes"] = [_script_volume()]
         head_pod["containers"][0].setdefault("volumeMounts", []).append(
+            {"name": VOLUME_NAME, "mountPath": TARGET_DIR, "readOnly": True}
+        )
+    if worker_distribution is not None:
+        worker_pod["initContainers"] = [_payload_init_container(image, worker_distribution)]
+        worker_pod["volumes"] = [_script_volume()]
+        worker_pod["containers"][0].setdefault("volumeMounts", []).append(
             {"name": VOLUME_NAME, "mountPath": TARGET_DIR, "readOnly": True}
         )
 
@@ -409,8 +421,10 @@ def render_rayjob(
         if profile.priority_class:
             submitter_pod["priorityClassName"] = profile.priority_class
         spec["submitterPodTemplate"] = {"spec": submitter_pod}
-    if pip:
-        spec["runtimeEnvYAML"] = _runtime_env_yaml(pip)
+    if pip or worker_distribution is not None:
+        spec["runtimeEnvYAML"] = _runtime_env_yaml(
+            pip, distributed=worker_distribution is not None
+        )
 
     return {"apiVersion": "ray.io/v1", "kind": "RayJob", "metadata": metadata, "spec": spec}
 
@@ -625,8 +639,12 @@ def _entrypoint(base: str, pip: List[str], *, submitter_shell: bool = False) -> 
     return script
 
 
-def _runtime_env_yaml(pip: List[str]) -> str:
-    return yaml.safe_dump({"pip": list(pip)}, sort_keys=False)
+def _runtime_env_yaml(pip: List[str], *, distributed: bool = False) -> str:
+    runtime: Dict[str, Any] = {"pip": list(pip)}
+    if distributed:
+        runtime["working_dir"] = f"file://{PROJECT_ARCHIVE_PATH}"
+        runtime["env_vars"] = {TARGET_DIR_ENV: {"inline": TARGET_DIR}}
+    return yaml.safe_dump(runtime, sort_keys=False)
 
 
 def _ray_version(image: str) -> str:
