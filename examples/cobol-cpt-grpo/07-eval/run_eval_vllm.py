@@ -14,7 +14,8 @@ and `cobc --version` succeeds.
 
 Paragraph completions are cut at the next paragraph header and compiled with
 the rest of the original procedure appended. Each compile suite also reports
-how many tasks compile with the reference in place of the generation.
+how many tasks compile with the reference, and with an empty generation, in
+place of the generation.
 """
 
 import json
@@ -415,15 +416,19 @@ def eval_compilation(tasks, generated_texts, reference_texts):
     failed = 0
     reference_compiled = 0
     compiled_where_reference_compiles = 0
+    empty_compiled = 0
     fmt_counts = {"free": 0, "fixed": 0}
     results = []
 
     for task, gen_text, ref_text in zip(tasks, generated_texts, reference_texts):
-        full_text = task["prompt"] + gen_text + task.get("suffix", "")
-        success, errors, fmt_used = try_compile(full_text)
+        suffix = task.get("suffix", "")
+        success, errors, fmt_used = try_compile(task["prompt"] + gen_text + suffix)
         ref_success, _, _ = try_compile(ref_text)
-        if success is None or ref_success is None:
+        empty_success, _, _ = try_compile(task["prompt"] + suffix)
+        if None in (success, ref_success, empty_success):
             raise RuntimeError(f"cobc not found while compiling task {task['id']}")
+        if empty_success:
+            empty_compiled += 1
         if success:
             compiled += 1
             fmt_counts[fmt_used] += 1
@@ -439,6 +444,7 @@ def eval_compilation(tasks, generated_texts, reference_texts):
                 "id": task["id"],
                 "compiled": success,
                 "reference_compiled": ref_success,
+                "empty_compiled": empty_success,
                 "errors": errors[:500] if errors else "",
                 "format": fmt_used,
             }
@@ -456,6 +462,7 @@ def eval_compilation(tasks, generated_texts, reference_texts):
         f"on {compiled_where_reference_compiles} of those",
         flush=True,
     )
+    print(f"  Empty generation compiles: {empty_compiled}/{total}", flush=True)
 
     return {
         "compilation_rate_pct": round(rate, 1),
@@ -465,6 +472,7 @@ def eval_compilation(tasks, generated_texts, reference_texts):
         "compiled_fixed": fmt_counts["fixed"],
         "reference_compiled": reference_compiled,
         "compiled_where_reference_compiles": compiled_where_reference_compiles,
+        "empty_compiled": empty_compiled,
         "details": results,
     }
 

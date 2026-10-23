@@ -131,7 +131,10 @@ in place of the generation: the paragraph prompt, reference, and appended
 procedure, or the original program for program and structural tasks.
 `reference_compiled` counts the tasks that compile that way, and
 `compiled_where_reference_compiles` counts the generations that compile on
-those tasks.
+those tasks. `empty_compiled` counts the tasks that compile with an empty
+generation. `cobc -fsyntax-only` accepts an empty paragraph or an empty
+PROCEDURE DIVISION, so a compile count is meaningful only above this floor and
+alongside BLEU, edit distance, and the structural checks.
 
 Before loading the model, the eval checks that `cobc --version` works and that
 all five suite files exist, are not empty, and have the fields the current

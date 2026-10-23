@@ -143,7 +143,7 @@ def test_cut_at_next_paragraph_keeps_only_the_target_body(run_eval):
     assert run_eval.cut_at_next_paragraph("       0100-START.\n" + body) == ""
 
 
-def test_eval_compilation_appends_suffix_and_counts_reference(run_eval):
+def test_eval_compilation_appends_suffix_and_counts_reference_and_empty(run_eval):
     compiled_texts = []
 
     def fake_compile(text):
@@ -156,11 +156,20 @@ def test_eval_compilation_appends_suffix_and_counts_reference(run_eval):
     ]
     with mock.patch.object(run_eval, "try_compile", side_effect=fake_compile):
         result = run_eval.eval_compilation(tasks, ["G1-", "G2"], ["REF-OK", "REF-BAD"])
-    assert compiled_texts == ["P1-G1-SUFFIX", "REF-OK", "P2-G2", "REF-BAD"]
+    assert compiled_texts == [
+        "P1-G1-SUFFIX",
+        "REF-OK",
+        "P1-SUFFIX",
+        "P2-G2",
+        "REF-BAD",
+        "P2-",
+    ]
     assert result["compiled"] == 1
     assert result["reference_compiled"] == 1
     assert result["compiled_where_reference_compiles"] == 1
+    assert result["empty_compiled"] == 1
     assert [d["reference_compiled"] for d in result["details"]] == [True, False]
+    assert [d["empty_compiled"] for d in result["details"]] == [True, False]
 
 
 def _load_benchmarks(tmp_path, monkeypatch):
