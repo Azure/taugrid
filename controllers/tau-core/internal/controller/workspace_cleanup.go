@@ -394,10 +394,10 @@ func (r *TauWorkspaceReconciler) cleanupStaleTargetRBAC(
 	return nil
 }
 
-func (r *TauWorkspaceReconciler) cleanupOwnedNamespaceAccess(
+func (r *TauWorkspaceReconciler) cleanupOwnedNamespaceWorkloadIdentity(
 	ctx context.Context,
 	workspace *tauv1alpha1.TauWorkspace,
-	targetNamespace, keepServiceAccount string,
+	keepServiceAccount string,
 ) error {
 	var namespaces corev1.NamespaceList
 	if err := r.List(ctx, &namespaces, client.MatchingLabels{
@@ -420,7 +420,7 @@ func (r *TauWorkspaceReconciler) cleanupOwnedNamespaceAccess(
 			return err
 		}
 	}
-	return r.reconcileOwnedNamespaceResearcherAccess(ctx, workspace, targetNamespace)
+	return nil
 }
 
 func canDeleteLegacyWorkspaceRole(role *rbacv1.Role, workspace *tauv1alpha1.TauWorkspace) bool {

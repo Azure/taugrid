@@ -2840,6 +2840,12 @@ func TestWorkspaceRetargetPreservesOldWorkloadIdentityWhileExternalQueueWorkload
 	newNamespace.Labels = map[string]string{labelWorkspace: workspace.Name}
 	newNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
 	account := testServiceAccount(oldNamespace.Name, workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
+	binding := testRoleBinding(oldNamespace.Name, defaultRoleName, workspace.Name)
+	binding.Subjects = []rbacv1.Subject{{
+		Kind:     rbacv1.GroupKind,
+		APIGroup: rbacv1.GroupName,
+		Name:     "former-researchers",
+	}}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "training",
@@ -2883,7 +2889,7 @@ func TestWorkspaceRetargetPreservesOldWorkloadIdentityWhileExternalQueueWorkload
 	workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(workspace, oldNamespace, newNamespace, account, job, localQueue, clusterQueue, workload).
+		WithObjects(workspace, oldNamespace, newNamespace, account, binding, job, localQueue, clusterQueue, workload).
 		WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
@@ -2894,6 +2900,14 @@ func TestWorkspaceRetargetPreservesOldWorkloadIdentityWhileExternalQueueWorkload
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
 		t.Fatalf("old workload identity was removed before Workload drain: %v", err)
+	}
+	var gotBinding rbacv1.RoleBinding
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &gotBinding); err != nil {
+		t.Fatalf("Get old researcher RoleBinding: %v", err)
+	}
+	wantSubjects := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, oldNamespace.Name)}
+	if !reflect.DeepEqual(gotBinding.Subjects, wantSubjects) {
+		t.Fatalf("old researcher subjects = %#v, want current subject %#v", gotBinding.Subjects, wantSubjects)
 	}
 	var waiting tauv1alpha1.TauWorkspace
 	if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {

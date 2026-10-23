@@ -109,8 +109,12 @@ func (r *TauWorkspaceReconciler) syncWorkspace(ctx context.Context, workspace *t
 			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "NamespaceCleanupFailed", err.Error(), workspace.Generation))
 		}
 	}
+	if err := r.reconcileOwnedNamespaceResearcherAccess(ctx, workspace, targetNamespace); err != nil {
+		previousAccessReady = false
+		conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
+	}
 	if previousAccessReady {
-		if err := r.cleanupOwnedNamespaceAccess(ctx, workspace, targetNamespace, keepServiceAccount); err != nil {
+		if err := r.cleanupOwnedNamespaceWorkloadIdentity(ctx, workspace, keepServiceAccount); err != nil {
 			previousAccessReady = false
 			conditions = append(conditions, boolCondition(tauv1alpha1.ConditionDriftDetected, true, "RBACCleanupFailed", err.Error(), workspace.Generation))
 		}
