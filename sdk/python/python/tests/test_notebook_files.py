@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -136,7 +137,7 @@ def test_read_selected_bounds_the_read_itself(tmp_path, monkeypatch):
     directory = notebook_directory(root, NOTEBOOK)
     (root / "huge.py").write_bytes(b"x" * (MAX_FILE_BYTES * 8))
 
-    real_open = Path.open
+    real_fdopen = os.fdopen
     reads = []
 
     class CountingHandle:
@@ -154,11 +155,10 @@ def test_read_selected_bounds_the_read_itself(tmp_path, monkeypatch):
             reads.append(size)
             return self._handle.read(size)
 
-    def counting_open(self, *args, **kwargs):
-        handle = real_open(self, *args, **kwargs)
-        return CountingHandle(handle) if self.name == "huge.py" else handle
+    def counting_fdopen(fd, *args, **kwargs):
+        return CountingHandle(real_fdopen(fd, *args, **kwargs))
 
-    monkeypatch.setattr(Path, "open", counting_open)
+    monkeypatch.setattr(os, "fdopen", counting_fdopen)
 
     with pytest.raises(FileSelectionError) as failure:
         read_selected(directory, ["huge.py"])
@@ -178,6 +178,85 @@ def test_read_selected_enforces_the_payload_ceiling(tmp_path, monkeypatch):
         read_selected(directory, ["helpers.py", "config.json"])
     assert failure.value.status == 413
     assert "payload ceiling" in str(failure.value)
+
+
+def test_read_selected_refuses_a_directory_swapped_for_a_symlink(tmp_path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    assert read_selected(directory, ["helpers.py"], before_read=lambda: None) == {"helpers.py": b"VALUE = 41\n"}
+
+    authorized = tmp_path.parent / (tmp_path.name + "-authorized")
+    directory.rename(authorized)
+    attacker = tmp_path.parent / (tmp_path.name + "-attacker")
+    attacker.mkdir()
+    (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
+    directory.symlink_to(attacker, target_is_directory=True)
+
+    with pytest.raises(FileSelectionError):
+        read_selected(directory, ["helpers.py"])
+    assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+
+
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="the pre-fix tree refuses a link exchanged between listing and reading")
+def test_read_selected_refuses_a_file_swapped_for_a_symlink_between_list_and_read(tmp_path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    assert [row["name"] for row in list_candidates(directory, NOTEBOOK)["files"]] == ["config.json", "helpers.py", "notes.md"]
+
+    secret = tmp_path / "outside_secret.txt"
+    secret.write_bytes(b"SA-TOKEN-abcdef")
+    target = root / "helpers.py"
+    target.unlink()
+    target.symlink_to(secret)
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(directory, ["helpers.py"])
+    assert failure.value.status == 409
+
+
+def test_read_selected_refuses_a_file_replaced_after_selection(tmp_path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    secret = tmp_path / "outside_secret.txt"
+    secret.write_bytes(b"SA-TOKEN-abcdef")
+
+    def swap():
+        target = root / "helpers.py"
+        target.unlink()
+        target.symlink_to(secret)
+
+    with pytest.raises(FileSelectionError):
+        read_selected(directory, ["helpers.py"], before_read=swap)
+
+
+def test_read_selected_refuses_an_alias_created_after_selection(tmp_path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    secret = tmp_path / "outside_secret.txt"
+    secret.write_bytes(b"SA-TOKEN-abcdef")
+
+    def create_alias():
+        (root / "late.py").symlink_to(secret)
+
+    with pytest.raises(FileSelectionError):
+        read_selected(directory, ["late.py"], before_read=create_alias)
+
+
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need dir_fd")
+def test_read_selected_binds_to_the_opened_directory_when_its_name_is_swapped(tmp_path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    authorized = tmp_path.parent / (tmp_path.name + "-authorized")
+    attacker = tmp_path.parent / (tmp_path.name + "-attacker")
+
+    def swap():
+        directory.rename(authorized)
+        attacker.mkdir()
+        (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
+        directory.symlink_to(attacker, target_is_directory=True)
+
+    assert read_selected(directory, ["helpers.py"], before_read=swap) == {"helpers.py": b"VALUE = 41\n"}
+    assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
 
 
 def test_chosen_files_ride_the_payload_and_the_plan_summary(tmp_path):
