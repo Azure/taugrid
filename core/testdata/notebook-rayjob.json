@@ -3,7 +3,7 @@
   "kind": "RayJob",
   "metadata": {
     "annotations": {
-      "tau.azure.com/payload-digest": "c0ed437277dba0999def827c48d429f2ae7314ce8977fa25af7a7099f215ca42",
+      "tau.azure.com/payload-digest": "591098cb0d07efdb3eb14c0bc09af920c23c016a527659e8afbdd4cfb17bb2d8",
       "tau.azure.com/tau-cluster-generation": "7",
       "tau.azure.com/workload-profile": "notebook-cpu",
       "tau.azure.com/workload-profile-set-hash": "sha256:fixture-profile-set"
@@ -70,7 +70,7 @@
                 "command": [
                   "python3",
                   "-c",
-                  "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = base64.b64decode(raw_b64)\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nraw = gzip.decompress(raw)\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
+                  "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = gzip.decompress(base64.b64decode(raw_b64))\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
                 ],
                 "env": [
                   {
@@ -79,7 +79,7 @@
                   },
                   {
                     "name": "TAU_PAYLOAD_DIGEST",
-                    "value": "c0ed437277dba0999def827c48d429f2ae7314ce8977fa25af7a7099f215ca42"
+                    "value": "591098cb0d07efdb3eb14c0bc09af920c23c016a527659e8afbdd4cfb17bb2d8"
                   },
                   {
                     "name": "TAU_PAYLOAD_TARGET_DIR",
@@ -240,7 +240,7 @@
             "command": [
               "python3",
               "-c",
-              "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = base64.b64decode(raw_b64)\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nraw = gzip.decompress(raw)\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
+              "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = gzip.decompress(base64.b64decode(raw_b64))\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
             ],
             "env": [
               {
@@ -249,7 +249,7 @@
               },
               {
                 "name": "TAU_PAYLOAD_DIGEST",
-                "value": "c0ed437277dba0999def827c48d429f2ae7314ce8977fa25af7a7099f215ca42"
+                "value": "591098cb0d07efdb3eb14c0bc09af920c23c016a527659e8afbdd4cfb17bb2d8"
               },
               {
                 "name": "TAU_PAYLOAD_TARGET_DIR",
