@@ -23,10 +23,11 @@ Two boundaries are load-bearing:
   resource carries that namespace (``taugrid:<namespace>``) instead of the single
   coarse ``taugrid`` string, so per-namespace policy is expressible. The same is
   true of the companion files a notebook ships: every surface that lists or reads
-  them authorizes ``taugrid:files:<directory>`` through :func:`files_resource`, so
-  a per-directory policy is not expressible on one surface and bypassable on
-  another, and the directory that is authorized is the one directory the reader
-  consumes.
+  them authorizes a resource from :func:`files_resource` with an explicit
+  ``files`` component (``taugrid:files:root`` at the server root), so a
+  per-directory policy is not expressible on one surface and bypassable on
+  another, the directory that is authorized is the one directory the reader
+  consumes, and no filesystem resource can collide with a namespace resource.
 * **Caller scope.** The team/lane a submission is authorized against comes from
   this server's own configuration (``TAUGRID_TEAM``/``TAUGRID_LANE``), never from
   the request body and never from the profile being authorized. A notebook
@@ -198,20 +199,35 @@ def _call_with_client(handler, reader, **kwargs):
             close()
 
 
+FILES_RESOURCE_COMPONENT = "files/"
+FILES_ROOT_COMPONENT = "."
+
+
 def files_resource(root: Path, directory: Path) -> str:
-    """The Authorizer namespace for one companion directory, for every surface.
+    """The Authorizer resource for one companion directory, for every surface.
 
     The directory that is read is part of *what* is being authorized, so it is
-    named the same way a workload namespace is: ``files`` at the server root and
-    ``files:<relative-directory>`` below it. ``FilesHandler`` lists those flat
-    files and the preview/submit POST paths read them, so both must publish the
-    one resource this function returns; deriving it in a single place is what
-    stops a per-directory policy from being expressible on one surface and
-    bypassable on the other. ``notebook_directory`` has already confined
-    ``directory`` to ``root``, so it is safe to make it relative.
+    named with an explicit ``files/`` component: ``taugrid:files/`` at the
+    server root and ``taugrid:files/<relative-directory>`` below it.
+    ``FilesHandler`` lists those flat files and the preview/submit POST paths
+    read them, so both must publish the one resource this function returns;
+    deriving it in a single place is what stops a per-directory policy from
+    being expressible on one surface and bypassable on the other.
+    ``notebook_directory`` has already confined ``directory`` to ``root``, so it
+    is safe to make it relative.
+
+    The whole resource is encoded here rather than handed to
+    ``auth_resource`` as if it were a namespace. Without that, the server root
+    was ``taugrid:files`` and a namespace literally named ``files`` produced the
+    byte-identical resource, so a grant on that namespace also granted root
+    companion listing and packaging. A namespace encodes as
+    ``taugrid:<namespace>`` with no ``/`` (Kubernetes names may not contain one),
+    so every filesystem resource is provably disjoint from every namespace
+    resource.
     """
     relative = directory.relative_to(root).as_posix()
-    return "files" if relative == "." else f"files:{relative}"
+    component = "" if relative == "." else relative
+    return f"{_ClientMixin.AUTH_RESOURCE}:{FILES_RESOURCE_COMPONENT}{component}"
 
 
 class _ClientMixin:
@@ -220,6 +236,19 @@ class _ClientMixin:
 
     def client(self) -> ClusterClient:
         return load_client(retries=0)
+
+    @classmethod
+    def resource_for(cls, target: object) -> str:
+        """Map an authorization target to the Authorizer resource it names.
+
+        A target that is already a complete resource (``taugrid:...``), as
+        :func:`files_resource` returns, is used verbatim. Anything else is a
+        Kubernetes namespace and is encoded as ``taugrid:<namespace>``.
+        """
+        text = str(target)
+        if text.startswith(cls.AUTH_RESOURCE + ":"):
+            return text
+        return cls.auth_resource(text)
 
     @classmethod
     def auth_resource(cls, namespace: str) -> str:
@@ -280,7 +309,7 @@ class _ClientMixin:
                 f"not authorized to {action} TauGrid notebook resources: no namespace was resolved",
             )
         else:
-            resource = self.auth_resource(str(namespace))
+            resource = _ClientMixin.resource_for(namespace)
         allowed = authorizer.is_authorized(self, user, action, resource)
         if inspect.isawaitable(allowed):
             allowed = await allowed
