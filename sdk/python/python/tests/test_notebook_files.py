@@ -48,6 +48,18 @@ def workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def authorized_directory_replaced_by_a_symlink(tmp_path: Path):
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    authorized = tmp_path.parent / (tmp_path.name + "-authorized")
+    attacker = tmp_path.parent / (tmp_path.name + "-attacker")
+    directory.rename(authorized)
+    attacker.mkdir()
+    (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
+    directory.symlink_to(attacker, target_is_directory=True)
+    return directory, attacker
+
+
 def test_candidates_offer_flat_source_files_and_skip_noise(tmp_path):
     root = workspace(tmp_path)
 
@@ -197,7 +209,7 @@ def test_read_selected_refuses_a_directory_swapped_for_a_symlink(tmp_path):
     assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
 
 
-@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="the pre-fix tree refuses a link exchanged between listing and reading")
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="the bound branch requires POSIX dir_fd and O_NOFOLLOW")
 def test_read_selected_refuses_a_file_swapped_for_a_symlink_between_list_and_read(tmp_path):
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
@@ -242,7 +254,7 @@ def test_read_selected_refuses_an_alias_created_after_selection(tmp_path):
         read_selected(directory, ["late.py"], before_read=create_alias)
 
 
-@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need dir_fd")
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
 def test_read_selected_binds_to_the_opened_directory_when_its_name_is_swapped(tmp_path):
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
@@ -257,6 +269,96 @@ def test_read_selected_binds_to_the_opened_directory_when_its_name_is_swapped(tm
 
     assert read_selected(directory, ["helpers.py"], before_read=swap) == {"helpers.py": b"VALUE = 41\n"}
     assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+
+
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
+def test_directory_open_refuses_a_symlink_without_relying_on_any_later_layer(tmp_path, monkeypatch):
+    directory, attacker = authorized_directory_replaced_by_a_symlink(tmp_path)
+    monkeypatch.setattr(notebook_files, "_verify_authorized_directory", lambda opened: None)
+    monkeypatch.setattr(notebook_files, "_read_names", lambda opened, names: {"helpers.py": b"unreached"})
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(directory, ["helpers.py"])
+
+    assert failure.value.status == 409
+    assert str(failure.value).startswith("the notebook directory was replaced by a symlink before it could be read")
+    assert isinstance(failure.value.__cause__, OSError)
+    assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+
+
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
+def test_directory_identity_refuses_a_symlink_the_open_flags_allowed(tmp_path, monkeypatch):
+    directory, attacker = authorized_directory_replaced_by_a_symlink(tmp_path)
+    monkeypatch.setattr(notebook_files, "_DIRECTORY_OPEN_FLAGS", os.O_RDONLY)
+    monkeypatch.setattr(notebook_files, "_read_names", lambda opened, names: {"helpers.py": b"unreached"})
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(directory, ["helpers.py"])
+
+    assert failure.value.status == 409
+    assert str(failure.value).startswith("the notebook directory was replaced by a symlink before it could be read")
+    assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+
+
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
+def test_relative_open_refuses_a_name_swapped_after_every_directory_check_passed(tmp_path):
+    held = tmp_path.parent / (tmp_path.name + "-held")
+    authorized = held / "authorized"
+    authorized.mkdir(parents=True)
+    filled = held / "filled"
+    filled.mkdir()
+    (filled / "helpers.py").write_bytes(b"ATTACKER = 1\n")
+    swapped = held / "swapped"
+
+    def swap():
+        authorized.rename(swapped)
+        authorized.symlink_to(filled, target_is_directory=True)
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(authorized, ["helpers.py"], before_read=swap)
+
+    assert failure.value.status == 409
+    assert str(failure.value) == "'helpers.py' was not found beside the notebook"
+    assert (filled / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="creating a FIFO needs POSIX os.mkfifo")
+def test_read_selected_refuses_a_named_pipe(tmp_path, monkeypatch):
+    def refuse_fdopen(fd, *args, **kwargs):
+        raise AssertionError("a named pipe must never be read")
+
+    monkeypatch.setattr(os, "fdopen", refuse_fdopen)
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    os.mkfifo(root / "pipe.py")
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(directory, ["pipe.py"])
+
+    assert failure.value.status == 409
+    assert "not a regular file" in str(failure.value)
+
+
+def test_pathname_read_refuses_a_named_pipe_without_the_directory_handle(tmp_path, monkeypatch):
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("creating a FIFO needs POSIX os.mkfifo")
+    if not os.path.exists("C:\\Windows"):
+        pytest.skip("the POSIX pathname branch blocks on a FIFO open and is only exercised on Windows")
+
+    def refuse_fdopen(fd, *args, **kwargs):
+        raise AssertionError("a named pipe must never be read")
+
+    monkeypatch.setattr(os, "fdopen", refuse_fdopen)
+    monkeypatch.setattr(notebook_files, "_DIRECTORY_BINDING", False)
+    root = workspace(tmp_path)
+    directory = notebook_directory(root, NOTEBOOK)
+    os.mkfifo(root / "pipe.py")
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(directory, ["pipe.py"])
+
+    assert failure.value.status == 409
+    assert "not a regular file" in str(failure.value)
 
 
 def test_chosen_files_ride_the_payload_and_the_plan_summary(tmp_path):
