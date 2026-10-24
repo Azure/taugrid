@@ -126,6 +126,29 @@ func (r *TauWorkspaceReconciler) cleanupResearcherRBAC(
 	return r.deleteOwnedObject(ctx, binding, workspace)
 }
 
+func (r *TauWorkspaceReconciler) cleanupOwnedResearcherRoleBindings(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
+	var bindings rbacv1.RoleBindingList
+	if err := r.List(ctx, &bindings, client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if binding.Name != defaultRoleName {
+			continue
+		}
+		if err := r.deleteOwnedObject(ctx, binding, workspace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func clusterQueueReaderBindingName(workspaceName string) string {
 	return "tau-clusterqueue-reader-" + workspaceName
 }

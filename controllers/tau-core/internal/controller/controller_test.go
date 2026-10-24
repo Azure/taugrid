@@ -1546,6 +1546,7 @@ func TestWorkspaceDeletePreservesWorkloadIdentityWhileExternalQueueWorkloadDrain
 	namespace := testNamespace(workspace.Name)
 	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
 	account := testServiceAccount(namespace.Name, workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
+	binding := testRoleBinding(namespace.Name, defaultRoleName, workspace.Name)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "training",
@@ -1589,7 +1590,7 @@ func TestWorkspaceDeletePreservesWorkloadIdentityWhileExternalQueueWorkloadDrain
 	workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
 	c := fake.NewClientBuilder().
 		WithScheme(testScheme(t)).
-		WithObjects(workspace, namespace, account, job, localQueue, clusterQueue, workload).
+		WithObjects(workspace, namespace, account, binding, job, localQueue, clusterQueue, workload).
 		Build()
 	reconciler := newTestWorkspaceReconciler(c)
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
@@ -1600,6 +1601,9 @@ func TestWorkspaceDeletePreservesWorkloadIdentityWhileExternalQueueWorkloadDrain
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
 		t.Fatalf("workspace workload identity was removed before Workload drain: %v", err)
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("researcher RoleBinding survived deletion drain: %v", err)
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(job), &batchv1.Job{}); err != nil {
 		t.Fatalf("pending Job was removed during Workload drain: %v", err)

@@ -263,6 +263,9 @@ func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, wor
 	if targetNamespace == "" {
 		targetNamespace = resolvedNamespace(workspace)
 	}
+	if err := r.cleanupOwnedResearcherRoleBindings(ctx, workspace); err != nil {
+		return err
+	}
 	if err := r.waitForNamespaceRoutingMetadataDrain(ctx, workspace, targetNamespace); err != nil {
 		return err
 	}
