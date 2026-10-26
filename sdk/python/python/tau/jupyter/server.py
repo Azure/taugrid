@@ -55,7 +55,7 @@ from jupyter_server.base.handlers import APIHandler
 from jupyter_server.utils import url_path_join
 from tornado import web
 
-from tau._notebook_pkg import MAX_INPUT_BYTES
+from tau._notebook_pkg import DEFAULT_CELL_TIMEOUT_SECONDS, MAX_INPUT_BYTES
 from tau._render import GPU_EXECUTION_LOCAL, RUNTIME_IMAGE_ENV
 from tau.jupyter.notebook_files import (
     MAX_CANDIDATES,
@@ -487,6 +487,7 @@ class _SubmitMixin(_ClientMixin):
                 env=body.get("env"),
                 env_secret=body.get("env_secret"),
                 gpu_execution=body.get("gpuExecution") or GPU_EXECUTION_LOCAL,
+                cell_timeout_seconds=body.get("cellTimeoutSeconds") or DEFAULT_CELL_TIMEOUT_SECONDS,
                 # The same trusted scope drives discovery (destinations) and
                 # submission, so a profile cannot be found in one scope and
                 # authorized in another.

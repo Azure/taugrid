@@ -524,3 +524,41 @@ def test_invalid_metadata_is_rejected(metadata):
 def test_launcher_recognition_requires_only_known_statements(source, expected):
     from tau._notebook_pkg import classify_launcher_cell
     assert classify_launcher_cell({"source": source}) is expected
+
+
+def test_build_plan_carries_the_cell_timeout_into_the_runner():
+    client = FakeClient(FakeCustom(cluster=cluster_doc()))
+    plan = build_plan(
+        client=client,
+        notebook_bytes=VALID_NB,
+        namespace="ray",
+        name="demo",
+        gpu_execution="ray",
+        cell_timeout_seconds=5400,
+    )
+    spec = plan.manifest["spec"]
+    head = spec["rayClusterSpec"]["headGroupSpec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in head["initContainers"][0]["env"]}
+    files = decode(env["TAU_PAYLOAD_B64"], env["TAU_PAYLOAD_DIGEST"])
+    assert "5400" in files["_tau_runner.py"].decode("utf-8")
+
+
+def test_build_plan_refuses_an_out_of_range_cell_timeout():
+    client = FakeClient(FakeCustom(cluster=cluster_doc()))
+    with pytest.raises(SubmitError):
+        build_plan(
+            client=client,
+            notebook_bytes=VALID_NB,
+            namespace="ray",
+            name="demo",
+            cell_timeout_seconds=999999999,
+        )
+
+
+def test_native_build_forwards_the_requested_cell_timeout():
+    import inspect
+
+    from tau.jupyter import server as server_module
+
+    source = inspect.getsource(server_module._SubmitMixin.build)
+    assert "cellTimeoutSeconds" in source
