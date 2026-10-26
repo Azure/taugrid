@@ -35,7 +35,7 @@ from tau._profile import (
     profile_queue,
     ready_profiles,
 )
-from tau._render import GPU_EXECUTION_LOCAL, Profile, UnsupportedShape, render_rayjob
+from tau._render import GPU_EXECUTION_LOCAL, GPU_EXECUTION_RAY, Profile, UnsupportedShape, render_rayjob
 from tau._kube_io import read_document
 
 if TYPE_CHECKING:
@@ -260,6 +260,7 @@ def build_plan(
         staged = package(
         notebook_bytes, staging_dir=staging_dir, input_cap=input_cap, extra_files=extra_files,
         cell_timeout_seconds=cell_timeout_seconds,
+        distributed=gpu_execution == GPU_EXECUTION_RAY,
     )
     except NotebookInvalid as exc:
         raise SubmitError(f"cannot submit this notebook: {exc}") from exc

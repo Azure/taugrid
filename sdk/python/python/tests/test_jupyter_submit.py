@@ -161,8 +161,12 @@ def test_build_plan_embeds_a_self_contained_payload():
     assert init["name"] == "tau-payload"
     env = {e["name"]: e["value"] for e in init["env"]}
     files = decode(env["TAU_PAYLOAD_B64"], env["TAU_PAYLOAD_DIGEST"])
-    # the prepared notebook, the runner, and the context manifest all ship
-    assert set(files) == {"analysis.ipynb", "_tau_runner.py", "_tau_notebook_context.json"}
+    assert set(files) == {
+        "analysis.ipynb",
+        "_tau_runner.py",
+        "_tau_notebook_context.json",
+        "_tau_project.zip",
+    }
     assert plan.manifest["metadata"]["annotations"]["tau.azure.com/payload-digest"] == plan.digest
     assert plan.manifest["metadata"]["labels"]["kueue.x-k8s.io/queue-name"] == "research-gpu"
     # CLI parity: the managed-by label is what makes a run discoverable by list.

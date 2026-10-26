@@ -21,8 +21,10 @@ it is not a transport budget.
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -225,22 +227,6 @@ def _runner_script(cell_timeout_seconds: int = DEFAULT_CELL_TIMEOUT_SECONDS) -> 
         "    if staged:\n"
         "        joined = ', '.join(staged)\n"
         "        print(f'tg-runner: staged {len(staged)} file(s) into {work}: {joined}', flush=True)\n"
-        "    # Workers can never read this head-local directory. When the RayJob\n"
-        "    # distributes the payload, the same files ship as a runtime_env\n"
-        "    # working_dir archive every node resolves at DISTRIBUTED_TARGET_ENV.\n"
-        "    distributed_target = os.environ.get(DISTRIBUTED_TARGET_ENV, '')\n"
-        "    distributed_root = Path(distributed_target) if distributed_target.strip() else Path()\n"
-        "    if distributed_target.strip() and distributed_root.is_dir():\n"
-        "        bundled = []\n"
-        "        head_only = ('analysis.ipynb', '_tau_runner.py', '_tau_notebook_context.json')\n"
-        "        with zipfile.ZipFile(distributed_root / DISTRIBUTED_ARCHIVE_NAME, 'w', zipfile.ZIP_DEFLATED) as bundle:\n"
-        "            for item in sorted(distributed_root.iterdir()):\n"
-        "                if item.name in head_only or item.suffix in ('.zip', '.pyc') or item.name.startswith('.'):\n"
-        "                    continue\n"
-        "                if item.is_file():\n"
-        "                    bundle.write(item, item.name)\n"
-        "                    bundled.append(item.name)\n"
-        "        print(f'tg-runner: distributed {len(bundled)} file(s) as {DISTRIBUTED_ARCHIVE_NAME}', flush=True)\n"
         "    # A selected module resolves before the runner imports ray, so a helper\n"
         "    # that itself imports ray cannot shadow the real package.\n"
         "    for module_source in companion_modules:\n"
@@ -297,6 +283,29 @@ def _context_manifest(notebook_bytes: bytes, prepared: bytes, dropped: List[str]
     return json.dumps(manifest, separators=(",", ":"), sort_keys=True).encode("utf-8")
 
 
+def _project_archive(files: Dict[str, bytes], head_only: set) -> bytes:
+    """The working_dir archive every Ray node unpacks, built before the driver runs.
+
+    Ray resolves ``runtime_env.working_dir`` before the entrypoint starts, so the
+    archive cannot be produced by the notebook driver: the driver is the workload
+    Ray is waiting on, and its ``/script`` mount is read-only anyway. Building it
+    here puts it in the payload, which the init container writes to ``/script`` on
+    the head and every worker.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for name in sorted(files):
+            if (
+                name in head_only
+                or name == DISTRIBUTED_ARCHIVE_NAME
+                or name.endswith(".pyc")
+                or name.startswith(".")
+            ):
+                continue
+            bundle.writestr(name, files[name])
+    return buffer.getvalue()
+
+
 def package(
     notebook_bytes: bytes,
     *,
@@ -304,6 +313,7 @@ def package(
     input_cap: int = MAX_INPUT_BYTES,
     extra_files: Dict[str, bytes] | None = None,
     cell_timeout_seconds: int = DEFAULT_CELL_TIMEOUT_SECONDS,
+    distributed: bool = False,
 ) -> StagedPayload:
     """Stage the prepared notebook plus runner and encode the embedded payload.
 
@@ -335,6 +345,8 @@ def package(
             raise NotebookInvalid(f"{name!r} collides with a generated payload file; rename it or deselect it")
         files[name] = data
         included.append(name)
+    if distributed:
+        files[DISTRIBUTED_ARCHIVE_NAME] = _project_archive(files, {NOTEBOOK_NAME, RUNNER_NAME, CONTEXT_NAME})
     encoding = encode(files)
 
     nb_path = runner_path = None

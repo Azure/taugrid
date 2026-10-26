@@ -15,6 +15,7 @@ and then check what a worker resolves from that archive.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import tau._render
 import yaml
-from tau._notebook_pkg import RUNNER_NAME, package
+from tau._notebook_pkg import DISTRIBUTED_ARCHIVE_NAME, RUNNER_NAME, package
 from tau._payload import TARGET_DIR
 from tau._render import ENV_TARGET_DIR, GPU_EXECUTION_RAY, Profile, _runtime_env_yaml, render_rayjob
 
@@ -117,15 +118,16 @@ def _env(tmp_path: Path, script: Path) -> dict:
     )
 
 
-def test_the_archive_resolves_the_selected_files_on_a_worker(tmp_path):
+def test_the_archive_ships_in_the_payload_before_the_driver_runs(tmp_path):
     selected = {
         "helpers.py": b"GREETING = 'hello from the selected helper'\n",
-        "config.json": b'{"answer": 42}\n',
+        "config.json": b'{"answer": 42}'+b"\n",
     }
     staged = package(
         _notebook("print('hi')"),
         staging_dir=tmp_path / "stage",
         extra_files=selected,
+        distributed=True,
     )
     rendered = render_rayjob(
         name="companions",
@@ -139,31 +141,48 @@ def test_the_archive_resolves_the_selected_files_on_a_worker(tmp_path):
     worker = rendered["spec"]["rayClusterSpec"]["workerGroupSpecs"][0]["template"]["spec"]
     assert worker["initContainers"][0]["name"] == "tau-payload"
 
-    result = _run_runner(staged.runner_path, _env(tmp_path, tmp_path / "stage"))
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    archive = tmp_path / "stage" / "_tau_project.zip"
-    assert archive.is_file()
+    archive_bytes = staged.files[DISTRIBUTED_ARCHIVE_NAME]
     worker_dir = tmp_path / "worker"
-    with zipfile.ZipFile(archive) as bundle:
+    worker_dir.mkdir()
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as bundle:
         bundle.extractall(worker_dir)
 
     assert (worker_dir / "helpers.py").read_bytes() == selected["helpers.py"]
     assert (worker_dir / "config.json").read_bytes() == selected["config.json"]
-    assert RUNNER_NAME not in {path.name for path in worker_dir.iterdir()}
-    assert "analysis.ipynb" not in {path.name for path in worker_dir.iterdir()}
+    names = {path.name for path in worker_dir.iterdir()}
+    assert RUNNER_NAME not in names
+    assert "analysis.ipynb" not in names
 
 
-def test_the_runner_loads_a_selected_helper_from_the_payload(tmp_path):
+def test_the_driver_no_longer_writes_the_archive(tmp_path):
+    staged = package(
+        _notebook("print('hi')"),
+        staging_dir=tmp_path / "stage",
+        extra_files={"helpers.py": b"VALUE = 7\n"},
+        distributed=True,
+    )
+    result = _run_runner(staged.runner_path, _env(tmp_path, tmp_path / "stage"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (tmp_path / "stage" / DISTRIBUTED_ARCHIVE_NAME).exists()
+
+
+def test_a_local_submission_ships_no_archive(tmp_path):
+    staged = package(_notebook("print('hi')"), extra_files={"helpers.py": b"VALUE = 7\n"})
+    assert DISTRIBUTED_ARCHIVE_NAME not in staged.files
+
+
+def test_the_runner_still_resolves_a_selected_helper(tmp_path):
     staged = package(
         _notebook("import helpers", "print(helpers.VALUE)"),
         staging_dir=tmp_path / "stage",
         extra_files={"helpers.py": b"VALUE = 7\n"},
+        distributed=True,
     )
     result = _run_runner(staged.runner_path, _env(tmp_path, tmp_path / "stage"))
     assert result.returncode == 0, result.stdout + result.stderr
-    with zipfile.ZipFile(tmp_path / "stage" / "_tau_project.zip") as bundle:
+    with zipfile.ZipFile(io.BytesIO(staged.files[DISTRIBUTED_ARCHIVE_NAME])) as bundle:
         assert "helpers.py" in bundle.namelist()
+
 
 
 def test_distributed_runtime_env_uses_string_env_var_values():
