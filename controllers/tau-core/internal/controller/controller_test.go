@@ -2913,6 +2913,14 @@ func TestWorkspaceRetargetPreservesOldWorkloadIdentityWhileExternalQueueWorkload
 				WithObjects(workspace, oldNamespace, newNamespace, account, binding, job, localQueue, clusterQueue, workload).
 				WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).
 				WithInterceptorFuncs(interceptor.Funcs{
+					Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+						if _, ok := obj.(*rbacv1.RoleBinding); ok && obj.GetNamespace() == oldNamespace.Name && identityChange != "unchanged" {
+							if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+								t.Fatal("researcher access was restored before obsolete identity revocation")
+							}
+						}
+						return c.Create(ctx, obj, opts...)
+					},
 					Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
 						if _, ok := obj.(*rbacv1.RoleBinding); ok && obj.GetNamespace() == oldNamespace.Name && identityChange != "unchanged" {
 							if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
@@ -2997,6 +3005,25 @@ func TestWorkspaceRetargetPreservesOldWorkloadIdentityWhileExternalQueueWorkload
 				retainedAccount.Finalizers = nil
 				if err := c.Update(ctx, &retainedAccount); err != nil {
 					t.Fatal(err)
+				}
+			}
+			if identityChange == "deletion-fails" || identityChange == "deletion-pending" {
+				reconcileWorkspaceTimes(t, reconciler, ctx, workspace.Name, 3)
+				if err := c.Get(ctx, client.ObjectKeyFromObject(binding), &gotBinding); err != nil {
+					t.Fatalf("researcher access was not restored after identity revocation recovered: %v", err)
+				}
+				wantSubjects := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, oldNamespace.Name)}
+				if !reflect.DeepEqual(gotBinding.Subjects, wantSubjects) {
+					t.Fatalf("recovered researcher subjects = %#v, want %#v", gotBinding.Subjects, wantSubjects)
+				}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+					t.Fatalf("obsolete identity survived successful recovery: %v", err)
+				}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
+					t.Fatal(err)
+				}
+				if waiting.Status.Target.ResolvedNamespace != oldNamespace.Name {
+					t.Fatal("recovery advanced the target before the Workload finished")
 				}
 			}
 

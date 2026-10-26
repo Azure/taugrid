@@ -10,7 +10,9 @@ import (
 	"reflect"
 	"testing"
 
+	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -94,6 +96,71 @@ func TestKustomizeControllerRoleAllowsLegacyRoleDeletionWithoutMutation(t *testi
 		}
 	}
 	t.Fatalf("Kustomize controller role must permit identity-checked Role deletion without Role mutation: %#v", role.Rules)
+}
+
+func TestKustomizeControllerRoleAllowsReadOnlySourceJobDiscovery(t *testing.T) {
+	role := kustomizeClusterRole(t, "tau-core-controller")
+	want := rbacv1.PolicyRule{
+		APIGroups: []string{"batch"},
+		Resources: []string{"jobs"},
+		Verbs:     []string{"get", "list", "watch"},
+	}
+	for _, rule := range role.Rules {
+		if reflect.DeepEqual(rule, want) {
+			return
+		}
+	}
+	t.Fatalf("controller role must allow read-only source Job discovery: %#v", role.Rules)
+}
+
+func TestRetainedNamespaceRestoresOnlyCurrentAuthorizedResearcherBinding(t *testing.T) {
+	for _, scenario := range []string{"group", "service-account", "cluster-wide", "missing-subject", "missing-principal", "abandoned-namespace", "foreign-namespace"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := testWorkspace("research")
+			workspace.Status.Target.ResolvedNamespace = "retained"
+			namespace := testNamespace("retained")
+			namespace.Labels = workspaceLabels(workspace.Name)
+			namespace.Annotations[annotationOwnerUID] = string(workspace.UID)
+			wantBinding := scenario == "group" || scenario == "service-account"
+			switch scenario {
+			case "service-account":
+				workspace.Spec.KubernetesSubject = &tauv1alpha1.KubernetesSubject{Kind: rbacv1.ServiceAccountKind, Name: "current-researcher"}
+			case "cluster-wide":
+				workspace.Spec.Authorization = &tauv1alpha1.WorkspaceAuthorization{Mode: tauv1alpha1.AuthorizationModeClusterWide}
+			case "missing-subject":
+				workspace.Spec.KubernetesSubject = nil
+			case "missing-principal":
+				workspace.Spec.PrincipalRef = nil
+			case "abandoned-namespace":
+				workspace.Status.Target.ResolvedNamespace = "another-namespace"
+			case "foreign-namespace":
+				namespace.Annotations[annotationOwnerUID] = "another-workspace-uid"
+			}
+			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(namespace).Build()
+			if err := newTestWorkspaceReconciler(c).reconcileOwnedNamespaceResearcherAccess(ctx, workspace, "new-target"); err != nil {
+				t.Fatal(err)
+			}
+			var binding rbacv1.RoleBinding
+			err := c.Get(ctx, client.ObjectKey{Namespace: namespace.Name, Name: defaultRoleName}, &binding)
+			if !wantBinding {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("unexpected researcher access was created: %v, %#v", err, binding)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantSubjects := []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, namespace.Name)}
+			if !reflect.DeepEqual(binding.Subjects, wantSubjects) ||
+				binding.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}) ||
+				!ownedByWorkspace(binding.Labels, workspace.Name) ||
+				binding.Annotations[annotationOwnerUID] != string(workspace.UID) {
+				t.Fatalf("restored researcher access does not match current workspace: %#v", binding)
+			}
+		})
+	}
 }
 
 func kustomizeClusterRole(t *testing.T, name string) rbacv1.ClusterRole {

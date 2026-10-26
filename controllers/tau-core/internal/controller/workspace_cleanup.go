@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -187,75 +189,128 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 		if !found || queueName == "" {
 			continue
 		}
-		localQueue := newQueueObject(localQueueGVK)
-		localQueueKey := client.ObjectKey{Name: queueName, Namespace: namespace.Name}
-		if err := r.apiReader().Get(ctx, localQueueKey, localQueue); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return false, "", fmt.Errorf("read LocalQueue %s before routing metadata cleanup: %w", localQueueKey, err)
-		}
-		clusterQueueName, found, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
-		if err != nil {
-			return false, "", fmt.Errorf("read LocalQueue %s backing ClusterQueue: %w", localQueueKey, err)
-		}
-		if !found || strings.TrimSpace(clusterQueueName) == "" {
-			return false, "", fmt.Errorf("LocalQueue %s has no backing ClusterQueue", localQueueKey)
-		}
-		admittedClusterQueue, admitted, err := unstructured.NestedString(workload.Object, "status", "admission", "clusterQueue")
+		admittedClusterQueue, _, err := unstructured.NestedString(workload.Object, "status", "admission", "clusterQueue")
 		if err != nil {
 			return false, "", fmt.Errorf("read Workload %s admitted ClusterQueue: %w", client.ObjectKeyFromObject(workload), err)
 		}
-		if admitted && strings.TrimSpace(admittedClusterQueue) != "" {
-			clusterQueueName = admittedClusterQueue
+		inUse, message, err := r.queueRoutingMetadataInUse(
+			ctx, workspace, namespace, cleanedLabels, queueName, admittedClusterQueue,
+			fmt.Sprintf("Workload %s", client.ObjectKeyFromObject(workload)),
+		)
+		if err != nil || inUse {
+			return inUse, message, err
 		}
-		clusterQueue := newQueueObject(clusterQueueGVK)
-		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
-			return false, "", fmt.Errorf("read ClusterQueue %s before routing metadata cleanup: %w", clusterQueueName, err)
-		}
-		if expectedUID := strings.TrimSpace(workspace.Status.Queue.ClusterQueueUID); expectedUID != "" &&
-			clusterQueueName == strings.TrimSpace(workspace.Status.Queue.ClusterQueue) &&
-			string(clusterQueue.GetUID()) != expectedUID {
-			return false, "", fmt.Errorf(
-				"ClusterQueue %q UID changed from %q to %q before routing metadata cleanup",
-				clusterQueueName,
-				expectedUID,
-				clusterQueue.GetUID(),
-			)
-		}
-		selectorMap, found, err := unstructured.NestedMap(clusterQueue.Object, "spec", "namespaceSelector")
-		if err != nil {
-			return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
-		}
-		labelSelector := metav1.LabelSelector{}
-		if found {
-			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &labelSelector); err != nil {
-				return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+	}
+	var jobs batchv1.JobList
+	if err := r.apiReader().List(ctx, &jobs, client.InNamespace(namespace.Name)); err != nil {
+		return false, "", fmt.Errorf("list Jobs in namespace %q before routing metadata cleanup: %w", namespace.Name, err)
+	}
+	workloadJobs := make(map[types.UID]string)
+	for i := range workloads.Items {
+		for _, owner := range workloads.Items[i].GetOwnerReferences() {
+			if owner.APIVersion == batchv1.SchemeGroupVersion.String() && owner.Kind == "Job" && owner.UID != "" {
+				workloadJobs[owner.UID] = owner.Name
 			}
 		}
-		selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
-		if err != nil {
-			return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
-		}
-		if !selector.Matches(labels.Set(namespace.Labels)) {
-			return false, "", fmt.Errorf(
-				"ClusterQueue %q namespaceSelector does not match namespace %q for unfinished Workload %s",
-				clusterQueueName,
-				namespace.Name,
-				client.ObjectKeyFromObject(workload),
-			)
-		}
-		if selector.Matches(labels.Set(cleanedLabels)) {
+	}
+	for i := range jobs.Items {
+		job := &jobs.Items[i]
+		if job.UID != "" && workloadJobs[job.UID] == job.Name {
 			continue
 		}
-		return true, fmt.Sprintf(
-			"waiting for Workload %s using retained LocalQueue %q and ClusterQueue %q before removing namespace routing metadata",
-			client.ObjectKeyFromObject(workload),
-			queueName,
-			clusterQueueName,
-		), nil
+		finished := false
+		for _, condition := range job.Status.Conditions {
+			if condition.Status == corev1.ConditionTrue &&
+				(condition.Type == batchv1.JobComplete || condition.Type == batchv1.JobFailed) {
+				finished = true
+				break
+			}
+		}
+		queueName := strings.TrimSpace(job.Labels["kueue.x-k8s.io/queue-name"])
+		if finished || queueName == "" {
+			continue
+		}
+		inUse, message, err := r.queueRoutingMetadataInUse(
+			ctx, workspace, namespace, cleanedLabels, queueName, "",
+			fmt.Sprintf("Job %s", client.ObjectKeyFromObject(job)),
+		)
+		if err != nil || inUse {
+			return inUse, message, err
+		}
 	}
 	return false, "", nil
+}
+
+func (r *TauWorkspaceReconciler) queueRoutingMetadataInUse(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace *corev1.Namespace,
+	cleanedLabels map[string]string,
+	queueName, admittedClusterQueue, source string,
+) (bool, string, error) {
+	localQueue := newQueueObject(localQueueGVK)
+	localQueueKey := client.ObjectKey{Name: queueName, Namespace: namespace.Name}
+	if err := r.apiReader().Get(ctx, localQueueKey, localQueue); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("read LocalQueue %s before routing metadata cleanup: %w", localQueueKey, err)
+	}
+	clusterQueueName, found, err := unstructured.NestedString(localQueue.Object, "spec", "clusterQueue")
+	if err != nil {
+		return false, "", fmt.Errorf("read LocalQueue %s backing ClusterQueue: %w", localQueueKey, err)
+	}
+	if !found || strings.TrimSpace(clusterQueueName) == "" {
+		return false, "", fmt.Errorf("LocalQueue %s has no backing ClusterQueue", localQueueKey)
+	}
+	if strings.TrimSpace(admittedClusterQueue) != "" {
+		clusterQueueName = admittedClusterQueue
+	}
+	clusterQueue := newQueueObject(clusterQueueGVK)
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Name: clusterQueueName}, clusterQueue); err != nil {
+		return false, "", fmt.Errorf("read ClusterQueue %s before routing metadata cleanup: %w", clusterQueueName, err)
+	}
+	if expectedUID := strings.TrimSpace(workspace.Status.Queue.ClusterQueueUID); expectedUID != "" &&
+		clusterQueueName == strings.TrimSpace(workspace.Status.Queue.ClusterQueue) &&
+		string(clusterQueue.GetUID()) != expectedUID {
+		return false, "", fmt.Errorf(
+			"ClusterQueue %q UID changed from %q to %q before routing metadata cleanup",
+			clusterQueueName,
+			expectedUID,
+			clusterQueue.GetUID(),
+		)
+	}
+	selectorMap, found, err := unstructured.NestedMap(clusterQueue.Object, "spec", "namespaceSelector")
+	if err != nil {
+		return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+	}
+	labelSelector := metav1.LabelSelector{}
+	if found {
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &labelSelector); err != nil {
+			return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+		}
+	}
+	selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
+	if err != nil {
+		return false, "", fmt.Errorf("read ClusterQueue %q namespaceSelector: %w", clusterQueueName, err)
+	}
+	if !selector.Matches(labels.Set(namespace.Labels)) {
+		return false, "", fmt.Errorf(
+			"ClusterQueue %q namespaceSelector does not match namespace %q for unfinished %s",
+			clusterQueueName,
+			namespace.Name,
+			source,
+		)
+	}
+	if selector.Matches(labels.Set(cleanedLabels)) {
+		return false, "", nil
+	}
+	return true, fmt.Sprintf(
+		"waiting for %s using retained LocalQueue %q and ClusterQueue %q before removing namespace routing metadata",
+		source,
+		queueName,
+		clusterQueueName,
+	), nil
 }
 
 func (r *TauWorkspaceReconciler) cleanupWorkspaceAccess(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {

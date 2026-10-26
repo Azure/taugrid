@@ -2,6 +2,16 @@ suite: Researcher RayService permissions
 templates:
   - templates/rbac.yaml
 tests:
+  - it: grants the controller read-only source Job access for workspace drain checks
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["batch"]
+            resources: ["jobs"]
+            verbs: ["get", "list", "watch"]
+        documentIndex: 2
+
   - it: grants RayJob and RayService lifecycle permissions to the researcher role
     documentSelector:
       path: metadata.name

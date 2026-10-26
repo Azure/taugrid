@@ -50,7 +50,10 @@ The overall phase currently requires `RBACReady` and `QueueReady`; `DriftDetecte
 | `DriftDetected=True` | Fix the dependency or workspace spec named in the message, then let the controller restore its owned namespace/RBAC objects. |
 
 During namespace retargeting, unfinished Workloads on retained external queues
-can delay cleanup of the old namespace's routing metadata. An unchanged workload
+can delay cleanup of the old namespace's routing metadata. Submitted, unfinished
+Jobs that have not received a derived Workload yet also retain routing metadata
+on deletion or retargeting, using their queue label and the live queue selector.
+An unchanged workload
 identity ServiceAccount is retained until those Workloads finish, while researcher
 authorization is reconciled independently. Changing the ServiceAccount name or
 client ID, or removing `workloadIdentity`, revokes the obsolete ServiceAccount
@@ -59,6 +62,13 @@ the drain. Pending Jobs that use the revoked account can no longer create Pods;
 the operator must cancel or replace affected work before the drain can complete.
 Keep the identity unchanged until draining finishes when uninterrupted execution
 is required.
+
+If identity cleanup fails or deletion is delayed by a finalizer, researcher
+bindings are removed until obsolete identity revocation is confirmed. After
+cleanup recovers, the current researcher's binding is restored in the retained
+resolved namespace even while its Workloads are unfinished, so the researcher
+can inspect or cancel the remaining work. Cluster-wide authorization does not
+create a researcher binding.
 
 ### Storage readiness is platform-owned
 
