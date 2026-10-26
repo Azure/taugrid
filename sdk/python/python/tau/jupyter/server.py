@@ -487,7 +487,11 @@ class _SubmitMixin(_ClientMixin):
                 env=body.get("env"),
                 env_secret=body.get("env_secret"),
                 gpu_execution=body.get("gpuExecution") or GPU_EXECUTION_LOCAL,
-                cell_timeout_seconds=body.get("cellTimeoutSeconds") or DEFAULT_CELL_TIMEOUT_SECONDS,
+                cell_timeout_seconds=(
+                    DEFAULT_CELL_TIMEOUT_SECONDS
+                    if body.get("cellTimeoutSeconds") is None
+                    else body.get("cellTimeoutSeconds")
+                ),
                 # The same trusted scope drives discovery (destinations) and
                 # submission, so a profile cannot be found in one scope and
                 # authorized in another.

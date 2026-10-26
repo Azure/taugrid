@@ -325,9 +325,12 @@ def package(
     runner_bytes = _runner_script(cell_timeout_seconds).encode("utf-8")
     manifest = _context_manifest(notebook_bytes, prepared, dropped)
     files = {NOTEBOOK_NAME: prepared, RUNNER_NAME: runner_bytes, CONTEXT_NAME: manifest}
+    reserved = set(files)
+    if distributed:
+        reserved.add(DISTRIBUTED_ARCHIVE_NAME)
     included: List[str] = []
     for name, data in (extra_files or {}).items():
-        if name in files:
+        if name in reserved:
             raise NotebookInvalid(f"{name!r} collides with a generated payload file; rename it or deselect it")
         files[name] = data
         included.append(name)

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from tau._payload import decode
+from tau.jupyter import server
 from tau.jupyter.submit import (
     SubmitError,
     _safe_name,
@@ -555,10 +556,37 @@ def test_build_plan_refuses_an_out_of_range_cell_timeout():
         )
 
 
+class _BuildHandler(server._SubmitMixin):
+    current_user = "researcher"
+
+    def __init__(self, client):
+        self._client = client
+
+    def client(self):
+        return self._client
+
+
 def test_native_build_forwards_the_requested_cell_timeout():
-    import inspect
+    plan = _BuildHandler(FakeClient(FakeCustom(cluster=cluster_doc()))).build(
+        {"notebook": VALID_NB.decode("utf-8"), "namespace": "ray", "name": "demo",
+         "gpuExecution": "ray", "cellTimeoutSeconds": 5400}
+    )
+    spec = plan.manifest["spec"]
+    head = spec["rayClusterSpec"]["headGroupSpec"]["template"]["spec"]
+    env = {e["name"]: e["value"] for e in head["initContainers"][0]["env"]}
+    files = decode(env["TAU_PAYLOAD_B64"], env["TAU_PAYLOAD_DIGEST"])
+    assert "5400" in files["_tau_runner.py"].decode("utf-8")
 
-    from tau.jupyter import server as server_module
-
-    source = inspect.getsource(server_module._SubmitMixin.build)
-    assert "cellTimeoutSeconds" in source
+@pytest.mark.parametrize("value", [0, -5, 4.5, True, 10**12])
+def test_explicit_invalid_cell_timeout_is_refused_at_the_boundary(value):
+    client = FakeClient(FakeCustom(cluster=cluster_doc()))
+    with pytest.raises(SubmitError) as error:
+        build_plan(
+            client=client,
+            notebook_bytes=VALID_NB,
+            namespace="ray",
+            name="demo",
+            gpu_execution="ray",
+            cell_timeout_seconds=value,
+        )
+    assert error.value.status == 400

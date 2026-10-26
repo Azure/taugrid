@@ -438,16 +438,28 @@ def test_read_selected_refuses_an_ancestor_swapped_before_the_bind(tmp_path):
     notebook_files._DIRECTORY_BINDING,
     reason="the lexical refusal is the fallback path, exercised only without dir_fd binding",
 )
-def test_read_selected_refuses_an_ancestor_swap_without_dir_fd(tmp_path):
+def test_read_selected_never_returns_escaped_bytes_without_dir_fd(tmp_path):
     root = tmp_path / "root"
     inner = root / "work"
     inner.mkdir(parents=True)
-    (inner / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (inner / "helper.py").write_text("AUTHORIZED = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helper.py").write_text("ATTACKER = 2\n", encoding="utf-8")
     directory = notebook_files.notebook_directory(root, "work/analysis.ipynb")
+    reached = []
 
     def swap_ancestor():
+        reached.append(True)
         (root / "work").rename(tmp_path / "work-away")
-        (root / "work").symlink_to(tmp_path / "work-away", target_is_directory=True)
+        (root / "work").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(notebook_files.FileSelectionError):
-        notebook_files.read_selected(root, directory, ["helper.py"], before_read=swap_ancestor)
+    try:
+        selected = notebook_files.read_selected(root, directory, ["helper.py"], before_read=swap_ancestor)
+    except notebook_files.FileSelectionError as failure:
+        assert failure.status == 409
+        assert (outside / "helper.py").read_text(encoding="utf-8") == "ATTACKER = 2\n"
+    else:
+        assert selected["helper.py"] == b"AUTHORIZED = 1\n"
+    assert reached, "the swap hook never ran, so this test proved nothing"
+

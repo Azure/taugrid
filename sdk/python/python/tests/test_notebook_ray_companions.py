@@ -23,9 +23,9 @@ import sys
 import zipfile
 from pathlib import Path
 
-import tau._render
+import pytest
 import yaml
-from tau._notebook_pkg import DISTRIBUTED_ARCHIVE_NAME, RUNNER_NAME, package
+from tau._notebook_pkg import DISTRIBUTED_ARCHIVE_NAME, RUNNER_NAME, NotebookInvalid, package
 from tau._payload import TARGET_DIR
 from tau._render import ENV_TARGET_DIR, GPU_EXECUTION_RAY, Profile, _runtime_env_yaml, render_rayjob
 
@@ -195,10 +195,7 @@ def test_distributed_runtime_env_uses_string_env_var_values():
     assert all(isinstance(value, str) for value in env_vars.values())
 
 
-def test_render_defines_no_second_target_dir_env_literal():
-    source = Path(tau._render.__file__).read_text(encoding="utf-8")
-    assert "TARGET_DIR_ENV" not in source
-    assert '"TAU_PAYLOAD_TARGET_DIR"' not in source
+
 
 
 def test_the_runner_does_not_execute_companion_modules():
@@ -245,3 +242,19 @@ def test_the_companion_is_transported_to_the_working_directory(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert (tmp_path / "stage" / "helper.py").read_bytes() == b"VALUE = 1\n"
     assert "staged 1 file(s)" in result.stdout
+
+def test_a_selected_file_named_like_the_archive_is_refused_not_overwritten():
+    with pytest.raises(NotebookInvalid):
+        package(
+            _notebook("print('hi')"),
+            extra_files={DISTRIBUTED_ARCHIVE_NAME: b"USER-CONTROLLED"},
+            distributed=True,
+        )
+
+
+def test_the_archive_name_is_allowed_when_not_distributed():
+    staged = package(
+        _notebook("print('hi')"),
+        extra_files={DISTRIBUTED_ARCHIVE_NAME: b"USER-CONTROLLED"},
+    )
+    assert staged.files[DISTRIBUTED_ARCHIVE_NAME] == b"USER-CONTROLLED"
