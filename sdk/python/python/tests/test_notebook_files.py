@@ -463,3 +463,72 @@ def test_read_selected_never_returns_escaped_bytes_without_dir_fd(tmp_path):
         assert selected["helper.py"] == b"AUTHORIZED = 1\n"
     assert reached, "the swap hook never ran, so this test proved nothing"
 
+
+
+@pytest.mark.skipif(
+    notebook_files._DIRECTORY_BINDING,
+    reason="the reparse-point walk is the fallback path, exercised only without dir_fd binding",
+)
+def test_fallback_refuses_an_ancestor_swapped_for_a_link_before_the_read(tmp_path):
+    root = tmp_path / "root"
+    inner = root / "work"
+    inner.mkdir(parents=True)
+    (inner / "helper.py").write_text("AUTHORIZED = 1\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helper.py").write_text("ATTACKER = 2\n", encoding="utf-8")
+    directory = notebook_files.notebook_directory(root, "work/analysis.ipynb")
+
+    (root / "work").rename(tmp_path / "work-away")
+    try:
+        (root / "work").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"this account cannot create a directory link: {exc}")
+
+    with pytest.raises(notebook_files.FileSelectionError) as failure:
+        notebook_files.read_selected(root, directory, ["helper.py"])
+
+    assert failure.value.status == 409
+    assert "symlink" in str(failure.value)
+    assert (outside / "helper.py").read_text(encoding="utf-8") == "ATTACKER = 2\n"
+
+
+@pytest.mark.skipif(
+    notebook_files._DIRECTORY_BINDING,
+    reason="the reparse-point walk is the fallback path, exercised only without dir_fd binding",
+)
+def test_fallback_still_reads_a_clean_nested_directory(tmp_path):
+    root = tmp_path / "root"
+    inner = root / "one" / "two"
+    inner.mkdir(parents=True)
+    (inner / "helper.py").write_bytes(b"OK = 1\n")
+    directory = notebook_files.notebook_directory(root, "one/two/analysis.ipynb")
+
+    assert notebook_files.read_selected(root, directory, ["helper.py"]) == {"helper.py": b"OK = 1\n"}
+
+
+@pytest.mark.skipif(
+    notebook_files._DIRECTORY_BINDING,
+    reason="the reparse-point walk is the fallback path, exercised only without dir_fd binding",
+)
+def test_fallback_refuses_a_mid_path_ancestor_swapped_for_a_link(tmp_path):
+    root = tmp_path / "root"
+    (root / "project" / "notebooks").mkdir(parents=True)
+    (root / "project" / "notebooks" / "helper.py").write_bytes(b"AUTHORIZED = 1\n")
+    outside = tmp_path / "outside"
+    (outside / "notebooks").mkdir(parents=True)
+    (outside / "notebooks" / "helper.py").write_bytes(b"ATTACKER = 2\n")
+    directory = notebook_files.notebook_directory(root, "project/notebooks/nb.ipynb")
+
+    (root / "project").rename(tmp_path / "project-away")
+    try:
+        (root / "project").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"this account cannot create a directory link: {exc}")
+
+    with pytest.raises(notebook_files.FileSelectionError) as failure:
+        notebook_files.read_selected(root, directory, ["helper.py"])
+
+    assert failure.value.status == 409
+    assert "symlink" in str(failure.value)
+    assert (outside / "notebooks" / "helper.py").read_bytes() == b"ATTACKER = 2\n"

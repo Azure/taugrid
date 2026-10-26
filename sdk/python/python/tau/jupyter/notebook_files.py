@@ -126,11 +126,50 @@ def _verify_authorized_directory(directory: _OpenedDirectory) -> None:
         raise FileSelectionError("the notebook directory was moved or replaced before it could be read", status=409)
 
 
+def _refuse_reparse_ancestors(root: Path, directory: Path) -> None:
+    """Refuse a directory reached through a link or reparse point anywhere below root.
+
+    Platforms without ``dir_fd`` cannot bind the read to the opened directory, so
+    this is the guarantee they get instead: every component between the root and
+    the directory must be a real directory, checked without following links. A
+    writable ancestor swapped for a symlink or junction is refused here rather
+    than resolved into a directory the caller was never authorized for.
+    """
+    resolved_root = Path(root)
+    try:
+        relative = Path(directory).relative_to(resolved_root)
+    except ValueError as exc:
+        raise FileSelectionError(
+            "the notebook directory is outside the Jupyter server root", status=409
+        ) from exc
+    current = resolved_root
+    for part in relative.parts:
+        if part in ("", ".", ".."):
+            raise FileSelectionError(
+                "the notebook directory is outside the Jupyter server root", status=409
+            )
+        current = current / part
+        try:
+            entry = os.stat(current, follow_symlinks=False)
+        except OSError as exc:
+            raise FileSelectionError(
+                f"the notebook directory path could not be verified before it was read: {exc}",
+                status=409,
+            ) from exc
+        if stat.S_ISLNK(entry.st_mode) or getattr(entry, "st_reparse_tag", 0):
+            raise FileSelectionError(
+                "the notebook directory was replaced by a symlink before it could be read", status=409
+            )
+        if not stat.S_ISDIR(entry.st_mode):
+            raise FileSelectionError("the notebook directory is no longer a directory", status=409)
+
+
 _DIRECTORY_BINDING = os.name != "nt" and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW")
 
 
 def _open_directory_from_root(root_fd: int, directory: Path, root: Path) -> int:
     if not _DIRECTORY_BINDING:
+        _refuse_reparse_ancestors(Path(root), Path(directory))
         _verify_authorized_directory(_OpenedDirectory(None, Path(directory)))
         return -1
     resolved_root = Path(root)
