@@ -44,6 +44,7 @@ def write(nb, path, version=4):
 
 NBCONVERT_STUB = '''
 import os
+import sys
 from pathlib import Path
 
 
@@ -60,10 +61,12 @@ class ExecutePreprocessor:
         scope = {"__name__": "__main__"}
         cwd = Path.cwd()
         os.chdir(work)
+        sys.path.insert(0, str(work))
         try:
             for cell in nb.get("cells", []):
                 exec(compile("".join(cell.get("source") or []), "<cell>", "exec"), scope)
         finally:
+            sys.path.remove(str(work))
             os.chdir(cwd)
         return nb, (resources or {})
 '''
@@ -196,3 +199,49 @@ def test_render_defines_no_second_target_dir_env_literal():
     source = Path(tau._render.__file__).read_text(encoding="utf-8")
     assert "TARGET_DIR_ENV" not in source
     assert '"TAU_PAYLOAD_TARGET_DIR"' not in source
+
+
+def test_the_runner_does_not_execute_companion_modules():
+    from tau._notebook_pkg import _runner_script
+
+    script = _runner_script(600)
+    assert "exec_module" not in script
+    assert "spec_from_file_location" not in script
+
+
+def test_a_companion_is_imported_by_a_cell_not_before_the_cells(tmp_path):
+    staged = package(
+        _notebook(
+            "import pathlib; pathlib.Path('cell-ran').write_text('1')",
+            "import helper",
+            "print(helper.VALUE)",
+        ),
+        staging_dir=tmp_path / "stage",
+        extra_files={"helper.py": b"import pathlib\nVALUE = pathlib.Path('cell-ran').exists()\n"},
+    )
+    result = _run_runner(staged.runner_path, _env(tmp_path, tmp_path / "stage"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "True" in result.stdout
+
+
+def test_a_companion_whose_body_would_fail_at_import_time_does_not_stop_the_run(tmp_path):
+    staged = package(
+        _notebook("print('cells still run')"),
+        staging_dir=tmp_path / "stage",
+        extra_files={"helper.py": b"raise RuntimeError('must not run before cells')\n"},
+    )
+    result = _run_runner(staged.runner_path, _env(tmp_path, tmp_path / "stage"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "cells still run" in result.stdout
+
+
+def test_the_companion_is_transported_to_the_working_directory(tmp_path):
+    staged = package(
+        _notebook("print('hi')"),
+        staging_dir=tmp_path / "stage",
+        extra_files={"helper.py": b"VALUE = 1\n"},
+    )
+    result = _run_runner(staged.runner_path, _env(tmp_path, tmp_path / "stage"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "stage" / "helper.py").read_bytes() == b"VALUE = 1\n"
+    assert "staged 1 file(s)" in result.stdout
