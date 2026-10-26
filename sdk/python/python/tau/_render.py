@@ -172,7 +172,6 @@ _SUPPORTED_RUNTIME_KEYS = {"pip"}
 #: every node separately, so this is the one path the head and its workers agree on.
 PROJECT_ARCHIVE_NAME = "_tau_project.zip"
 PROJECT_ARCHIVE_PATH = f"{TARGET_DIR}/{PROJECT_ARCHIVE_NAME}"
-TARGET_DIR_ENV = "TAU_PAYLOAD_TARGET_DIR"
 
 
 class UnsupportedShape(ValueError):
@@ -643,7 +642,7 @@ def _runtime_env_yaml(pip: List[str], *, distributed: bool = False) -> str:
     runtime: Dict[str, Any] = {"pip": list(pip)}
     if distributed:
         runtime["working_dir"] = f"file://{PROJECT_ARCHIVE_PATH}"
-        runtime["env_vars"] = {TARGET_DIR_ENV: {"inline": TARGET_DIR}}
+        runtime["env_vars"] = {ENV_TARGET_DIR: TARGET_DIR}
     return yaml.safe_dump(runtime, sort_keys=False)
 
 

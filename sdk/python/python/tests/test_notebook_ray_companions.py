@@ -22,8 +22,11 @@ import sys
 import zipfile
 from pathlib import Path
 
+import tau._render
+import yaml
 from tau._notebook_pkg import RUNNER_NAME, package
-from tau._render import GPU_EXECUTION_RAY, Profile, render_rayjob
+from tau._payload import TARGET_DIR
+from tau._render import ENV_TARGET_DIR, GPU_EXECUTION_RAY, Profile, _runtime_env_yaml, render_rayjob
 
 NBFORMAT_STUB = '''
 import json
@@ -161,3 +164,16 @@ def test_the_runner_loads_a_selected_helper_from_the_payload(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     with zipfile.ZipFile(tmp_path / "stage" / "_tau_project.zip") as bundle:
         assert "helpers.py" in bundle.namelist()
+
+
+def test_distributed_runtime_env_uses_string_env_var_values():
+    rendered = yaml.safe_load(_runtime_env_yaml([], distributed=True))
+    env_vars = rendered["env_vars"]
+    assert env_vars[ENV_TARGET_DIR] == TARGET_DIR
+    assert all(isinstance(value, str) for value in env_vars.values())
+
+
+def test_render_defines_no_second_target_dir_env_literal():
+    source = Path(tau._render.__file__).read_text(encoding="utf-8")
+    assert "TARGET_DIR_ENV" not in source
+    assert '"TAU_PAYLOAD_TARGET_DIR"' not in source
