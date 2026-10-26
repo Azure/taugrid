@@ -1,0 +1,87 @@
+
+== Success: capacity-gated admission (profile gpu-a100-8)
+   ClusterQueue gpu-a100 has the ProvisioningRequest AdmissionCheck on flavor a100-scale.
+   Pool gpupool: min 0, max 2 nodes x 8 GPU. We ask for 2 workers x 8 GPU.
+$ ./bin/tau-demo submit --name train --workers 2 --run 20s
+preflight: profile gpu-a100-8 ProvisioningReady=True
+preflight: gang needs 2 node(s) of gpupool (max 2): fits
+submitted team-a/train: 2 worker(s) x 8 GPU, profile gpu-a100-8, LocalQueue gpu-a100 (suspended until Kueue admits)
+   Kueue reserves quota, creates a ProvisioningRequest, and keeps the Job suspended until
+   the autoscaler books the whole gang (atomic scale-up). Then both pods start together.
+$ ./bin/tau-demo status train --watch
+----
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:40
+Startup phases:
+  ✓ Submitted              Job applied (suspended)
+  ✓ Quota reserved         16 nvidia.com/gpu on ClusterQueue gpu-a100 (flavor a100-scale)
+  … Capacity provisioning  ProvisioningRequest job-train-6e176-taugrid-cas-gpu-1 created (1s)
+  · Pod scheduling         
+  · Running                
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:42
+  … Capacity provisioning  ProvisioningRequest job-train-6e176-taugrid-cas-gpu-1 created (3s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:44
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (5s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:46
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (7s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:48
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (9s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:50
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (11s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:52
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (13s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:54
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (15s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:56
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (17s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:53:58
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (19s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:00
+  … Capacity provisioning  ScaleUpInProgress: scaling gpupool by 2 node(s) (21s)
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:02
+  ✓ Capacity provisioning  capacity booked on 2 node(s) of gpupool
+  ✓ Pod scheduling         2/2 on aks-gpupool-vmss096473, aks-gpupool-vmss167144
+  … Running                2 active
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:04
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:06
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:08
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:10
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:12
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:14
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:16
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:18
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:20
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:23
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:25
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:27
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:29
+Run team-a/train  profile=gpu-a100-8  queue=gpu-a100  00:54:31
+  ✓ Capacity provisioning  nodes provisioned
+  ✓ Pod scheduling         2 pod(s) placed
+  ✓ Running                Succeeded (2/2 completions)
+$ ./bin/tau-demo overview
+00:54:31
+ClusterQueue GPU quota reserved / nominal
+  gpu-a100         0 / 16
+Workloads
+  job-train-6e176                    queue=gpu-a100    Finished
+ProvisioningRequests
+  (none)
+Node pool gpupool: 2/2 nodes
+  aks-gpupool-vmss096473   pods=0
+  aks-gpupool-vmss167144   pods=0
+   After the run, Job TTL removes it and the autoscaler scales the empty nodes down.
+   waiting for the cluster to drain (no Jobs, Workloads, ProvisioningRequests or pool nodes)
+   quiet: pool back at 0, quota released
+00:54:50
+Node pool gpupool: 0/2 nodes
+
+---- fake-ca log ----
+00:53:38 [fake-ca] simulating AKS Cluster Autoscaler (atomic ProvisioningRequest scale-up)
+00:53:42 [fake-ca] ProvisioningRequest team-a.job-train-6e176-taugrid-cas-gpu-1: accepted (needs 2 node(s) of gpupool)
+00:53:44 [fake-ca] ProvisioningRequest team-a.job-train-6e176-taugrid-cas-gpu-1: scaling gpupool 0 -> 2 atomically (boot 15s)
+00:54:00 [fake-ca] scale-up: node aks-gpupool-vmss096473 created (8 GPU) for ProvisioningRequest team-a.job-train-6e176-taugrid-cas-gpu-1
+00:54:00 [fake-ca] scale-up: node aks-gpupool-vmss167144 created (8 GPU) for ProvisioningRequest team-a.job-train-6e176-taugrid-cas-gpu-1
+00:54:00 [fake-ca] ProvisioningRequest team-a.job-train-6e176-taugrid-cas-gpu-1: 2 node(s) Ready
+00:54:02 [fake-ca] ProvisioningRequest team-a.job-train-6e176-taugrid-cas-gpu-1: Provisioned=True (2 node(s) booked)
+00:54:46 [fake-ca] scale-down: node aks-gpupool-vmss096473 empty for 15s, removed
+00:54:46 [fake-ca] scale-down: node aks-gpupool-vmss167144 empty for 15s, removed
