@@ -336,7 +336,16 @@ def package(
         included.append(name)
     if distributed:
         files[DISTRIBUTED_ARCHIVE_NAME] = _project_archive(files, {NOTEBOOK_NAME, RUNNER_NAME, CONTEXT_NAME})
-    encoding = encode(files)
+    try:
+        encoding = encode(files)
+    except PayloadTooLarge as exc:
+        if not distributed:
+            raise
+        raise PayloadTooLarge(
+            f"{exc} A distributed submission also carries the selected files as "
+            f"{DISTRIBUTED_ARCHIVE_NAME} for Ray to unpack, so its payload is larger than the "
+            "same selection previewed locally; deselect files or bake them into the runtime image."
+        ) from exc
 
     nb_path = runner_path = None
     if staging_dir is not None:

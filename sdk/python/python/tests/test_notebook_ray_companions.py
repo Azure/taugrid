@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from tau._notebook_pkg import DISTRIBUTED_ARCHIVE_NAME, RUNNER_NAME, NotebookInvalid, package
+from tau._notebook_pkg import DISTRIBUTED_ARCHIVE_NAME, RUNNER_NAME, NotebookInvalid, PayloadTooLarge, package
 from tau._payload import TARGET_DIR
 from tau._render import ENV_TARGET_DIR, GPU_EXECUTION_RAY, Profile, _runtime_env_yaml, render_rayjob
 
@@ -258,3 +258,21 @@ def test_the_archive_name_is_allowed_when_not_distributed():
         extra_files={DISTRIBUTED_ARCHIVE_NAME: b"USER-CONTROLLED"},
     )
     assert staged.files[DISTRIBUTED_ARCHIVE_NAME] == b"USER-CONTROLLED"
+
+def test_a_distributed_selection_that_overflows_names_the_archive_as_the_cause():
+    import os
+
+    payload = {f"f{index}.bin": os.urandom(20000) for index in range(2)}
+    with pytest.raises(PayloadTooLarge) as error:
+        package(_notebook("print('hi')"), extra_files=payload, distributed=True)
+    message = str(error.value)
+    assert DISTRIBUTED_ARCHIVE_NAME in message
+    assert "previewed locally" in message
+
+
+def test_the_same_selection_that_fits_locally_still_packages_locally():
+    import os
+
+    payload = {f"f{index}.bin": os.urandom(20000) for index in range(2)}
+    staged = package(_notebook("print('hi')"), extra_files=payload)
+    assert staged.encoding.env_entry_bytes > 0
