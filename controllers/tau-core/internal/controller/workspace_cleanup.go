@@ -576,6 +576,18 @@ func (r *TauWorkspaceReconciler) cleanupStaleWorkloadIdentityServiceAccounts(
 		if err := r.deleteWithPreconditions(ctx, account); err != nil {
 			return err
 		}
+		var remaining corev1.ServiceAccount
+		if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(account), &remaining); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		return fmt.Errorf(
+			"waiting for obsolete workload identity ServiceAccount %s deletion to complete; finalizers=%v",
+			client.ObjectKeyFromObject(&remaining),
+			remaining.Finalizers,
+		)
 	}
 	return nil
 }

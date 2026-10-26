@@ -49,6 +49,17 @@ The overall phase currently requires `RBACReady` and `QueueReady`; `DriftDetecte
 | `QueueReady=False` | Restore the named LocalQueue and its accessible backing ClusterQueue; fix that queue directly rather than creating a second queue with a different name to bypass the workspace spec. |
 | `DriftDetected=True` | Fix the dependency or workspace spec named in the message, then let the controller restore its owned namespace/RBAC objects. |
 
+During namespace retargeting, unfinished Workloads on retained external queues
+can delay cleanup of the old namespace's routing metadata. An unchanged workload
+identity ServiceAccount is retained until those Workloads finish, while researcher
+authorization is reconciled independently. Changing the ServiceAccount name or
+client ID, or removing `workloadIdentity`, revokes the obsolete ServiceAccount
+before granting the current researcher access to the old namespace, even during
+the drain. Pending Jobs that use the revoked account can no longer create Pods;
+the operator must cancel or replace affected work before the drain can complete.
+Keep the identity unchanged until draining finishes when uninterrupted execution
+is required.
+
 ### Storage readiness is platform-owned
 
 `Ready` proves RBAC and queue reconciliation only, not storage. TauGrid 0.1 has no `StorageReady` condition on `TauWorkspace` or `TauCluster`, so a workspace can reach `Ready` while a workload's configured PVC is missing or unbound. Verify the platform-managed claim directly before handing the workspace to a researcher:
