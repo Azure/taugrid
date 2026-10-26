@@ -63,7 +63,7 @@ def authorized_directory_replaced_by_a_symlink(tmp_path: Path):
     attacker.mkdir()
     (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
     directory.symlink_to(attacker, target_is_directory=True)
-    return directory, attacker
+    return root, directory, attacker
 
 
 def test_candidates_offer_flat_source_files_and_skip_noise(tmp_path):
@@ -119,7 +119,7 @@ def test_read_selected_refuses_paths_outside_the_flat_directory(tmp_path):
 
     for name in ("../helpers.py", "nested/deep.py", "/etc/passwd", ".."):
         with pytest.raises(FileSelectionError):
-            read_selected(directory, [name])
+            read_selected(root, directory, [name])
 
 
 def test_read_selected_refuses_files_the_picker_skips(tmp_path):
@@ -128,7 +128,7 @@ def test_read_selected_refuses_files_the_picker_skips(tmp_path):
 
     for name in (".hidden", "image.png"):
         with pytest.raises(FileSelectionError):
-            read_selected(directory, [name])
+            read_selected(root, directory, [name])
 
 
 def test_read_selected_refuses_missing_and_oversize_files(tmp_path):
@@ -137,10 +137,10 @@ def test_read_selected_refuses_missing_and_oversize_files(tmp_path):
     (root / "big.py").write_bytes(b"x" * (MAX_FILE_BYTES + 1))
 
     with pytest.raises(FileSelectionError):
-        read_selected(directory, ["nope.py"])
+        read_selected(root, directory, ["nope.py"])
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["big.py"])
+        read_selected(root, directory, ["big.py"])
     assert failure.value.status == 413
 
 
@@ -179,7 +179,7 @@ def test_read_selected_bounds_the_read_itself(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "fdopen", counting_fdopen)
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["huge.py"])
+        read_selected(root, directory, ["huge.py"])
 
     assert failure.value.status == 413
     # The read asked for a bounded slice and stopped at the ceiling rather
@@ -193,7 +193,7 @@ def test_read_selected_enforces_the_payload_ceiling(tmp_path, monkeypatch):
     monkeypatch.setattr(notebook_files, "MAX_DECODED_BYTES", 10)
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["helpers.py", "config.json"])
+        read_selected(root, directory, ["helpers.py", "config.json"])
     assert failure.value.status == 413
     assert "payload ceiling" in str(failure.value)
 
@@ -201,7 +201,7 @@ def test_read_selected_enforces_the_payload_ceiling(tmp_path, monkeypatch):
 def test_read_selected_refuses_a_directory_swapped_for_a_symlink(tmp_path):
     root = workspace(tmp_path)
     directory = notebook_directory(root, NOTEBOOK)
-    assert read_selected(directory, ["helpers.py"], before_read=lambda: None) == {"helpers.py": b"VALUE = 41\n"}
+    assert read_selected(root, directory, ["helpers.py"], before_read=lambda: None) == {"helpers.py": b"VALUE = 41\n"}
 
     authorized = sibling_directory(tmp_path, "authorized")
     directory.rename(authorized)
@@ -211,7 +211,7 @@ def test_read_selected_refuses_a_directory_swapped_for_a_symlink(tmp_path):
     directory.symlink_to(attacker, target_is_directory=True)
 
     with pytest.raises(FileSelectionError):
-        read_selected(directory, ["helpers.py"])
+        read_selected(root, directory, ["helpers.py"])
     assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
 
 
@@ -228,7 +228,7 @@ def test_read_selected_refuses_a_file_swapped_for_a_symlink_between_list_and_rea
     target.symlink_to(secret)
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["helpers.py"])
+        read_selected(root, directory, ["helpers.py"])
     assert failure.value.status == 409
 
 
@@ -244,7 +244,7 @@ def test_read_selected_refuses_a_file_replaced_after_selection(tmp_path):
         target.symlink_to(secret)
 
     with pytest.raises(FileSelectionError):
-        read_selected(directory, ["helpers.py"], before_read=swap)
+        read_selected(root, directory, ["helpers.py"], before_read=swap)
 
 
 def test_read_selected_refuses_an_alias_created_after_selection(tmp_path):
@@ -257,7 +257,7 @@ def test_read_selected_refuses_an_alias_created_after_selection(tmp_path):
         (root / "late.py").symlink_to(secret)
 
     with pytest.raises(FileSelectionError):
-        read_selected(directory, ["late.py"], before_read=create_alias)
+        read_selected(root, directory, ["late.py"], before_read=create_alias)
 
 
 @pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
@@ -273,38 +273,61 @@ def test_read_selected_binds_to_the_opened_directory_when_its_name_is_swapped(tm
         (attacker / "helpers.py").write_bytes(b"ATTACKER = 1\n")
         directory.symlink_to(attacker, target_is_directory=True)
 
-    assert read_selected(directory, ["helpers.py"], before_read=swap) == {"helpers.py": b"VALUE = 41\n"}
+    assert read_selected(root, directory, ["helpers.py"], before_read=swap) == {"helpers.py": b"VALUE = 41\n"}
     assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
 
 
 @pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
-def test_directory_open_refuses_a_symlink_without_relying_on_any_later_layer(tmp_path, monkeypatch):
-    directory, attacker = authorized_directory_replaced_by_a_symlink(tmp_path)
-    monkeypatch.setattr(notebook_files, "_verify_authorized_directory", lambda opened: None)
-    monkeypatch.setattr(notebook_files, "_read_names", lambda opened, names: {"helpers.py": b"unreached"})
+def test_root_walk_refuses_a_symlink_standing_in_for_the_directory(tmp_path):
+    root = workspace(tmp_path)
+    inner = root / "project"
+    inner.mkdir()
+    (inner / "helpers.py").write_bytes(b"AUTHORIZED = 1\n")
+    outside = sibling_directory(tmp_path, "outside")
+    outside.mkdir()
+    (outside / "helpers.py").write_bytes(b"ATTACKER = 1\n")
+    directory = notebook_directory(root, "project/nb.ipynb")
+
+    inner.rename(tmp_path / "project-away")
+    inner.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["helpers.py"])
+        read_selected(root, directory, ["helpers.py"])
 
     assert failure.value.status == 409
-    assert str(failure.value).startswith("the notebook directory was replaced by a symlink before it could be read")
-    assert isinstance(failure.value.__cause__, OSError)
-    assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+    assert "moved or replaced by a symlink" in str(failure.value)
+    assert (outside / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
+
+@pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
+def test_root_walk_refuses_a_parent_component_that_would_escape_the_root(tmp_path):
+    root = workspace(tmp_path)
+    (root / "inner").mkdir()
+    secret = sibling_directory(tmp_path, "secret")
+    secret.mkdir()
+    (secret / "helpers.py").write_bytes(b"SECRET = 1\n")
+    directory = root / "inner" / ".." / secret.name
+
+    with pytest.raises(FileSelectionError) as failure:
+        read_selected(root, directory, ["helpers.py"])
+
+    assert failure.value.status == 409
+    assert "outside the Jupyter server root" in str(failure.value)
+    assert (secret / "helpers.py").read_bytes() == b"SECRET = 1\n"
 
 
 @pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
-def test_directory_identity_refuses_a_symlink_the_open_flags_allowed(tmp_path, monkeypatch):
-    directory, attacker = authorized_directory_replaced_by_a_symlink(tmp_path)
-    monkeypatch.setattr(notebook_files, "_DIRECTORY_OPEN_FLAGS", os.O_RDONLY)
-    monkeypatch.setattr(notebook_files, "_read_names", lambda opened, names: {"helpers.py": b"unreached"})
+def test_root_walk_refuses_an_ancestor_outside_the_root(tmp_path):
+    root = workspace(tmp_path)
+    outside = sibling_directory(tmp_path, "outside")
+    outside.mkdir()
+    (outside / "helpers.py").write_bytes(b"ATTACKER = 1\n")
+    directory = notebook_directory(root, NOTEBOOK)
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["helpers.py"])
+        read_selected(outside, directory, ["helpers.py"])
 
     assert failure.value.status == 409
-    assert str(failure.value).startswith("the notebook directory was replaced by a symlink before it could be read")
-    assert (attacker / "helpers.py").read_bytes() == b"ATTACKER = 1\n"
-
+    assert "outside the Jupyter server root" in str(failure.value)
 
 @pytest.mark.skipif(not notebook_files._DIRECTORY_BINDING, reason="relative opens need POSIX dir_fd and O_NOFOLLOW")
 def test_relative_open_refuses_a_name_swapped_after_every_directory_check_passed(tmp_path):
@@ -321,7 +344,7 @@ def test_relative_open_refuses_a_name_swapped_after_every_directory_check_passed
         authorized.symlink_to(filled, target_is_directory=True)
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(authorized, ["helpers.py"], before_read=swap)
+        read_selected(held, authorized, ["helpers.py"], before_read=swap)
 
     assert failure.value.status == 409
     assert str(failure.value) == "'helpers.py' was not found beside the notebook"
@@ -339,7 +362,7 @@ def test_read_selected_refuses_a_named_pipe(tmp_path, monkeypatch):
     os.mkfifo(root / "pipe.py")
 
     with pytest.raises(FileSelectionError) as failure:
-        read_selected(directory, ["pipe.py"])
+        read_selected(root, directory, ["pipe.py"])
 
     assert failure.value.status == 409
     assert "not a regular file" in str(failure.value)
@@ -347,7 +370,7 @@ def test_read_selected_refuses_a_named_pipe(tmp_path, monkeypatch):
 
 def test_chosen_files_ride_the_payload_and_the_plan_summary(tmp_path):
     root = workspace(tmp_path)
-    selected = read_selected(notebook_directory(root, NOTEBOOK), ["helpers.py", "config.json"])
+    selected = read_selected(root, notebook_directory(root, NOTEBOOK), ["helpers.py", "config.json"])
 
     staged = package(notebook_bytes(), staging_dir=tmp_path / "stage", extra_files=selected)
 
@@ -364,3 +387,67 @@ def test_package_refuses_a_collision_with_a_generated_file(tmp_path):
 
     with pytest.raises(NotebookInvalid):
         package(notebook_bytes(), staging_dir=tmp_path, extra_files={"_tau_runner.py": b"x"})
+
+
+def test_read_selected_never_returns_an_ancestor_swapped_after_the_bind(tmp_path):
+    root = tmp_path / "root"
+    inner = root / "work"
+    inner.mkdir(parents=True)
+    (inner / "helper.py").write_text("AUTHORIZED = 1\n", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helper.py").write_text("ATTACKER = 2\n", encoding="utf-8")
+
+    directory = notebook_files.notebook_directory(root, "work/analysis.ipynb")
+
+    def swap_ancestor():
+        (root / "work").rename(tmp_path / "work-away")
+        (root / "work").symlink_to(outside, target_is_directory=True)
+
+    if notebook_files._DIRECTORY_BINDING:
+        selected = notebook_files.read_selected(root, directory, ["helper.py"], before_read=swap_ancestor)
+        assert selected["helper.py"] == b"AUTHORIZED = 1\n"
+    else:
+        with pytest.raises(notebook_files.FileSelectionError) as err:
+            notebook_files.read_selected(root, directory, ["helper.py"], before_read=swap_ancestor)
+        assert err.value.status == 409
+    assert (outside / "helper.py").read_text(encoding="utf-8") == "ATTACKER = 2\n"
+
+
+def test_read_selected_refuses_an_ancestor_swapped_before_the_bind(tmp_path):
+    root = tmp_path / "root"
+    inner = root / "work"
+    inner.mkdir(parents=True)
+    (inner / "helper.py").write_text("AUTHORIZED = 1\n", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "helper.py").write_text("ATTACKER = 2\n", encoding="utf-8")
+
+    directory = notebook_files.notebook_directory(root, "work/analysis.ipynb")
+    (root / "work").rename(tmp_path / "work-away")
+    (root / "work").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(notebook_files.FileSelectionError) as err:
+        notebook_files.read_selected(root, directory, ["helper.py"])
+    assert err.value.status == 409
+
+
+@pytest.mark.skipif(
+    notebook_files._DIRECTORY_BINDING,
+    reason="the lexical refusal is the fallback path, exercised only without dir_fd binding",
+)
+def test_read_selected_refuses_an_ancestor_swap_without_dir_fd(tmp_path):
+    root = tmp_path / "root"
+    inner = root / "work"
+    inner.mkdir(parents=True)
+    (inner / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    directory = notebook_files.notebook_directory(root, "work/analysis.ipynb")
+
+    def swap_ancestor():
+        (root / "work").rename(tmp_path / "work-away")
+        (root / "work").symlink_to(tmp_path / "work-away", target_is_directory=True)
+
+    with pytest.raises(notebook_files.FileSelectionError):
+        notebook_files.read_selected(root, directory, ["helper.py"], before_read=swap_ancestor)

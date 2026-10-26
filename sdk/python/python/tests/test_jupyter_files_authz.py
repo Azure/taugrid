@@ -63,7 +63,7 @@ def test_read_selected_refuses_a_symlink_out_of_the_notebook_directory(tmp_path)
     assert "loot" not in offered
 
     with pytest.raises(FileSelectionError):
-        read_selected(notebook_directory(root, rel), ["loot"])
+        read_selected(root, notebook_directory(root, rel), ["loot"])
 
 
 def test_read_selected_refuses_a_symlink_that_points_inside_the_directory(tmp_path):
@@ -76,9 +76,9 @@ def test_read_selected_refuses_a_symlink_that_points_inside_the_directory(tmp_pa
     rel = "notebooks/" + NOTEBOOK
     assert "alias.py" not in [row["name"] for row in list_candidates(notebook_directory(root, rel), rel)["files"]]
     with pytest.raises(FileSelectionError):
-        read_selected(notebook_directory(root, rel), ["alias.py"])
+        read_selected(root, notebook_directory(root, rel), ["alias.py"])
     # The real file is still fine.
-    assert read_selected(notebook_directory(root, rel), ["helpers.py"]) == {"helpers.py": b"VALUE = 41\n"}
+    assert read_selected(root, notebook_directory(root, rel), ["helpers.py"]) == {"helpers.py": b"VALUE = 41\n"}
 
 
 def test_containment_is_a_parent_test_not_a_string_prefix(tmp_path):
@@ -231,9 +231,9 @@ def read_spy(monkeypatch):
     calls = []
     real = server.read_selected
 
-    def recording(directory, names):
+    def recording(root, directory, names):
         calls.append((str(directory), list(names)))
-        return real(directory, names)
+        return real(root, directory, names)
 
     monkeypatch.setattr(server, "read_selected", recording)
     return calls

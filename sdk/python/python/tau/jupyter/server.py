@@ -403,7 +403,7 @@ class _SubmitMixin(_ClientMixin):
             raise web.HTTPError(400, "path must be a string")
         return body
 
-    async def authorize_companion_files(self, body: Mapping[str, Any]) -> Optional[Path]:
+    async def authorize_companion_files(self, body: Mapping[str, Any]) -> Optional[tuple]:
         """Resolve and authorize the companion directory this request will read.
 
         ``FilesHandler`` names the notebook directory ``files:<directory>``
@@ -430,39 +430,48 @@ class _SubmitMixin(_ClientMixin):
         except FileSelectionError as exc:
             raise web.HTTPError(exc.status, str(exc)) from exc
         await self.authorize("read", namespace=files_resource(root, directory))
-        return directory
+        return root, directory
 
     def selected_files(
-        self, body: Mapping[str, Any], directory: Optional[Path] = None
+        self,
+        body: Mapping[str, Any],
+        root: Optional[Path] = None,
+        directory: Optional[Path] = None,
     ) -> Dict[str, bytes]:
         """Read the selected files from the directory the handler authorized.
 
-        ``directory`` is required whenever the request names files: re-resolving
-        the request path here would be the second resolution that lets the
-        authorized value and the read value diverge, so a missing directory fails
-        closed instead of reading an unauthorized one.
+        ``root`` is the resolved Jupyter server root and ``directory`` the
+        authorized notebook directory under it. The read is anchored to ``root``
+        so that no ancestor of ``directory`` can be swapped for a symlink between
+        the open and the read. Re-resolving the request path here would be the
+        second resolution that lets the authorized value and the read value
+        diverge, so a missing root or directory fails closed instead of reading
+        an unauthorized one.
         """
         names = body.get("files") or []
         if not names:
             return {}
-        if directory is None:
+        if root is None or directory is None:
             raise web.HTTPError(
                 500, "companion directory was not authorized before reading notebook files"
             )
         try:
-            return read_selected(directory, names)
+            return read_selected(root, directory, names)
         except FileSelectionError as exc:
             raise web.HTTPError(exc.status, str(exc)) from exc
 
     def build(
-        self, body: Mapping[str, Any], files_directory: Optional[Path] = None
+        self,
+        body: Mapping[str, Any],
+        files_root: Optional[Path] = None,
+        files_directory: Optional[Path] = None,
     ) -> SubmitPlan:
         notebook = body.get("notebook")
         if not isinstance(notebook, str) or not notebook.strip():
             raise web.HTTPError(
                 400, "notebook is required: send the saved .ipynb content as a UTF-8 string"
             )
-        extra_files = self.selected_files(body, files_directory)
+        extra_files = self.selected_files(body, files_root, files_directory)
         scope = trusted_scope()
         namespace = str(body.get("namespace") or "default")
         try:
@@ -636,8 +645,8 @@ class PreviewHandler(APIHandler, _SubmitMixin):
         # refused before the read, exactly as ``FilesHandler`` refuses the
         # listing. Resolving once and handing the value to ``build`` keeps the
         # authorized directory and the read directory the same value.
-        files_directory = await self.authorize_companion_files(body)
-        plan = await asyncio.to_thread(self.build, body, files_directory)
+        files_root, files_directory = await self.authorize_companion_files(body) or (None, None)
+        plan = await asyncio.to_thread(self.build, body, files_root, files_directory)
         self.finish(
             {
                 "submittable": True,
@@ -656,7 +665,7 @@ class SubmitHandler(APIHandler, _SubmitMixin):
         # the same companion-directory grant preview does; it is checked before
         # the release gate so a denial is never masked by configuration state,
         # and before ``build`` so no file is read without it.
-        files_directory = await self.authorize_companion_files(body)
+        files_root, files_directory = await self.authorize_companion_files(body) or (None, None)
         if not SUBMISSION_ENABLED:
             raise web.HTTPError(
                 409,
@@ -671,7 +680,7 @@ class SubmitHandler(APIHandler, _SubmitMixin):
         digest = body.get("planDigest")
         if not isinstance(digest, str) or len(digest) != 64:
             raise web.HTTPError(400, "planDigest from preview is required")
-        plan = await asyncio.to_thread(self.build, body, files_directory)
+        plan = await asyncio.to_thread(self.build, body, files_root, files_directory)
         if not hmac.compare_digest(digest, plan.summary()["planDigest"]):
             raise web.HTTPError(409, "Submission plan changed; review the notebook and plan again")
         try:

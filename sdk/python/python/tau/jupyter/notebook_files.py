@@ -126,32 +126,52 @@ def _verify_authorized_directory(directory: _OpenedDirectory) -> None:
         raise FileSelectionError("the notebook directory was moved or replaced before it could be read", status=409)
 
 
-def _open_authorized_directory(path: Path) -> _OpenedDirectory:
-    if os.name == "nt":
-        _stat_directory(None, path)
-        return _OpenedDirectory(None, path)
-    try:
-        descriptor = os.open(path, _DIRECTORY_OPEN_FLAGS)
-    except FileNotFoundError as exc:
-        raise FileSelectionError(f"the notebook directory was not found: {exc}", status=409) from exc
-    except OSError as exc:
-        try:
-            current = os.lstat(path)
-        except OSError:
-            current = None
-        if current is not None and stat.S_ISLNK(current.st_mode):
-            raise FileSelectionError("the notebook directory was replaced by a symlink before it could be read", status=409) from exc
-        raise FileSelectionError(f"could not open the notebook directory: {exc}", status=502) from exc
-    directory = _OpenedDirectory(descriptor, path)
-    try:
-        _verify_authorized_directory(directory)
-    except BaseException:
-        os.close(descriptor)
-        raise
-    return directory
-
-
 _DIRECTORY_BINDING = os.name != "nt" and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW")
+
+
+def _open_directory_from_root(root_fd: int, directory: Path, root: Path) -> int:
+    if not _DIRECTORY_BINDING:
+        _verify_authorized_directory(_OpenedDirectory(None, Path(directory)))
+        return -1
+    resolved_root = Path(root)
+    try:
+        relative = Path(directory).relative_to(resolved_root)
+    except ValueError as exc:
+        raise FileSelectionError(
+            "the notebook directory is outside the Jupyter server root", status=409
+        ) from exc
+    if not relative.parts:
+        return root_fd
+    if any(part in ("", ".", "..") for part in relative.parts):
+        raise FileSelectionError(
+            "the notebook directory is outside the Jupyter server root", status=409
+        )
+    descriptor = root_fd
+    root_owned = True
+    try:
+        for part in relative.parts:
+            child = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptor)
+            if not root_owned:
+                os.close(descriptor)
+            descriptor = child
+            root_owned = False
+    except OSError as exc:
+        if not root_owned:
+            os.close(descriptor)
+        raise FileSelectionError(
+            "the notebook directory was moved or replaced by a symlink before it could be read",
+            status=409,
+        ) from exc
+    return descriptor
+
+
+def _open_root(root: Path) -> int:
+    if not _DIRECTORY_BINDING:
+        return -1
+    try:
+        return os.open(Path(root), _DIRECTORY_OPEN_FLAGS)
+    except OSError as exc:
+        raise FileSelectionError(f"could not open the Jupyter server root: {exc}", status=502) from exc
 
 
 def _read_bound_file(directory_fd: int, name: str) -> bytes:
@@ -298,6 +318,7 @@ def list_candidates(directory: Path, notebook_path: str) -> Dict[str, Any]:
 
 
 def read_selected(
+    root: Path,
     directory: Path,
     names: Iterable[str],
     *,
@@ -305,24 +326,37 @@ def read_selected(
 ) -> Dict[str, bytes]:
     """Read the chosen files, refusing anything outside the flat, bounded set.
 
-    The directory is opened once and verified before any file is touched, then
-    every file is opened relative to that descriptor without following links. A
-    directory renamed and replaced by a symlink after authorization is refused
+    ``directory`` is a directory under the server root ``root`` that the caller
+    already authorized. Reads are anchored to a descriptor for ``root`` opened
+    once, and every component between that descriptor and ``directory`` is
+    opened relative to its parent without following links, so a symlink in
+    place of any ancestor is a refusal rather than a redirect. Each file is then
+    opened relative to the bound directory descriptor without following links.
+    A directory renamed and replaced by a symlink after authorization is refused
     rather than re-resolved. Platforms without relative opens refuse the swapped
     name, the link, and a replaced file, but cannot bind the read to the opened
     directory; they re-verify the directory and the opened file identity instead.
 
-    ``before_read`` is a test-only hook that runs after the directory is verified
-    and before the first file is opened.
+    ``before_read`` is a test-only hook that runs after the directory is opened
+    through the bound walk and before the first file is opened.
     """
-    directory_handle = _open_authorized_directory(Path(directory))
+    root_descriptor = _open_root(Path(root))
+    directory_descriptor = -1
+    owns_directory = False
     try:
+        directory_descriptor = _open_directory_from_root(root_descriptor, Path(directory), Path(root))
+        owns_directory = directory_descriptor != root_descriptor
         if before_read is not None:
             before_read()
+        directory_handle = _OpenedDirectory(
+            None if directory_descriptor < 0 else directory_descriptor, Path(directory)
+        )
         return _read_names(directory_handle, names)
     finally:
-        if directory_handle.descriptor is not None:
-            os.close(directory_handle.descriptor)
+        if owns_directory and directory_descriptor >= 0:
+            os.close(directory_descriptor)
+        if root_descriptor >= 0:
+            os.close(root_descriptor)
 
 
 __all__ = [
