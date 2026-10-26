@@ -209,10 +209,9 @@ def test_endpoint_is_registered_no_store_and_read_only():
             self.result = value
     handler = Handler()
     asyncio.run(handler_class.get(handler))
-    assert handler.result["namespace"] == "research"
-    # The success path authorizes the coarse grant for the namespace listing and
-    # then the resolved namespace before the catalog's profiles and queues.
-    assert ("read", "taugrid:research") in handler.authorizer.calls
+    assert handler.result["namespace"] is None
+    assert {row["name"] for row in handler.result["namespaces"]} == {"research", "default"}
+    assert handler.authorizer.calls == [("read", "taugrid")]
 
 
 class _RecordingAllowAll:
@@ -238,15 +237,46 @@ class _NamespaceDenyingAuthorizer:
         return resource != self.denied
 
 
-def test_omitted_namespace_is_authorized_as_the_resolved_namespace():
-    """A request that omits ``namespace`` must authorize ``taugrid:<resolved>``.
+def test_omitted_namespace_authorizes_nothing_and_returns_the_choices():
+    """An unnamed request must not authorize any namespace.
 
-    When the request names no namespace, discovery reads the first visible
-    namespace's profiles and LocalQueues, so the coarse ``taugrid`` grant alone
-    must not reach that read. This Authorizer grants everything except the
-    resolved namespace: the request is refused before any queue is listed, which
-    is only true if the resolved namespace was authorized.
+    The picker exists so the user can choose a destination. Authorizing an
+    implicit default first refuses the whole request when that default is
+    denied, hiding the namespaces the caller is allowed to use, and a refresh
+    repeats the same refusal.
     """
+    client = CatalogClient()
+
+    class Handler(server._ClientMixin):
+        current_user = "researcher"
+        settings = {}
+        authorizer = _NamespaceDenyingAuthorizer("taugrid:research")
+
+        def __init__(self):
+            self.body = None
+
+        def client(self):
+            return client
+
+        def get_argument(self, name, default=None):
+            return default
+
+        def set_header(self, name, value):
+            return None
+
+        def finish(self, value):
+            self.body = value
+
+    handler = Handler()
+    asyncio.run(server.DestinationsHandler.get(handler))
+    assert handler.body is not None
+    assert handler.body["namespace"] is None
+    assert handler.body["queues"] == []
+    assert not any(name == "queues" for name, _ in client.calls)
+    assert not any(resource == "taugrid:research" for _, resource in handler.authorizer.calls)
+
+
+def test_a_named_namespace_is_still_authorized():
     client = CatalogClient()
 
     class Handler(server._ClientMixin):
@@ -258,20 +288,19 @@ def test_omitted_namespace_is_authorized_as_the_resolved_namespace():
             return client
 
         def get_argument(self, name, default=None):
-            return default
+            return "research"
 
         def set_header(self, name, value):
-            raise AssertionError("a denied request must not reach the response")
+            return None
 
         def finish(self, value):
-            raise AssertionError("a denied request must not finish")
+            self.body = value
 
     handler = Handler()
     with pytest.raises(HTTPError) as error:
         asyncio.run(server.DestinationsHandler.get(handler))
     assert error.value.status_code == 403
     assert ("read", "taugrid:research") in handler.authorizer.calls
-    assert not any(name == "queues" for name, _ in client.calls)
 
 
 # -- C1: listing must fail closed without a trusted team ---------------------

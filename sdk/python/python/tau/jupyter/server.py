@@ -522,14 +522,12 @@ class DestinationsHandler(APIHandler, _ClientMixin):
 
         requested = self.get_argument("namespace", None)
         # Listing namespaces is cluster-wide discovery, so the coarse ``taugrid``
-        # grant covers it. The namespace whose profiles and LocalQueues are read
-        # is resolved exactly once, and the same discovery snapshot is handed to
-        # the catalog, so the value authorized here and the value read there
-        # cannot come from two independent cluster calls. A request that names no
-        # namespace would otherwise reach a namespace's queues holding only the
-        # coarse grant; a namespace discovery did not find is never read; and a
-        # discovery that legitimately finds none leaves the catalog empty rather
-        # than resolving to a namespace that was never authorized.
+        # grant covers it. A namespace is authorized only when the request named
+        # one: an unnamed request returns the choices so the user can pick a
+        # destination they are actually allowed to use, and authorizing an
+        # implicit default first would refuse the whole picker when that default
+        # is denied. The same discovery snapshot is handed to the catalog, so the
+        # value authorized here and the value read there cannot diverge.
         await self.authorize("read")
         resolved, discovery = await self.read(resolve_destinations, namespace=requested)
         if resolved is not None:

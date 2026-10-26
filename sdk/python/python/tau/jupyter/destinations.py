@@ -25,17 +25,15 @@ def _visible(namespace, namespaces):
 
 
 def _pick_namespace(namespace, namespaces):
-    """The one namespace the catalog reads, or ``None`` when none is visible.
+    """The one namespace the catalog reads, or ``None`` when nothing was named.
 
-    A request that omits ``namespace`` lets discovery pick the first visible
-    namespace. This selection happens once, in :func:`resolve_destinations`; its
-    result is what the handler authorizes, and the discovery snapshot is then
-    handed to :func:`list_destinations` so the read cannot pick again.
+    A request that omits ``namespace`` resolves to ``None``: discovery never
+    picks a destination for the user. The handler then authorizes no namespace
+    and the picker returns every visible choice, so a denied default cannot hide
+    the namespaces the caller is allowed to use.
     """
     if namespace:
         return _visible(namespace, namespaces)
-    if namespaces:
-        return namespaces[0]["name"]
     return None
 
 
@@ -61,10 +59,10 @@ def resolve_destinations(client, namespace=None):
     never resolves independently. Discovery itself is a cluster-wide list, so the
     coarse ``taugrid`` grant covers this call.
 
-    ``None`` is a real result: discovery found no visible namespace, so no
-    namespaced read is authorized and the catalog stays empty. A namespace the
-    request names is validated against this snapshot and refused when it is not
-    visible.
+    ``None`` is a real result: the request named no namespace, or discovery
+    found none, so no namespaced read is authorized and the catalog stays
+    scope-only. A namespace the request names is validated against this snapshot
+    and refused when it is not visible.
     """
     discovery = list_namespaces(client)
     return _pick_namespace(namespace, discovery["namespaces"]), discovery
@@ -87,6 +85,8 @@ def list_destinations(client, namespace=None, *, team=None, lane=None, discovery
     """
     if discovery is None:
         discovery = list_namespaces(client)
+        if namespace is None and discovery["namespaces"]:
+            namespace = discovery["namespaces"][0]["name"]
         namespace = _pick_namespace(namespace, discovery["namespaces"])
     else:
         namespace = _resolved_namespace(namespace, discovery["namespaces"])
