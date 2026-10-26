@@ -30,6 +30,7 @@ import base64
 import gzip
 import hashlib
 import json
+import zlib
 from dataclasses import dataclass
 from typing import Dict, Mapping
 
@@ -150,7 +151,7 @@ def encode(files: Mapping[str, bytes]) -> EncodedPayload:
         ],
     }
     raw = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    compressed = gzip.compress(raw, compresslevel=9, mtime=0)
+    compressed = _gzip_huffman(raw)
     encoded = base64.b64encode(compressed).decode("ascii")
     env_entry_bytes = len(ENV_B64) + 1 + len(encoded)
     if env_entry_bytes > MAX_ENV_ENTRY_BYTES:
@@ -164,6 +165,14 @@ def encode(files: Mapping[str, bytes]) -> EncodedPayload:
         compressed_bytes=len(compressed),
         env_entry_bytes=env_entry_bytes,
     )
+
+
+def _gzip_huffman(raw: bytes) -> bytes:
+    compressor = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS, 9, zlib.Z_HUFFMAN_ONLY)
+    deflate_body = compressor.compress(raw) + compressor.flush()
+    header = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff"
+    trailer = zlib.crc32(raw).to_bytes(4, "little") + (len(raw) & 0xFFFFFFFF).to_bytes(4, "little")
+    return header + deflate_body + trailer
 
 
 def decode(encoded: str, digest: str) -> Dict[str, bytes]:
