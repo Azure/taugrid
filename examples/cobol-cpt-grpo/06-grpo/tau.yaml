@@ -1,0 +1,59 @@
+name: cobol-grpo
+engine: rayjob
+run:
+  entrypoint: driver.py
+  working_dir: .
+  working_dir_excludes:
+    - __pycache__
+    - .pytest_cache
+    - .ruff_cache
+    - test_*.py
+
+experiment:
+  project: cobol-cpt-grpo
+  name: grpo
+  group: grpo-ray
+
+runtime:
+  image: registry.example.com/cobol-train:v0.28.0-ray2.56.0
+  rdma:
+    enabled: true
+  env:
+    MODEL_ID: /data/projects/taugrid-default/runs/cobol-cpt-grpo/cpt/final
+    TRAIN_FILE: /data/datasets/cobol/prepared/rl-prompts.jsonl
+    OUTPUT_DIR: /data/projects/taugrid-default/runs/cobol-cpt-grpo/grpo
+    NUM_EPOCHS: "3"
+    LR: "5e-7"
+    K_SAMPLES: "4"
+    TEMPERATURE: "0.8"
+    KL_COEFF: "0.05"
+    BATCH_SIZE: "4"
+    GRAD_ACCUM: "4"
+    MAX_PROMPT_LEN: "3072"
+    MAX_GEN_LEN: "1024"
+    SAVE_STEPS: "50"
+    PYTHONUNBUFFERED: "1"
+    HF_HOME: /tmp/hf-cache
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+
+compute:
+  workers: 2
+  gpus_per_worker: 8
+  worker_cpu_request: "32"
+  worker_memory_request: 768Gi
+  worker_cpu_limit: "64"
+  worker_memory_limit: 1500Gi
+
+storage:
+  data_pvc: workspace-data
+  output: /data/projects/taugrid-default/runs/cobol-cpt-grpo/grpo
+
+metrics:
+  history:
+    - metrics-history-attempt-0/*.jsonl
+  offload:
+    enabled: true
+
+policy:
+  workspace: taugrid-default
+  topology: same-network-domain
