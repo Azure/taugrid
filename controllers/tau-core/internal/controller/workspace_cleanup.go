@@ -206,10 +206,14 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 		return false, "", fmt.Errorf("list Jobs in namespace %q before routing metadata cleanup: %w", namespace.Name, err)
 	}
 	workloadJobs := make(map[types.UID]string)
+	workloadRayJobs := make(map[types.UID]string)
 	for i := range workloads.Items {
 		for _, owner := range workloads.Items[i].GetOwnerReferences() {
 			if owner.APIVersion == batchv1.SchemeGroupVersion.String() && owner.Kind == "Job" && owner.UID != "" {
 				workloadJobs[owner.UID] = owner.Name
+			}
+			if owner.APIVersion == "ray.io/v1" && owner.Kind == "RayJob" && owner.UID != "" {
+				workloadRayJobs[owner.UID] = owner.Name
 			}
 		}
 	}
@@ -238,7 +242,47 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 			return inUse, message, err
 		}
 	}
+	rayJobs := &unstructured.UnstructuredList{}
+	rayJobs.SetGroupVersionKind(schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: "RayJobList"})
+	if err := r.apiReader().List(ctx, rayJobs, client.InNamespace(namespace.Name)); err != nil {
+		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("list RayJobs in namespace %q before routing metadata cleanup: %w", namespace.Name, err)
+	}
+	for i := range rayJobs.Items {
+		rayJob := &rayJobs.Items[i]
+		if rayJob.GetUID() != "" && workloadRayJobs[rayJob.GetUID()] == rayJob.GetName() {
+			continue
+		}
+		queueName := strings.TrimSpace(rayJob.GetLabels()["kueue.x-k8s.io/queue-name"])
+		if queueName == "" {
+			continue
+		}
+		finished, err := sourceRayJobFinished(rayJob)
+		if err != nil {
+			return false, "", err
+		}
+		if finished {
+			continue
+		}
+		inUse, message, err := r.queueRoutingMetadataInUse(
+			ctx, workspace, namespace, cleanedLabels, queueName, "",
+			fmt.Sprintf("RayJob %s", client.ObjectKeyFromObject(rayJob)),
+		)
+		if err != nil || inUse {
+			return inUse, message, err
+		}
+	}
 	return false, "", nil
+}
+
+func sourceRayJobFinished(rayJob *unstructured.Unstructured) (bool, error) {
+	value, _, err := unstructured.NestedString(rayJob.Object, "status", "jobDeploymentStatus")
+	if err != nil {
+		return false, fmt.Errorf("read RayJob %s jobDeploymentStatus before routing metadata cleanup: %w", client.ObjectKeyFromObject(rayJob), err)
+	}
+	return value == "Complete" || value == "Failed", nil
 }
 
 func (r *TauWorkspaceReconciler) queueRoutingMetadataInUse(

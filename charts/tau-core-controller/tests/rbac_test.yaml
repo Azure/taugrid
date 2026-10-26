@@ -11,6 +11,13 @@ tests:
             resources: ["jobs"]
             verbs: ["get", "list", "watch"]
         documentIndex: 2
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["ray.io"]
+            resources: ["rayjobs"]
+            verbs: ["get", "list", "watch"]
+        documentIndex: 2
 
   - it: grants RayJob and RayService lifecycle permissions to the researcher role
     documentSelector:

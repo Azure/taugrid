@@ -51,10 +51,15 @@ The overall phase currently requires `RBACReady` and `QueueReady`; `DriftDetecte
 
 During namespace retargeting, unfinished Workloads on retained external queues
 can delay cleanup of the old namespace's routing metadata. Submitted, unfinished
-Jobs that have not received a derived Workload yet also retain routing metadata
-on deletion or retargeting, using their queue label and the live queue selector.
-An unchanged workload
-identity ServiceAccount is retained until those Workloads finish, while researcher
+Jobs and RayJobs that have not received a derived Workload yet also retain routing
+metadata on deletion or retargeting, using their queue label and the live queue
+selector. Completed or failed sources do not block cleanup. A RayJob is finished
+only when `status.jobDeploymentStatus` is `Complete` or `Failed`, matching Kueue;
+a failed driver with a retry still pending retains its route. RayJob discovery
+is skipped when the optional RayJob API is not installed; other discovery errors
+block cleanup until the source state can be read. Both Helm and Kustomize grant
+the controller read-only discovery of Jobs and RayJobs.
+An unchanged workload identity ServiceAccount is retained until those Workloads finish, while researcher
 authorization is reconciled independently. Changing the ServiceAccount name or
 client ID, or removing `workloadIdentity`, revokes the obsolete ServiceAccount
 before granting the current researcher access to the old namespace, even during

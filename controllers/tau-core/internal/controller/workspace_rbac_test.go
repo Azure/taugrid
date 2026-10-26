@@ -99,18 +99,22 @@ func TestKustomizeControllerRoleAllowsLegacyRoleDeletionWithoutMutation(t *testi
 }
 
 func TestKustomizeControllerRoleAllowsReadOnlySourceJobDiscovery(t *testing.T) {
-	role := kustomizeClusterRole(t, "tau-core-controller")
-	want := rbacv1.PolicyRule{
-		APIGroups: []string{"batch"},
-		Resources: []string{"jobs"},
-		Verbs:     []string{"get", "list", "watch"},
+	for _, source := range []struct{ group, resource string }{{"batch", "jobs"}, {"ray.io", "rayjobs"}} {
+		t.Run(source.resource, func(t *testing.T) {
+			role := kustomizeClusterRole(t, "tau-core-controller")
+			want := rbacv1.PolicyRule{
+				APIGroups: []string{source.group},
+				Resources: []string{source.resource},
+				Verbs:     []string{"get", "list", "watch"},
+			}
+			for _, rule := range role.Rules {
+				if reflect.DeepEqual(rule, want) {
+					return
+				}
+			}
+			t.Fatalf("controller role must allow read-only source Job discovery: %#v", role.Rules)
+		})
 	}
-	for _, rule := range role.Rules {
-		if reflect.DeepEqual(rule, want) {
-			return
-		}
-	}
-	t.Fatalf("controller role must allow read-only source Job discovery: %#v", role.Rules)
 }
 
 func TestRetainedNamespaceRestoresOnlyCurrentAuthorizedResearcherBinding(t *testing.T) {
