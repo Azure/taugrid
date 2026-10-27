@@ -468,7 +468,7 @@ def check_gpu_tolerations_match_across_renderers(root: Path) -> list[str]:
         ]
 
     py_text = _read(py_path)
-    py_assignments = re.findall(r"worker_pod\[\s*[\"']tolerations[\"']\s*\]\s*=([^\n]*)", py_text)
+    py_assignments = re.findall(r"(?:worker_pod|pod)\[\s*[\"']tolerations[\"']\s*\]\s*=([^\n]*)", py_text)
     if not py_assignments:
         return [
             f"[gpu-tolerations] {_PY_RENDERER} never assigns worker_pod['tolerations']; "
