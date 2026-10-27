@@ -41,6 +41,7 @@ CONTEXT_NAME = "_tau_notebook_context.json"
 DISTRIBUTED_TARGET_ENV = _render.ENV_TARGET_DIR
 DISTRIBUTED_DEFAULT_TARGET = _render.TARGET_DIR
 DISTRIBUTED_ARCHIVE_NAME = _render.PROJECT_ARCHIVE_NAME
+ARCHIVE_ENTRY_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 
 #: Bounded cell timeout the executed-notebook runner emits when none is given.
 DEFAULT_CELL_TIMEOUT_SECONDS = 600
@@ -288,7 +289,9 @@ def _project_archive(files: Dict[str, bytes], head_only: set) -> bytes:
                 or name.startswith(".")
             ):
                 continue
-            bundle.writestr(name, files[name])
+            entry = zipfile.ZipInfo(name, date_time=ARCHIVE_ENTRY_DATE_TIME)
+            entry.external_attr = 0o644 << 16
+            bundle.writestr(entry, files[name])
     return buffer.getvalue()
 
 

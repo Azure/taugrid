@@ -311,7 +311,8 @@ def render_rayjob(
         ]
     }
     if profile.gpus_per_worker:
-        worker_pod["tolerations"] = [dict(toleration) for toleration in GPU_TOLERATIONS]
+        for pod in (head_pod, worker_pod):
+            pod["tolerations"] = [dict(toleration) for toleration in GPU_TOLERATIONS]
 
     worker_distribution = payload if gpu_execution == GPU_EXECUTION_RAY else None
     if payload is not None:

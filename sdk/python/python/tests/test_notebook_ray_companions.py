@@ -276,3 +276,19 @@ def test_the_same_selection_that_fits_locally_still_packages_locally():
     payload = {f"f{index}.bin": os.urandom(20000) for index in range(2)}
     staged = package(_notebook("print('hi')"), extra_files=payload)
     assert staged.encoding.env_entry_bytes > 0
+
+def test_the_archive_is_byte_identical_across_independent_packages():
+    import time
+
+    selected = {"helpers.py": b"V = 1\n"}
+    first = package(_notebook("print('hi')"), extra_files=selected, distributed=True)
+    time.sleep(2.1)
+    second = package(_notebook("print('hi')"), extra_files=selected, distributed=True)
+    assert first.files[DISTRIBUTED_ARCHIVE_NAME] == second.files[DISTRIBUTED_ARCHIVE_NAME]
+    assert first.encoding.digest == second.encoding.digest
+
+
+def test_archive_entries_carry_a_fixed_timestamp():
+    staged = package(_notebook("print('hi')"), extra_files={"helpers.py": b"V = 1\n"}, distributed=True)
+    with zipfile.ZipFile(io.BytesIO(staged.files[DISTRIBUTED_ARCHIVE_NAME])) as bundle:
+        assert {entry.date_time for entry in bundle.infolist()} == {(1980, 1, 1, 0, 0, 0)}

@@ -310,13 +310,18 @@ def test_cpu_worker_does_not_tolerate_gpu_taints():
     assert _tolerated_taints(job, "head") == set()
 
 
-def test_gpu_tolerations_are_worker_scoped():
-    """The control-only head is pinned to zero GPUs and takes no GPU toleration."""
+def test_gpu_tolerations_cover_the_head_the_pool_places_there():
+    """The head requests no GPU, but the profile's selector still places it on the GPU pool.
+
+    Tolerations and the selector have to agree: pinning the head to a tainted
+    node without the matching toleration leaves the control pod unschedulable,
+    so the RayJob never starts and no worker is ever created.
+    """
     job = _render(
         profile=Profile(name="gpu", workers=1, gpus_per_worker=2),
         gpu_execution=GPU_EXECUTION_RAY,
     )
 
-    assert _tolerated_taints(job, "worker")
-    assert _tolerated_taints(job, "head") == set()
+    assert _tolerated_taints(job, "worker") == _tolerated_taints(job, "head")
+    assert _tolerated_taints(job, "head")
 
