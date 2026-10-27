@@ -98,6 +98,9 @@ updates:
       - "/charts/tau-core-controller"
       - "/charts/taugrid"
       - "/charts/taugrid-core"
+    exclude-paths:
+      - "**/values.yaml"
+      - "**/values.yml"
     schedule:
       interval: daily
       time: "09:00"

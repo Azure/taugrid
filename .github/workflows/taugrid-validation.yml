@@ -38,6 +38,12 @@ jobs:
       - name: Verify Go toolchain pins
         run: make toolchain-pins
 
+      - name: Validate required gate contracts
+        run: bash scripts/ci/tests/required-gates-contract_test.sh
+
+      - name: Validate dependency source contracts
+        run: bash scripts/ci/tests/dependency-sources-contract_test.sh
+
   release-detect:
     name: Release / Detect preparation
     runs-on: ubuntu-latest
@@ -338,7 +344,8 @@ jobs:
           wheel_first_dir="$RUNNER_TEMP/tau-python-wheel-a"
           wheel_second_dir="$RUNNER_TEMP/tau-python-wheel-b"
 
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           python -m build --wheel --outdir "$wheel_first_dir" ./sdk/python/python
           python -m build --wheel --outdir "$wheel_second_dir" ./sdk/python/python
 
@@ -427,11 +434,13 @@ jobs:
         run: pwsh -NoProfile -File cli/scripts/test-install-tau.ps1
 
   required:
-    name: Required
+    name: TauGrid Core Required
     if: always()
     needs:
+      - cli-windows
       - dependency-review
       - go
+      - kueue-host-slot
       - license-headers
       - release-build
       - release-detect
@@ -441,8 +450,10 @@ jobs:
     steps:
       - name: Check validation result
         env:
+          CLI_WINDOWS_RESULT: ${{ needs.cli-windows.result }}
           DEPENDENCY_REVIEW_RESULT: ${{ needs.dependency-review.result }}
           GO_RESULT: ${{ needs.go.result }}
+          KUEUE_HOST_SLOT_RESULT: ${{ needs.kueue-host-slot.result }}
           LICENSE_HEADERS_RESULT: ${{ needs.license-headers.result }}
           RELEASE_BUILD_RESULT: ${{ needs.release-build.result }}
           RELEASE_DETECT_RESULT: ${{ needs.release-detect.result }}
@@ -451,9 +462,15 @@ jobs:
           RELEASE_PREFLIGHT_ENABLED: ${{ needs.release-detect.outputs.enabled }}
         run: |
           set -euo pipefail
+          test "${CLI_WINDOWS_RESULT}" = success
           test "${GO_RESULT}" = success
+          test "${KUEUE_HOST_SLOT_RESULT}" = success
           test "${LICENSE_HEADERS_RESULT}" = success
-          test "${DEPENDENCY_REVIEW_RESULT}" = success || test "${DEPENDENCY_REVIEW_RESULT}" = skipped
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            test "${DEPENDENCY_REVIEW_RESULT}" = success
+          else
+            test "${DEPENDENCY_REVIEW_RESULT}" = skipped
+          fi
           test "${RELEASE_DETECT_RESULT}" = success
           if [[ "${RELEASE_PREFLIGHT_ENABLED}" == "true" ]]; then
             test "${RELEASE_INSTALLER_RESULT}" = success
