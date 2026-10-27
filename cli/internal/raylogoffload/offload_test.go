@@ -544,9 +544,11 @@ func TestWrapShellScriptTerminatesNestedForegroundProcess(t *testing.T) {
 	root := t.TempDir()
 	completionPath := filepath.Join(root, "tau-driver-complete")
 	childPIDPath := filepath.Join(root, "child.pid")
+	finalizerPath := filepath.Join(root, "finalizer-ran")
 	command := fmt.Sprintf(
-		"python3 -c %s\nprintf 'finalizer should not run\\n'",
+		"python3 -c %s\nprintf 'finalizer should not run\\n' > %s",
 		shellTestQuote("import os,time; open("+strconv.Quote(childPIDPath)+",'w').write(str(os.getpid())); time.sleep(30)"),
+		shellTestQuote(finalizerPath),
 	)
 	cmd := exec.Command("bash", "-c", WrapShellScript(command))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -597,8 +599,10 @@ func TestWrapShellScriptTerminatesNestedForegroundProcess(t *testing.T) {
 		t.Fatal("wrapper did not terminate after forwarding TERM")
 	}
 
-	if strings.Contains(output.String(), "finalizer should not run") {
+	if _, err := os.Stat(finalizerPath); err == nil {
 		t.Fatalf("wrapper continued after terminating the workload:\n%s", output.String())
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("check finalizer marker: %v", err)
 	}
 	marker, err := os.ReadFile(completionPath)
 	if err != nil {
