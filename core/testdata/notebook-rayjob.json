@@ -1,0 +1,306 @@
+{
+  "apiVersion": "ray.io/v1",
+  "kind": "RayJob",
+  "metadata": {
+    "name": "nb-demo",
+    "namespace": "ray",
+    "labels": {
+      "kueue.x-k8s.io/queue-name": "namespace-q",
+      "tau.azure.com/managed-by": "tau",
+      "tau.azure.com/run-id": "nb-demo",
+      "tau.azure.com/profile": "notebook-cpu",
+      "tau.azure.com/workload-kind": "rayjob",
+      "tau.azure.com/team": "research"
+    },
+    "annotations": {
+      "tau.azure.com/workload-profile": "notebook-cpu",
+      "tau.azure.com/tau-cluster-generation": "7",
+      "tau.azure.com/workload-profile-set-hash": "sha256:fixture-profile-set",
+      "tau.azure.com/payload-digest": "f880a04c592cb05916f68f8fb98a48ebca880351319452b523665dcc2e8393de"
+    }
+  },
+  "spec": {
+    "suspend": true,
+    "shutdownAfterJobFinishes": true,
+    "ttlSecondsAfterFinished": 600,
+    "submissionMode": "K8sJobMode",
+    "submitterConfig": {
+      "backoffLimit": 0
+    },
+    "entrypoint": "bash -lc 'set -eu\nif [ -s /script/requirements.txt ]; then python3 -m pip install --quiet --no-cache-dir -r /script/requirements.txt || python3 -m pip install --quiet --no-cache-dir --user -r /script/requirements.txt; fi\nPATH=\"$(python3 -m site --user-base)/bin:$PATH\"; export PATH\ncd /data\npython3 /script/_tau_runner.py --notebook analysis.ipynb\n'",
+    "rayClusterSpec": {
+      "rayVersion": "2.56.0",
+      "headGroupSpec": {
+        "rayStartParams": {
+          "num-gpus": "0",
+          "num-cpus": "0"
+        },
+        "template": {
+          "metadata": {},
+          "spec": {
+            "containers": [
+              {
+                "name": "ray-head",
+                "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+                "resources": {
+                  "requests": {
+                    "cpu": "2",
+                    "memory": "8Gi"
+                  },
+                  "limits": {
+                    "cpu": "4",
+                    "memory": "16Gi"
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "name": "script",
+                    "mountPath": "/script",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  },
+                  {
+                    "name": "tau-hot",
+                    "mountPath": "/mnt"
+                  },
+                  {
+                    "name": "dshm",
+                    "mountPath": "/dev/shm"
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "tau-payload",
+                "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+                "command": [
+                  "python3",
+                  "-c",
+                  "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = gzip.decompress(base64.b64decode(raw_b64))\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
+                ],
+                "env": [
+                  {
+                    "name": "TAU_PAYLOAD_B64",
+                    "value": "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"
+                  },
+                  {
+                    "name": "TAU_PAYLOAD_DIGEST",
+                    "value": "f880a04c592cb05916f68f8fb98a48ebca880351319452b523665dcc2e8393de"
+                  },
+                  {
+                    "name": "TAU_PAYLOAD_TARGET_DIR",
+                    "value": "/script"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "script",
+                    "mountPath": "/script"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "10m",
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "128Mi"
+                  }
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "script",
+                "emptyDir": {}
+              },
+              {
+                "name": "data",
+                "emptyDir": {}
+              },
+              {
+                "name": "tau-hot",
+                "emptyDir": {}
+              },
+              {
+                "name": "dshm",
+                "emptyDir": {
+                  "medium": "Memory",
+                  "sizeLimit": "16Gi"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "workerGroupSpecs": [
+        {
+          "replicas": 1,
+          "groupName": "notebook-workers",
+          "rayStartParams": {
+            "num-gpus": "0"
+          },
+          "template": {
+            "metadata": {},
+            "spec": {
+              "containers": [
+                {
+                  "name": "ray-worker",
+                  "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+                  "resources": {
+                    "requests": {
+                      "cpu": "4",
+                      "memory": "8Gi"
+                    },
+                    "limits": {
+                      "cpu": "4",
+                      "memory": "8Gi"
+                    }
+                  },
+                  "volumeMounts": [
+                    {
+                      "name": "data",
+                      "mountPath": "/data"
+                    },
+                    {
+                      "name": "tau-hot",
+                      "mountPath": "/mnt"
+                    },
+                    {
+                      "name": "dshm",
+                      "mountPath": "/dev/shm"
+                    }
+                  ]
+                }
+              ],
+              "volumes": [
+                {
+                  "name": "data",
+                  "emptyDir": {}
+                },
+                {
+                  "name": "tau-hot",
+                  "emptyDir": {}
+                },
+                {
+                  "name": "dshm",
+                  "emptyDir": {
+                    "medium": "Memory",
+                    "sizeLimit": "16Gi"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "submitterPodTemplate": {
+      "spec": {
+        "restartPolicy": "Never",
+        "containers": [
+          {
+            "name": "submitter",
+            "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+            "resources": {
+              "requests": {
+                "cpu": "100m",
+                "memory": "256Mi"
+              },
+              "limits": {
+                "cpu": "1",
+                "memory": "1Gi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "script",
+                "mountPath": "/script",
+                "readOnly": true
+              },
+              {
+                "name": "data",
+                "mountPath": "/data"
+              },
+              {
+                "name": "tau-hot",
+                "mountPath": "/mnt"
+              },
+              {
+                "name": "dshm",
+                "mountPath": "/dev/shm"
+              }
+            ]
+          }
+        ],
+        "initContainers": [
+          {
+            "name": "tau-payload",
+            "image": "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0",
+            "command": [
+              "python3",
+              "-c",
+              "import base64\nimport gzip\nimport hashlib\nimport json\nimport os\nimport sys\n\nraw_b64 = os.environ[\"TAU_PAYLOAD_B64\"]\nwant_digest = os.environ[\"TAU_PAYLOAD_DIGEST\"]\ntarget_dir = os.environ[\"TAU_PAYLOAD_TARGET_DIR\"]\n\nraw = gzip.decompress(base64.b64decode(raw_b64))\ngot_digest = hashlib.sha256(raw).hexdigest()\nif got_digest != want_digest:\n    sys.stderr.write(\"tau-payload: integrity check failed: digest=%s want=%s\\n\" % (got_digest, want_digest))\n    sys.exit(1)\n\nenvelope = json.loads(raw)\nif envelope.get(\"version\") != 2:\n    sys.stderr.write(\"tau-payload: unsupported envelope version %r\\n\" % (envelope.get(\"version\"),))\n    sys.exit(1)\nfiles = envelope.get(\"files\", [])\nos.makedirs(target_dir, exist_ok=True)\nfor f in files:\n    name = f[\"name\"]\n    if not name or name in (\".\", \"..\") or \"/\" in name or \"\\\\\" in name:\n        sys.stderr.write(\"tau-payload: rejecting unsafe file name %r\\n\" % (name,))\n        sys.exit(1)\n    path = os.path.join(target_dir, name)\n    with open(path, \"wb\") as fh:\n        fh.write(base64.b64decode(f[\"data\"]))\n    os.chmod(path, 0o644)\n\nsys.stderr.write(\"tau-payload: wrote %d file(s) to %s\\n\" % (len(files), target_dir))\n"
+            ],
+            "env": [
+              {
+                "name": "TAU_PAYLOAD_B64",
+                "value": "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"
+              },
+              {
+                "name": "TAU_PAYLOAD_DIGEST",
+                "value": "f880a04c592cb05916f68f8fb98a48ebca880351319452b523665dcc2e8393de"
+              },
+              {
+                "name": "TAU_PAYLOAD_TARGET_DIR",
+                "value": "/script"
+              }
+            ],
+            "volumeMounts": [
+              {
+                "name": "script",
+                "mountPath": "/script"
+              }
+            ],
+            "resources": {
+              "requests": {
+                "cpu": "10m",
+                "memory": "32Mi"
+              },
+              "limits": {
+                "cpu": "250m",
+                "memory": "128Mi"
+              }
+            }
+          }
+        ],
+        "volumes": [
+          {
+            "name": "script",
+            "emptyDir": {}
+          },
+          {
+            "name": "data",
+            "emptyDir": {}
+          },
+          {
+            "name": "tau-hot",
+            "emptyDir": {}
+          },
+          {
+            "name": "dshm",
+            "emptyDir": {
+              "medium": "Memory",
+              "sizeLimit": "16Gi"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
