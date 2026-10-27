@@ -51,4 +51,3 @@ tools/jupyter-*.png
 # (`-state`, `-viewport`, `<step>-failure`), so a pattern that only matched the
 # happy-path name let failure screenshots reach `git add -A`.
 /*-e2e*.png
->>>>>>> a462045 (feat(sdk): add the TauGrid notebook runtime)

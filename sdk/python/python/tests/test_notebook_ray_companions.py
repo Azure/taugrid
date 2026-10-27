@@ -292,3 +292,22 @@ def test_archive_entries_carry_a_fixed_timestamp():
     staged = package(_notebook("print('hi')"), extra_files={"helpers.py": b"V = 1\n"}, distributed=True)
     with zipfile.ZipFile(io.BytesIO(staged.files[DISTRIBUTED_ARCHIVE_NAME])) as bundle:
         assert {entry.date_time for entry in bundle.infolist()} == {(1980, 1, 1, 0, 0, 0)}
+
+def test_the_worker_runtime_env_installs_the_selected_requirements_file():
+    rendered = yaml.safe_load(_runtime_env_yaml([], distributed=True))
+    entry = "-r${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.txt"
+    assert entry in rendered["pip"]
+    assert len(entry.split()) == 1
+
+
+def test_a_local_submission_does_not_reference_a_working_dir_requirements_file():
+    rendered = yaml.safe_load(_runtime_env_yaml([], distributed=False))
+    assert all("RAY_RUNTIME_ENV_CREATE_WORKING_DIR" not in item for item in rendered["pip"])
+
+
+def test_the_requirements_file_the_runtime_env_names_is_in_the_archive(tmp_path):
+    selected = {"requirements.txt": b"scipy==1.11.4\n", "helpers.py": b"V = 1\n"}
+    staged = package(_notebook("print('hi')"), extra_files=selected, distributed=True)
+    with zipfile.ZipFile(io.BytesIO(staged.files[DISTRIBUTED_ARCHIVE_NAME])) as bundle:
+        assert "requirements.txt" in bundle.namelist()
+        assert bundle.read("requirements.txt") == selected["requirements.txt"]

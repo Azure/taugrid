@@ -172,6 +172,7 @@ _SUPPORTED_RUNTIME_KEYS = {"pip"}
 #: every node separately, so this is the one path the head and its workers agree on.
 PROJECT_ARCHIVE_NAME = "_tau_project.zip"
 PROJECT_ARCHIVE_PATH = f"{TARGET_DIR}/{PROJECT_ARCHIVE_NAME}"
+DISTRIBUTED_REQUIREMENTS_ENTRY = "-r${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.txt"
 
 
 class UnsupportedShape(ValueError):
@@ -640,10 +641,12 @@ def _entrypoint(base: str, pip: List[str], *, submitter_shell: bool = False) -> 
 
 
 def _runtime_env_yaml(pip: List[str], *, distributed: bool = False) -> str:
-    runtime: Dict[str, Any] = {"pip": list(pip)}
+    packages = list(pip)
+    runtime: Dict[str, Any] = {"pip": packages}
     if distributed:
         runtime["working_dir"] = f"file://{PROJECT_ARCHIVE_PATH}"
         runtime["env_vars"] = {ENV_TARGET_DIR: TARGET_DIR}
+        packages.append(DISTRIBUTED_REQUIREMENTS_ENTRY)
     return yaml.safe_dump(runtime, sort_keys=False)
 
 
