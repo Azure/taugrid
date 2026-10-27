@@ -15,7 +15,7 @@ tests:
           path: rules
           content:
             apiGroups: ["ray.io"]
-            resources: ["rayjobs"]
+            resources: ["rayjobs", "rayservices"]
             verbs: ["get", "list", "watch"]
         documentIndex: 2
 

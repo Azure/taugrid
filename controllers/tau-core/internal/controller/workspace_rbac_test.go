@@ -99,12 +99,18 @@ func TestKustomizeControllerRoleAllowsLegacyRoleDeletionWithoutMutation(t *testi
 }
 
 func TestKustomizeControllerRoleAllowsReadOnlySourceJobDiscovery(t *testing.T) {
-	for _, source := range []struct{ group, resource string }{{"batch", "jobs"}, {"ray.io", "rayjobs"}} {
-		t.Run(source.resource, func(t *testing.T) {
+	for _, source := range []struct {
+		group     string
+		resources []string
+	}{
+		{"batch", []string{"jobs"}},
+		{"ray.io", []string{"rayjobs", "rayservices"}},
+	} {
+		t.Run(source.group, func(t *testing.T) {
 			role := kustomizeClusterRole(t, "tau-core-controller")
 			want := rbacv1.PolicyRule{
 				APIGroups: []string{source.group},
-				Resources: []string{source.resource},
+				Resources: source.resources,
 				Verbs:     []string{"get", "list", "watch"},
 			}
 			for _, rule := range role.Rules {

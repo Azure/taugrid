@@ -242,36 +242,40 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 			return inUse, message, err
 		}
 	}
-	rayJobs := &unstructured.UnstructuredList{}
-	rayJobs.SetGroupVersionKind(schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: "RayJobList"})
-	if err := r.apiReader().List(ctx, rayJobs, client.InNamespace(namespace.Name)); err != nil {
-		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
-			return false, "", nil
+	for _, kind := range []string{"RayJob", "RayService"} {
+		sources := &unstructured.UnstructuredList{}
+		sources.SetGroupVersionKind(schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: kind + "List"})
+		if err := r.apiReader().List(ctx, sources, client.InNamespace(namespace.Name)); err != nil {
+			if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, "", fmt.Errorf("list %ss in namespace %q before routing metadata cleanup: %w", kind, namespace.Name, err)
 		}
-		return false, "", fmt.Errorf("list RayJobs in namespace %q before routing metadata cleanup: %w", namespace.Name, err)
-	}
-	for i := range rayJobs.Items {
-		rayJob := &rayJobs.Items[i]
-		if rayJob.GetUID() != "" && workloadRayJobs[rayJob.GetUID()] == rayJob.GetName() {
-			continue
-		}
-		queueName := strings.TrimSpace(rayJob.GetLabels()["kueue.x-k8s.io/queue-name"])
-		if queueName == "" {
-			continue
-		}
-		finished, err := sourceRayJobFinished(rayJob)
-		if err != nil {
-			return false, "", err
-		}
-		if finished {
-			continue
-		}
-		inUse, message, err := r.queueRoutingMetadataInUse(
-			ctx, workspace, namespace, cleanedLabels, queueName, "",
-			fmt.Sprintf("RayJob %s", client.ObjectKeyFromObject(rayJob)),
-		)
-		if err != nil || inUse {
-			return inUse, message, err
+		for i := range sources.Items {
+			source := &sources.Items[i]
+			queueName := strings.TrimSpace(source.GetLabels()["kueue.x-k8s.io/queue-name"])
+			if queueName == "" {
+				continue
+			}
+			if kind == "RayJob" {
+				if source.GetUID() != "" && workloadRayJobs[source.GetUID()] == source.GetName() {
+					continue
+				}
+				finished, err := sourceRayJobFinished(source)
+				if err != nil {
+					return false, "", err
+				}
+				if finished {
+					continue
+				}
+			}
+			inUse, message, err := r.queueRoutingMetadataInUse(
+				ctx, workspace, namespace, cleanedLabels, queueName, "",
+				fmt.Sprintf("%s %s", kind, client.ObjectKeyFromObject(source)),
+			)
+			if err != nil || inUse {
+				return inUse, message, err
+			}
 		}
 	}
 	return false, "", nil

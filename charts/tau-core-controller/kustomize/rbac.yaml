@@ -114,7 +114,7 @@ rules:
     resources: ["jobs"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["ray.io"]
-    resources: ["rayjobs"]
+    resources: ["rayjobs", "rayservices"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["workloads"]
