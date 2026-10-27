@@ -104,6 +104,7 @@ func TestKustomizeControllerRoleAllowsReadOnlySourceJobDiscovery(t *testing.T) {
 		resources []string
 	}{
 		{"batch", []string{"jobs"}},
+		{"apps", []string{"deployments"}},
 		{"ray.io", []string{"rayjobs", "rayservices"}},
 	} {
 		t.Run(source.group, func(t *testing.T) {

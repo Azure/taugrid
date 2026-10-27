@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -237,6 +238,24 @@ func (r *TauWorkspaceReconciler) namespaceRoutingMetadataInUse(
 		inUse, message, err := r.queueRoutingMetadataInUse(
 			ctx, workspace, namespace, cleanedLabels, queueName, "",
 			fmt.Sprintf("Job %s", client.ObjectKeyFromObject(job)),
+		)
+		if err != nil || inUse {
+			return inUse, message, err
+		}
+	}
+	var deployments appsv1.DeploymentList
+	if err := r.apiReader().List(ctx, &deployments, client.InNamespace(namespace.Name)); err != nil {
+		return false, "", fmt.Errorf("list Deployments in namespace %q before routing metadata cleanup: %w", namespace.Name, err)
+	}
+	for i := range deployments.Items {
+		deployment := &deployments.Items[i]
+		queueName := strings.TrimSpace(deployment.Spec.Template.Labels["kueue.x-k8s.io/queue-name"])
+		if deployment.Spec.Template.Labels["kueue.x-k8s.io/managed"] != "true" || queueName == "" {
+			continue
+		}
+		inUse, message, err := r.queueRoutingMetadataInUse(
+			ctx, workspace, namespace, cleanedLabels, queueName, "",
+			fmt.Sprintf("Deployment %s", client.ObjectKeyFromObject(deployment)),
 		)
 		if err != nil || inUse {
 			return inUse, message, err

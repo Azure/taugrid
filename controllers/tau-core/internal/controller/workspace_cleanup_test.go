@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,7 +28,7 @@ import (
 )
 
 func TestWorkspacePreservesRoutingForJobBeforeWorkloadCreation(t *testing.T) {
-	for _, kind := range []string{"Job", "RayJob", "RayService"} {
+	for _, kind := range []string{"Job", "RayJob", "RayService", "Deployment"} {
 		t.Run(kind, func(t *testing.T) {
 			for _, lifecycle := range []string{"delete", "retarget"} {
 				t.Run(lifecycle, func(t *testing.T) {
@@ -68,7 +69,26 @@ func TestWorkspacePreservesRoutingForJobBeforeWorkloadCreation(t *testing.T) {
 					}
 					var source client.Object = job
 					sourceAPIVersion := batchv1.SchemeGroupVersion.String()
-					if kind != "Job" {
+					if kind == "Deployment" {
+						sourceAPIVersion = appsv1.SchemeGroupVersion.String()
+						source = &appsv1.Deployment{
+							ObjectMeta: job.ObjectMeta,
+							Spec: appsv1.DeploymentSpec{
+								Replicas: ptr.To(int32(1)),
+								Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": job.Name}},
+								Template: corev1.PodTemplateSpec{
+									ObjectMeta: metav1.ObjectMeta{
+										Labels: map[string]string{
+											"app": job.Name, "kueue.x-k8s.io/queue-name": "jobqueue",
+											"kueue.x-k8s.io/managed": "true",
+										},
+										Annotations: map[string]string{"kueue.x-k8s.io/pod-suspending-parent": "deployment"},
+									},
+									Spec: job.Spec.Template.Spec,
+								},
+							},
+						}
+					} else if kind != "Job" {
 						sourceAPIVersion = "ray.io/v1"
 						rayJob := newQueueObject(schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: kind})
 						rayJob.SetName(job.Name)
@@ -138,6 +158,11 @@ func TestWorkspacePreservesRoutingForJobBeforeWorkloadCreation(t *testing.T) {
 					workload.SetOwnerReferences([]metav1.OwnerReference{{
 						APIVersion: sourceAPIVersion, Kind: kind, Name: source.GetName(), UID: source.GetUID(),
 					}})
+					if kind == "Deployment" {
+						workload.SetOwnerReferences([]metav1.OwnerReference{{
+							APIVersion: "v1", Kind: "Pod", Name: "service-pod", UID: types.UID("service-pod-uid"),
+						}})
+					}
 					workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
 					if err := c.Create(ctx, workload); err != nil {
 						t.Fatal(err)
@@ -151,16 +176,16 @@ func TestWorkspacePreservesRoutingForJobBeforeWorkloadCreation(t *testing.T) {
 					if err := c.Update(ctx, workload); err != nil {
 						t.Fatal(err)
 					}
-					if kind == "RayService" {
+					if kind == "RayService" || kind == "Deployment" {
 						_, err := reconciler.Reconcile(ctx, request)
 						if lifecycle == "delete" && err == nil {
-							t.Fatal("live RayService stopped retaining routing after its Workload finished")
+							t.Fatalf("live %s stopped retaining routing after its Workload finished", kind)
 						}
 						if lifecycle == "retarget" && err != nil {
 							t.Fatal(err)
 						}
 						if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
-							t.Fatalf("live RayService lost execution identity: %v", err)
+							t.Fatalf("live %s lost execution identity: %v", kind, err)
 						}
 						if err := c.Delete(ctx, source); err != nil {
 							t.Fatal(err)
@@ -183,6 +208,99 @@ func TestWorkspacePreservesRoutingForJobBeforeWorkloadCreation(t *testing.T) {
 						t.Fatalf("retarget did not complete after source Job drain: %v, target=%q", err, finished.Status.Target.ResolvedNamespace)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestNamespaceRoutingMetadataSourceDeployments(t *testing.T) {
+	for _, scenario := range []string{
+		"managed", "unmanaged", "missing-managed-label", "root-label-only", "template-label-only",
+		"template-queue-differs", "zero-replicas", "paused", "deleting", "other-namespace",
+		"missing-queue", "selector-independent", "list-forbidden", "queue-read-error",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := testWorkspace("aurora")
+			namespace := testNamespace(workspace.Name)
+			namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "service", Namespace: namespace.Name,
+					Labels: map[string]string{"kueue.x-k8s.io/queue-name": "jobqueue"},
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr.To(int32(1)),
+					Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"kueue.x-k8s.io/managed": "true", "kueue.x-k8s.io/queue-name": "jobqueue",
+						},
+					}},
+				},
+			}
+			localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+			localQueue.SetAnnotations(nil)
+			clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+			clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+			}}
+			wantInUse, wantError := true, false
+			switch scenario {
+			case "unmanaged":
+				deployment.Spec.Template.Labels["kueue.x-k8s.io/managed"] = "false"
+				wantInUse = false
+			case "missing-managed-label":
+				delete(deployment.Spec.Template.Labels, "kueue.x-k8s.io/managed")
+				wantInUse = false
+			case "root-label-only":
+				delete(deployment.Spec.Template.Labels, "kueue.x-k8s.io/queue-name")
+				wantInUse = false
+			case "template-label-only":
+				deployment.Labels = nil
+			case "template-queue-differs":
+				deployment.Labels["kueue.x-k8s.io/queue-name"] = "unrelated"
+			case "zero-replicas":
+				deployment.Spec.Replicas = ptr.To(int32(0))
+			case "paused":
+				deployment.Spec.Paused = true
+			case "deleting":
+				now := metav1.Now()
+				deployment.DeletionTimestamp = &now
+				deployment.Finalizers = []string{"example.invalid/drain"}
+			case "other-namespace":
+				deployment.Namespace = "unrelated"
+				wantInUse = false
+			case "missing-queue":
+				deployment.Spec.Template.Labels["kueue.x-k8s.io/queue-name"] = "missing"
+				wantInUse = false
+			case "selector-independent":
+				clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{}}
+				wantInUse = false
+			case "list-forbidden", "queue-read-error":
+				wantInUse, wantError = false, true
+			}
+			baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).
+				WithObjects(namespace, deployment, localQueue, clusterQueue).Build()
+			c := interceptor.NewClient(baseClient, interceptor.Funcs{
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*appsv1.DeploymentList); ok && scenario == "list-forbidden" {
+						return apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "", errors.New("discovery denied"))
+					}
+					return c.List(ctx, list, opts...)
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if scenario == "queue-read-error" && obj.GetObjectKind().GroupVersionKind() == localQueueGVK {
+						return errors.New("queue unavailable")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			inUse, message, err := newTestWorkspaceReconciler(c).namespaceRoutingMetadataInUse(ctx, workspace, namespace)
+			if inUse != wantInUse || (err != nil) != wantError {
+				t.Fatalf("namespaceRoutingMetadataInUse() = %v, %q, %v; want inUse=%v error=%v", inUse, message, err, wantInUse, wantError)
+			}
+			if inUse && !strings.Contains(message, "Deployment "+client.ObjectKeyFromObject(deployment).String()) {
+				t.Fatalf("drain message does not identify source Deployment: %q", message)
 			}
 		})
 	}

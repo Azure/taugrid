@@ -64,6 +64,14 @@ execution identity until the service is deleted, even if a derived Workload
 reports `Finished`. Delete the service before completing workspace
 deletion or retargeting. Both Helm and Kustomize grant the controller read-only
 discovery of Jobs, RayJobs, and RayServices.
+Kueue-managed Deployments submitted with `tau serve deploy --kind=deployment`
+also retain routing before their Pod Workloads exist. Discovery uses the Pod
+template's managed and queue labels, not just the Deployment's own labels.
+A Deployment has no terminal job state: a present managed Deployment retains
+its required route even at zero replicas or after a Pod Workload finishes.
+Delete the Deployment before completing workspace deletion or retargeting.
+Both controller RBAC manifests include read-only Deployment discovery;
+unreadable Deployment lists block cleanup.
 An unchanged workload identity ServiceAccount is retained until those Workloads finish, while researcher
 authorization is reconciled independently. Changing the ServiceAccount name or
 client ID, or removing `workloadIdentity`, revokes the obsolete ServiceAccount

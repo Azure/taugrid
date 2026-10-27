@@ -7,6 +7,13 @@ tests:
       - contains:
           path: rules
           content:
+            apiGroups: ["apps"]
+            resources: ["deployments"]
+            verbs: ["get", "list", "watch"]
+        documentIndex: 2
+      - contains:
+          path: rules
+          content:
             apiGroups: ["batch"]
             resources: ["jobs"]
             verbs: ["get", "list", "watch"]
