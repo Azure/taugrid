@@ -323,6 +323,9 @@ func TestBoardCountsActiveScheduledGPUAssignments(t *testing.T) {
 	if reader.podsCallCount != 1 {
 		t.Fatalf("ListPods calls = %d, want 1", reader.podsCallCount)
 	}
+	if snap.GeneratedAt.IsZero() || snap.GPUActivity == nil || *snap.GPUActivity != (GPUActivity{RunningPods: 1, PendingPods: 1}) {
+		t.Fatalf("GPU activity = %+v, generatedAt = %v; want one running and one pending GPU pod", snap.GPUActivity, snap.GeneratedAt)
+	}
 	if !snap.GPUAllocationKnown || snap.GPUAllocated != 4 || snap.GPUAvailable != 0 {
 		t.Fatalf("GPU allocation = known %t, allocated %d, available %d; want true/4/0",
 			snap.GPUAllocationKnown, snap.GPUAllocated, snap.GPUAvailable)
@@ -354,6 +357,28 @@ func TestBoardDoesNotCountUnavailableNodesAsFree(t *testing.T) {
 	t.Fatal("NotReady GPU node not found")
 }
 
+func TestGPUActivityDistinguishesPodPhaseFromBoundAllocation(t *testing.T) {
+	reader := &fakeReader{json: `{"items":[{"metadata":{"name":"gpu-host"},"status":{
+	  "capacity":{"nvidia.com/gpu":"4"},"allocatable":{"nvidia.com/gpu":"4"},
+	  "conditions":[{"type":"Ready","status":"True"}]
+	}}]}`, podsJSON: `{"items":[
+	  {"metadata":{"deletionTimestamp":"2026-10-27T20:00:00Z"},"spec":{"nodeName":"gpu-host","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},"status":{"phase":"Running"}},
+	  {"spec":{"nodeName":"gpu-host","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},"status":{"phase":"Pending"}},
+	  {"spec":{"containers":[{"resources":{"requests":{"nvidia.com/gpu":"2"}}}]},"status":{"phase":"Pending"}},
+	  {"spec":{"nodeName":"gpu-host","containers":[{"resources":{"requests":{"nvidia.com/gpu":"1"}}}]},"status":{"phase":"Unknown"}},
+	  {"spec":{"nodeName":"gpu-host","containers":[{"resources":{"requests":{"cpu":"1"}}}]},"status":{"phase":"Running"}},
+	  {"spec":{"nodeName":"gpu-host","containers":[{"resources":{"requests":{"nvidia.com/gpu":"8"}}}]},"status":{"phase":"Failed"}}
+	]}`}
+	snap, err := Board(context.Background(), reader, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := GPUActivity{RunningPods: 1, PendingPods: 2, OtherPods: 1, TerminatingPods: 1}
+	if snap.GPUActivity == nil || *snap.GPUActivity != want || snap.GPUAllocated != 3 {
+		t.Fatalf("GPU activity = %+v, bound requests = %d; want %+v, 3", snap.GPUActivity, snap.GPUAllocated, want)
+	}
+}
+
 func TestBoardDoesNotCountCordonedNodesAsFree(t *testing.T) {
 	const cordonedNodeJSON = `{"items":[
 	  {"metadata":{"name":"cordoned","labels":{}},"spec":{"unschedulable":true},
@@ -379,7 +404,7 @@ func TestBoardFailsClosedForUnsupportedGPUAssignmentTypes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Board: %v", err)
 	}
-	if snap.GPUAllocationKnown || snap.GPUAllocationError == "" {
+	if snap.GPUAllocationKnown || snap.GPUActivity != nil || snap.GPUAllocationError == "" {
 		t.Fatalf("GPU allocation = known %t, error %q; want unknown with error", snap.GPUAllocationKnown, snap.GPUAllocationError)
 	}
 }
@@ -393,7 +418,7 @@ func TestBoardPreservesInventoryWhenGPUAssignmentsAreUnavailable(t *testing.T) {
 	if snap.TotalNodes != 3 || snap.GPUAllocatable != 2 {
 		t.Fatalf("inventory totals = nodes %d, allocatable %d; want 3/2", snap.TotalNodes, snap.GPUAllocatable)
 	}
-	if snap.GPUAllocationKnown || snap.GPUAvailable != 0 || snap.GPUAllocationError == "" {
+	if snap.GPUAllocationKnown || snap.GPUActivity != nil || snap.GPUAvailable != 0 || snap.GPUAllocationError == "" {
 		t.Fatalf("GPU allocation = known %t, available %d, error %q; want unknown with error",
 			snap.GPUAllocationKnown, snap.GPUAvailable, snap.GPUAllocationError)
 	}
@@ -402,6 +427,21 @@ func TestBoardPreservesInventoryWhenGPUAssignmentsAreUnavailable(t *testing.T) {
 			t.Fatalf("node %q unexpectedly has allocation values: allocated %v, available %v",
 				node.Name, node.GPUAllocated, node.GPUAvailable)
 		}
+	}
+}
+
+func TestUnboundUnsupportedGPUClaimsDoNotHideKnownBoundAllocation(t *testing.T) {
+	snap, err := Board(context.Background(), &fakeReader{
+		json: nodesJSON, podsJSON: `{"items":[
+		  {"spec":{"resourceClaims":[{"name":"gpu"}]},"status":{"phase":"Pending"}}
+		]}`,
+	}, Options{IncludeAllocations: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.GPUAllocationKnown || snap.GPUAvailable != 1 || snap.GPUAllocationError != "" ||
+		snap.GPUActivity != nil || snap.GPUActivityError == "" {
+		t.Fatalf("unbound claim snapshot = %+v; want known allocation, unknown activity", snap)
 	}
 }
 

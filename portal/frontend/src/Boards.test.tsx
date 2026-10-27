@@ -32,13 +32,14 @@ describe('Platform overview', () => {
     const fetchMock = vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({ cards: { queue: {
-        admitted: 3, pending: 1, gpuUsed: 8, gpuHeadroom: 8,
+        admitted: 3, pending: 1, gpuUsed: 8, gpuHeadroom: 6,
+        gpuReserved: 10, gpuNominal: 16, gpuReservationAvailable: true, gpuNominalAvailable: true,
         queues: [
           { namespace: 'tau-default', queue: 'cpu', clusterQueue: 'tau-cpu-cq', admitted: 2, pending: 0 },
           { namespace: 'tau-default', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 1, pending: 0 },
           { namespace: 'aks-ai-runtime-e2e', queue: 'jobqueue', clusterQueue: 'tau-cq', admitted: 0, pending: 1 },
         ],
-      } }, pending: [
+      } }, runtimeScopes: [{ namespace: 'tau-default', queue: 'jobqueue' }], pending: [
         { name: 'priority-finetune', namespace: 'tau-default', queue: 'jobqueue', gpuRequested: 8,
           admissionPriorityClass: 'taugrid-priority', admissionPriority: 1200, podPriorityClasses: ['taugrid-priority'], reason: 'QuotaNotReserved' },
         { name: 'default-eval', namespace: 'tau-default', queue: 'jobqueue', gpuRequested: 1,
@@ -72,6 +73,7 @@ describe('Platform overview', () => {
       }));
       if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
         readyNodes: 2, totalNodes: 2, totalGPUs: 16, gpuNodes: 2, gpuSchedulable: 16, gpuAvailable: 8,
+        gpuActivity: { runningPods: 6, pendingPods: 1, otherPods: 0, terminatingPods: 0 },
         nodes: [
           { name: 'gpu-a', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 4, gpuAvailable: 4, gpuProduct: 'NVIDIA H100', ready: true },
           { name: 'gpu-a2', site: 'west', region: 'westus3', agentPool: 'h100', gpuCapacity: 8, gpuAllocated: 8, gpuAvailable: 0, gpuProduct: 'NVIDIA H100', ready: true },
@@ -94,6 +96,12 @@ describe('Platform overview', () => {
     expect(screen.queryByText('system')).not.toBeInTheDocument();
     expect(screen.queryByText('Follow capacity from GPU sites through admission to active workloads.')).not.toBeInTheDocument();
     expect(screen.getByText('Runtime and admission state')).toBeInTheDocument();
+    expect(screen.getByLabelText('Fleet GPU pod activity')).toHaveTextContent('Running GPU pods: 6');
+    expect(screen.getByText(/Job and admission scope:/)).toHaveTextContent('tau-default/jobqueue');
+    expect(screen.getByText('ClusterQueue GPU reservation').parentElement).toHaveTextContent('10 / 16');
+    expect(screen.getByLabelText('63% of nominal GPU quota reserved')).toBeInTheDocument();
+    expect(screen.queryByText('GPUs free')).not.toBeInTheDocument();
+    expect(screen.getByText(/Deployments, RayServices, standalone pods/)).toBeInTheDocument();
     const quota = screen.getByLabelText('Workspace and team quota');
     expect(quota).toHaveTextContent('tau-ws-flex');
     expect(quota).toHaveTextContent('8used of 16');
@@ -180,11 +188,11 @@ describe('Platform overview', () => {
     </MemoryRouter></QueryClientProvider>);
 
     expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
-    expect(screen.getByText('unhealthy of 1 observed')).toBeVisible();
+    expect(screen.getByText(/unhealthy of 1 observed/)).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: 'Refresh Infrastructure overview' }));
     expect(await screen.findByText(/GPU telemetry refresh failed: 503 telemetry backend unavailable/)).toBeVisible();
     expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('GPU telemetry: refresh failed; stale data retained');
-    expect(screen.getByText('unhealthy of 1 observed')).toBeVisible();
+    expect(screen.getByText(/unhealthy of 1 observed/)).toBeVisible();
     expect(screen.getByText('gpu-a')).toBeVisible();
   });
 
@@ -203,5 +211,80 @@ describe('Platform overview', () => {
     const link = screen.getByRole('link', { name: 'open ↗' });
     expect(link).toHaveAttribute('href', '/portal/experiments?project=vision&run=train-77');
     expect(link).not.toHaveAttribute('href', expect.stringContaining('target='));
+  });
+
+  it.each([
+    { available: true, reserved: 0, nominal: 32, want: '0 / 32' },
+    { available: true, reserved: 12, nominal: 8, want: '12 / 8' },
+    { available: false, reserved: 0, nominal: 32, want: '— / 32' },
+  ])('keeps fleet activity independent of empty queue scopes ($want)', async ({ available, reserved, nominal, want }) => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/overview')) return Promise.resolve(json({
+        generatedAt: '2026-10-27T20:30:01Z',
+        runtimeScopes: [{ namespace: 'research', queue: 'training' }],
+        cards: { queue: {
+          admitted: 0, pending: 0, gpuUsed: 0, gpuHeadroom: Math.max(0, nominal - reserved),
+          gpuReserved: reserved, gpuNominal: nominal,
+          gpuReservationAvailable: available, gpuNominalAvailable: true,
+          observedAt: '2026-10-27T20:30:00Z',
+          queues: [{ namespace: 'research', queue: 'training', clusterQueue: 'shared-cq', admitted: 0, pending: 0 }],
+        } },
+        active: [], pending: [], running: [], waiting: [],
+      }));
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
+        generatedAt: '2026-10-27T20:29:59Z',
+        readyNodes: 1, totalNodes: 1, gpuNodes: 1, gpuSchedulable: 37, gpuAllocated: 19, gpuAvailable: 18,
+        gpuAllocationKnown: true, gpuActivity: { runningPods: 6, pendingPods: 0, otherPods: 0, terminatingPods: 0 },
+        nodes: [{ name: 'gpu-node', site: 'site-a', gpuCapacity: 37, gpuAllocated: 19, gpuAvailable: 18, ready: true }],
+      }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(json({
+        scope: { namespace: 'selected', localQueue: 'jobqueue' },
+        legacy: true, workspace: { name: 'shared-cq', resources: [
+          { flavor: 'gpu', resource: 'nvidia.com/gpu', nominal: '32' },
+        ], admittedWorkloads: 0, usageAvailable: false },
+      }));
+      return Promise.resolve(json({ window: '15m', gpus: [] }));
+    }));
+    render(<QueryClientProvider client={createPortalQueryClient()}><MemoryRouter>
+      <WorkspaceProvider scope={scope} managed={false}><Overview persona="platform"/></WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+    expect(await screen.findByText(/Running GPU pods: 6/)).toBeVisible();
+    expect(screen.getByLabelText('19 allocated GPUs and 18 available GPUs')).toBeVisible();
+    expect(screen.getByText('ClusterQueue GPU reservation').parentElement).toHaveTextContent(want);
+    expect(screen.getByText('research/training')).toBeVisible();
+    expect(screen.getByText(/Selected workspace:/)).toHaveTextContent('selected/jobqueue');
+    expect(screen.getByLabelText('Active jobs')).toHaveTextContent('Other workloads may still be running');
+    expect(screen.queryByText('No Job or RayJob is currently running.')).not.toBeInTheDocument();
+    expect(screen.getByText('ClusterQueue usage is not reported.')).toBeVisible();
+    if (!available) expect(screen.getByText('GPU reservation or nominal quota is not reported.')).toBeVisible();
+    expect(document.querySelector('time[datetime="2026-10-27T20:29:59Z"]')).toBeInTheDocument();
+    expect(document.querySelector('time[datetime="2026-10-27T20:30:00Z"]')).toBeInTheDocument();
+  });
+
+  it('does not present unavailable runtime and pod sources as zero activity', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/api/portal/overview')) return Promise.resolve(json({
+        cards: { queueUnavailable: 'queue read forbidden' },
+        active: [], running: [], waiting: [], pending: [],
+        activeUnavailable: 'runtime read forbidden', runningUnavailable: 'admission read forbidden',
+      }));
+      if (url.includes('/api/portal/nodes')) return Promise.resolve(json({
+        nodes: [], gpuAllocationKnown: false, gpuAllocationError: 'pod read forbidden',
+      }));
+      if (url.includes('/api/portal/quota')) return Promise.resolve(new Response('quota read forbidden', { status: 503 }));
+      return Promise.resolve(json({ gpus: [] }));
+    }));
+    render(<QueryClientProvider client={createPortalQueryClient()}><MemoryRouter>
+      <WorkspaceProvider scope={scope} managed={false}><Overview persona="workloads"/></WorkspaceProvider>
+    </MemoryRouter></QueryClientProvider>);
+    const active = await screen.findByLabelText('Active jobs');
+    expect(active).toHaveTextContent('Active queued jobs—');
+    expect(active).toHaveTextContent('runtime read forbidden');
+    expect(screen.getByLabelText('Fleet GPU pod activity')).toHaveTextContent('pod read forbidden');
+    expect(screen.queryByText(/No queued Job or RayJob reports Running/)).not.toBeInTheDocument();
+    expect(screen.queryByText('No admitted workloads.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No workloads waiting for admission.')).not.toBeInTheDocument();
   });
 });
