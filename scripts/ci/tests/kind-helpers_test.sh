@@ -90,8 +90,11 @@ grep -q "^podman exec tau-test-worker crictl inspecti -o go-template --template 
 grep -q '^podman save --format oci-archive localhost/controller:dev$' "${CALL_LOG}"
 grep -q '^podman exec -i tau-test-worker ctr --namespace=k8s.io images import --all-platforms --digests -$' "${CALL_LOG}"
 [[ "$(grep -c '^podman save ' "${CALL_LOG}")" -eq 1 ]]
-assert_failure 1 "" grep -q '^kind load image-archive ' "${CALL_LOG}"
-grep -q '^kind load docker-image controller:dev --name tau-test$' "${CALL_LOG}"
+grep -q "^docker image inspect --format {{.Id}} controller:dev$" "${CALL_LOG}"
+grep -q "^docker exec tau-test-control-plane crictl inspecti -o go-template --template {{.status.id}} controller:dev$" "${CALL_LOG}"
+grep -q '^docker save controller:dev$' "${CALL_LOG}"
+grep -q '^docker exec -i tau-test-control-plane ctr --namespace=k8s.io images import --all-platforms --digests -$' "${CALL_LOG}"
+assert_failure 1 "" grep -q '^kind load ' "${CALL_LOG}"
 grep -q '^helm template release chart --namespace namespace --set feature=true --show-only templates/deployment.yaml$' "${CALL_LOG}"
 grep -q '^kubectl --context kind-tau-test create --dry-run=client ' "${CALL_LOG}"
 
@@ -99,8 +102,8 @@ assert_load_failure() {
   KIND_TEST_FAILURE="$1" assert_failure 1 "$2" tau_kind_load_image podman tau-test localhost/controller:dev
 }
 assert_load_failure podman:image "not available on the host"
-assert_load_failure podman:ps "failed to list Podman nodes"
-assert_load_failure empty-nodes "has no Podman nodes"
+assert_load_failure podman:ps "failed to list podman nodes"
+assert_load_failure empty-nodes "has no podman nodes"
 assert_load_failure podman:save "failed to load"
 assert_load_failure import "failed to load"
 
