@@ -17,12 +17,12 @@ case "$tool:$1" in
     [ "${KIND_TEST_FAILURE:-}" != empty-nodes ] || exit 0
     printf '%s\n' tau-test-control-plane tau-test-worker ;;
   docker:ps) printf '%s\n' tau-test-control-plane ;;
-  podman:image) [ "$2" = inspect ]; printf '%s\n' test-image-id ;;
-  podman:save) printf archive ;;
-  podman:exec)
+  podman:image | docker:image) [ "$2" = inspect ]; printf '%s\n' test-image-id ;;
+  podman:save | docker:save) printf archive ;;
+  podman:exec | docker:exec)
     if [ "$2" = tau-test-control-plane ] && [ "$3" = crictl ]; then
-      printf '%s\n' sha256:test-image-id
-    elif [ "$2" = -i ] && [ "$3" = tau-test-worker ] && [ "$4" = ctr ]; then
+      [ "$tool" = podman ] && printf '%s\n' sha256:test-image-id
+    elif [ "$2" = -i ] && { [ "$3" = tau-test-worker ] || [ "$3" = tau-test-control-plane ]; } && [ "$4" = ctr ]; then
       [ "$(cat)" = archive ] || exit 1
       [ "${KIND_TEST_FAILURE:-}" != import ]
     else

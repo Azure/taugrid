@@ -110,13 +110,8 @@ tau_kind_load_image() {
   local image="$3"
   local host_id node node_id nodes node_count=0
 
-  if [[ "${engine}" != "podman" ]]; then
-    kind load docker-image "${image}" --name "${cluster_name}"
-    return
-  fi
-
   if ! host_id="$("${engine}" image inspect --format '{{.Id}}' "${image}")"; then
-    echo "Podman image ${image} is not available on the host" >&2
+    echo "${engine} image ${image} is not available on the host" >&2
     return 1
   fi
   host_id="${host_id#sha256:}"
@@ -125,7 +120,7 @@ tau_kind_load_image() {
       --filter "label=io.x-k8s.kind.cluster=${cluster_name}" \
       --format '{{.Names}}'
   )"; then
-    echo "failed to list Podman nodes for Kind cluster ${cluster_name}" >&2
+    echo "failed to list ${engine} nodes for Kind cluster ${cluster_name}" >&2
     return 1
   fi
 
@@ -142,7 +137,11 @@ tau_kind_load_image() {
     echo "Loading ${image} into ${node}"
     if ! (
       set -o pipefail
-      "${engine}" save --format oci-archive "${image}" |
+      if [[ "${engine}" == "podman" ]]; then
+        "${engine}" save --format oci-archive "${image}"
+      else
+        "${engine}" save "${image}"
+      fi |
         "${engine}" exec -i "${node}" \
           ctr --namespace=k8s.io images import --all-platforms --digests -
     ); then
@@ -152,7 +151,7 @@ tau_kind_load_image() {
   done <<<"${nodes}"
 
   if [[ "${node_count}" -eq 0 ]]; then
-    echo "Kind cluster ${cluster_name} has no Podman nodes" >&2
+    echo "Kind cluster ${cluster_name} has no ${engine} nodes" >&2
     return 1
   fi
 }
