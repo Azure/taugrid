@@ -55,9 +55,13 @@ func TestCheckReportsReadyInstallation(t *testing.T) {
 
 func TestCheckReportsActionableReadinessFailures(t *testing.T) {
 	runner := readyRunner()
+	runner["get deployments --namespace kueue-system --selector app.kubernetes.io/instance=taugrid-kueue --output=json"] = fakeResponse{
+		output: `{"items":[
+			{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.19.10"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0}}
+		]}`,
+	}
 	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
 		output: `{"items":[
-			{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":0,"availableReplicas":0}},
 			{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 		]}`,
@@ -419,9 +423,13 @@ func readyRunner() fakeRunner {
 		},
 		"get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json": {
 			output: `{"items":[
-				{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.18.2"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 				{"metadata":{"name":"taugrid-kuberay-operator","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.6.2"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
 				{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+			]}`,
+		},
+		"get deployments --namespace kueue-system --selector app.kubernetes.io/instance=taugrid-kueue --output=json": {
+			output: `{"items":[
+				{"metadata":{"name":"taugrid-kueue-controller-manager","generation":2,"labels":{"helm.sh/chart":"kueue-0.19.10"}},"spec":{"replicas":1},"status":{"observedGeneration":2,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
 			]}`,
 		},
 		"get deployment tau-core-controller --namespace tau-system --output=json": {

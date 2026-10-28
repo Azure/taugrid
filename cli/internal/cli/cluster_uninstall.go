@@ -10,36 +10,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Azure/taugrid/cli/internal/installationcheck"
 	"github.com/Azure/taugrid/core/kube"
 )
 
 type clusterUninstallSpec struct {
-	KubeContext string
-	Release     string
-	Namespace   string
-	Chart       string
-	Timeout     string
-	Wait        bool
-	DryRun      bool
-	KeepHistory bool
-	NoHooks     bool
-	AssumeYes   bool
-	DrainQueue  bool
+	KubeContext  string
+	Release      string
+	Namespace    string
+	Chart        string
+	Timeout      string
+	Wait         bool
+	DryRun       bool
+	KeepHistory  bool
+	NoHooks      bool
+	AssumeYes    bool
+	DrainQueue   bool
+	KueueRelease string
 }
 
 func newClusterUninstallCmd() *cobra.Command {
 	spec := clusterUninstallSpec{
-		Release:    defaultTauGridRelease,
-		Namespace:  defaultTauGridNamespace,
-		Chart:      defaultTauGridChart,
-		Timeout:    "15m",
-		Wait:       true,
-		DrainQueue: true,
+		Release:      defaultTauGridRelease,
+		Namespace:    defaultTauGridNamespace,
+		Chart:        defaultTauGridChart,
+		Timeout:      "15m",
+		Wait:         true,
+		DrainQueue:   true,
+		KueueRelease: defaultTauGridKueueRelease,
 	}
 	cmd := &cobra.Command{
 		Use:          "uninstall",
@@ -48,11 +52,10 @@ func newClusterUninstallCmd() *cobra.Command {
 		SilenceUsage: true,
 		Long: `Uninstall the TauGrid Helm release without ad hoc Kubernetes deletion.
 
-Uninstall runs in two Helm phases. The first removes the release-owned queue
+Uninstall removes the release-owned queue
 policy while Kueue is still running, so Kueue can release the finalizers it
-holds on those objects. The second uninstalls the release. Helm's own uninstall
-order deletes the Kueue controller before its custom resources, which would
-otherwise leave them undeletable.
+holds on those objects. It then uninstalls TauGrid and, when TauGrid owns the
+self-managed Kueue release, removes that separate release last.
 
 Helm removes resources owned by the release. Kubernetes CRDs, user-created
 custom resources, retained namespaces, cloud infrastructure, node labels,
@@ -72,12 +75,35 @@ objects before uninstalling the controller.`,
 			queue := sync.OnceValue(func() baselineQueuePolicy {
 				return tauGridBaselineQueue(cmd, spec)
 			})
+			disabled := disabledTauGridComponents(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+			kueueReleaseExists, err := tauGridReleaseExists(
+				cmd,
+				spec.KubeContext,
+				spec.KueueRelease,
+				defaultTauGridKueueNS,
+			)
+			if err != nil {
+				return err
+			}
+			removeKueue := kueueReleaseExists &&
+				!slices.Contains(disabled, installationcheck.ComponentKueue)
 			drained := !spec.DryRun && spec.DrainQueue && drainTauGridQueuePolicy(cmd, spec, queue())
 			if err := runHelmCommand(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), clusterUninstallArgs(spec)); err != nil {
 				if !drained {
 					printUninstallRecovery(cmd.ErrOrStderr(), queue())
 				}
 				return err
+			}
+			if removeKueue {
+				if err := runHelmCommand(
+					cmd.Context(),
+					cmd.InOrStdin(),
+					cmd.OutOrStdout(),
+					cmd.ErrOrStderr(),
+					clusterUninstallKueueArgs(spec),
+				); err != nil {
+					return fmt.Errorf("TauGrid release was removed, but self-managed Kueue removal failed: %w", err)
+				}
 			}
 			if spec.DryRun {
 				fmt.Fprintln(cmd.OutOrStdout(), "\nTauGrid Helm uninstall dry-run completed; no cluster resources were changed.")
@@ -95,6 +121,7 @@ cluster.`)
 	flags.StringVar(&spec.Release, "release", spec.Release, "Helm release name")
 	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "Helm release namespace")
 	flags.StringVar(&spec.Chart, "chart", spec.Chart, "TauGrid chart reference used to drain the queue policy")
+	flags.StringVar(&spec.KueueRelease, "kueue-release", spec.KueueRelease, "self-managed Kueue Helm release name")
 	flags.StringVar(&spec.Timeout, "timeout", spec.Timeout, "Helm operation timeout")
 	flags.BoolVar(&spec.Wait, "wait", spec.Wait, "wait for release resources to be removed")
 	flags.BoolVar(&spec.DryRun, "dry-run", false, "show Helm's uninstall plan without changing the cluster")
@@ -107,9 +134,10 @@ cluster.`)
 
 func validateClusterUninstallSpec(spec clusterUninstallSpec) error {
 	required := map[string]string{
-		"--release":   spec.Release,
-		"--namespace": spec.Namespace,
-		"--timeout":   spec.Timeout,
+		"--release":       spec.Release,
+		"--namespace":     spec.Namespace,
+		"--timeout":       spec.Timeout,
+		"--kueue-release": spec.KueueRelease,
 	}
 	if spec.DrainQueue {
 		required["--chart"] = spec.Chart
@@ -300,6 +328,7 @@ func clusterUninstallArgs(spec clusterUninstallSpec) []string {
 		"--timeout", spec.Timeout,
 		"--ignore-not-found",
 	}
+
 	args = appendKubeContext(args, spec.KubeContext)
 	if spec.Wait {
 		args = append(args, "--wait")
@@ -314,4 +343,11 @@ func clusterUninstallArgs(spec clusterUninstallSpec) []string {
 		args = append(args, "--no-hooks")
 	}
 	return args
+}
+
+func clusterUninstallKueueArgs(spec clusterUninstallSpec) []string {
+	kueueSpec := spec
+	kueueSpec.Release = spec.KueueRelease
+	kueueSpec.Namespace = defaultTauGridKueueNS
+	return clusterUninstallArgs(kueueSpec)
 }

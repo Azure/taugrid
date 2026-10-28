@@ -76,7 +76,7 @@ func TestClusterInstallUpgradesCRDsBeforeExistingRelease(t *testing.T) {
 				}
 				return crdUpgradeRunner{steps: &steps, failAt: failAt}
 			}
-			_, err := runCluster(t, "install", "--context=kind-fixture", "--values=cluster.yaml")
+			_, err := runClusterInstallExternal(t, "--context=kind-fixture", "--values=cluster.yaml")
 			want := []string{"render", "validate", "apply", "wait", "helm"}
 			if failAt != "" {
 				for i, step := range want {

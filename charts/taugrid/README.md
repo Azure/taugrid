@@ -1,6 +1,9 @@
 # TauGrid Distribution Chart
 
-Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core controller, GPU node health monitoring, the operator Portal, and a portable baseline queue on fresh AKS clusters.
+Kubernetes-native TauGrid distribution. Installs KubeRay, the Tau core
+controller, GPU node health monitoring, the operator Portal, and a portable
+baseline queue on fresh AKS clusters. The supported self-managed path installs
+Kueue separately in `kueue-system`.
 
 ## Install
 
@@ -8,9 +11,15 @@ Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core co
 tau cluster install --version 0.4.7 --values taugrid-values.yaml
 ```
 
-Or with Helm directly:
+Or with Helm directly, installing the aligned Kueue release first:
 
 ```bash
+helm upgrade --install taugrid-kueue \
+  oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid-kueue \
+  --version 0.4.7 \
+  --namespace kueue-system --create-namespace \
+  --wait --atomic
+
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
   --version 0.4.7 \
@@ -82,7 +91,7 @@ authentication, not viewer authentication or permission to expose Portal.
 
 ## MultiKueue
 
-The supported TauGrid install enables Kueue's MultiKueue capability by default,
+The supported self-managed TauGrid install enables Kueue's MultiKueue capability by default,
 including its CRDs, controller feature gate, and prerequisite RBAC. It does not
 create operator-owned worker credentials, `MultiKueueCluster`,
 `MultiKueueConfig`, `AdmissionCheck`, queue routing, or `multiKueue` workload
@@ -95,7 +104,7 @@ for isolation, tenant authorization, and rollback.
 
 | Component | Condition | What it provides |
 |---|---|---|
-| Kueue | `components.kueue.enabled` | Job scheduling, admission, quota |
+| Kueue | `components.kueue.enabled` | Records whether the separate `taugrid-kueue` release owns job scheduling, admission, and quota |
 | KubeRay Operator | `components.kuberayOperator.enabled` | RayCluster/RayJob/RayService lifecycle |
 | tau-core-controller | `components.tauCoreController.enabled` | TauWorkspace reconciliation, Azure GPU topology labels, and the TauGrid Kueue Topology |
 | taugrid-core | `components.taugridCore.enabled` | Default Portal plus opt-in Stellar, lifecycle recorder, and image prewarm services |
@@ -103,6 +112,15 @@ for isolation, tenant authorization, and rollback.
 
 All components are enabled by default. Disable any with
 `--set components.<key>.enabled=false`.
+
+The self-managed distribution uses maintained AKS-composed MCR charts. The
+`taugrid-kueue` chart pins Kueue `0.19.10-aks.0.9.2` and must run as a separate
+release in `kueue-system`; this umbrella pins KubeRay
+`1.7.0-aks.0.1.3`. Plain MCR versions are historical publications and are not
+the maintained AKS channel. Use `tau cluster install` to coordinate both
+self-managed releases, or use the
+[`aks-managed-extensions`](../../examples/aks-managed-extensions/) recipe when
+AKS should own both operators.
 
 GPU monitoring is deliberately not an unconstrained toggle: a cluster running a
 Tau control plane always gets GPU node health signal, so a fleet cannot end up
@@ -127,7 +145,7 @@ Toggle individual sub-charts. All default to `true`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `components.kueue.enabled` | bool | `true` | Install the Kueue job scheduler |
+| `components.kueue.enabled` | bool | `true` | Record that TauGrid owns the separate self-managed Kueue release |
 | `components.kuberayOperator.enabled` | bool | `true` | Install the KubeRay operator |
 | `components.tauCoreController.enabled` | bool | `true` | Install the Tau core controller |
 | `components.taugridCore.enabled` | bool | `true` | Install the taugrid-core services chart |
@@ -301,19 +319,13 @@ would treat it as automatically tolerated and make the GPU flavor eligible for
 CPU-only admission. Workloads not rendered by Tau must declare their own
 matching pod tolerations.
 
-### `kueue`
+### Kueue
 
-Pass-through values for the embedded Kueue chart. The most common override is
-the controller image:
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `kueue.controllerManager.manager.image.repository` | string | `mcr.microsoft.com/oss/v2/kueue/kueue` | Kueue controller image |
-| `kueue.controllerManager.manager.image.tag` | string | `v0.19.2` | Kueue image tag |
-| `kueue.managerConfig.controllerManagerConfigYaml` | string | (embedded) | Full Kueue Configuration YAML |
-
-Refer to the [upstream Kueue chart values](https://kueue.sigs.k8s.io/docs/installation/)
-for the complete reference.
+Kueue is not embedded in this chart. `tau cluster install` installs the
+`taugrid-kueue` chart first as release `taugrid-kueue` in `kueue-system`, then
+installs this chart in the selected TauGrid system namespace. Pass Kueue-only
+overrides with `--kueue-values`, `--kueue-set`, or
+`--kueue-set-string`.
 
 ### `kuberay-operator`
 
@@ -321,8 +333,6 @@ Pass-through values for the embedded KubeRay chart:
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `kuberay-operator.image.repository` | string | `mcr.microsoft.com/oss/v2/kuberay/operator` | KubeRay operator image |
-| `kuberay-operator.image.tag` | string | `v1.6.2` | KubeRay operator image tag |
 | `kuberay-operator.configuration.enabled` | bool | `true` | Enable RayCluster default container env injection |
 
 Refer to the [upstream KubeRay chart values](https://docs.ray.io/en/latest/cluster/kubernetes/getting-started/raycluster-quick-start.html)

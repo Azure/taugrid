@@ -60,6 +60,42 @@ func TestClusterUninstallDrainsQueueBeforeUninstall(t *testing.T) {
 	}
 }
 
+func TestClusterUninstallRemovesSelfManagedKueueLast(t *testing.T) {
+	stubForceConflicts(t, false)
+	var calls [][]string
+	original := runHelmCommand
+	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
+		switch {
+		case len(args) > 0 && args[0] == "list":
+			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"tau-system"},{"name":"taugrid-kueue","namespace":"kueue-system"}]`)
+			return nil
+		case len(args) > 1 && args[0] == "get" && args[1] == "values":
+			_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":true}},"baselineQueue":{"enabled":true}}`)
+			return nil
+		case len(args) > 1 && args[0] == "get" && args[1] == "metadata":
+			_, _ = io.WriteString(out, deployedMetadata)
+			return nil
+		default:
+			calls = append(calls, append([]string(nil), args...))
+			return nil
+		}
+	}
+	t.Cleanup(func() { runHelmCommand = original })
+
+	out, err := runCluster(t, "uninstall", "--yes")
+	if err != nil {
+		t.Fatalf("uninstall errored: %v\n%s", err, out)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("mutating Helm calls = %d, want queue drain, TauGrid uninstall, then Kueue uninstall: %#v", len(calls), calls)
+	}
+	if calls[0][0] != "upgrade" ||
+		!reflect.DeepEqual(calls[1][:4], []string{"uninstall", defaultTauGridRelease, "--namespace", defaultTauGridNamespace}) ||
+		!reflect.DeepEqual(calls[2][:4], []string{"uninstall", defaultTauGridKueueRelease, "--namespace", defaultTauGridKueueNS}) {
+		t.Fatalf("unexpected uninstall order: %#v", calls)
+	}
+}
+
 func TestClusterUninstallExposesWaitAndTimeoutEscapeHatch(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata), recordHelm(&calls))

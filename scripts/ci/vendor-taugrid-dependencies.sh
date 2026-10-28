@@ -214,10 +214,12 @@ vendor_taugrid_dependencies() {
   local local_version
   local dependencies
   local dependency_line=0
+  local chart_name
 
+  chart_name=$(awk '$1 == "name:" { print $2; exit }' "${chart_dir}/Chart.yaml" 2>/dev/null || true)
   if [[ ! -f "${chart_dir}/Chart.yaml" ]] ||
-    [[ "$(awk '$1 == "name:" { print $2; exit }' "${chart_dir}/Chart.yaml")" != "taugrid" ]]; then
-    echo "Expected the TauGrid umbrella chart, got: ${chart_dir}" >&2
+    [[ "$chart_name" != "taugrid" && "$chart_name" != "taugrid-kueue" ]]; then
+    echo "Expected a TauGrid distribution chart, got: ${chart_dir}" >&2
     return 1
   fi
 

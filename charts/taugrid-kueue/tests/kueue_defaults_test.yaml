@@ -1,0 +1,24 @@
+suite: TauGrid self-managed Kueue defaults
+templates:
+  - charts/kueue/templates/manager/manager-config.yaml
+  - charts/kueue/templates/manager/manager.yaml
+tests:
+  - it: keeps Ray integrations and AKS DRA mapping
+    template: charts/kueue/templates/manager/manager-config.yaml
+    asserts:
+      - matchRegex:
+          path: data["controller_manager_config.yaml"]
+          pattern: "ray.io/rayjob"
+      - matchRegex:
+          path: data["controller_manager_config.yaml"]
+          pattern: "deviceClassMappings:"
+      - matchRegex:
+          path: data["controller_manager_config.yaml"]
+          pattern: "gpu.nvidia.com"
+
+  - it: uses the maintained MCR Kueue image
+    template: charts/kueue/templates/manager/manager.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: mcr.microsoft.com/oss/v2/kueue/kueue:v0.19.10-1

@@ -1,0 +1,8 @@
+kueue:
+  aksExtension:
+    enableKueueObjectsAutomation: false
+    enableMultiKueue: true
+  controllerManager:
+    manager:
+      image:
+        pullPolicy: IfNotPresent

@@ -135,19 +135,22 @@ Key CI settings: `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`. Tests run with `-
 
 ## TauGrid Release Version Bump
 
-TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
-`tau-core-controller` charts plus the `tau`, `taugrid-portal`, and
+TauGrid uses one release version for the `taugrid`, `taugrid-kueue`,
+`taugrid-core`, and `tau-core-controller` charts plus the `tau`,
+`taugrid-portal`, and
 `tau-core-controller` images. Helm and MCR use `X.Y.Z`; the Git tag uses
 `vX.Y.Z`. The tag publishes the `tau` and `tau-gen` CLI binaries plus the
 independently versioned Python SDK wheel; `gpu-monitoring` and `adx-mon` keep
 their own release versions.
 
-1. Update `version`/`appVersion` in the three `Chart.yaml` files and the two
-   first-party dependency versions in `charts/taugrid/Chart.yaml`.
+1. Update `version`/`appVersion` in the three workload `Chart.yaml` files,
+   `version` in `charts/taugrid-kueue/Chart.yaml`, and the two first-party
+   dependency versions in `charts/taugrid/Chart.yaml`.
 2. Update their image tags, the controller Kustomize image, the CLI default
    chart version, install examples, and version assertions.
-3. Run `scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid`, Helm lint and
-   unit tests for the three charts, `cd cli && go test ./internal/cli`, and
+3. Run `scripts/ci/vendor-taugrid-dependencies.sh` for both `charts/taugrid`
+   and `charts/taugrid-kueue`, Helm lint and unit tests for the four charts,
+   `cd cli && go test ./internal/cli`, and
    `python3 scripts/check-license-headers.py`.
 4. Before tagging, add `cli/releases/vX.Y.Z.md`. After merge, push the annotated
    tag; the TauGrid release starts automatically and publishes the CLI binaries

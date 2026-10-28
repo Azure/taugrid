@@ -26,11 +26,12 @@ var (
 
 func newClusterValidateInstallationCmd() *cobra.Command {
 	var (
-		kubeContext string
-		release     = defaultTauGridRelease
-		namespace   = defaultTauGridNamespace
-		timeoutText = "5m"
-		pollText    = defaultInstallationValidationPollInterval.String()
+		kubeContext  string
+		release      = defaultTauGridRelease
+		kueueRelease = defaultTauGridKueueRelease
+		namespace    = defaultTauGridNamespace
+		timeoutText  = "5m"
+		pollText     = defaultInstallationValidationPollInterval.String()
 	)
 
 	cmd := &cobra.Command{
@@ -71,6 +72,8 @@ KubeRay can still use this command as a gate.`,
 				installationcheck.Options{
 					Release:            release,
 					SystemNamespace:    namespace,
+					KueueRelease:       kueueRelease,
+					KueueNamespace:     defaultTauGridKueueNS,
 					Timeout:            timeout,
 					PollInterval:       pollInterval,
 					DisabledComponents: disabled,
@@ -83,6 +86,7 @@ KubeRay can still use this command as a gate.`,
 	flags := cmd.Flags()
 	flags.StringVar(&kubeContext, "context", defaultKubeContext(), kubeContextHelp())
 	flags.StringVar(&release, "release", release, "Helm release name")
+	flags.StringVar(&kueueRelease, "kueue-release", kueueRelease, "self-managed Kueue Helm release name")
 	flags.StringVar(&namespace, "namespace", namespace, "namespace containing all TauGrid system components")
 	flags.StringVar(&timeoutText, "timeout", timeoutText, "maximum readiness wait")
 	flags.StringVar(&pollText, "poll-interval", pollText, "readiness poll interval")

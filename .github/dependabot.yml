@@ -97,6 +97,7 @@ updates:
       - "/charts/adx-mon"
       - "/charts/tau-core-controller"
       - "/charts/taugrid"
+      - "/charts/taugrid-kueue"
       - "/charts/taugrid-core"
     exclude-paths:
       - "**/values.yaml"

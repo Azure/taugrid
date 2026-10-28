@@ -31,7 +31,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		return nil
 	})
 
-	out, err := runCluster(t, "install",
+	out, err := runClusterInstallExternal(t,
 		"--context", "aks-dev",
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
@@ -51,6 +51,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
 		"--set-string", "kuberay-operator.labels.environment=dev",
+		"--set", "components.kueue.enabled=false",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("helm args:\n got: %#v\nwant: %#v", got, want)
@@ -87,6 +88,34 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	}
 }
 
+func TestClusterInstallSelfManagedInstallsKueueBeforeTauGrid(t *testing.T) {
+	stubForceConflicts(t, false)
+	var calls [][]string
+	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+		calls = append(calls, append([]string(nil), args...))
+		return nil
+	})
+
+	out, err := runCluster(t, "install")
+	if err != nil {
+		t.Fatalf("install errored: %v\n%s", err, out)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("Helm upgrade calls = %d, want Kueue plus TauGrid bootstrap and final install: %#v", len(calls), calls)
+	}
+	if !containsArgPair(calls[0], "--namespace", defaultTauGridKueueNS) ||
+		!slices.Contains(calls[0], defaultTauGridKueueChart) ||
+		!containsArgPair(calls[0], "--version", defaultTauGridChartVersion) {
+		t.Fatalf("first Helm call did not install the pinned Kueue release: %#v", calls[0])
+	}
+	for _, args := range calls[1:] {
+		if !slices.Contains(args, defaultTauGridChart) ||
+			!containsArgPair(args, "--set", "components.kueue.enabled=true") {
+			t.Fatalf("TauGrid call did not record self-managed Kueue ownership: %#v", args)
+		}
+	}
+}
+
 func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 	stubForceConflicts(t, false)
 	stubRollbackOnFailure(t, true)
@@ -96,7 +125,7 @@ func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 		return nil
 	})
 
-	out, err := runCluster(t, "install", "--wait", "--atomic", "--timeout", "45s")
+	out, err := runClusterInstallExternal(t, "--wait", "--atomic", "--timeout", "45s")
 	if err != nil {
 		t.Fatalf("install errored: %v\n%s", err, out)
 	}
@@ -130,7 +159,7 @@ func TestClusterInstallAtomicUsesHelm3Spelling(t *testing.T) {
 		return nil
 	})
 
-	if _, err := runCluster(t, "install", "--atomic"); err != nil {
+	if _, err := runClusterInstallExternal(t, "--atomic"); err != nil {
 		t.Fatalf("install errored: %v", err)
 	}
 	if !containsArg(got, "--atomic") || containsArg(got, "--rollback-on-failure") {
@@ -145,7 +174,7 @@ func TestClusterInstallBootstrapsFreshReleaseWithoutQueuePolicy(t *testing.T) {
 		return nil
 	})
 
-	if _, err := runCluster(t, "install"); err != nil {
+	if _, err := runClusterInstallExternal(t); err != nil {
 		t.Fatalf("install errored: %v", err)
 	}
 	if len(calls) != 2 {
@@ -175,7 +204,7 @@ func TestClusterInstallResetsValuesButKeepsRequestedOverrides(t *testing.T) {
 		return nil
 	})
 
-	if _, err := runCluster(t, "install",
+	if _, err := runClusterInstallExternal(t,
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.enabled=false"); err != nil {
 		t.Fatalf("install errored: %v", err)
@@ -209,7 +238,7 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	if _, err := runCluster(t, "install"); err != nil {
+	if _, err := runClusterInstallExternal(t); err != nil {
 		t.Fatalf("install errored: %v", err)
 	}
 	if upgrades != 1 {
@@ -235,7 +264,7 @@ func TestClusterInstallListAvoidsHelm4RemovedAllFlag(t *testing.T) {
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	if _, err := runCluster(t, "install"); err != nil {
+	if _, err := runClusterInstallExternal(t); err != nil {
 		t.Fatalf("install errored: %v", err)
 	}
 	if listArgs == nil {
@@ -270,7 +299,7 @@ func TestClusterInstallRejectsReleaseInAnotherNamespace(t *testing.T) {
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	_, err := runCluster(t, "install", "--namespace", "new-system")
+	_, err := runClusterInstallExternal(t, "--namespace", "new-system")
 	if err == nil || !strings.Contains(err.Error(), `Helm release "taugrid" already exists in namespace old-system`) ||
 		!strings.Contains(err.Error(), "cannot be changed in place") {
 		t.Fatalf("cross-namespace release error = %v", err)
@@ -285,7 +314,7 @@ func TestClusterInstallCustomNamespaceFlowsIntoNextSteps(t *testing.T) {
 		return nil
 	})
 
-	out, err := runCluster(t, "install", "--namespace", "custom-system")
+	out, err := runClusterInstallExternal(t, "--namespace", "custom-system")
 	if err != nil {
 		t.Fatalf("install errored: %v\n%s", err, out)
 	}
@@ -313,7 +342,7 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	out, err := runCluster(t, "install", "--dry-run", "--context", "aks-dev", "--values", "cluster.yaml")
+	out, err := runClusterInstallExternal(t, "--dry-run", "--context", "aks-dev", "--values", "cluster.yaml")
 	if err != nil {
 		t.Fatalf("dry-run errored: %v\n%s", err, out)
 	}
@@ -328,6 +357,7 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 		"--kube-context", "aks-dev",
 		"--dependency-update",
 		"--values", "cluster.yaml",
+		"--set", "components.kueue.enabled=false",
 	}
 	if !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("dry-run helm args:\n got: %#v\nwant: %#v", calls[0], want)
@@ -352,7 +382,7 @@ metadata:
 		return nil
 	})
 
-	out, err := runCluster(t, "install", "--dry-run")
+	out, err := runClusterInstallExternal(t, "--dry-run")
 	if err != nil {
 		t.Fatalf("dry-run errored on the dependency-update banner: %v\n%s", err, out)
 	}
@@ -388,7 +418,7 @@ metadata:
 		return nil
 	})
 
-	out, err := runCluster(t, "install", "--dry-run")
+	out, err := runClusterInstallExternal(t, "--dry-run")
 	if err != nil {
 		t.Fatalf("dry-run errored: %v\n%s", err, out)
 	}
@@ -416,7 +446,7 @@ func TestClusterInstallDryRunSkipsReadinessValidation(t *testing.T) {
 		return installationcheck.Report{}, nil
 	}
 
-	out, err := runCluster(t, "install", "--dry-run")
+	out, err := runClusterInstallExternal(t, "--dry-run")
 	if err != nil {
 		t.Fatalf("dry-run errored: %v\n%s", err, out)
 	}
@@ -432,7 +462,7 @@ func TestClusterInstallDryRunHonorsDependencyUpdateOptOut(t *testing.T) {
 		return nil
 	})
 
-	if _, err := runCluster(t, "install", "--dry-run", "--dependency-update=false"); err != nil {
+	if _, err := runClusterInstallExternal(t, "--dry-run", "--dependency-update=false"); err != nil {
 		t.Fatalf("dry-run errored: %v", err)
 	}
 	if containsArg(got, "--dependency-update") {
@@ -471,7 +501,7 @@ func TestClusterInstallSurfacesHelmFailure(t *testing.T) {
 		fmt.Fprintln(errOut, `Error: failed to perform "FetchReference": repository not found`)
 		return errors.New("exit status 1")
 	})
-	out, err := runCluster(t, "install")
+	out, err := runClusterInstallExternal(t)
 	if err == nil {
 		t.Fatal("install unexpectedly succeeded")
 	}
@@ -495,7 +525,7 @@ func TestClusterInstallPreservesNonRegistryHelmFailure(t *testing.T) {
 		return errors.New("Kubernetes cluster unreachable")
 	})
 
-	_, err := runCluster(t, "install")
+	_, err := runClusterInstallExternal(t)
 	if err == nil || !strings.Contains(err.Error(), "Kubernetes cluster unreachable") {
 		t.Fatalf("install error = %v", err)
 	}
@@ -509,7 +539,7 @@ func TestClusterInstallRejectsNonPositiveTimeoutBeforeHelm(t *testing.T) {
 		t.Fatal("Helm must not run for an invalid timeout")
 		return nil
 	})
-	_, err := runCluster(t, "install", "--timeout", "0s")
+	_, err := runClusterInstallExternal(t, "--timeout", "0s")
 	if err == nil || !strings.Contains(err.Error(), "must be greater than zero") {
 		t.Fatalf("install timeout error = %v", err)
 	}
@@ -526,7 +556,7 @@ func TestClusterInstallSurfacesValidationFailure(t *testing.T) {
 		return report, errors.New("TauGrid did not become ready")
 	}
 
-	out, err := runCluster(t, "install")
+	out, err := runClusterInstallExternal(t)
 	if err == nil || !strings.Contains(err.Error(), "did not become ready") {
 		t.Fatalf("install validation error = %v\n%s", err, out)
 	}
@@ -665,19 +695,24 @@ func containsArg(args []string, want string) bool {
 }
 
 func TestDefaultChartVersionMatchesChartYAML(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Clean("../../../charts/taugrid/Chart.yaml"))
-	if err != nil {
-		t.Fatalf("read Chart.yaml: %v", err)
-	}
-	var chart struct {
-		Version string `yaml:"version"`
-	}
-	if err := yaml.Unmarshal(raw, &chart); err != nil {
-		t.Fatalf("parse Chart.yaml: %v", err)
-	}
-	if chart.Version != defaultTauGridChartVersion {
-		t.Fatalf("defaultTauGridChartVersion is %q but charts/taugrid/Chart.yaml is %q; bump the constant with the chart",
-			defaultTauGridChartVersion, chart.Version)
+	for _, path := range []string{
+		"../../../charts/taugrid/Chart.yaml",
+		"../../../charts/taugrid-kueue/Chart.yaml",
+	} {
+		raw, err := os.ReadFile(filepath.Clean(path))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var chart struct {
+			Version string `yaml:"version"`
+		}
+		if err := yaml.Unmarshal(raw, &chart); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		if chart.Version != defaultTauGridChartVersion {
+			t.Fatalf("defaultTauGridChartVersion is %q but %s is %q; bump the constant with both distribution charts",
+				defaultTauGridChartVersion, path, chart.Version)
+		}
 	}
 }
 
@@ -712,6 +747,9 @@ func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 	loadYAML("../../../charts/taugrid/Chart.yaml", &umbrella)
 	releaseVersion := umbrella.Version
 	assertVersion("taugrid appVersion", umbrella.AppVersion, releaseVersion)
+	var kueueWrapper chartMetadata
+	loadYAML("../../../charts/taugrid-kueue/Chart.yaml", &kueueWrapper)
+	assertVersion("taugrid-kueue chart version", kueueWrapper.Version, releaseVersion)
 
 	for _, chartName := range []string{"tau-core-controller", "taugrid-core"} {
 		var child chartMetadata

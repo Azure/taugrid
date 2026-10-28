@@ -404,11 +404,12 @@ fi
 
 "$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
   "$REPO_ROOT/charts/taugrid"
+"$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
+  "$REPO_ROOT/charts/taugrid-kueue"
 
 KUEUE_IMAGE="$(tau_kind_render_image \
-  "$KUBE_CONTEXT" "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
-  charts/kueue/templates/manager/manager.yaml \
-  --set components.taugridCore.enabled=false)"
+  "$KUBE_CONTEXT" taugrid-kueue "$REPO_ROOT/charts/taugrid-kueue" kueue-system \
+  charts/kueue/templates/manager/manager.yaml)"
 KUBERAY_IMAGE="$(tau_kind_render_image \
   "$KUBE_CONTEXT" "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
   charts/kuberay-operator/templates/deployment.yaml \
@@ -427,6 +428,7 @@ done
 install_taugrid() {
   "$TAU_BIN" cluster install \
   --chart "$REPO_ROOT/charts/taugrid" \
+  --kueue-chart "$REPO_ROOT/charts/taugrid-kueue" \
   --version 0.4.7 \
   --release "$TAUGRID_RELEASE" \
   --namespace "$TAUGRID_NAMESPACE" \

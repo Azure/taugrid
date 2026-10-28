@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,11 @@ const (
 	defaultTauGridNamespace    = "tau-system"
 	defaultTauGridChartVersion = "0.4.7"
 	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
+	defaultTauGridKueueRelease = "taugrid-kueue"
+	defaultTauGridKueueNS      = "kueue-system"
+	defaultTauGridKueueChart   = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid-kueue"
+	kueueModeSelfManaged       = "self-managed"
+	kueueModeExternal          = "external"
 )
 
 type clusterInstallSpec struct {
@@ -32,10 +38,17 @@ type clusterInstallSpec struct {
 	Namespace    string
 	Chart        string
 	Version      string
+	KueueRelease string
+	KueueChart   string
+	KueueVersion string
+	KueueMode    string
 	Timeout      string
 	ValuesFiles  []string
 	SetValues    []string
 	SetString    []string
+	KueueValues  []string
+	KueueSet     []string
+	KueueString  []string
 	CreateNS     bool
 	Wait         bool
 	Atomic       bool
@@ -49,6 +62,10 @@ func newClusterInstallCmd() *cobra.Command {
 		Namespace:    defaultTauGridNamespace,
 		Chart:        defaultTauGridChart,
 		Version:      defaultTauGridChartVersion,
+		KueueRelease: defaultTauGridKueueRelease,
+		KueueChart:   defaultTauGridKueueChart,
+		KueueVersion: defaultTauGridChartVersion,
+		KueueMode:    kueueModeSelfManaged,
 		Timeout:      "15m",
 		CreateNS:     true,
 		Wait:         false,
@@ -61,8 +78,10 @@ func newClusterInstallCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		Long: `Install the versioned TauGrid distribution on an existing Kubernetes cluster.
 
-The chart owns cluster-scoped installation state: Kueue, KubeRay, Tau APIs,
-tau-core-controller, and the portable baseline queue.
+The installer owns two Helm releases in self-managed mode: Kueue in
+kueue-system, then the TauGrid distribution in the selected system namespace.
+Use --kueue-mode=external when a managed extension or another platform owner
+provides Kueue.
 On upgrade, Tau updates its own CRDs from the selected chart before running
 Helm. Existing custom resources are retained; Helm rollback does not revert
 these CRD updates. Third-party CRD migrations remain platform-owned.
@@ -91,6 +110,12 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			printClusterInstallPlan(cmd, spec)
 			if spec.DryRun {
 				var rendered bytes.Buffer
+				if spec.KueueMode == kueueModeSelfManaged {
+					if err := runKueueInstallHelm(cmd, spec, &rendered, clusterInstallKueueRenderArgs(spec)); err != nil {
+						return err
+					}
+					rendered.WriteString("\n---\n")
+				}
 				if err := runClusterInstallHelm(cmd, spec, &rendered, clusterInstallRenderArgs(spec)); err != nil {
 					return err
 				}
@@ -104,6 +129,18 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			if err != nil {
 				return err
 			}
+			kueueReleaseExists := false
+			if spec.KueueMode == kueueModeSelfManaged {
+				kueueReleaseExists, err = tauGridReleaseExists(
+					cmd,
+					spec.KubeContext,
+					spec.KueueRelease,
+					defaultTauGridKueueNS,
+				)
+				if err != nil {
+					return err
+				}
+			}
 			installationRunner := newInstallationCheckRunner(spec.KubeContext)
 			if releaseExists {
 				if err := ensureSystemNamespaceMigrationSafe(cmd.Context(), installationRunner, spec.Namespace); err != nil {
@@ -111,6 +148,13 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 				}
 				if err := upgradeTauGridCRDs(cmd, installationRunner, spec); err != nil {
 					return err
+				}
+			}
+			installKueueBeforeTauGrid := spec.KueueMode == kueueModeSelfManaged &&
+				(!releaseExists || kueueReleaseExists)
+			if installKueueBeforeTauGrid {
+				if err := runKueueInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallKueueArgs(spec)); err != nil {
+					return fmt.Errorf("install self-managed Kueue: %w", err)
 				}
 			}
 			if !releaseExists {
@@ -121,6 +165,11 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			if err := runClusterInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallArgs(spec)); err != nil {
 				return err
 			}
+			if spec.KueueMode == kueueModeSelfManaged && !installKueueBeforeTauGrid {
+				if err := runKueueInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallKueueArgs(spec)); err != nil {
+					return fmt.Errorf("TauGrid was upgraded to split Kueue into its own release, but installing self-managed Kueue failed; rerun tau cluster install to complete the migration: %w", err)
+				}
+			}
 			disabled := disabledTauGridComponents(cmd, spec.KubeContext, spec.Release, spec.Namespace)
 			if err := runTauGridInstallationValidation(
 				cmd.Context(),
@@ -128,6 +177,8 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 				installationcheck.Options{
 					Release:            spec.Release,
 					SystemNamespace:    spec.Namespace,
+					KueueRelease:       spec.KueueRelease,
+					KueueNamespace:     defaultTauGridKueueNS,
 					Timeout:            validationTimeout,
 					PollInterval:       defaultInstallationValidationPollInterval,
 					DisabledComponents: disabled,
@@ -155,10 +206,17 @@ Next:
 	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "namespace for all TauGrid system workloads and TauWorkspace objects")
 	flags.StringVar(&spec.Chart, "chart", spec.Chart, "TauGrid chart reference or local chart path")
 	flags.StringVar(&spec.Version, "version", spec.Version, "TauGrid chart version")
+	flags.StringVar(&spec.KueueRelease, "kueue-release", spec.KueueRelease, "self-managed Kueue Helm release name")
+	flags.StringVar(&spec.KueueChart, "kueue-chart", spec.KueueChart, "self-managed TauGrid Kueue chart reference or local chart path")
+	flags.StringVar(&spec.KueueVersion, "kueue-version", spec.KueueVersion, "self-managed TauGrid Kueue chart version")
+	flags.StringVar(&spec.KueueMode, "kueue-mode", spec.KueueMode, "Kueue ownership mode: self-managed or external")
 	flags.StringVar(&spec.Timeout, "timeout", spec.Timeout, "timeout for each Helm operation and the readiness wait")
 	flags.StringArrayVarP(&spec.ValuesFiles, "values", "f", nil, "additional Helm values file (repeatable)")
 	flags.StringArrayVar(&spec.SetValues, "set", nil, "set a Helm value (repeatable)")
 	flags.StringArrayVar(&spec.SetString, "set-string", nil, "set a Helm string value (repeatable)")
+	flags.StringArrayVar(&spec.KueueValues, "kueue-values", nil, "additional self-managed Kueue values file (repeatable)")
+	flags.StringArrayVar(&spec.KueueSet, "kueue-set", nil, "set a self-managed Kueue Helm value (repeatable)")
+	flags.StringArrayVar(&spec.KueueString, "kueue-set-string", nil, "set a self-managed Kueue Helm string value (repeatable)")
 	flags.BoolVar(&spec.CreateNS, "create-namespace", spec.CreateNS, "create the release namespace")
 	flags.BoolVar(&spec.Wait, "wait", spec.Wait, "also run Helm's generic resource watcher before Tau's component-aware readiness validation")
 	flags.BoolVar(&spec.Atomic, "atomic", spec.Atomic, "roll back on Helm failure (also enables Helm's generic watcher wait)")
@@ -169,15 +227,26 @@ Next:
 
 func validateClusterInstallSpec(spec clusterInstallSpec) error {
 	for name, value := range map[string]string{
-		"--release":   spec.Release,
-		"--namespace": spec.Namespace,
-		"--chart":     spec.Chart,
-		"--version":   spec.Version,
-		"--timeout":   spec.Timeout,
+		"--release":       spec.Release,
+		"--namespace":     spec.Namespace,
+		"--chart":         spec.Chart,
+		"--version":       spec.Version,
+		"--kueue-release": spec.KueueRelease,
+		"--kueue-chart":   spec.KueueChart,
+		"--kueue-version": spec.KueueVersion,
+		"--kueue-mode":    spec.KueueMode,
+		"--timeout":       spec.Timeout,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s must not be empty", name)
 		}
+	}
+	if spec.KueueMode != kueueModeSelfManaged && spec.KueueMode != kueueModeExternal {
+		return fmt.Errorf("--kueue-mode must be %q or %q", kueueModeSelfManaged, kueueModeExternal)
+	}
+	if spec.KueueMode == kueueModeExternal &&
+		(len(spec.KueueValues) > 0 || len(spec.KueueSet) > 0 || len(spec.KueueString) > 0) {
+		return fmt.Errorf("--kueue-values, --kueue-set, and --kueue-set-string require --kueue-mode=%s", kueueModeSelfManaged)
 	}
 	return nil
 }
@@ -196,6 +265,8 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Namespace:  %s
   Chart:      %s
   Version:    %s
+  Kueue mode: %s
+  Kueue:      %s in %s, chart %s version %s
   Helm wait:  %s
   Rollback:   %s
   Tau CRDs:   update from the selected chart before an existing-release upgrade; not rolled back by Helm
@@ -203,11 +274,16 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Opt-in:     Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
 
-`, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
+`, spec.Release, spec.Namespace, spec.Chart, spec.Version, spec.KueueMode,
+		spec.KueueRelease, defaultTauGridKueueNS, spec.KueueChart, spec.KueueVersion, helmWait, rollback)
 }
 
 func runClusterInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.Writer, args []string) error {
 	return runTauGridHelmCommand(cmd, spec.Chart, spec.Version, out, args)
+}
+
+func runKueueInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.Writer, args []string) error {
+	return runTauGridHelmCommand(cmd, spec.KueueChart, spec.KueueVersion, out, args)
 }
 
 func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace string) (bool, error) {
@@ -276,6 +352,19 @@ func clusterInstallRenderArgs(spec clusterInstallSpec) []string {
 		args = append(args, "--dependency-update")
 	}
 	return appendHelmValueArgs(args, spec)
+}
+
+func clusterInstallKueueRenderArgs(spec clusterInstallSpec) []string {
+	args := []string{
+		"template", spec.KueueRelease, spec.KueueChart,
+		"--namespace", defaultTauGridKueueNS,
+		"--version", spec.KueueVersion,
+		"--include-crds",
+	}
+	if spec.DependencyUp {
+		args = append(args, "--dependency-update")
+	}
+	return appendKueueHelmValueArgs(args, spec)
 }
 
 func printRenderedKindSummary(out io.Writer, manifest []byte) error {
@@ -350,6 +439,28 @@ func clusterInstallArgs(spec clusterInstallSpec) []string {
 	return appendHelmValueArgs(appendForceConflicts(args), spec)
 }
 
+func clusterInstallKueueArgs(spec clusterInstallSpec) []string {
+	args := []string{
+		"upgrade", "--install", spec.KueueRelease, spec.KueueChart,
+		"--namespace", defaultTauGridKueueNS,
+		"--version", spec.KueueVersion,
+		"--timeout", spec.Timeout,
+		"--create-namespace",
+		"--reset-values",
+		"--wait",
+	}
+	if spec.KubeContext != "" {
+		args = append(args, "--kube-context", spec.KubeContext)
+	}
+	if spec.DependencyUp {
+		args = append(args, "--dependency-update")
+	}
+	if spec.Atomic {
+		args = appendRollbackOnFailure(args)
+	}
+	return appendKueueHelmValueArgs(appendForceConflicts(args), spec)
+}
+
 func appendHelmValueArgs(args []string, spec clusterInstallSpec) []string {
 	for _, file := range spec.ValuesFiles {
 		args = append(args, "--values", file)
@@ -358,6 +469,24 @@ func appendHelmValueArgs(args []string, spec clusterInstallSpec) []string {
 		args = append(args, "--set", value)
 	}
 	for _, value := range spec.SetString {
+		args = append(args, "--set-string", value)
+	}
+	args = append(
+		args,
+		"--set",
+		"components.kueue.enabled="+strconv.FormatBool(spec.KueueMode == kueueModeSelfManaged),
+	)
+	return args
+}
+
+func appendKueueHelmValueArgs(args []string, spec clusterInstallSpec) []string {
+	for _, file := range spec.KueueValues {
+		args = append(args, "--values", file)
+	}
+	for _, value := range spec.KueueSet {
+		args = append(args, "--set", value)
+	}
+	for _, value := range spec.KueueString {
 		args = append(args, "--set-string", value)
 	}
 	return args

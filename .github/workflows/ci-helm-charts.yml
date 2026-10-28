@@ -60,7 +60,7 @@ jobs:
             | cut -d/ -f1-2 \
             | sort -u || true)
           if grep -Eq '^scripts/ci/(vendor-taugrid-dependencies\.sh|tests/vendor-taugrid-dependencies_test\.sh)$' <<<"${CHANGED_FILES}"; then
-            CHANGED_DIRS=$(printf '%s\ncharts/taugrid\n' "${CHANGED_DIRS}" | sort -u)
+            CHANGED_DIRS=$(printf '%s\ncharts/taugrid\ncharts/taugrid-kueue\n' "${CHANGED_DIRS}" | sort -u)
           fi
 
           # Charts to validate = changed chart directories that contain a Chart.yaml.
@@ -109,12 +109,12 @@ jobs:
           version: v${{ matrix.helm_version }}
 
       - name: Run vendoring script tests
-        if: matrix.chart == 'charts/taugrid'
+        if: matrix.chart == 'charts/taugrid' && matrix.helm_version == '3.18.6'
         run: bash scripts/ci/tests/vendor-taugrid-dependencies_test.sh
 
       - name: Build chart dependencies
         run: |
-          if [[ "${{ matrix.chart }}" == "charts/taugrid" ]]; then
+          if [[ "${{ matrix.chart }}" == "charts/taugrid" || "${{ matrix.chart }}" == "charts/taugrid-kueue" ]]; then
             scripts/ci/vendor-taugrid-dependencies.sh "${{ matrix.chart }}"
           else
             helm repo add --force-update prometheus-community https://prometheus-community.github.io/helm-charts
@@ -150,13 +150,18 @@ jobs:
 
       - name: Validate template rendering
         run: |
+          template_args=()
+          if [[ "${{ matrix.chart }}" == "charts/taugrid-kueue" ]]; then
+            template_args+=(--namespace kueue-system)
+          fi
+
           # Render with default values.
-          helm template test "${{ matrix.chart }}" > /dev/null
+          helm template test "${{ matrix.chart }}" "${template_args[@]}" > /dev/null
 
           # Render with any bundled example/test values files, if present.
           if ls "${{ matrix.chart }}"/examples/*.yaml >/dev/null 2>&1; then
             for values in "${{ matrix.chart }}"/examples/*.yaml; do
               echo "Testing with $(basename "$values")"
-              helm template test "${{ matrix.chart }}" -f "$values" > /dev/null
+              helm template test "${{ matrix.chart }}" "${template_args[@]}" -f "$values" > /dev/null
             done
           fi
