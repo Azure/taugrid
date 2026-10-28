@@ -21,6 +21,8 @@ WAIT_TIMEOUT="${TAU_KIND_WAIT_TIMEOUT:-180s}"
 RAY_WAIT_TIMEOUT="${TAU_KIND_RAY_WAIT_TIMEOUT:-600s}"
 TAUGRID_RELEASE="${TAU_KIND_TAUGRID_RELEASE:-taugrid-kind}"
 TAUGRID_NAMESPACE="${TAU_KIND_TAUGRID_NAMESPACE:-tau-system}"
+KUEUE_RELEASE="${TAU_KIND_KUEUE_RELEASE:-taugrid-kueue}"
+KUEUE_NAMESPACE="${TAU_KIND_KUEUE_NAMESPACE:-kueue-system}"
 TAU_BIN="${TAU_BIN:-${TAU_DIR}/bin/tau}"
 KIND_GET_TIMEOUT_SECONDS="${TAU_KIND_GET_TIMEOUT_SECONDS:-30}"
 KIND_DELETE_TIMEOUT_SECONDS="${TAU_KIND_DELETE_TIMEOUT_SECONDS:-180}"
@@ -408,7 +410,7 @@ fi
   "$REPO_ROOT/charts/taugrid-kueue"
 
 KUEUE_IMAGE="$(tau_kind_render_image \
-  "$KUBE_CONTEXT" taugrid-kueue "$REPO_ROOT/charts/taugrid-kueue" kueue-system \
+  "$KUBE_CONTEXT" "$KUEUE_RELEASE" "$REPO_ROOT/charts/taugrid-kueue" "$KUEUE_NAMESPACE" \
   charts/kueue/templates/manager/manager.yaml)"
 KUBERAY_IMAGE="$(tau_kind_render_image \
   "$KUBE_CONTEXT" "$TAUGRID_RELEASE" "$REPO_ROOT/charts/taugrid" "$TAUGRID_NAMESPACE" \
@@ -429,6 +431,7 @@ install_taugrid() {
   "$TAU_BIN" cluster install \
   --chart "$REPO_ROOT/charts/taugrid" \
   --kueue-chart "$REPO_ROOT/charts/taugrid-kueue" \
+  --kueue-release "$KUEUE_RELEASE" \
   --version 0.4.7 \
   --release "$TAUGRID_RELEASE" \
   --namespace "$TAUGRID_NAMESPACE" \
@@ -457,8 +460,8 @@ kubectl --context "$KUBE_CONTEXT" wait \
   crd/workloads.kueue.x-k8s.io \
   --timeout=120s
 kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" rollout status deploy/kuberay-operator --timeout=180s
-kubectl --context "$KUBE_CONTEXT" -n "$TAUGRID_NAMESPACE" rollout status \
-  "deploy/${TAUGRID_RELEASE}-kueue-controller-manager" --timeout=180s
+kubectl --context "$KUBE_CONTEXT" -n "$KUEUE_NAMESPACE" rollout status \
+  deploy/kueue-controller-manager --timeout=180s
 
 kubectl --context "$KUBE_CONTEXT" apply -f "$EXAMPLE_DIR/kind-kueue-lanes.yaml"
 kubectl --context "$KUBE_CONTEXT" patch cluster.tau.azure.com cluster \
