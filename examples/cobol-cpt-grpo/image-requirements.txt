@@ -1,7 +1,7 @@
-vllm==0.28.0
+vllm==0.32.0
 torch==2.13.0+cu130
 transformers==5.15.1
-accelerate==1.14.0
+accelerate==1.15.0
 huggingface_hub==1.28.0
 sentencepiece==0.2.2
 protobuf==6.33.6
@@ -28,5 +28,5 @@ py-spy==0.4.2
 python-discovery==1.6.1
 smart_open==8.0.2
 tensorboardX==2.6.5
-virtualenv==21.14.9
+virtualenv==21.14.13
 wrapt==2.5.0
