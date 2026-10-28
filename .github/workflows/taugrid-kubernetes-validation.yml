@@ -4,31 +4,9 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - .github/workflows/taugrid-kubernetes-validation.yml
-      - charts/tau-core-controller/**
-      - charts/taugrid/**
-      - charts/taugrid-core/**
-      - cli/**
-      - controllers/tau-core/**
-      - core/**
-      - examples/**
-      - images/tau-core-controller/**
-      - scripts/ci/vendor-taugrid-dependencies.sh
   push:
     branches:
       - main
-    paths:
-      - .github/workflows/taugrid-kubernetes-validation.yml
-      - charts/tau-core-controller/**
-      - charts/taugrid/**
-      - charts/taugrid-core/**
-      - cli/**
-      - controllers/tau-core/**
-      - core/**
-      - examples/**
-      - images/tau-core-controller/**
-      - scripts/ci/vendor-taugrid-dependencies.sh
   workflow_dispatch:
 
 concurrency:
@@ -45,8 +23,29 @@ env:
   KIND_LINUX_AMD64_SHA256: 50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54
 
 jobs:
+  scope:
+    name: Kubernetes / Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.scope.outputs.enabled }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Detect validation scope
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/validation-scope.sh kubernetes
+
   controller-smoke:
     name: Controller smoke
+    needs: scope
+    if: needs.scope.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -81,6 +80,8 @@ jobs:
 
   runtime-smoke:
     name: Runtime smoke
+    needs: scope
+    if: needs.scope.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -114,17 +115,27 @@ jobs:
         run: make -C cli test-kind-e2e
 
   required:
-    name: Required
+    name: TauGrid Kubernetes Required
     if: always()
     needs:
+      - scope
       - controller-smoke
       - runtime-smoke
     runs-on: ubuntu-latest
     steps:
       - name: Check validation result
         env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          SCOPE_ENABLED: ${{ needs.scope.outputs.enabled }}
           CONTROLLER_SMOKE_RESULT: ${{ needs.controller-smoke.result }}
           RUNTIME_SMOKE_RESULT: ${{ needs.runtime-smoke.result }}
         run: |
-          test "${CONTROLLER_SMOKE_RESULT}" = success
-          test "${RUNTIME_SMOKE_RESULT}" = success
+          set -euo pipefail
+          test "${SCOPE_RESULT}" = success
+          case "${SCOPE_ENABLED}" in
+            true) expected=success ;;
+            false) expected=skipped ;;
+            *) exit 1 ;;
+          esac
+          test "${CONTROLLER_SMOKE_RESULT}" = "$expected"
+          test "${RUNTIME_SMOKE_RESULT}" = "$expected"

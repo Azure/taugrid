@@ -8,8 +8,10 @@
   },
   "scripts": {
     "dev": "vite",
+    "prebuild": "npm run test:registry",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "test:registry": "node --test scripts/check-registry.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

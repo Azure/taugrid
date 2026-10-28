@@ -103,6 +103,8 @@ build:
 	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go build ./...
 
 test:
+	bash scripts/ci/tests/required-gates-contract_test.sh
+	bash scripts/ci/tests/dependency-sources-contract_test.sh
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh
 	bash scripts/ci/tests/image-build-contract_test.sh

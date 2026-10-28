@@ -81,8 +81,8 @@ discover_logs() {
 
 cleanup() {
   local pid
-  for pid in "${tail_pids[@]:-}"; do
-    kill "$pid" 2>/dev/null || true
+  for pid in "${tail_pids[@]:-}" "${!:-}"; do
+    kill -KILL "$pid" 2>/dev/null || true
   done
   wait || true
 }
@@ -128,6 +128,7 @@ tau_driver_child=""
 tau_driver_signal_status=""
 tau_driver_forward_signal() {
   if [ -n "${tau_driver_child:-}" ]; then
+    kill -TERM "$tau_driver_child" 2>/dev/null || true
     kill -TERM -- "-$tau_driver_child" 2>/dev/null || true
     wait "$tau_driver_child"
     tau_driver_signal_status="$?"
@@ -136,6 +137,8 @@ tau_driver_forward_signal() {
 trap tau_complete_driver_logs EXIT
 trap tau_driver_forward_signal TERM INT
 (
+trap 'exit 143' TERM
+trap 'exit 130' INT
 %s
 ) &
 tau_driver_child="$!"

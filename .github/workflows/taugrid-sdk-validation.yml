@@ -93,7 +93,7 @@ jobs:
         run: python -m build
 
   required:
-    name: Required
+    name: TauGrid SDK Required
     if: always()
     needs:
       - lint
