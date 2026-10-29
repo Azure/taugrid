@@ -16,6 +16,7 @@ const (
 	LabelAcceleratorDomain  = "tau.azure.com/accelerator-domain"
 	LabelInfiniband         = "tau.azure.com/infiniband"
 	LabelDiscoverGPUFlavors = "tau.azure.com/discover-gpu-flavors"
+	LabelUseGPUTopology     = "tau.azure.com/use-gpu-topology"
 
 	AnnotationApproved             = "tau.azure.com/approved"
 	AnnotationRejected             = "tau.azure.com/rejected"

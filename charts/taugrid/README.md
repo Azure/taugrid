@@ -172,6 +172,16 @@ number of GPU Nodes they represent. For upgrade compatibility, omitting that
 resource renders zero slot quota, which safely leaves multi-node torchrun
 pending until the operator configures it.
 
+Existing operator-managed ClusterQueues can independently opt into
+`taugrid-gpu-topology` with the label `tau.azure.com/use-gpu-topology=true`.
+This preserves existing quotas and copies eligible GPU ResourceFlavors rather
+than editing their immutable topology references. Migration requires a paused,
+reservation-free queue; the controller does not pause or resume it. Queues
+without this label are unchanged. Cohort and TauWorkspace-managed queue
+migrations must go through their quota authority. See
+[the safe migration procedure](../../site/content/en/docs/platform-admin-guide/policy-and-placement.md#opt-an-existing-clusterqueue-into-gpu-topology).
+This opt-in does not enable GPU capacity discovery or infer shared fabrics.
+
 When topology is enabled, only GPU flavors carry `topologyName`. Every Tau GPU
 workload explicitly selects `unconstrained`, `same-host`,
 `same-accelerator-domain`, `same-network-domain`, or `same-site`; ResourceFlavors advertise TAS capability

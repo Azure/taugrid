@@ -110,6 +110,49 @@ TauGrid creates one controller-owned Topology named `taugrid-gpu-topology`
 with the levels `tau.azure.com/site`, `tau.azure.com/network-domain`,
 `tau.azure.com/accelerator-domain`, and `kubernetes.io/hostname`.
 
+### Opt an existing ClusterQueue into GPU topology
+
+Set `tau.azure.com/use-gpu-topology=true` on a standalone, operator-managed
+ClusterQueue. The controller copies its positive-GPU-quota flavors to
+`taugrid-topology-<source-flavor>` with `topologyName: taugrid-gpu-topology`,
+then swaps the queue's flavor references. This avoids editing immutable
+ResourceFlavors. Selectors, taints, tolerations, quotas, ordering, and
+flavor-specific admission checks are preserved. CPU-only and zero-GPU flavors,
+original flavors, and non-opted-in queues stay unchanged.
+
+Pause the queue and opt in:
+
+```bash
+kubectl patch clusterqueue <queue> --type=merge \
+  -p '{"metadata":{"labels":{"tau.azure.com/use-gpu-topology":"true"}},"spec":{"stopPolicy":"Hold"}}'
+kubectl get clusters.tau.azure.com cluster -o yaml
+kubectl get clusterqueue <queue> -o yaml
+kubectl get resourceflavor -o \
+  custom-columns=NAME:.metadata.name,TOPOLOGY:.spec.topologyName
+```
+
+Migration waits for Kueue's `Active=False`, reason `Stopped`, for the current
+queue generation, with no reservations or admitted workloads. Running workloads
+are not evicted. Resolve any `GPUQueueTopologyReconcileFailed` condition and
+verify that the queue references the topology-bound copies before resuming:
+
+```bash
+kubectl patch clusterqueue <queue> --type=merge \
+  -p '{"spec":{"stopPolicy":"None"}}'
+```
+
+The controller never pauses or resumes queues itself. Already-bound flavors
+need no migration; observe-only mode reports drift without writes. This label
+does not enable capacity discovery or infer shared fabrics.
+
+Cohort and TauWorkspace-managed queues must migrate through their quota
+authority instead. Persist the label and new references in GitOps if applicable.
+Copies are placement snapshots, not mirrors: removing the label does not revert
+references or delete flavors. Rollback requires pausing and draining reservations
+again, then explicitly restoring the original references.
+
+### Baseline GPU discovery
+
 The baseline queue contains the non-TAS CPU flavor `taugrid-default-cpu` with
 zero GPU quota. `tau-core-controller` discovers GPU Nodes and creates one
 topology-aware ResourceFlavor per distinct `tau.azure.com/gpu-class`. Initial
