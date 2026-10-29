@@ -11,6 +11,7 @@ readonly CHARTS=(
   charts/gpu-monitoring
   charts/taugrid-core
   charts/adx-mon
+  charts/taugrid-kueue
   charts/taugrid
 )
 
@@ -37,7 +38,7 @@ package_charts() {
 
   for chart in "${CHARTS[@]}"; do
     echo "Validating ${chart}"
-    if [[ "$chart" == "charts/taugrid" ]]; then
+    if [[ "$chart" == "charts/taugrid" || "$chart" == "charts/taugrid-kueue" ]]; then
       scripts/ci/vendor-taugrid-dependencies.sh "$chart"
     else
       helm dependency build "$chart"
@@ -46,7 +47,11 @@ package_charts() {
     if [[ -f "${chart}/tests/scripts_test.sh" ]]; then
       bash "${chart}/tests/scripts_test.sh"
     fi
-    helm template test "$chart" > /dev/null
+    if [[ "$chart" == "charts/taugrid-kueue" ]]; then
+      helm template test "$chart" --namespace kueue-system > /dev/null
+    else
+      helm template test "$chart" > /dev/null
+    fi
     helm package "$chart" --destination "$output_dir"
   done
 }

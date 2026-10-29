@@ -22,8 +22,8 @@ routing.
 |---|---|
 | TauGrid | Chart and images `0.4.x` from the same release |
 | Kubernetes | `1.30` or newer, matching the TauGrid chart constraint |
-| Kueue | TauGrid-pinned AKS chart and controller `0.19.2` |
-| KubeRay | TauGrid-pinned operator `1.6.2` for RayJob dispatch |
+| Kueue | `taugrid-kueue` `0.4.x`, pinning AKS-composed Kueue `0.19.10-aks.0.9.2` and controller `v0.19.10-1` |
+| KubeRay | TauGrid-pinned AKS-composed chart `1.7.0-aks.0.1.3` and operator `v1.7.0-5` for RayJob dispatch |
 | Platform | AKS manager and workers with operator-managed identities, networking, storage, GPU drivers, and compatible CRDs |
 
 Use the same Kubernetes, Kueue, KubeRay, and workload CRD minor versions on the
@@ -32,16 +32,12 @@ contract.
 
 ## Platform-owner configuration
 
-The standard `taugrid` installation enables the pinned Kueue MultiKueue
-controller capability and gives the Tau controller read-only access to its
-prerequisites:
+The standard self-managed installation enables the pinned Kueue MultiKueue
+controller capability in a separate `kueue-system` release and gives the Tau
+controller read-only access to its prerequisites:
 
 ```bash
-helm upgrade --install taugrid \
-  oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.7 \
-  --namespace tau-system --create-namespace \
-  --wait --atomic
+tau cluster install --wait --atomic
 ```
 
 There is no separate values file or approval list. The standard installation

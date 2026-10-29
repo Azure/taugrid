@@ -42,69 +42,7 @@ baselineQueue:
       - tau.azure.com/torchrun-host-slot
     flavors: []
 
-kueue:
-  aksExtension:
-    enableMultiKueue: true
-  controllerManager:
-    manager:
-      image:
-        repository: mcr.microsoft.com/oss/v2/kueue/kueue
-        tag: v0.19.2
-        pullPolicy: IfNotPresent
-  managerConfig:
-    controllerManagerConfigYaml: |-
-      apiVersion: config.kueue.x-k8s.io/v1beta2
-      kind: Configuration
-      health:
-        healthProbeBindAddress: :8081
-      metrics:
-        bindAddress: :8443
-      webhook:
-        port: 9443
-      leaderElection:
-        leaderElect: true
-        resourceName: c1f6bfd2.kueue.x-k8s.io
-      controller:
-        groupKindConcurrency:
-          Job.batch: 5
-          Pod: 5
-          Workload.kueue.x-k8s.io: 5
-          LocalQueue.kueue.x-k8s.io: 1
-          ClusterQueue.kueue.x-k8s.io: 1
-          ResourceFlavor.kueue.x-k8s.io: 1
-      clientConnection:
-        qps: 50
-        burst: 100
-      integrations:
-        frameworks:
-          - batch/job
-          - kubeflow.org/mpijob
-          - ray.io/rayjob
-          - ray.io/rayservice
-          - ray.io/raycluster
-          - jobset.x-k8s.io/jobset
-          - trainer.kubeflow.org/trainjob
-          - kubeflow.org/paddlejob
-          - kubeflow.org/pytorchjob
-          - kubeflow.org/tfjob
-          - kubeflow.org/xgboostjob
-          - kubeflow.org/jaxjob
-          - workload.codeflare.dev/appwrapper
-          - pod
-          - deployment
-          - statefulset
-          - leaderworkerset.x-k8s.io/leaderworkerset
-      resources:
-        deviceClassMappings:
-          - name: gpu.nvidia.com
-            deviceClassNames:
-              - gpu.nvidia.com
-
 kuberay-operator:
-  image:
-    repository: mcr.microsoft.com/oss/v2/kuberay/operator
-    tag: v1.6.2
-    pullPolicy: IfNotPresent
   podAnnotations:
     adx-mon/scrape: "true"
     adx-mon/port: "8080"

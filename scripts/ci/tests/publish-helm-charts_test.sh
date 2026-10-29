@@ -51,10 +51,17 @@ mkdir -p \
   "${ISOLATED_REPO}/charts/gpu-monitoring" \
   "${ISOLATED_REPO}/charts/taugrid-core" \
   "${ISOLATED_REPO}/charts/adx-mon" \
+  "${ISOLATED_REPO}/charts/taugrid-kueue" \
   "${ISOLATED_REPO}/charts/taugrid" \
   "$PACKAGE_DIR" \
   "${TEST_ROOT}/bin"
 cp "${TEST_DIR}/../publish-helm-charts.sh" "${ISOLATED_REPO}/scripts/ci/"
+cat >"${ISOLATED_REPO}/scripts/ci/vendor-taugrid-dependencies.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+EOF
+chmod +x "${ISOLATED_REPO}/scripts/ci/vendor-taugrid-dependencies.sh"
 
 write_chart() {
   local name="$1"
@@ -71,6 +78,7 @@ write_chart tau-core-controller 0.3.0
 write_chart gpu-monitoring 0.1.4
 write_chart taugrid-core 0.3.0
 write_chart adx-mon 0.3.3
+write_chart taugrid-kueue 0.3.0
 write_chart taugrid 0.3.0
 
 cat >"${TEST_ROOT}/bin/helm" <<'EOF'
@@ -163,7 +171,7 @@ run_publish() {
 
 : >"$COMMAND_LOG"
 existing_output=$(run_publish)
-for chart in tau-core-controller gpu-monitoring taugrid-core adx-mon taugrid; do
+for chart in tau-core-controller gpu-monitoring taugrid-core adx-mon taugrid-kueue taugrid; do
   version=$(awk '$1 == "version:" {print $2; exit}' \
     "${ISOLATED_REPO}/charts/${chart}/Chart.yaml")
   assert_output_contains "$existing_output" \

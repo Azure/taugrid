@@ -110,6 +110,14 @@ and a compatible CSI driver registered on every eligible node if workloads
 need PVCs), then continue with
 [TauGrid installation](../kubernetes/#3-install-taugrid).
 
+AKS 1.34 or later can instead use the preview managed Kueue and KubeRay
+extensions. Follow the
+[`aks-managed-extensions` recipe](https://github.com/Azure/taugrid/tree/main/examples/aks-managed-extensions)
+to install and verify both extensions before installing TauGrid with its
+duplicate Helm-managed controllers disabled. Keep this path separate from the
+default self-managed chart installation; neither controller may have two
+owners in one cluster.
+
 ## AKS storage drivers and Flex nodes
 
 Normal AKS agent pools receive AKS node metadata and bootstrap integration used

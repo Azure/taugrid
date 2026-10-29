@@ -188,29 +188,11 @@ helm template namespace-check "$TEST_CHART_DIR" \
   --include-crds >"$default_manifest"
 assert_namespaces "$default_manifest" custom-system kube-system
 
-for required in \
-  'name: multikueueclusters.kueue.x-k8s.io' \
-  'name: multikueueconfigs.kueue.x-k8s.io' \
-  'manager-clusterprofiles-role' \
-  'manager-secrets-role' \
-  '      - multikueueclusters' \
-  '      - multikueueconfigs' \
-  '--feature-gates=MultiKueue=true'; do
-  grep -Fq -- "$required" "$default_manifest" ||
-    fail "default render is missing the MultiKueue capability: $required"
-done
-retained_crd_count="$(grep -c 'helm.sh/resource-policy: keep' "$default_manifest")"
-[[ "$retained_crd_count" -eq 11 ]] ||
-  fail "expected all 11 Kueue CRDs to retain the Helm keep policy, got $retained_crd_count"
-if grep -Eq $'^(AdmissionCheck|MultiKueueConfig|MultiKueueCluster)\t' < <(render_objects "$default_manifest"); then
-  fail "default render created operator-owned MultiKueue routing objects implicitly"
-fi
-if grep -Ei $'^Secret\t.*(multikueue|worker)' < <(render_objects "$default_manifest"); then
-  fail "default render created operator-owned worker credentials implicitly"
+if grep -Fq 'helm.sh/chart: kueue-' "$default_manifest"; then
+  fail "TauGrid umbrella rendered Kueue instead of leaving it in kueue-system"
 fi
 
 for deployment in \
-  namespace-check-kueue-controller-manager \
   kuberay-operator \
   tau-core-controller \
   tau-portal; do

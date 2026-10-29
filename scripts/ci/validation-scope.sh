@@ -48,6 +48,7 @@ case "$suite" in
       .github/workflows/taugrid-kubernetes-validation.yml
       'charts/tau-core-controller/**'
       'charts/taugrid/**'
+      'charts/taugrid-kueue/**'
       'charts/taugrid-core/**'
       'cli/**'
       'controllers/tau-core/**'

@@ -22,6 +22,11 @@ func runCluster(t *testing.T, args ...string) (string, error) {
 	return strings.TrimSpace(out.String() + stderr.String()), err
 }
 
+func runClusterInstallExternal(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	return runCluster(t, append([]string{"install", "--kueue-mode", kueueModeExternal}, args...)...)
+}
+
 type releaseFixture struct {
 	Release  string
 	Values   string

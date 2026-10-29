@@ -36,7 +36,7 @@ Toggle sub-charts with `components.<key>.enabled`:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `components.kueue.enabled` | `true` | Kueue job scheduler |
+| `components.kueue.enabled` | `true` | Records ownership of the separate self-managed Kueue release |
 | `components.kuberayOperator.enabled` | `true` | KubeRay operator |
 | `components.tauCoreController.enabled` | `true` | Tau core controller (TauWorkspace, TauCluster) |
 | `components.taugridCore.enabled` | `true` | Include the services chart, including the default Portal |
@@ -153,8 +153,7 @@ The remaining top-level keys pass values directly to embedded sub-charts:
 
 | Prefix | Sub-chart | Common overrides |
 | --- | --- | --- |
-| `kueue.*` | Kueue v0.18 | `controllerManager.manager.image`, `managerConfig` |
-| `kuberay-operator.*` | KubeRay v1.6 | `image`, `configuration`, `podAnnotations` |
+| `kuberay-operator.*` | AKS-aligned KubeRay v1.7 | `image`, `configuration`, `podAnnotations` |
 | `tau-core-controller.*` | Tau controller | `image`, `tauCluster.nodeLabelRules` |
 | `taugrid-core.*` | Services chart | `prewarm.enabled`, `stellar.enabled`, `portal.enabled` |
 | `gpu-monitoring.*` | GPU monitoring | `gpuSkus`, `daemonset`, `metricsCollector`, `namespace` |

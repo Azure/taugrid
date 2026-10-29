@@ -20,6 +20,27 @@ func TestKindSmokeProtectsKubeRayOperatorFromWorkloadPreemption(t *testing.T) {
 	}
 }
 
+func TestKindSmokeWaitsForSeparateKueueRelease(t *testing.T) {
+	script, err := os.ReadFile("../../scripts/kind-smoke-e2e.sh")
+	if err != nil {
+		t.Fatalf("read kind smoke script: %v", err)
+	}
+	for _, want := range []string{
+		`KUEUE_RELEASE="${TAU_KIND_KUEUE_RELEASE:-taugrid-kueue}"`,
+		`KUEUE_NAMESPACE="${TAU_KIND_KUEUE_NAMESPACE:-kueue-system}"`,
+		`--kueue-release "$KUEUE_RELEASE"`,
+		`-n "$KUEUE_NAMESPACE" rollout status`,
+		`deploy/kueue-controller-manager --timeout=180s`,
+	} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("runtime smoke missing separate Kueue release contract %q", want)
+		}
+	}
+	if strings.Contains(string(script), `${TAUGRID_RELEASE}-kueue-controller-manager`) {
+		t.Fatal("runtime smoke still assumes Kueue is an umbrella deployment")
+	}
+}
+
 func TestKindSmokeExercisesRayServiceAndLegacyCRDUpgrade(t *testing.T) {
 	script, err := os.ReadFile("../../scripts/kind-smoke-e2e.sh")
 	if err != nil {

@@ -19,6 +19,8 @@ const (
 	minimumKubernetesMinor = 30
 
 	defaultReadinessQueryTimeout = 30 * time.Second
+	defaultKueueRelease          = "taugrid-kueue"
+	defaultKueueNamespace        = "kueue-system"
 
 	tauControllerName = "tau-core-controller"
 	tauClusterName    = "cluster"
@@ -32,6 +34,8 @@ type Runner interface {
 type Options struct {
 	Release            string
 	SystemNamespace    string
+	KueueRelease       string
+	KueueNamespace     string
 	Timeout            time.Duration
 	PollInterval       time.Duration
 	QueryTimeout       time.Duration
@@ -54,13 +58,12 @@ type chartComponent struct {
 }
 
 var chartComponents = []chartComponent{
-	{name: ComponentKueue, valuesKey: "kueue", chartPrefix: "kueue-"},
 	{name: ComponentKubeRay, valuesKey: "kuberayOperator", chartPrefix: "kuberay-operator-"},
 }
 
 var componentSwitches = []chartComponent{
+	{name: ComponentKueue, valuesKey: "kueue"},
 	chartComponents[0],
-	chartComponents[1],
 	{name: ComponentTauCore, valuesKey: "tauCoreController"},
 }
 
@@ -211,10 +214,28 @@ func validateOptions(opts Options) error {
 func Check(ctx context.Context, runner Runner, opts Options) Report {
 	runner = boundedRunner{runner: runner, timeout: readinessQueryTimeout(opts)}
 	results := make([]Result, 0, 8)
+	kueueRelease := opts.KueueRelease
+	if kueueRelease == "" {
+		kueueRelease = defaultKueueRelease
+	}
+	kueueNamespace := opts.KueueNamespace
+	if kueueNamespace == "" {
+		kueueNamespace = defaultKueueNamespace
+	}
 
 	results = append(results, checkKubernetesVersion(ctx, runner))
 
 	deployments, listErr := getDeploymentList(ctx, runner, opts.SystemNamespace, opts.Release)
+	if slices.Contains(opts.DisabledComponents, ComponentKueue) {
+		results = append(results, skip("Kueue", "components.kueue.enabled is false in the Helm release"))
+	} else {
+		kueueDeployments, kueueErr := getDeploymentList(ctx, runner, kueueNamespace, kueueRelease)
+		if kueueErr != nil {
+			results = append(results, fail("Kueue", fmt.Sprintf("%v; inspect with kubectl -n %s get deploy", kueueErr, kueueNamespace)))
+		} else {
+			results = append(results, checkChartDeployment("Kueue", kueueDeployments, "kueue-"))
+		}
+	}
 	for _, component := range chartComponents {
 		name := string(component.name)
 		switch {
