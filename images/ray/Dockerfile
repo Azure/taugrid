@@ -25,7 +25,8 @@ COPY --from=wget-builder /tmp/wget-*/src/wget /usr/bin/wget
 
 RUN tdnf install -y ca-certificates which gcc gcc-c++ binutils glibc-devel kernel-headers \
         ninja-build python3-devel \
-        rdma-core libibverbs librdmacm && tdnf clean all
+        rdma-core libibverbs librdmacm && tdnf clean all \
+    && ln -sf "$(command -v python3)" /usr/local/bin/python
 
 ENV SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 ENV CURL_CA_BUNDLE=/etc/pki/tls/certs/ca-bundle.crt

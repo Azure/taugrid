@@ -25,6 +25,10 @@ The image runs as the `nonroot` user and exposes Ray's default ports:
 | 8265 | Dashboard |
 | 10001 | Client |
 
+`/usr/local/bin/python` links to the installed `python3` interpreter. This
+supports KubeRay's generated job-submitter health check and driver entrypoints
+that invoke bare `python`.
+
 ## Project Structure
 
 ```
