@@ -40,7 +40,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/oss/v2/kuberay/operator:v1.6.2
+          value: mcr.microsoft.com/oss/v2/kuberay/operator:v1.7.0
       - equal:
           path: spec.template.metadata.annotations["adx-mon/scrape"]
           value: "true"
