@@ -115,12 +115,14 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	selected := o.selectedWorkloadProfile
 	var p profile.Profile
 	resolvedProfileName := ""
+	expectedClusterQueue := o.workspaceClusterQueue
 	if selected != nil {
 		if err := validateSelectedWorkloadProfileMode(selected, o.dryRun); err != nil {
 			return err
 		}
 		p = selected.Render
 		resolvedProfileName = selected.Selection.Profile.Name
+		expectedClusterQueue = selected.ClusterQueue
 	} else if o.directJobProfile != nil {
 		p = *o.directJobProfile
 	} else {
@@ -365,7 +367,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 			ns,
 			manifest,
 			&opts,
-			queueValidationPolicy{ClusterQueue: selected.ClusterQueue},
+			queueValidationPolicy{ClusterQueue: expectedClusterQueue},
 			renderJob,
 		)
 		if err != nil {
