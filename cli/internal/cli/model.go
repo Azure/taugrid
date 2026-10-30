@@ -925,7 +925,8 @@ mkdir -p "$(dirname "$path")"
 printf '%s' "$payload" | base64 -d > "$tmp"
 mv "$tmp" "$path"
 `
-	podYAML, err := helperPodYAML(helperPodSpec{
+	r := kube.New(kubeContext)
+	podYAML, err := helperPodYAMLForPVC(ctx, r, helperPodSpec{
 		Name:       podName,
 		Namespace:  namespace,
 		LabelApp:   "tau-pvc-write",
@@ -938,7 +939,6 @@ mv "$tmp" "$path"
 	if err != nil {
 		return fmt.Errorf("render helper pod: %w", err)
 	}
-	r := kube.New(kubeContext)
 	if _, err := r.Raw(ctx, []string{"apply", "-n", namespace, "-f", "-"}, podYAML); err != nil {
 		return fmt.Errorf("create helper pod: %w", err)
 	}

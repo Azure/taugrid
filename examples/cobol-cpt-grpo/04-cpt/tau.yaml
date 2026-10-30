@@ -1,0 +1,65 @@
+name: cobol-cpt
+engine: rayjob
+run:
+  entrypoint: driver.py
+  working_dir: .
+  working_dir_excludes:
+    - __pycache__
+    - .pytest_cache
+    - .ruff_cache
+    - test_*.py
+
+experiment:
+  project: cobol-cpt-grpo
+  name: cpt
+  group: cpt-ray-zero3
+
+runtime:
+  image: registry.example.com/cobol-train:v0.28.0-ray2.56.0
+  rdma:
+    enabled: true
+  env:
+    MODEL_ID: Qwen/Qwen2.5-Coder-32B
+    TRAIN_FILE: /data/datasets/cobol/prepared/train.jsonl
+    VAL_FILE: /data/datasets/cobol/prepared/val.jsonl
+    OUTPUT_DIR: /data/projects/taugrid-default/runs/cobol-cpt-grpo/cpt
+    EPOCHS: "3"
+    LR: "2e-5"
+    BATCH_SIZE: "4"
+    GRAD_ACCUM: "4"
+    MAX_SEQ_LEN: "4096"
+    SAVE_STEPS: "25"
+    WARMUP_RATIO: "0.05"
+    WEIGHT_DECAY: "0.1"
+    PYTHONUNBUFFERED: "1"
+    HF_HOME: /tmp/hf-cache
+    NCCL_DEBUG: INFO
+    NCCL_SOCKET_IFNAME: eth0
+    NCCL_IB_HCA: mlx5
+    NCCL_IB_GID_INDEX: "3"
+    NCCL_NET_GDR_LEVEL: "5"
+    NCCL_ALGO: Ring
+    NCCL_IB_QPS_PER_CONNECTION: "4"
+    NCCL_IB_SPLIT_DATA_ON_QPS: "1"
+    NCCL_IB_TIMEOUT: "22"
+    NCCL_TIMEOUT: "1800000"
+
+execution:
+  launcher: ray-train
+  allow_nccl_override: true
+
+compute:
+  workers: 2
+  gpus_per_worker: 8
+  worker_cpu_request: "32"
+  worker_memory_request: 768Gi
+  worker_cpu_limit: "64"
+  worker_memory_limit: 1500Gi
+
+storage:
+  data_pvc: workspace-data
+  output: /data/projects/taugrid-default/runs/cobol-cpt-grpo/cpt
+
+policy:
+  workspace: taugrid-default
+  topology: same-network-domain

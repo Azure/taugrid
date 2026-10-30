@@ -25,3 +25,6 @@ portal/frontend/*.tsbuildinfo
 
 metrics/experiment-metrics-collector/bin/
 metrics/experiment-metrics-collector/taugrid-metrics-collector
+
+__pycache__/
+*.pyc

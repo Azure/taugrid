@@ -1,6 +1,6 @@
 module github.com/Azure/taugrid/metrics/experiment-metrics-collector
 
-go 1.26.5
+go 1.27.2
 
 require (
 	github.com/Azure/azure-kusto-go/azkustodata v1.2.2

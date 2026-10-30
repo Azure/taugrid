@@ -55,6 +55,119 @@ func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	}
 }
 
+func TestValidateRunName(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		engine  string
+		nodes   int
+		wantErr bool
+	}{
+		{name: "omitted", engine: EngineJob},
+		{name: "job minimum", value: "a", engine: EngineJob},
+		{name: "job DNS label maximum", value: strings.Repeat("a", 63), engine: EngineJob},
+		{name: "job dotted DNS subdomain maximum", value: strings.Repeat("a", 31) + "." + strings.Repeat("b", 31), engine: EngineJob},
+		{name: "job over maximum", value: strings.Repeat("a", 64), engine: EngineJob, wantErr: true},
+		{name: "job double dot", value: "train..v1", engine: EngineJob, wantErr: true},
+		{name: "job uppercase", value: "Train-v1", engine: EngineJob, wantErr: true},
+		{name: "job leading hyphen", value: "-train-v1", engine: EngineJob, wantErr: true},
+		{name: "job trailing hyphen", value: "train-v1-", engine: EngineJob, wantErr: true},
+		{name: "multi-node maximum", value: strings.Repeat("a", 54), engine: EngineJob, nodes: 2},
+		{name: "multi-node over maximum", value: strings.Repeat("a", 55), engine: EngineJob, nodes: 2, wantErr: true},
+		{name: "multi-node dotted", value: "train.v1", engine: EngineJob, nodes: 2, wantErr: true},
+		{name: "RayJob maximum", value: strings.Repeat("a", 47), engine: EngineRayJob},
+		{name: "RayJob over maximum", value: strings.Repeat("a", 48), engine: EngineRayJob, wantErr: true},
+		{name: "RayJob dotted", value: "train.v1", engine: EngineRayJob, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRunName(tt.value, tt.engine, tt.nodes)
+			if tt.wantErr && err == nil {
+				t.Fatalf("ValidateRunName(%q, %q, %d) succeeded, want error", tt.value, tt.engine, tt.nodes)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateRunName(%q, %q, %d): %v", tt.value, tt.engine, tt.nodes, err)
+			}
+		})
+	}
+}
+
+func TestValidateDirectResourceQuantities(t *testing.T) {
+	valid := Config{Compute: Compute{
+		CPURequest:     "500m",
+		MemoryRequest:  "128Mi",
+		CPULimit:       "1.5",
+		MemoryLimit:    "1Gi",
+		HeadCPURequest: "0",
+		HeadMemRequest: "0",
+		HeadCPULimit:   "500m",
+		HeadMemLimit:   "128Mi",
+		WorkerCPUReq:   "1.5",
+		WorkerMemReq:   "1Gi",
+		WorkerCPULimit: "0",
+		WorkerMemLimit: "0",
+	}}
+	if err := valid.ValidateDirect(); err != nil {
+		t.Fatalf("valid Kubernetes quantities rejected: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		field string
+		set   func(*Compute)
+	}{
+		{name: "cpu request negative", field: "compute.cpu_request", set: func(c *Compute) { c.CPURequest = "-1" }},
+		{name: "memory request malformed", field: "compute.memory_request", set: func(c *Compute) { c.MemoryRequest = "banana" }},
+		{name: "cpu limit malformed", field: "compute.cpu_limit", set: func(c *Compute) { c.CPULimit = "1 core" }},
+		{name: "memory limit negative", field: "compute.memory_limit", set: func(c *Compute) { c.MemoryLimit = "-1Gi" }},
+		{name: "head cpu request negative", field: "compute.head_cpu_request", set: func(c *Compute) { c.HeadCPURequest = "-1m" }},
+		{name: "head memory request malformed", field: "compute.head_memory_request", set: func(c *Compute) { c.HeadMemRequest = "128Mii" }},
+		{name: "head cpu limit negative", field: "compute.head_cpu_limit", set: func(c *Compute) { c.HeadCPULimit = "-0.5" }},
+		{name: "head memory limit malformed", field: "compute.head_memory_limit", set: func(c *Compute) { c.HeadMemLimit = "1GBB" }},
+		{name: "worker cpu request negative", field: "compute.worker_cpu_request", set: func(c *Compute) { c.WorkerCPUReq = "-2" }},
+		{name: "worker memory request malformed", field: "compute.worker_memory_request", set: func(c *Compute) { c.WorkerMemReq = "lots" }},
+		{name: "worker cpu limit negative", field: "compute.worker_cpu_limit", set: func(c *Compute) { c.WorkerCPULimit = "-500m" }},
+		{name: "worker memory limit malformed", field: "compute.worker_memory_limit", set: func(c *Compute) { c.WorkerMemLimit = "1 Mi" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var compute Compute
+			tt.set(&compute)
+			err := (Config{Compute: compute}).ValidateDirect()
+			if err == nil || !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("ValidateDirect error = %v, want exact field %s", err, tt.field)
+			}
+		})
+	}
+}
+
+func TestValidateDirectResilience(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   Resilience
+		wantErr string
+	}{
+		{name: "defaults"},
+		{name: "zero retries", value: Resilience{MaxRetries: 0}},
+		{name: "positive retries with default reasons", value: Resilience{MaxRetries: 1}},
+		{name: "supported reasons", value: Resilience{MaxRetries: 1, RetryOn: []string{"Preempted", "Evicted", "OOMKilled"}}},
+		{name: "case insensitive reason", value: Resilience{MaxRetries: 1, RetryOn: []string{"preempted"}}},
+		{name: "negative retries", value: Resilience{MaxRetries: -1}, wantErr: "resilience.max_retries must be >= 0"},
+		{name: "unsupported reason", value: Resilience{MaxRetries: 1, RetryOn: []string{"NetworkLost"}}, wantErr: `resilience.retry_on contains unsupported reason "NetworkLost"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (Config{Resilience: tt.value}).ValidateDirect()
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("ValidateDirect() unexpected error: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("ValidateDirect() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestRunTTLSecondsAfterFinished(t *testing.T) {
 	cfg, err := parse([]byte(`name: short-retention
 engine: job
@@ -1009,6 +1122,20 @@ func TestJSONSchemaCoversCoreFields(t *testing.T) {
 	}
 	if !strings.Contains(workingDir["description"].(string), "container.workingDir") {
 		t.Fatalf("runtime.working_dir description does not name the Kubernetes field: %v", workingDir["description"])
+	}
+	for path, name := range map[string]map[string]any{
+		"name":     props["name"].(map[string]any),
+		"run.name": props["run"].(map[string]any)["properties"].(map[string]any)["name"].(map[string]any),
+	} {
+		if _, ok := name["maxLength"]; ok {
+			t.Fatalf("%s must not publish an unconditional maxLength: %v", path, name)
+		}
+		if _, ok := name["pattern"]; ok {
+			t.Fatalf("%s must not publish an unconditional pattern: %v", path, name)
+		}
+		if !strings.Contains(name["description"].(string), "execution target") {
+			t.Fatalf("%s description does not explain target-dependent validation: %v", path, name)
+		}
 	}
 }
 

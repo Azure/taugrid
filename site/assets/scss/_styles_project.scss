@@ -622,6 +622,27 @@ li {
   text-align: right;
 }
 
+.tau-walkthrough {
+  margin: 1.5rem 0;
+}
+
+.tau-walkthrough video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--cp-border);
+  border-radius: 0.75rem;
+  background: var(--cp-surface-soft);
+}
+
+.tau-walkthrough figcaption {
+  margin-top: 0.75rem;
+  color: var(--cp-text-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
 .tau-maturity {
   --tau-maturity-color: var(--cp-success);
 

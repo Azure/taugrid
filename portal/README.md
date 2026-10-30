@@ -75,6 +75,10 @@ markers when no new scalars arrive.
 
 Frontend development and Make-based builds require Node.js 22.20 or newer and npm in
 addition to Go. Dependencies are locked in `frontend/package-lock.json`.
+The frontend pins the public npm registry in `frontend/.npmrc`. Keep locked
+package URLs on `https://registry.npmjs.org/` so contributors and dependency
+automation do not need access to a package mirror. `npm run test:registry` checks
+this contract and runs automatically before frontend builds.
 
 ```bash
 cd portal

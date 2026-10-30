@@ -21,6 +21,8 @@ import (
 	offloadcontract "github.com/Azure/taugrid/core/metricsoffload"
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type Config struct {
@@ -137,6 +139,48 @@ func NormalizeRDMA(cfg RDMA) NormalizedRDMA {
 	return NormalizedRDMA{Enabled: true}
 }
 
+const (
+	MaxJobRunNameLength          = validation.DNS1123LabelMaxLength
+	MaxMultiNodeJobRunNameLength = 54
+	MaxRayJobRunNameLength       = 47
+)
+
+func ValidateRunName(value, engine string, nodes int) error {
+	if value == "" {
+		return nil
+	}
+	normalizedEngine, err := NormalizeEngine(engine)
+	if err != nil {
+		return err
+	}
+	switch normalizedEngine {
+	case "", EngineJob:
+		if nodes > 1 {
+			if problems := validation.IsDNS1123Label(value); len(problems) > 0 {
+				return fmt.Errorf("run name %q for a multi-node Job must be a valid Kubernetes DNS label: %s", value, strings.Join(problems, "; "))
+			}
+			if len(value) > MaxMultiNodeJobRunNameLength {
+				return fmt.Errorf("run name %q is too long for multi-node Job dispatch: the generated headless Service name must fit the 63-character DNS label limit; maximum run name length is %d", value, MaxMultiNodeJobRunNameLength)
+			}
+			return nil
+		}
+		if problems := validation.IsDNS1123Subdomain(value); len(problems) > 0 {
+			return fmt.Errorf("run name %q for a Job must be a valid Kubernetes DNS subdomain: %s", value, strings.Join(problems, "; "))
+		}
+		if len(value) > MaxJobRunNameLength {
+			return fmt.Errorf("run name %q is too long for a Job: maximum length is %d", value, MaxJobRunNameLength)
+		}
+	case EngineRayJob:
+		if problems := validation.IsDNS1123Label(value); len(problems) > 0 {
+			return fmt.Errorf("run name %q for a RayJob must be a valid Kubernetes DNS label: %s", value, strings.Join(problems, "; "))
+		}
+		if len(value) > MaxRayJobRunNameLength {
+			return fmt.Errorf("run name %q is too long for a RayJob: KubeRay supports at most %d characters", value, MaxRayJobRunNameLength)
+		}
+	}
+	return nil
+}
+
 const SecurityModeRestricted = "restricted"
 
 type Security struct {
@@ -178,6 +222,45 @@ type Compute struct {
 	WorkerMemReq    string `yaml:"worker_memory_request"`
 	WorkerCPULimit  string `yaml:"worker_cpu_limit"`
 	WorkerMemLimit  string `yaml:"worker_memory_limit"`
+}
+
+func (c Compute) ValidateResourceQuantities() error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "compute.cpu_request", value: c.CPURequest},
+		{name: "compute.memory_request", value: c.MemoryRequest},
+		{name: "compute.cpu_limit", value: c.CPULimit},
+		{name: "compute.memory_limit", value: c.MemoryLimit},
+		{name: "compute.head_cpu_request", value: c.HeadCPURequest},
+		{name: "compute.head_memory_request", value: c.HeadMemRequest},
+		{name: "compute.head_cpu_limit", value: c.HeadCPULimit},
+		{name: "compute.head_memory_limit", value: c.HeadMemLimit},
+		{name: "compute.worker_cpu_request", value: c.WorkerCPUReq},
+		{name: "compute.worker_memory_request", value: c.WorkerMemReq},
+		{name: "compute.worker_cpu_limit", value: c.WorkerCPULimit},
+		{name: "compute.worker_memory_limit", value: c.WorkerMemLimit},
+	} {
+		if err := ValidateResourceQuantity(field.name, field.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ValidateResourceQuantity(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return fmt.Errorf("%s %q is not a valid Kubernetes resource quantity", field, value)
+	}
+	if quantity.Sign() < 0 {
+		return fmt.Errorf("%s must be >= 0, got %q", field, value)
+	}
+	return nil
 }
 
 type Policy struct {
@@ -298,6 +381,31 @@ type Resilience struct {
 	BackoffMax     Duration `yaml:"backoff_max"`
 }
 
+var resilienceRetryReasons = []string{"Preempted", "Evicted", "OOMKilled"}
+
+func (r Resilience) Validate() error {
+	if r.MaxRetries < 0 {
+		return fmt.Errorf("resilience.max_retries must be >= 0")
+	}
+	for _, reason := range r.RetryOn {
+		supported := false
+		for _, allowed := range resilienceRetryReasons {
+			if strings.EqualFold(reason, allowed) {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return fmt.Errorf(
+				"resilience.retry_on contains unsupported reason %q; supported reasons: %s",
+				reason,
+				strings.Join(resilienceRetryReasons, ", "),
+			)
+		}
+	}
+	return nil
+}
+
 type Duration struct{ time.Duration }
 
 func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
@@ -397,6 +505,12 @@ func (p managedConfigProjection) config() Config {
 func (c Config) ValidateDirect() error {
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
+	}
+	if err := c.Compute.ValidateResourceQuantities(); err != nil {
+		return err
+	}
+	if err := c.Resilience.Validate(); err != nil {
+		return err
 	}
 	if err := ValidateContainerWorkingDir(c.Runtime.WorkingDir); err != nil {
 		return err

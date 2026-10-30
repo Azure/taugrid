@@ -137,8 +137,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: .go-version
+          go-version: "1.27.3-1"
+          go-download-base-url: https://aka.ms/golang/release/latest
           cache: false
+
+      - name: Verify Microsoft Go toolchain
+        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.3-1-microsoft"
 
       - name: Test Go release modules
         run: |
@@ -147,7 +151,7 @@ jobs:
           (cd cli && go test ./...)
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -175,11 +179,15 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version-file: .go-version
+          go-version: "1.27.3-1"
+          go-download-base-url: https://aka.ms/golang/release/latest
           cache: false
 
+      - name: Verify Microsoft Go toolchain
+        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.3-1-microsoft"
+
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 
@@ -516,7 +524,7 @@ jobs:
           ref: ${{ env.RELEASE_SOURCE_REF }}
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
 

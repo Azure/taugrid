@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/taugrid/portal/internal/expapi"
 	"github.com/Azure/taugrid/portal/internal/portal/cluster"
 	"github.com/Azure/taugrid/portal/internal/portal/cost"
+	"github.com/Azure/taugrid/portal/internal/portal/gpuinventory"
 	"github.com/Azure/taugrid/portal/internal/portal/jobdetail"
 	"github.com/Azure/taugrid/portal/internal/portal/jobs"
 	"github.com/Azure/taugrid/portal/internal/portal/links"
@@ -55,6 +56,7 @@ type Options struct {
 	Runs               RunsOptions
 	NodeUtil           NodeUtilOptions
 	Quota              QuotaOptions
+	GPU                GPUOptions
 	WorkspaceDirectory WorkspaceDirectory
 	Identity           IdentityOptions
 	KueueViz           KueueVizOptions
@@ -106,6 +108,13 @@ type QuotaOptions struct {
 	Reader portalquota.Reader
 }
 
+type GPUOptions struct {
+	Reader         gpuinventory.Reader
+	FleetEnabled   bool
+	RequestTimeout time.Duration
+	MaxWorkloads   int
+}
+
 type Server struct {
 	mux                   *http.ServeMux
 	stellar               *expapi.Server
@@ -120,6 +129,7 @@ type Server struct {
 	runs                  RunsOptions
 	nodeUtil              NodeUtilOptions
 	quota                 QuotaOptions
+	gpu                   GPUOptions
 	workspaceDirectory    WorkspaceDirectory
 	identity              IdentityOptions
 	singleWorkspaceScope  WorkspaceScope
@@ -186,6 +196,7 @@ func NewServer(opts Options) (*Server, error) {
 		runs:                  opts.Runs,
 		nodeUtil:              opts.NodeUtil,
 		quota:                 opts.Quota,
+		gpu:                   opts.GPU,
 		workspaceDirectory:    opts.WorkspaceDirectory,
 		identity:              normalizeIdentityOptions(opts.Identity),
 		kueueViz:              opts.KueueViz,
@@ -468,6 +479,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/portal/workspaces", s.handleWorkspaces)
 	s.mux.HandleFunc("/api/portal/overview", s.handleOverview)
 	s.mux.HandleFunc("/api/portal/quota", s.handleQuota)
+	s.mux.HandleFunc("/api/portal/workspace-gpu-workloads", s.handleWorkspaceGPUWorkloads)
+	s.mux.HandleFunc("/api/portal/gpu-consumers", s.handleGPUConsumers)
 	s.mux.HandleFunc("/api/portal/jobs", s.handleJobs)
 	s.mux.HandleFunc("/api/portal/cluster", s.handleCluster)
 	s.mux.HandleFunc("/api/portal/cost", s.handleCost)
@@ -479,6 +492,7 @@ func (s *Server) routes() {
 	for _, p := range rayUnscopedPrefixes {
 		s.mux.HandleFunc(p, handleRayUnscoped)
 	}
+	s.mux.HandleFunc("/api/", handleAPIFallback)
 	s.mux.HandleFunc("/api/portal/nodes", s.handleNodes)
 	s.mux.HandleFunc("/api/portal/nodeutil", s.handleNodeUtil)
 	s.mux.HandleFunc("/api/portal/runs", s.handleRuns)
@@ -498,6 +512,14 @@ func (s *Server) routes() {
 	s.mux.Handle("/api/stellar/", workspaceStellarHandler)
 	s.mux.Handle("/api/v1/stellar/", workspaceStellarHandler)
 	s.mux.Handle("/api/v2/stellar/", workspaceStellarHandler)
+}
+
+func handleAPIFallback(w http.ResponseWriter, r *http.Request) {
+	if rayUnscopedAPIPath(r.URL.Path) {
+		handleRayUnscoped(w, r)
+		return
+	}
+	writeJSONError(w, http.StatusNotFound, "not found")
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {

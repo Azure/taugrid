@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-.PHONY: help build test lint check license-headers \
+.PHONY: help build test lint check license-headers toolchain-pins \
 	install-tau install-tau-cli install-tau-sdk \
 	install-taugrid-portal install-taugrid-metrics-collector \
 	uninstall-tau uninstall-taugrid-portal uninstall-taugrid-metrics-collector \
@@ -23,7 +23,7 @@ TAU_SDK_DIR := $(REPO_ROOT)/sdk/python/python
 TAU_SITE_DIR := $(REPO_ROOT)/site
 PYTHON ?= python3
 HOST_GOARCH := $(shell go env GOARCH)
-STATICCHECK_VERSION := v0.7.0
+STATICCHECK_VERSION := v0.8.2
 GO_COMMAND_FLAGS := -mod=readonly -buildvcs=false
 KIND_CLUSTER_NAME ?= taugrid-dev
 KIND_NAMESPACE ?= tau-system
@@ -62,6 +62,7 @@ help:
 	@echo "  make test                    # run Go, offline E2E, and Python tests"
 	@echo "  make lint                    # lint Go and Python source"
 	@echo "  make check                   # run build, test, lint, and license checks"
+	@echo "  make toolchain-pins          # verify repository Go toolchain pins"
 	@echo "  make install-tau             # install the Tau CLI and optional Python SDK"
 	@echo "  make install-tau-cli         # install the Tau CLI and tau-gen"
 	@echo "  make install-tau-sdk         # install the Python SDK in the active Python"
@@ -102,9 +103,12 @@ build:
 	@cd $(E2E_DIR) && GOFLAGS="$(GO_COMMAND_FLAGS)" go build ./...
 
 test:
+	bash scripts/ci/tests/required-gates-contract_test.sh
+	bash scripts/ci/tests/dependency-sources-contract_test.sh
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh
 	bash scripts/ci/tests/image-build-contract_test.sh
+	bash scripts/ci/tests/go-runtime-default-contract_test.sh
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"
 	@cd $(CORE_DIR) && go test ./...
@@ -139,6 +143,7 @@ lint:
 	@cd $(TAU_SDK_DIR) && $(PYTHON) -m ruff check .
 
 check:
+	$(MAKE) toolchain-pins
 	$(MAKE) build
 	$(MAKE) test
 	$(MAKE) lint
@@ -146,6 +151,9 @@ check:
 
 license-headers:
 	python3 $(REPO_ROOT)/scripts/check-license-headers.py
+
+toolchain-pins:
+	bash $(REPO_ROOT)/scripts/ci/check-go-toolchain-pins.sh
 
 install-tau: install-tau-cli
 	$(MAKE) -C $(TAU_SDK_DIR) install-optional PYTHON="$(PYTHON)"

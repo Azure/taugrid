@@ -1,0 +1,592 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
+package controller
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+
+	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+)
+
+func TestWorkspacePreservesRoutingForJobBeforeWorkloadCreation(t *testing.T) {
+	for _, kind := range []string{"Job", "RayJob", "RayService", "Deployment"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, lifecycle := range []string{"delete", "retarget"} {
+				t.Run(lifecycle, func(t *testing.T) {
+					ctx := context.Background()
+					workspace := testWorkspace("aurora")
+					workspace.Finalizers = []string{workspaceFinalizer}
+					workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+					now := metav1.Now()
+					if lifecycle == "delete" {
+						workspace.DeletionTimestamp = &now
+					}
+					workspace.Spec.Target.CreateNamespace = false
+					workspace.Spec.Queue = "jobqueue"
+					workspace.Status.Target.ResolvedNamespace = workspace.Name
+					namespace := testNamespace(workspace.Name)
+					namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+					account := testServiceAccount(namespace.Name, workspace.Spec.WorkloadIdentity.ServiceAccountName, workspace.Name)
+					account.Annotations[annotationAzureWIClientID] = workspace.Spec.WorkloadIdentity.ClientID
+					newNamespace := testNamespace("new-target")
+					newNamespace.Labels = map[string]string{labelWorkspace: workspace.Name}
+					newNamespace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+					if lifecycle == "retarget" {
+						workspace.Spec.Target.Namespace = newNamespace.Name
+					}
+					job := &batchv1.Job{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "training", Namespace: namespace.Name, UID: types.UID("training-job-uid"),
+							Labels: map[string]string{"kueue.x-k8s.io/queue-name": "jobqueue"},
+						},
+						Spec: batchv1.JobSpec{
+							Suspend: ptr.To(true),
+							Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+								ServiceAccountName: account.Name,
+								RestartPolicy:      corev1.RestartPolicyNever,
+								Containers:         []corev1.Container{{Name: "trainer", Image: "example.invalid/trainer"}},
+							}},
+						},
+					}
+					var source client.Object = job
+					sourceAPIVersion := batchv1.SchemeGroupVersion.String()
+					if kind == "Deployment" {
+						sourceAPIVersion = appsv1.SchemeGroupVersion.String()
+						source = &appsv1.Deployment{
+							ObjectMeta: job.ObjectMeta,
+							Spec: appsv1.DeploymentSpec{
+								Replicas: ptr.To(int32(1)),
+								Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": job.Name}},
+								Template: corev1.PodTemplateSpec{
+									ObjectMeta: metav1.ObjectMeta{
+										Labels: map[string]string{
+											"app": job.Name, "kueue.x-k8s.io/queue-name": "jobqueue",
+											"kueue.x-k8s.io/managed": "true",
+										},
+										Annotations: map[string]string{"kueue.x-k8s.io/pod-suspending-parent": "deployment"},
+									},
+									Spec: job.Spec.Template.Spec,
+								},
+							},
+						}
+					} else if kind != "Job" {
+						sourceAPIVersion = "ray.io/v1"
+						rayJob := newQueueObject(schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: kind})
+						rayJob.SetName(job.Name)
+						rayJob.SetNamespace(job.Namespace)
+						rayJob.SetUID(job.UID)
+						rayJob.SetLabels(job.Labels)
+						rayJob.Object["spec"] = map[string]any{
+							"suspend": true, "entrypoint": "python train.py",
+							"shutdownAfterJobFinishes": true,
+							"rayClusterSpec": map[string]any{"headGroupSpec": map[string]any{
+								"template": map[string]any{"spec": map[string]any{"serviceAccountName": account.Name}},
+							}},
+						}
+						if kind == "RayService" {
+							rayJob.Object["spec"] = map[string]any{
+								"serveConfigV2": "applications:\n  - name: default\n    import_path: serve:app\n",
+								"rayClusterConfig": map[string]any{
+									"headGroupSpec": map[string]any{
+										"template": map[string]any{"spec": map[string]any{"serviceAccountName": account.Name}},
+									},
+								},
+							}
+						}
+						source = rayJob
+					}
+					localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+					localQueue.SetAnnotations(nil)
+					clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+					clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+						"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+					}}
+					c := fake.NewClientBuilder().WithScheme(testScheme(t)).
+						WithObjects(workspace, namespace, newNamespace, account, source, localQueue, clusterQueue).
+						WithStatusSubresource(&tauv1alpha1.TauWorkspace{}).Build()
+					reconciler := newTestWorkspaceReconciler(c)
+					request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+					for range 3 {
+						_, err := reconciler.Reconcile(ctx, request)
+						if lifecycle == "delete" && (err == nil ||
+							!strings.Contains(err.Error(), "before removing namespace routing metadata")) {
+							t.Fatalf("Reconcile() = %v, want source Job drain wait", err)
+						}
+						if lifecycle == "retarget" && err != nil {
+							t.Fatal(err)
+						}
+						var waiting tauv1alpha1.TauWorkspace
+						if err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &waiting); err != nil {
+							t.Fatal(err)
+						}
+						if waiting.Status.Target.ResolvedNamespace != namespace.Name {
+							t.Fatal("resolved target advanced before source Job drain")
+						}
+						if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
+							t.Fatalf("execution identity removed before source Job drain: %v", err)
+						}
+						var retained corev1.Namespace
+						if err := c.Get(ctx, client.ObjectKeyFromObject(namespace), &retained); err != nil {
+							t.Fatal(err)
+						}
+						if retained.Labels[labelWorkspace] != workspace.Name {
+							t.Fatal("source Job lost namespace routing metadata")
+						}
+					}
+					workload := newQueueObject(workloadGVK)
+					workload.SetName("job-training")
+					workload.SetNamespace(namespace.Name)
+					workload.SetOwnerReferences([]metav1.OwnerReference{{
+						APIVersion: sourceAPIVersion, Kind: kind, Name: source.GetName(), UID: source.GetUID(),
+					}})
+					if kind == "Deployment" {
+						workload.SetOwnerReferences([]metav1.OwnerReference{{
+							APIVersion: "v1", Kind: "Pod", Name: "service-pod", UID: types.UID("service-pod-uid"),
+						}})
+					}
+					workload.Object["spec"] = map[string]any{"queueName": localQueue.GetName()}
+					if err := c.Create(ctx, workload); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := reconciler.Reconcile(ctx, request); lifecycle == "delete" && err == nil {
+						t.Fatal("workspace stopped draining after Kueue created the Workload")
+					}
+					workload.Object["status"] = map[string]any{"conditions": []any{
+						map[string]any{"type": "Finished", "status": "True"},
+					}}
+					if err := c.Update(ctx, workload); err != nil {
+						t.Fatal(err)
+					}
+					if kind == "RayService" || kind == "Deployment" {
+						_, err := reconciler.Reconcile(ctx, request)
+						if lifecycle == "delete" && err == nil {
+							t.Fatalf("live %s stopped retaining routing after its Workload finished", kind)
+						}
+						if lifecycle == "retarget" && err != nil {
+							t.Fatal(err)
+						}
+						if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); err != nil {
+							t.Fatalf("live %s lost execution identity: %v", kind, err)
+						}
+						if err := c.Delete(ctx, source); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for range 3 {
+						if _, err := reconciler.Reconcile(ctx, request); err != nil {
+							t.Fatalf("Reconcile() after drain = %v", err)
+						}
+					}
+					if err := c.Get(ctx, client.ObjectKeyFromObject(account), &corev1.ServiceAccount{}); !apierrors.IsNotFound(err) {
+						t.Fatalf("execution account survived drain: %v", err)
+					}
+					var finished tauv1alpha1.TauWorkspace
+					err := c.Get(ctx, client.ObjectKeyFromObject(workspace), &finished)
+					if lifecycle == "delete" && !apierrors.IsNotFound(err) {
+						t.Fatalf("workspace survived completed source Job drain: %v", err)
+					}
+					if lifecycle == "retarget" && (err != nil || finished.Status.Target.ResolvedNamespace != newNamespace.Name) {
+						t.Fatalf("retarget did not complete after source Job drain: %v, target=%q", err, finished.Status.Target.ResolvedNamespace)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestNamespaceRoutingMetadataSourceDeployments(t *testing.T) {
+	for _, scenario := range []string{
+		"managed", "unmanaged", "missing-managed-label", "root-label-only", "template-label-only",
+		"template-queue-differs", "zero-replicas", "paused", "deleting", "other-namespace",
+		"missing-queue", "selector-independent", "list-forbidden", "queue-read-error",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := testWorkspace("aurora")
+			namespace := testNamespace(workspace.Name)
+			namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "service", Namespace: namespace.Name,
+					Labels: map[string]string{"kueue.x-k8s.io/queue-name": "jobqueue"},
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr.To(int32(1)),
+					Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{
+						Labels: map[string]string{
+							"kueue.x-k8s.io/managed": "true", "kueue.x-k8s.io/queue-name": "jobqueue",
+						},
+					}},
+				},
+			}
+			localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+			localQueue.SetAnnotations(nil)
+			clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+			clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+			}}
+			wantInUse, wantError := true, false
+			switch scenario {
+			case "unmanaged":
+				deployment.Spec.Template.Labels["kueue.x-k8s.io/managed"] = "false"
+				wantInUse = false
+			case "missing-managed-label":
+				delete(deployment.Spec.Template.Labels, "kueue.x-k8s.io/managed")
+				wantInUse = false
+			case "root-label-only":
+				delete(deployment.Spec.Template.Labels, "kueue.x-k8s.io/queue-name")
+				wantInUse = false
+			case "template-label-only":
+				deployment.Labels = nil
+			case "template-queue-differs":
+				deployment.Labels["kueue.x-k8s.io/queue-name"] = "unrelated"
+			case "zero-replicas":
+				deployment.Spec.Replicas = ptr.To(int32(0))
+			case "paused":
+				deployment.Spec.Paused = true
+			case "deleting":
+				now := metav1.Now()
+				deployment.DeletionTimestamp = &now
+				deployment.Finalizers = []string{"example.invalid/drain"}
+			case "other-namespace":
+				deployment.Namespace = "unrelated"
+				wantInUse = false
+			case "missing-queue":
+				deployment.Spec.Template.Labels["kueue.x-k8s.io/queue-name"] = "missing"
+				wantInUse = false
+			case "selector-independent":
+				clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{}}
+				wantInUse = false
+			case "list-forbidden", "queue-read-error":
+				wantInUse, wantError = false, true
+			}
+			baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).
+				WithObjects(namespace, deployment, localQueue, clusterQueue).Build()
+			c := interceptor.NewClient(baseClient, interceptor.Funcs{
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*appsv1.DeploymentList); ok && scenario == "list-forbidden" {
+						return apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "", errors.New("discovery denied"))
+					}
+					return c.List(ctx, list, opts...)
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if scenario == "queue-read-error" && obj.GetObjectKind().GroupVersionKind() == localQueueGVK {
+						return errors.New("queue unavailable")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			inUse, message, err := newTestWorkspaceReconciler(c).namespaceRoutingMetadataInUse(ctx, workspace, namespace)
+			if inUse != wantInUse || (err != nil) != wantError {
+				t.Fatalf("namespaceRoutingMetadataInUse() = %v, %q, %v; want inUse=%v error=%v", inUse, message, err, wantInUse, wantError)
+			}
+			if inUse && !strings.Contains(message, "Deployment "+client.ObjectKeyFromObject(deployment).String()) {
+				t.Fatalf("drain message does not identify source Deployment: %q", message)
+			}
+		})
+	}
+}
+
+func TestNamespaceRoutingMetadataSourceRayResources(t *testing.T) {
+	for _, kind := range []string{"RayJob", "RayService"} {
+		t.Run(kind, func(t *testing.T) {
+			for _, scenario := range []string{
+				"suspended", "running", "complete", "failed", "retrying", "succeeded-driver",
+				"unlabeled", "other-namespace", "missing-queue", "selector-independent",
+				"workload-finished", "workload-wrong-uid", "workload-wrong-name", "workload-wrong-kind",
+				"api-not-installed", "api-not-found", "list-forbidden", "list-error",
+				"malformed-status", "queue-read-error", "invalid-selector",
+				"rayjob-api-not-installed", "rayjob-api-not-found",
+			} {
+				t.Run(scenario, func(t *testing.T) {
+					ctx := context.Background()
+					workspace := testWorkspace("aurora")
+					namespace := testNamespace(workspace.Name)
+					namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+					rayJob := newQueueObject(schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: kind})
+					rayJob.SetName("training")
+					rayJob.SetNamespace(namespace.Name)
+					rayJob.SetUID(types.UID("rayjob-uid"))
+					rayJob.SetLabels(map[string]string{"kueue.x-k8s.io/queue-name": "jobqueue"})
+					if kind == "RayService" {
+						rayJob.Object["spec"] = map[string]any{"rayClusterConfig": map[string]any{}}
+					} else {
+						rayJob.Object["spec"] = map[string]any{"suspend": true}
+					}
+					localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+					localQueue.SetAnnotations(nil)
+					clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+					clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+						"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+					}}
+					workload := newQueueObject(workloadGVK)
+					workload.SetName("rayjob-training")
+					workload.SetNamespace(namespace.Name)
+					workload.SetOwnerReferences([]metav1.OwnerReference{{
+						APIVersion: "ray.io/v1", Kind: kind, Name: rayJob.GetName(), UID: rayJob.GetUID(),
+					}})
+					workload.Object["spec"] = map[string]any{"queueName": "jobqueue"}
+					workload.Object["status"] = map[string]any{"conditions": []any{
+						map[string]any{"type": "Finished", "status": "True"},
+					}}
+					objects := []client.Object{namespace, rayJob, localQueue, clusterQueue}
+					wantInUse, wantError := true, false
+					switch scenario {
+					case "running":
+						rayJob.Object["spec"] = map[string]any{"suspend": false}
+						rayJob.Object["status"] = map[string]any{"jobDeploymentStatus": "Running", "jobStatus": "RUNNING"}
+					case "complete", "failed":
+						state := "Complete"
+						if scenario == "failed" {
+							state = "Failed"
+						}
+						rayJob.Object["status"] = map[string]any{"jobDeploymentStatus": state}
+						wantInUse = kind == "RayService"
+					case "retrying":
+						rayJob.Object["status"] = map[string]any{"jobDeploymentStatus": "Retrying", "jobStatus": "FAILED"}
+					case "succeeded-driver":
+						rayJob.Object["status"] = map[string]any{"jobDeploymentStatus": "Running", "jobStatus": "SUCCEEDED"}
+					case "unlabeled":
+						rayJob.SetLabels(nil)
+						wantInUse = false
+					case "other-namespace":
+						rayJob.SetNamespace("unrelated")
+						wantInUse = false
+					case "missing-queue":
+						rayJob.SetLabels(map[string]string{"kueue.x-k8s.io/queue-name": "missing"})
+						wantInUse = false
+					case "selector-independent":
+						clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{}}
+						wantInUse = false
+					case "workload-finished", "workload-wrong-uid", "workload-wrong-name", "workload-wrong-kind":
+						owner := workload.GetOwnerReferences()[0]
+						switch scenario {
+						case "workload-finished":
+							wantInUse = kind == "RayService"
+						case "workload-wrong-uid":
+							owner.UID = types.UID("another-uid")
+						case "workload-wrong-name":
+							owner.Name = "another-job"
+						case "workload-wrong-kind":
+							owner.Kind = "RayService"
+							if kind == "RayService" {
+								owner.Kind = "RayJob"
+							}
+						}
+						workload.SetOwnerReferences([]metav1.OwnerReference{owner})
+						objects = append(objects, workload)
+					case "api-not-installed", "api-not-found":
+						wantInUse = false
+					case "list-forbidden", "list-error", "queue-read-error":
+						wantInUse, wantError = false, true
+					case "malformed-status":
+						rayJob.Object["status"] = map[string]any{"jobDeploymentStatus": int64(42)}
+						wantInUse, wantError = kind == "RayService", kind == "RayJob"
+					case "rayjob-api-not-installed", "rayjob-api-not-found":
+						wantInUse = kind == "RayService"
+					case "invalid-selector":
+						clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+							"matchExpressions": []any{map[string]any{"key": labelWorkspace, "operator": "Invalid"}},
+						}}
+						wantInUse, wantError = false, true
+					}
+					baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()
+					c := interceptor.NewClient(baseClient, interceptor.Funcs{
+						List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+							listKind := list.GetObjectKind().GroupVersionKind().Kind
+							if listKind == "RayJobList" {
+								if scenario == "rayjob-api-not-installed" {
+									return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "ray.io", Kind: "RayJob"}}
+								}
+								if scenario == "rayjob-api-not-found" {
+									return apierrors.NewNotFound(schema.GroupResource{Group: "ray.io", Resource: "rayjobs"}, "")
+								}
+							}
+							if listKind == kind+"List" {
+								resource := schema.GroupResource{Group: "ray.io", Resource: strings.ToLower(kind) + "s"}
+								switch scenario {
+								case "api-not-installed":
+									return &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "ray.io", Kind: kind}}
+								case "api-not-found":
+									return apierrors.NewNotFound(resource, "")
+								case "list-forbidden":
+									return apierrors.NewForbidden(resource, "", errors.New("RayJob discovery denied"))
+								case "list-error":
+									return errors.New("RayJob discovery unavailable")
+								}
+							}
+							return c.List(ctx, list, opts...)
+						},
+						Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+							if scenario == "queue-read-error" && obj.GetObjectKind().GroupVersionKind() == localQueueGVK {
+								return errors.New("queue unavailable")
+							}
+							return c.Get(ctx, key, obj, opts...)
+						},
+					})
+					inUse, message, err := newTestWorkspaceReconciler(c).namespaceRoutingMetadataInUse(ctx, workspace, namespace)
+					if inUse != wantInUse || (err != nil) != wantError {
+						t.Fatalf("namespaceRoutingMetadataInUse() = %v, %q, %v; want inUse=%v error=%v", inUse, message, err, wantInUse, wantError)
+					}
+					if inUse && !strings.Contains(message, kind+" "+client.ObjectKeyFromObject(rayJob).String()) {
+						t.Fatalf("drain message does not identify the source %s: %q", kind, message)
+					}
+					for _, queue := range []*unstructured.Unstructured{localQueue, clusterQueue} {
+						got := newQueueObject(queue.GroupVersionKind())
+						if err := baseClient.Get(ctx, client.ObjectKeyFromObject(queue), got); err != nil {
+							t.Fatal(err)
+						}
+						if !reflect.DeepEqual(got.Object, queue.Object) {
+							t.Fatalf("external queue was mutated: %#v", got.Object)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestNamespaceRoutingMetadataSourceJobs(t *testing.T) {
+	for _, scenario := range []string{
+		"suspended", "running", "complete", "failed", "false-completion",
+		"unlabeled", "other-namespace", "missing-queue", "selector-independent",
+		"workload-finished", "workload-wrong-uid", "workload-wrong-name",
+		"job-list-error", "queue-read-error", "cluster-queue-read-error",
+		"invalid-selector", "cluster-queue-uid-changed",
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := testWorkspace("aurora")
+			workspace.Status.Queue = tauv1alpha1.WorkspaceQueueStatus{
+				ClusterQueue: "jobqueue", ClusterQueueUID: "jobqueue-uid",
+			}
+			namespace := testNamespace(workspace.Name)
+			namespace.Labels = workspaceNamespaceLabels(workspace.Name, "jobqueue")
+			job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+				Name: "training", Namespace: namespace.Name, UID: types.UID("training-job-uid"),
+				Labels: map[string]string{"kueue.x-k8s.io/queue-name": "jobqueue"},
+			}, Spec: batchv1.JobSpec{Suspend: ptr.To(true)}}
+			localQueue := testLocalQueue(namespace.Name, "jobqueue", "jobqueue")
+			localQueue.SetAnnotations(nil)
+			clusterQueue := clusterQueueWithUID("jobqueue", "jobqueue-uid")
+			clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{labelWorkspace: workspace.Name},
+			}}
+			workload := newQueueObject(workloadGVK)
+			workload.SetName("job-training")
+			workload.SetNamespace(namespace.Name)
+			workload.SetOwnerReferences([]metav1.OwnerReference{{
+				APIVersion: batchv1.SchemeGroupVersion.String(), Kind: "Job", Name: job.Name, UID: job.UID,
+			}})
+			workload.Object["spec"] = map[string]any{"queueName": "jobqueue"}
+			workload.Object["status"] = map[string]any{"conditions": []any{
+				map[string]any{"type": "Finished", "status": "True"},
+			}}
+			wantInUse, wantError := true, false
+			objects := []client.Object{namespace, job, localQueue, clusterQueue}
+			switch scenario {
+			case "running":
+				job.Spec.Suspend = ptr.To(false)
+			case "complete", "failed", "false-completion":
+				conditionType, status := batchv1.JobComplete, corev1.ConditionTrue
+				if scenario == "failed" {
+					conditionType = batchv1.JobFailed
+				}
+				if scenario == "false-completion" {
+					status = corev1.ConditionFalse
+				} else {
+					wantInUse = false
+				}
+				job.Status.Conditions = []batchv1.JobCondition{{Type: conditionType, Status: status}}
+			case "unlabeled":
+				job.Labels = nil
+				wantInUse = false
+			case "other-namespace":
+				job.Namespace = "unrelated"
+				wantInUse = false
+			case "missing-queue":
+				job.Labels["kueue.x-k8s.io/queue-name"] = "missing"
+				wantInUse = false
+			case "selector-independent":
+				clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{}}
+				wantInUse = false
+			case "workload-finished", "workload-wrong-uid", "workload-wrong-name":
+				if scenario == "workload-finished" {
+					wantInUse = false
+				} else {
+					owner := workload.GetOwnerReferences()[0]
+					if scenario == "workload-wrong-uid" {
+						owner.UID = types.UID("different-job-uid")
+					} else {
+						owner.Name = "different-job"
+					}
+					workload.SetOwnerReferences([]metav1.OwnerReference{owner})
+				}
+				objects = append(objects, workload)
+			case "job-list-error", "queue-read-error", "cluster-queue-read-error":
+				wantInUse, wantError = false, true
+			case "invalid-selector":
+				clusterQueue.Object["spec"] = map[string]any{"namespaceSelector": map[string]any{
+					"matchExpressions": []any{map[string]any{"key": labelWorkspace, "operator": "Invalid"}},
+				}}
+				wantInUse, wantError = false, true
+			case "cluster-queue-uid-changed":
+				clusterQueue.SetUID(types.UID("replacement-uid"))
+				wantInUse, wantError = false, true
+			}
+			baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()
+			c := interceptor.NewClient(baseClient, interceptor.Funcs{
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					if _, ok := list.(*batchv1.JobList); ok && scenario == "job-list-error" {
+						return errors.New("source Jobs unavailable")
+					}
+					return c.List(ctx, list, opts...)
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if queue, ok := obj.(*unstructured.Unstructured); ok &&
+						(scenario == "queue-read-error" && queue.GroupVersionKind() == localQueueGVK ||
+							scenario == "cluster-queue-read-error" && queue.GroupVersionKind() == clusterQueueGVK) {
+						return errors.New("queue unavailable")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			inUse, message, err := newTestWorkspaceReconciler(c).namespaceRoutingMetadataInUse(ctx, workspace, namespace)
+			if inUse != wantInUse || (err != nil) != wantError {
+				t.Fatalf("namespaceRoutingMetadataInUse() = %v, %q, %v; want inUse=%v error=%v", inUse, message, err, wantInUse, wantError)
+			}
+			if inUse && !strings.Contains(message, "Job "+client.ObjectKeyFromObject(job).String()) {
+				t.Fatalf("drain message does not identify the source Job: %q", message)
+			}
+			for _, queue := range []*unstructured.Unstructured{localQueue, clusterQueue} {
+				var got unstructured.Unstructured
+				got.SetGroupVersionKind(queue.GroupVersionKind())
+				if err := baseClient.Get(ctx, client.ObjectKeyFromObject(queue), &got); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got.Object, queue.Object) {
+					t.Fatalf("external queue was mutated: %#v", got.Object)
+				}
+			}
+		})
+	}
+}

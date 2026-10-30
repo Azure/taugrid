@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
@@ -102,6 +103,54 @@ func TestListNodeMetricsUsesAggregatedMetricsAPI(t *testing.T) {
 	}
 	if !json.Valid(data) {
 		t.Fatalf("ListNodeMetrics returned invalid JSON: %s", data)
+	}
+}
+
+func TestListPodsFollowsPagination(t *testing.T) {
+	var queries []url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("continue") == "" {
+			_, _ = w.Write([]byte(`{
+				"apiVersion":"v1","kind":"PodList","metadata":{"continue":"next"},
+				"items":[{"apiVersion":"v1","kind":"Pod","metadata":{"name":"first","namespace":"team-a"}}]
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"apiVersion":"v1","kind":"PodList","metadata":{},
+			"items":[{"apiVersion":"v1","kind":"Pod","metadata":{"name":"second","namespace":"team-b"}}]
+		}`))
+	}))
+	defer server.Close()
+	client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := NewForDynamic(client).ListPods(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Metadata struct {
+			Continue string `json:"continue"`
+		} `json:"metadata"`
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 || list.Items[0].Metadata.Name != "first" || list.Items[1].Metadata.Name != "second" ||
+		list.Metadata.Continue != "" {
+		t.Fatalf("list = %+v", list)
+	}
+	if len(queries) != 2 || queries[0].Get("limit") != "500" || queries[1].Get("continue") != "next" {
+		t.Fatalf("queries = %#v", queries)
 	}
 }
 

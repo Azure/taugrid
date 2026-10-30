@@ -1,0 +1,42 @@
+name: cobol-eval
+engine: rayjob
+run:
+  entrypoint: driver.py
+  working_dir: .
+  working_dir_excludes:
+    - __pycache__
+    - .pytest_cache
+    - .ruff_cache
+    - test_*.py
+
+experiment:
+  project: cobol-cpt-grpo
+  name: eval-grpo
+  group: eval
+
+runtime:
+  image: registry.example.com/cobol-train:v0.28.0-ray2.56.0
+  env:
+    EVAL_DIR: /data/datasets/cobol/eval
+    MODEL_ID: /data/projects/taugrid-default/runs/cobol-cpt-grpo/grpo/final
+    OUT: /data/projects/taugrid-default/runs/cobol-cpt-grpo/eval/grpo
+    MAX_NEW_TOKENS: "512"
+    TP_SIZE: "8"
+    PYTHONUNBUFFERED: "1"
+    HF_HOME: /tmp/hf-cache
+    VLLM_WORKER_MULTIPROC_METHOD: spawn
+
+compute:
+  workers: 1
+  gpus_per_worker: 8
+  worker_cpu_request: "32"
+  worker_memory_request: 128Gi
+  worker_cpu_limit: "64"
+  worker_memory_limit: 256Gi
+
+storage:
+  data_pvc: workspace-data
+  output: /data/projects/taugrid-default/runs/cobol-cpt-grpo/eval/grpo
+
+policy:
+  workspace: taugrid-default

@@ -2,13 +2,14 @@
 # Licensed under the MIT License.
 
 BINARY := tau-core-controller
+GODEBUG_LDFLAG := -X=runtime.godebugDefault=ms_tlsmldsacert=0
 
 CONTROLLER_GEN ?= go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
 
 .PHONY: build test test-kind-e2e lint generate manifests clean
 
 build:
-	CGO_ENABLED=0 go build -o bin/$(BINARY) ./cmd/controller
+	CGO_ENABLED=0 go build -ldflags "$(GODEBUG_LDFLAG)" -o bin/$(BINARY) ./cmd/controller
 
 test:
 	go test -race -count=1 ./...

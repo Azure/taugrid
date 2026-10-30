@@ -9,10 +9,11 @@ VERSION ?= $(shell git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/Azure/taugrid/core/version
-LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE)
+GODEBUG_LDFLAG := -X=runtime.godebugDefault=ms_tlsmldsacert=0
+LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE) $(GODEBUG_LDFLAG)
 BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 
-STATICCHECK_VERSION := v0.7.0
+STATICCHECK_VERSION := v0.8.2
 
 frontend/node_modules/.package-lock.json: frontend/package.json frontend/package-lock.json
 	cd frontend && npm ci

@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -32,18 +33,7 @@ func (r *TauWorkspaceReconciler) reconcileRBAC(ctx context.Context, workspace *t
 	if workspace.Spec.PrincipalRef == nil || workspace.Spec.KubernetesSubject == nil {
 		return false, "workspace-rbac authorization requires principalRef and kubernetesSubject", nil
 	}
-	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: targetNamespace}}
-	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace); err != nil {
-		return false, "refusing to adopt existing researcher RoleBinding", err
-	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
-		binding.Labels = workspaceLabels(workspace.Name)
-		setOwnerUIDAnnotation(binding, workspace.UID)
-		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}
-		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, targetNamespace)}
-		return nil
-	})
-	if err != nil {
+	if err := r.reconcileResearcherRoleBinding(ctx, workspace, targetNamespace); err != nil {
 		return false, "failed to reconcile researcher RoleBinding", err
 	}
 	if err := r.reconcileClusterQueueReaderRBAC(ctx, workspace, targetNamespace); err != nil {
@@ -53,6 +43,25 @@ func (r *TauWorkspaceReconciler) reconcileRBAC(ctx context.Context, workspace *t
 		return false, "failed to reconcile workspace reader RoleBinding", err
 	}
 	return true, "researcher namespace and ClusterQueue reader bindings are reconciled", nil
+}
+
+func (r *TauWorkspaceReconciler) reconcileResearcherRoleBinding(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+	namespace string,
+) error {
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: namespace}}
+	if err := r.getAndValidateWorkspaceOwnership(ctx, binding, workspace); err != nil {
+		return fmt.Errorf("refusing to adopt existing researcher RoleBinding: %w", err)
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, binding, func() error {
+		binding.Labels = workspaceLabels(workspace.Name)
+		setOwnerUIDAnnotation(binding, workspace.UID)
+		binding.RoleRef = rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: defaultRoleName}
+		binding.Subjects = []rbacv1.Subject{rbacSubject(*workspace.Spec.KubernetesSubject, namespace)}
+		return nil
+	})
+	return err
 }
 
 func authorizationMode(workspace *tauv1alpha1.TauWorkspace) string {
@@ -94,6 +103,12 @@ func (r *TauWorkspaceReconciler) reconcileExistingResearcherAccess(
 ) error {
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: namespace}}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(binding), binding); err != nil {
+		if apierrors.IsNotFound(err) &&
+			namespace == workspace.Status.Target.ResolvedNamespace &&
+			authorizationMode(workspace) != tauv1alpha1.AuthorizationModeClusterWide &&
+			workspace.Spec.PrincipalRef != nil && workspace.Spec.KubernetesSubject != nil {
+			return r.reconcileResearcherRoleBinding(ctx, workspace, namespace)
+		}
 		return client.IgnoreNotFound(err)
 	}
 	if !ownedByWorkspace(binding.Labels, workspace.Name) {
@@ -124,6 +139,29 @@ func (r *TauWorkspaceReconciler) cleanupResearcherRBAC(
 ) error {
 	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: defaultRoleName, Namespace: targetNamespace}}
 	return r.deleteOwnedObject(ctx, binding, workspace)
+}
+
+func (r *TauWorkspaceReconciler) cleanupOwnedResearcherRoleBindings(
+	ctx context.Context,
+	workspace *tauv1alpha1.TauWorkspace,
+) error {
+	var bindings rbacv1.RoleBindingList
+	if err := r.List(ctx, &bindings, client.MatchingLabels{
+		labelManagedBy: labelManagedByValue,
+		labelWorkspace: workspace.Name,
+	}); err != nil {
+		return err
+	}
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if binding.Name != defaultRoleName {
+			continue
+		}
+		if err := r.deleteOwnedObject(ctx, binding, workspace); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func clusterQueueReaderBindingName(workspaceName string) string {

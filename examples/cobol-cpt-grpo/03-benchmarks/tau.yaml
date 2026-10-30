@@ -1,0 +1,30 @@
+name: cobol-build-benchmarks
+engine: job
+entrypoint: build_benchmarks.py
+
+experiment:
+  project: cobol-cpt-grpo
+  name: build-benchmarks
+  group: data
+
+runtime:
+  image: python:3.11.17-bookworm@sha256:c255868cf24d6ca01031d262fa952f59b108b96776625f3d7f1af85d5f28e26a
+  env:
+    VAL: /data/datasets/cobol/prepared/val.jsonl
+    TRAIN: /data/datasets/cobol/prepared/train.jsonl
+    OUT: /data/datasets/cobol/eval
+    PYTHONUNBUFFERED: "1"
+
+compute:
+  gpus: 0
+  cpu_request: "1"
+  memory_request: 4Gi
+  cpu_limit: "4"
+  memory_limit: 8Gi
+
+storage:
+  data_pvc: workspace-data
+  output: /data/projects/taugrid-default/runs/cobol-cpt-grpo/build-benchmarks
+
+policy:
+  workspace: taugrid-default

@@ -49,6 +49,45 @@ The overall phase currently requires `RBACReady` and `QueueReady`; `DriftDetecte
 | `QueueReady=False` | Restore the named LocalQueue and its accessible backing ClusterQueue; fix that queue directly rather than creating a second queue with a different name to bypass the workspace spec. |
 | `DriftDetected=True` | Fix the dependency or workspace spec named in the message, then let the controller restore its owned namespace/RBAC objects. |
 
+During namespace retargeting, unfinished Workloads on retained external queues
+can delay cleanup of the old namespace's routing metadata. Submitted, unfinished
+Jobs, RayJobs, and RayServices that have not received a derived Workload yet retain routing
+metadata on deletion or retargeting, using their queue label and the live queue
+selector. Completed or failed batch sources do not block cleanup. A RayJob is finished
+only when `status.jobDeploymentStatus` is `Complete` or `Failed`, matching Kueue;
+a failed driver with a retry still pending retains its route. RayJob discovery
+is skipped when the optional RayJob API is not installed; RayService discovery
+is checked independently and also tolerates an absent API. Other discovery errors
+block cleanup until the source state can be read. RayServices have no terminal
+job state: a queued service retains required routing metadata and unchanged
+execution identity until the service is deleted, even if a derived Workload
+reports `Finished`. Delete the service before completing workspace
+deletion or retargeting. Both Helm and Kustomize grant the controller read-only
+discovery of Jobs, RayJobs, and RayServices.
+Kueue-managed Deployments submitted with `tau serve deploy --kind=deployment`
+also retain routing before their Pod Workloads exist. Discovery uses the Pod
+template's managed and queue labels, not just the Deployment's own labels.
+A Deployment has no terminal job state: a present managed Deployment retains
+its required route even at zero replicas or after a Pod Workload finishes.
+Delete the Deployment before completing workspace deletion or retargeting.
+Both controller RBAC manifests include read-only Deployment discovery;
+unreadable Deployment lists block cleanup.
+An unchanged workload identity ServiceAccount is retained until those Workloads finish, while researcher
+authorization is reconciled independently. Changing the ServiceAccount name or
+client ID, or removing `workloadIdentity`, revokes the obsolete ServiceAccount
+before granting the current researcher access to the old namespace, even during
+the drain. Pending Jobs that use the revoked account can no longer create Pods;
+the operator must cancel or replace affected work before the drain can complete.
+Keep the identity unchanged until draining finishes when uninterrupted execution
+is required.
+
+If identity cleanup fails or deletion is delayed by a finalizer, researcher
+bindings are removed until obsolete identity revocation is confirmed. After
+cleanup recovers, the current researcher's binding is restored in the retained
+resolved namespace even while its Workloads are unfinished, so the researcher
+can inspect or cancel the remaining work. Cluster-wide authorization does not
+create a researcher binding.
+
 ### Storage readiness is platform-owned
 
 `Ready` proves RBAC and queue reconciliation only, not storage. TauGrid 0.1 has no `StorageReady` condition on `TauWorkspace` or `TauCluster`, so a workspace can reach `Ready` while a workload's configured PVC is missing or unbound. Verify the platform-managed claim directly before handing the workspace to a researcher:

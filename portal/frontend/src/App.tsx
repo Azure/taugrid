@@ -11,17 +11,19 @@ import { Empty } from './components';
 import type { WorkspaceScope } from './types';
 import { CostBoard, ExperimentsBoard, Kueue, Observability, Overview, Services } from './Boards';
 import { Fleet } from './Fleet';
+import { GPUConsumers } from './GPUVisibility';
 import { JobDetailBoard, LegacyJobDetailRedirect, RayBoard, RayHistoryBoard, RunsBoard } from './Workloads';
 
 const tabs = [
-  { id: 'platform', label: 'Platform', items: [['Overview', '/portal'], ['Fleet', '/portal/fleet'], ['Kueue', '/portal/jobs'], ['Ray', '/portal/ray'], ['Observability', '/portal/observability'], ['Cost', '/portal/cost']] },
-  { id: 'workloads', label: 'Workloads', items: [['Overview', '/portal'], ['Jobs', '/portal/runs'], ['Services', '/portal/services']] },
+  { id: 'platform', label: 'Platform', items: [['Overview', '/portal'], ['Fleet', '/portal/fleet'], ['GPU Consumers', '/portal/gpu-consumers'], ['Kueue', '/portal/jobs'], ['Ray', '/portal/ray'], ['Observability', '/portal/observability'], ['Cost', '/portal/cost']] },
+  { id: 'workloads', label: 'Workloads', items: [['Overview', '/portal'], ['Tau Workloads', '/portal/runs'], ['Services', '/portal/services']] },
   { id: 'experiments', label: 'Experiments', items: [['Experiments', '/portal/experiments']] },
 ];
 const fleetPaths = ['/portal/fleet', '/portal/cluster', '/portal/gpu', '/portal/nodes'];
+const globalPaths = ['/portal/gpu-consumers'];
 export function tabForPath(path: string): string | undefined {
   if (path === '/stellar' || path.startsWith('/stellar/')) return 'experiments';
-  if (fleetPaths.includes(path) || path === '/portal/kueueviz' || path.startsWith('/portal/ray/')) return 'platform';
+  if (fleetPaths.includes(path) || globalPaths.includes(path) || path === '/portal/kueueviz' || path.startsWith('/portal/ray/')) return 'platform';
   if (path.startsWith('/portal/runs/') || path.startsWith('/portal/workloads/')) return 'workloads';
   return tabs.find(t => t.items.some(([, p]) => p !== '/portal' && p === path))?.id;
 }
@@ -44,6 +46,7 @@ export function App() {
   const queryClient = useQueryClient();
   const params = new URLSearchParams(location.search);
   const workspace = params.get('workspace') || '';
+  const globalRoute = globalPaths.includes(location.pathname);
   const directory = useDirectory(workspace);
   const data = directory.isError ? undefined : directory.data;
   const scope = data?.selected, managed = data?.managed === true;
@@ -55,8 +58,9 @@ export function App() {
     ['/portal', '/portal/experiments', '/stellar'].some(path => location.pathname === path || path === '/stellar' && location.pathname.startsWith('/stellar/')) &&
     ['available', 'redirect', 'unreachable', 'unsupported'].includes(scope.availability);
   const activeTab = tabs.find(t => t.id === persona)!;
-  const href = (path: string) => scopedURL(path === '/portal' ? `/portal?persona=${persona}` : path, scope?.workspace || workspace, managed);
-  const needsSelection = !!(managed && scope && !workspace);
+  const href = (path: string) => globalPaths.includes(path) ? path
+    : scopedURL(path === '/portal' ? `/portal?persona=${persona}` : path, scope?.workspace || workspace, managed);
+  const needsSelection = !!(!globalRoute && managed && scope && !workspace);
   useEffect(() => {
     if (needsSelection && scope) navigate(scopedURL(location.pathname + location.search + location.hash, scope.workspace, true), { replace: true });
   }, [needsSelection, scope, location.pathname, location.search, location.hash, navigate]);
@@ -66,11 +70,11 @@ export function App() {
     }
   }, [location.pathname, location.search, location.hash, navigate]);
   useEffect(() => {
-    if (scope?.availability === 'redirect' && !experimentSurface) {
+    if (scope?.availability === 'redirect' && !experimentSurface && !globalRoute) {
       const target = remoteWorkspaceURL(scope, location.pathname, location.search, location.hash);
       if (target) window.location.assign(target);
     }
-  }, [scope, location.pathname, location.search, location.hash, experimentSurface]);
+  }, [scope, location.pathname, location.search, location.hash, experimentSurface, globalRoute]);
   useEffect(() => {
     const queryKey = scope ? boardScopeKey(scope, managed) : undefined;
     const identity = queryKey ? JSON.stringify(queryKey) : '';
@@ -118,8 +122,9 @@ export function App() {
     return <Link key={path} to={href(path)} className={active ? 'active' : ''} aria-current={active ? 'page' : undefined}
       onMouseEnter={() => prefetchRoute(path)} onFocus={() => prefetchRoute(path)}
       onPointerDown={() => prefetchRoute(path)}>{title}</Link>;
-  })}</div></nav></aside>}<main><div id="scope-banner">{!directory.isPending && (!experimentView || scope?.availability !== 'available') && <ScopeBanner scope={scope}/>}</div><div className="card" id="view">
-    {directory.isPending || needsSelection ? <div className="empty" role="status">Loading project workspace…</div>
+  })}</div></nav></aside>}<main><div id="scope-banner">{!globalRoute && !directory.isPending && (!experimentView || scope?.availability !== 'available') && <ScopeBanner scope={scope}/>}</div><div className="card" id="view">
+    {globalRoute ? <BoardBoundary><GPUConsumers/></BoardBoundary>
+      : directory.isPending || needsSelection ? <div className="empty" role="status">Loading project workspace…</div>
       : directory.error ? <div className="empty warn" role="alert">Failed to load project workspace directory: {directory.error.message}</div>
         : !scope ? <Empty>No authorized project workspace is available.</Empty>
           : scope.availability !== 'available' && !experimentSurface ? <Empty warn>{scope.availability === 'redirect' ? 'Redirecting to the workspace Portal…' : `Workspace data is ${scope.availability} on this Portal. No local fallback was used.`}</Empty>

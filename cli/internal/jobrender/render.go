@@ -145,6 +145,12 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
+	if err := validateResourceQuantities("profile.resources.requests", p.Resources.Requests); err != nil {
+		return nil, err
+	}
+	if err := validateResourceQuantities("profile.resources.limits", p.Resources.Limits); err != nil {
+		return nil, err
+	}
 	if o.Retry < 0 {
 		return nil, fmt.Errorf("--retry must be >= 0, got %d", o.Retry)
 	}
@@ -287,6 +293,9 @@ func (o Options) validate() error {
 	if o.Name == "" {
 		return errors.New("Options.Name is required")
 	}
+	if err := runconfig.ValidateRunName(o.Name, runconfig.EngineJob, o.Nodes); err != nil {
+		return err
+	}
 	if o.Namespace == "" {
 		return errors.New("Options.Namespace is required")
 	}
@@ -314,6 +323,14 @@ func (o Options) validate() error {
 			runconfig.MaxTTLSecondsAfterFinished,
 		)
 	}
+	if err := (runconfig.Compute{
+		CPURequest:    o.CPURequest,
+		MemoryRequest: o.MemoryRequest,
+		CPULimit:      o.CPULimit,
+		MemoryLimit:   o.MemoryLimit,
+	}).ValidateResourceQuantities(); err != nil {
+		return err
+	}
 	switch strings.ToLower(o.Launcher) {
 	case "", "python", "torchrun":
 	default:
@@ -330,9 +347,6 @@ func (o Options) validate() error {
 	}
 	if o.Nodes > 1 && o.Launcher != "torchrun" {
 		return fmt.Errorf("nodes > 1 requires launcher=torchrun (got launcher=%q)", o.Launcher)
-	}
-	if o.Nodes > 1 && len(o.Name)+len(HeadlessSuffix) > 63 {
-		return fmt.Errorf("job name %q is too long for multi-node: %q must fit DNS label limit (63 chars); max name length is %d", o.Name, o.Name+HeadlessSuffix, 63-len(HeadlessSuffix))
 	}
 	if o.Launcher == "torchrun" {
 		reserved := []string{"MASTER_ADDR", "MASTER_PORT"}
@@ -370,6 +384,20 @@ func (o Options) validate() error {
 	}
 	if prof.Duration < 0 {
 		return fmt.Errorf("Options.Profile.Duration must be >= 0")
+	}
+	return nil
+}
+
+func validateResourceQuantities(field string, quantities map[string]any) error {
+	names := make([]string, 0, len(quantities))
+	for name := range quantities {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := runconfig.ValidateResourceQuantity(field+"."+name, fmt.Sprint(quantities[name])); err != nil {
+			return err
+		}
 	}
 	return nil
 }

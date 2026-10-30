@@ -26,7 +26,7 @@ try {
     try {
         $env:CGO_ENABLED = "0"
         go build -trimpath -mod=readonly -buildvcs=false `
-            -ldflags "-X github.com/Azure/taugrid/core/version.Version=v1.2.3" `
+            -ldflags "-X github.com/Azure/taugrid/core/version.Version=v1.2.3 -X=runtime.godebugDefault=ms_tlsmldsacert=0" `
             -o (Join-Path $releaseDirectory "tau-windows-amd64.exe") ./cmd/tau
         if ($LASTEXITCODE -ne 0) {
             throw "unable to build test tau executable."

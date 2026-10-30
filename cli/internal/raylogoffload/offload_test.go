@@ -384,6 +384,59 @@ func TestScriptExitsWhenContainerPIDReceivesSIGTERM(t *testing.T) {
 	}
 }
 
+func TestScriptExitsWhenSignaledBeforeTailPIDRegistration(t *testing.T) {
+	t.Parallel()
+	for _, signalName := range []string{"TERM", "INT"} {
+		t.Run(signalName, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			logsDir := filepath.Join(root, "session_001", "logs")
+			if err := os.MkdirAll(logsDir, 0o755); err != nil {
+				t.Fatalf("mkdir logs: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(logsDir, "job-driver-ready.log"), []byte("ready\n"), 0o644); err != nil {
+				t.Fatalf("write readiness log: %v", err)
+			}
+
+			preamble := fmt.Sprintf(`set -T
+trap 'if [[ "$BASH_COMMAND" == tail_pids+=* ]]; then printf "signal-before-registration\n"; kill -%s "$$"; fi' DEBUG
+`, signalName)
+			cmd := exec.Command("bash", "-c", preamble+Script)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Env = append(os.Environ(),
+				"TAU_RAY_TMP="+root,
+				"TAU_RAY_LOG_POLL_SECONDS=0.1",
+				"TAU_RAY_LOG_COMPLETION_FILE="+filepath.Join(root, "complete"),
+			)
+			var output bytes.Buffer
+			cmd.Stdout = &output
+			cmd.Stderr = &output
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start script: %v", err)
+			}
+			t.Cleanup(func() {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			})
+
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("script exited with error: %v\n%s", err, output.String())
+				}
+			case <-time.After(2 * time.Second):
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				<-done
+				t.Fatalf("script did not exit after %s before tail PID registration:\n%s", signalName, output.String())
+			}
+			if !strings.Contains(output.String(), "signal-before-registration\n") {
+				t.Fatalf("signal injection did not run:\n%s", output.String())
+			}
+		})
+	}
+}
+
 func TestWrapShellScriptWritesCompletionAndPreservesExitCode(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -491,13 +544,18 @@ func TestWrapShellScriptTerminatesNestedForegroundProcess(t *testing.T) {
 	root := t.TempDir()
 	completionPath := filepath.Join(root, "tau-driver-complete")
 	childPIDPath := filepath.Join(root, "child.pid")
+	finalizerPath := filepath.Join(root, "finalizer-ran")
 	command := fmt.Sprintf(
-		"python3 -c %s\nprintf 'finalizer should not run\\n'",
+		"python3 -c %s\nprintf 'finalizer should not run\\n' > %s",
 		shellTestQuote("import os,time; open("+strconv.Quote(childPIDPath)+",'w').write(str(os.getpid())); time.sleep(30)"),
+		shellTestQuote(finalizerPath),
 	)
 	cmd := exec.Command("bash", "-c", WrapShellScript(command))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = append(os.Environ(), "TAU_RAY_LOG_COMPLETION_FILE="+completionPath)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start wrapped command: %v", err)
 	}
@@ -533,12 +591,25 @@ func TestWrapShellScriptTerminatesNestedForegroundProcess(t *testing.T) {
 	case err := <-done:
 		exitErr, ok := err.(*exec.ExitError)
 		if !ok || exitErr.ExitCode() != 143 {
-			t.Fatalf("wrapped exit = %v, want 143", err)
+			t.Fatalf("wrapped exit = %v, want 143\n%s", err, output.String())
 		}
 	case <-time.After(2 * time.Second):
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-done
 		t.Fatal("wrapper did not terminate after forwarding TERM")
+	}
+
+	if _, err := os.Stat(finalizerPath); err == nil {
+		t.Fatalf("wrapper continued after terminating the workload:\n%s", output.String())
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("check finalizer marker: %v", err)
+	}
+	marker, err := os.ReadFile(completionPath)
+	if err != nil {
+		t.Fatalf("read completion marker: %v", err)
+	}
+	if string(marker) != `{"exit_code":143}`+"\n" {
+		t.Fatalf("completion marker = %q, want terminated exit code 143", marker)
 	}
 
 	deadline = time.Now().Add(2 * time.Second)

@@ -10,7 +10,7 @@ release workflow from the existing tag ref.
 Each release contains raw binaries and one checksum manifest. Linux binaries are
 statically linked. Darwin binaries use CGO for macOS Keychain access and link
 only to macOS system libraries and frameworks. Both Darwin architectures target
-macOS 12.0 or newer. Windows amd64 binaries are native PE executables.
+macOS 13.0 or newer. Windows amd64 binaries are native PE executables.
 
 - `tau-{darwin,linux}-{amd64,arm64}` and `tau-windows-amd64.exe`
 - `tau-gen-{darwin,linux}-{amd64,arm64}` and `tau-gen-windows-amd64.exe`
@@ -76,7 +76,7 @@ wheel with the CLI assets.
    release tags. Pushing the tag does not start **Release TauGrid**.
 2. Run the public Azure DevOps image publication pipelines for every coordinated
    first-party image using the tag's full source commit SHA and release tag
-   without the `v` prefix. For TauGrid 0.4.5, the required images are `tau`,
+   without the `v` prefix. For TauGrid 0.4.7, the required images are `tau`,
    `taugrid-portal`, `tau-core-controller`, and
    `taugrid-metrics-collector`.
 3. Verify the expected immutable image tags and coordinated chart versions are

@@ -142,9 +142,10 @@ jobs:
       - checkout: self
 
       - task: GoTool@0
-        displayName: Use Go 1.26.9
+        displayName: Use Microsoft Go 1.27.3-1
         inputs:
-          version: 1.26.9
+          version: 1.27.3-1
+          goDownloadUrl: https://aka.ms/golang/release/latest
 
       - task: DownloadPipelineArtifact@2
         displayName: Download hardware contract
@@ -463,9 +464,10 @@ jobs:
       - checkout: self
 
       - task: GoTool@0
-        displayName: Use Go 1.26.9
+        displayName: Use Microsoft Go 1.27.3-1
         inputs:
-          version: 1.26.9
+          version: 1.27.3-1
+          goDownloadUrl: https://aka.ms/golang/release/latest
 
       - task: AzureCLI@2
         displayName: Run synthetic H200 InfiniBand conformance
