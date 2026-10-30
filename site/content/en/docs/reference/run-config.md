@@ -78,6 +78,9 @@ mode, and routing must use the workspace's managed LocalQueue and ClusterQueue.
 Jobs remain suspended until Kueue admits them against the shared team pool;
 GPU requests and limits equal the explicit count. CPU and memory retain their
 normal explicit-resource validation. No workload-profile identity is stamped.
+Placement defaults to `unconstrained` for the pool's topology-aware flavors;
+an explicit `policy.topology` is preserved. CPU-only Jobs use the same GPU-node
+pool and tolerate its GPU-node taints without requesting a GPU.
 
 This path does not accept `policy.shape`, replace an explicitly requested
 `policy.profile`, or bypass a nonempty profile catalog. RayJobs and managed

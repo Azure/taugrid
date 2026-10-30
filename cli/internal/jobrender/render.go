@@ -92,7 +92,8 @@ type Options struct {
 	RedactSecrets bool
 	SecurityMode  string
 
-	RDMA RDMAOptions
+	RDMA        RDMAOptions
+	GPUNodePool bool
 
 	OutputDir string
 
@@ -664,7 +665,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		grace = metricsoffload.ShutdownGracePeriodSeconds(o.MetricsOffload.DoneTimeout, grace)
 	}
 	pod["terminationGracePeriodSeconds"] = grace
-	if tols := gpuTolerations(gpu.Count); len(tols) > 0 {
+	if tols := gpuTolerations(gpu.Count > 0 || o.GPUNodePool); len(tols) > 0 {
 		pod["tolerations"] = tols
 	}
 	if topologyPlan.PodPriorityClassName != "" {
@@ -1184,8 +1185,8 @@ func buildStoragePlan(o Options) (storagePlan, error) {
 	return plan, nil
 }
 
-func gpuTolerations(count int) []any {
-	if count <= 0 {
+func gpuTolerations(required bool) []any {
+	if !required {
 		return nil
 	}
 	return []any{

@@ -200,6 +200,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		Name:                    request.Name,
 		Namespace:               ns,
 		Image:                   o.image,
+		GPUNodePool:             o.directJobProfile != nil,
 		ServiceAccountName:      o.serviceAccountName,
 		AzureWorkloadIdentity:   o.azureWorkloadIdentity,
 		ScriptPath:              o.script,

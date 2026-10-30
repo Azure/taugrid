@@ -119,6 +119,7 @@ func resolveCapacityJob(o unresolvedRunOptions, cluster *unstructured.Unstructur
 	o.team = o.workspaceTeam
 	o.directJobProfile = &profile.Profile{
 		Queue:     o.queue,
+		Topology:  profile.Topology{Placement: profile.PlacementUnconstrained},
 		Resources: profile.Resources{GPU: profile.GPUContract{Count: *o.jobGPUs}},
 	}
 	return o, nil
