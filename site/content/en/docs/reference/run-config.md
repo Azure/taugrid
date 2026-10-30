@@ -53,7 +53,7 @@ needed, omit `storage.data_pvc`. TauGrid still provides the pod-local `/mnt`
 `emptyDir` scratch path through `TAU_HOT_DIR`; its contents disappear with the
 pod.
 
-### Jobs without workload profiles
+## Jobs without workload profiles
 
 When `TauCluster.spec.queues.capacityTeamRef` selects your workspace's team
 and `spec.workloadProfiles` is empty, a connected team-linked workspace supports
