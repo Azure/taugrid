@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { memo, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { BoardResult, Empty, PageTitle, ScopedLink, TrackingLink, n1, utilizationSummary } from './components';
 import { fleetBoardPaths, useBoard, useBoardPrefetch } from './data';
 import type { Cluster, Nodes, Overview as OverviewData, Quota } from './types';
@@ -94,6 +95,10 @@ function Metric({ label, value, detail, tone }: { label: string; value: ReactNod
 
 function gpuCountLabel(count: number) {
   return `${count} GPU${count === 1 ? '' : 's'}`;
+}
+
+function SnapshotTime({ at }: { at?: string }) {
+  return at ? <span> · Read <time dateTime={at}>{new Date(at).toLocaleTimeString()}</time></span> : null;
 }
 
 function PriorityDetail({ workload }: {
@@ -199,9 +204,12 @@ function QuotaSummary({ quota, error, loading }: { quota?: Quota; error?: Error 
             <span><b>{workspace.name}</b><small>{workspace.cohort || 'No team Cohort'}</small></span>
             <span><b>{workspace.admittedWorkloads}</b><small>admitted workloads</small></span>
           </div>
+          <p className="overview-stage-note">Selected workspace: {quota.scope?.namespace || 'namespace unknown'}/{quota.scope?.localQueue || 'queue unknown'}.
+            Resource quota and admitted totals below are shared ClusterQueue status, not pod execution.</p>
           {workspaceResources.length ? <div className="overview-quota-rows">
-            {rows(workspaceResources, workspace.usageAvailable, 'workspace quota')}
+            {rows(workspaceResources, true, 'workspace quota')}
           </div> : <p className="overview-workload-empty">No resource quota is configured on this workspace queue.</p>}
+          {!workspace.usageAvailable && <p className="overview-unavailable">ClusterQueue usage is not reported.</p>}
           {quota.team ? <div className="overview-team-quota">
             <div className="overview-workload-group-head"><strong>Team shared quota</strong>
               {quota.team.weightedShare && <span>share {quota.team.weightedShare}</span>}
@@ -223,30 +231,33 @@ const QueueBridge = memo(function QueueBridge({ data, quota, quotaError, quotaLo
   data: OverviewData; quota?: Quota; quotaError?: Error | null; quotaLoading: boolean;
 }) {
   const queue = data.cards.queue;
-  const lanes = queue?.queues?.filter(lane => lane.admitted > 0 || lane.pending > 0) ?? [];
+  const lanes = queue?.queues ?? [];
   const unavailable = data.cards.queueUnavailable || (!queue ? 'Queue data unavailable' : '');
-  const capacity = queue ? queue.gpuUsed + queue.gpuHeadroom : 0;
-  const pressure = queue && capacity > 0 ? queue.gpuUsed / capacity : 0;
+  const reservationKnown = !!queue?.gpuReservationAvailable && !!queue.gpuNominalAvailable;
+  const capacity = queue?.gpuNominal;
+  const pressure = reservationKnown && capacity && queue?.gpuReserved !== undefined ? queue.gpuReserved / capacity : 0;
   return <div className="overview-queue">
     <div className="overview-stage-title"><span>Scheduler</span><strong>Kueue admission</strong></div>
     <QuotaSummary quota={quota} error={quotaError} loading={quotaLoading}/>
     {unavailable ? <div className="overview-unavailable">{unavailable}</div> : <>
       <div className="overview-queue-dial">
-        <span>GPU reservation</span><strong>{queue!.gpuUsed}<small> / {capacity}</small></strong>
-        <div className="overview-pressure" aria-label={`${Math.round(pressure * 100)}% of reported GPU quota reserved`}>
+        <span>ClusterQueue GPU reservation</span><strong>{reservationKnown ? queue!.gpuReserved : '—'}<small> / {queue?.gpuNominalAvailable ? capacity : '—'}</small></strong>
+        {reservationKnown ? <div className="overview-pressure" aria-label={`${Math.round(pressure * 100)}% of nominal GPU quota reserved`}>
           <span style={{ width: `${Math.max(0, Math.min(100, pressure * 100))}%` }}/>
-        </div>
+        </div> : <p className="overview-unavailable">GPU reservation or nominal quota is not reported.</p>}
       </div>
       <div className="overview-queue-counts">
         <span><b>{queue!.admitted}</b> admitted</span>
         <span className={queue!.pending > 0 ? 'warning' : ''}><b>{queue!.pending}</b> pending</span>
-        <span><b>{queue!.gpuHeadroom}</b> GPUs free</span>
+        <span><b>{reservationKnown ? queue!.gpuHeadroom : '—'}</b> GPU quota unreserved</span>
       </div>
+      <p className="overview-stage-note">Nominal quota minus reservations is not physical GPU availability or a guarantee of admission.
+        GPU quota is counted once per shared ClusterQueue; workload counts cover only the LocalQueues below.<SnapshotTime at={queue?.observedAt}/></p>
       {!!lanes.length && <div className="overview-queue-lanes" aria-label="Queue admission lanes">
         {lanes.map(lane => <div className="overview-queue-lane" key={`${lane.namespace}/${lane.queue}`}>
           <div>
             <strong>{lane.queue === 'cpu' ? 'CPU queue' : lane.queue === 'jobqueue' ? 'GPU queue' : lane.queue}</strong>
-            <small>{lane.namespace}/{lane.queue}</small>
+            <small title={`${lane.namespace}/${lane.queue}`}>{lane.namespace}/{lane.queue}</small>
           </div>
           <span><b>{lane.admitted}</b> admitted</span>
           <span className={lane.pending > 0 ? 'warning' : ''}><b>{lane.pending}</b> pending</span>
@@ -301,11 +312,14 @@ const WorkloadFlow = memo(function WorkloadFlow({ data }: { data: OverviewData }
   </section>;
   return <div className="overview-workloads">
     <div className="overview-stage-title"><span>Execution</span><strong>Runtime and admission state</strong></div>
+    <p className="overview-stage-note">Job and admission scope: {data.runtimeScopes?.length
+      ? data.runtimeScopes.map(scope => `${scope.namespace}/${scope.queue}`).join(', ')
+      : 'not reported'}.<SnapshotTime at={data.generatedAt}/></p>
     <div className="overview-workload-groups">
       <section className="overview-workload-group" aria-label="Active jobs">
-        <div className="overview-workload-group-head"><strong>Active jobs</strong><span>{active.length}</span></div>
+        <div className="overview-workload-group-head"><strong>Active queued jobs</strong><span>{data.activeUnavailable ? '—' : active.length}</span></div>
         {data.activeUnavailable ? <div className="overview-unavailable">{data.activeUnavailable}</div>
-          : !active.length ? <p className="overview-workload-empty">No Job or RayJob is currently running.</p>
+          : !active.length ? <p className="overview-workload-empty">No queued Job or RayJob reports Running in these scopes. Other workloads may still be running.</p>
             : <div className="overview-workload-list">{active.slice(0, 5).map(run =>
               <div className="overview-workload" key={`${run.namespace}/${run.kind}/${run.name}`}>
                 <span className="overview-workload-state">Running</span>
@@ -323,7 +337,7 @@ const WorkloadFlow = memo(function WorkloadFlow({ data }: { data: OverviewData }
         {group('CPU quota admitted', cpu)}
         </>}
     </div>
-    <p className="overview-stage-note">Active jobs come from Job and RayJob runtime status. Admission reserves quota but does not prove execution. Admission priority controls Kueue ordering and workload preemption; pod priority controls Kubernetes scheduling and pod preemption.</p>
+    <p className="overview-stage-note">Active jobs come from Job and RayJob runtime status, filtered by LocalQueue. Deployments, RayServices, standalone pods, and other namespaces or queues are not included. Admission reserves quota but does not prove execution. Admission priority controls Kueue ordering and workload preemption; pod priority controls Kubernetes scheduling and pod preemption.</p>
     <div className="overview-stage-links">
       <ScopedLink to="/portal/runs" className="overview-stage-link">Inspect active jobs →</ScopedLink>
       <ScopedLink to="/portal/jobs" className="overview-stage-link">Inspect queue admission →</ScopedLink>
@@ -331,18 +345,26 @@ const WorkloadFlow = memo(function WorkloadFlow({ data }: { data: OverviewData }
   </div>;
 });
 
-const FleetTopology = memo(function FleetTopology({ sites, nodeError }: {
-  sites: SiteGroup[]; nodeError?: Error | null;
+const FleetTopology = memo(function FleetTopology({ sites, nodes, nodeError }: {
+  sites: SiteGroup[]; nodes?: Nodes; nodeError?: Error | null;
 }) {
   const [selectedSite, setSelectedSite] = useState<string>();
   const activeSite = sites.find(site => site.id === selectedSite) || sites[0];
   const prefetchFleet = useBoardPrefetch(fleetBoardPaths);
   return <div className="overview-fleet-stage">
     <div className="overview-stage-title"><span>Capacity</span><strong>GPU sites</strong></div>
+    <p className="overview-stage-note">Cluster-wide Kubernetes nodes and pod requests across all namespaces, including workloads outside Kueue.<SnapshotTime at={nodes?.generatedAt}/></p>
+    {nodes?.gpuActivity ? <p className="overview-stage-note" aria-label="Fleet GPU pod activity">
+        <strong>Running GPU pods: {nodes.gpuActivity.runningPods}</strong> · {nodes.gpuActivity.pendingPods} pending · {nodes.gpuActivity.otherPods} unknown phase · {nodes.gpuActivity.terminatingPods} terminating.
+        Running is pod phase, not application readiness or GPU utilization.
+      </p> : <p className="overview-unavailable" aria-label="Fleet GPU pod activity">{nodes?.gpuActivityError || nodes?.gpuAllocationError || 'Fleet GPU pod activity is not reported for this scope.'}</p>}
     {nodeError ? <div className="overview-unavailable">{nodeError.message}</div>
       : <SiteSelector sites={sites} selected={activeSite?.id} onSelect={setSelectedSite}/>}
     <PoolDetails site={activeSite} prefetchFleet={prefetchFleet}/>
+    <p className="overview-stage-note">Allocated means GPU requests on non-terminal, node-bound pods, including bound Pending and terminating pods.
+      Available means unrequested allocatable GPUs on ready, uncordoned nodes; placement constraints may still prevent scheduling. GPU tiles show counts, not device identity.</p>
     <ScopedLink to="/portal/fleet" className="overview-stage-link" onIntent={prefetchFleet}>Open fleet detail →</ScopedLink>
+    <Link to="/portal/gpu-consumers" className="overview-stage-link">Inspect GPU owners (requires fleet access) →</Link>
   </div>;
 });
 
@@ -361,30 +383,31 @@ function Atlas({ platform, data, nodes, cluster, quota, nodeError, quotaError, q
     };
   }, [cluster]);
   const queue = data.cards.queue;
-  const capacity = queue ? queue.gpuUsed + queue.gpuHeadroom : 0;
+  const reservationKnown = !!queue?.gpuReservationAvailable && !!queue.gpuNominalAvailable;
+  const capacity = queue?.gpuNominal;
 
   return <div className="overview-dashboard">
     <div className="overview-metrics" aria-label="Overview metrics">
       {platform ? <>
         <Metric label="Fleet readiness" value={nodes ? `${nodes.readyNodes}/${nodes.totalNodes}` : '—'} detail="nodes ready" tone={nodes && nodes.readyNodes < nodes.totalNodes ? 'warning' : undefined}/>
-        <Metric label="Schedulable GPUs" value={nodes?.gpuSchedulable ?? '—'} detail={`${nodes?.gpuAllocationKnown ? nodes.gpuAvailable : '—'} currently available`}/>
-        <Metric label="Observed health" value={fleetSummary.observedHealth ? fleetSummary.unhealthy : '—'} detail={fleetSummary.observedHealth ? `unhealthy of ${fleetSummary.observedHealth} observed` : 'no health observations'} tone={fleetSummary.unhealthy ? 'danger' : undefined}/>
-        <Metric label="Queue pressure" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail={`${queue?.pending ?? '—'} workloads pending`} tone={queue?.pending ? 'warning' : undefined}/>
+        <Metric label="Schedulable GPUs" value={nodes?.gpuSchedulable ?? '—'} detail={`${nodes?.gpuAllocationKnown ? nodes.gpuAvailable : '—'} unrequested across fleet`}/>
+        <Metric label="Observed health" value={fleetSummary.observedHealth ? fleetSummary.unhealthy : '—'} detail={fleetSummary.observedHealth ? `unhealthy of ${fleetSummary.observedHealth} observed · ${cluster?.window || 'unknown'} window; sample age not reported` : 'no health observations'} tone={fleetSummary.unhealthy ? 'danger' : undefined}/>
+        <Metric label="Queue reservations" value={reservationKnown ? `${queue!.gpuReserved}/${capacity}` : '—'} detail={`${queue?.pending ?? '—'} scoped workloads pending`} tone={queue?.pending ? 'warning' : undefined}/>
       </> : <>
-        <Metric label="Active jobs" value={data.activeUnavailable ? '—' : data.active?.length ?? 0} detail="Job or RayJob reporting Running"/>
+        <Metric label="Active queued jobs" value={data.activeUnavailable ? '—' : data.active?.length ?? 0} detail="Job or RayJob in configured queue scopes"/>
         <Metric label="Pending admission" value={queue?.pending ?? '—'} detail="waiting for quota" tone={queue?.pending ? 'warning' : undefined}/>
-        <Metric label="GPU reservation" value={queue ? `${queue.gpuUsed}/${capacity}` : '—'} detail="reserved / reported quota"/>
-        <Metric label="Measured utilization" value={fleetSummary.utilization.average === null ? '—' : `${n1(fleetSummary.utilization.average)}%`} detail={`${fleetSummary.utilization.observed}/${fleetSummary.utilization.total} GPUs observed`}/>
+        <Metric label="GPU reservation" value={reservationKnown ? `${queue!.gpuReserved}/${capacity}` : '—'} detail="ClusterQueue reserved / nominal quota"/>
+        <Metric label="Measured utilization" value={fleetSummary.utilization.average === null ? '—' : `${n1(fleetSummary.utilization.average)}%`} detail={`${fleetSummary.utilization.observed}/${fleetSummary.utilization.total} GPUs observed · ${cluster?.window || 'unknown'} window; sample age not reported`}/>
       </>}
     </div>
     <div className="overview-atlas">
       <section className="overview-map" aria-label="Infrastructure topology">
         <header>
           <h2>Infrastructure topology</h2>
-          <span>{sites.length} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.gpuNodes ?? 0} GPU nodes</span>
+          <span>{nodes ? sites.length : '—'} {sites.length === 1 ? 'site' : 'sites'} · {nodes?.gpuNodes ?? '—'} GPU nodes</span>
         </header>
         <div className="overview-flow">
-          <FleetTopology sites={sites} nodeError={nodeError}/>
+          <FleetTopology sites={sites} nodes={nodes} nodeError={nodeError}/>
           <QueueBridge data={data} quota={quota} quotaError={quotaError} quotaLoading={quotaLoading}/>
           <WorkloadFlow data={data}/>
         </div>

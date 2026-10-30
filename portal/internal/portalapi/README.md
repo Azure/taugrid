@@ -78,6 +78,37 @@ internal ClusterIP Service. It follows the persona-centered UI direction propose
 
 ## Workspace directory contract
 
+### Overview accounting
+
+The topology compares independent sources, not a single pool of interchangeable
+GPU counts. Fleet capacity and allocation come from cluster-wide Kubernetes
+Nodes and non-terminal, node-bound Pod requests across all namespaces, including
+unmanaged workloads. Running GPU pods count Pod phase, not application readiness
+or measured GPU utilization; pending pods can already be bound and allocated.
+Terminating non-terminal pods retain their requests until release. Unsupported
+MIG/DRA accounting or failed Pod reads remains unknown, never zero.
+
+The scheduler shows actual `flavorsReservation` against nominal ClusterQueue
+quota, not `flavorsUsage` or a denominator reconstructed from headroom.
+Unreserved nominal quota is not physical capacity or a guarantee of admission;
+borrowing can exceed nominal quota. Shared ClusterQueues are counted once.
+Missing reservation status is explicitly unavailable.
+Resolved CPU-only queues contribute a known zero to GPU totals rather than
+making mixed CPU/GPU queue summaries unavailable.
+
+Quota resource rows and queue totals describe ClusterQueue status. LocalQueue
+admission counts, waiting workloads, and active Job/RayJob status use the
+server-resolved Jobs scopes, which can differ from the selected workspace in
+operator mode. All configured scopes remain visible even when empty. These
+runtime counts omit Deployments, RayServices, standalone pods, and other queues
+or namespaces. They must not be interpreted as fleet-wide inactivity.
+
+The Overview and Nodes snapshots expose read timestamps; telemetry remains a
+separate windowed source, not a live allocation measurement. Fleet pod activity
+is available only with the existing cluster-wide allocation authorization.
+Owner details remain behind the existing authenticated fleet-consumer opt-in;
+the Overview does not broaden workload identity access.
+
 `taugrid-portal portal serve --workspace-directory=/path/workspaces.json` enables managed
 scope mode. The file is strict JSON with `localCluster`, optional per-cluster
 `endpoints`, and `workspaces`. Each workspace requires `id`, `cluster`,

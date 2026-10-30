@@ -32,29 +32,31 @@ type Snapshot struct {
 }
 
 type Group struct {
-	Namespace        string            `json:"namespace,omitempty"`
-	Workspace        string            `json:"workspace,omitempty"`
-	GPUClass         string            `json:"gpuClass"`
-	Team             string            `json:"team"`
-	Lane             string            `json:"lane"`
-	Queue            string            `json:"queue"`
-	ClusterQueue     string            `json:"clusterQueue"`
-	Cohort           string            `json:"cohort,omitempty"`
-	QuotaScope       string            `json:"quotaScope,omitempty"`
-	ResourceFlavor   string            `json:"resourceFlavor"`
-	Presets          []string          `json:"presets"`
-	QueueFound       bool              `json:"queueFound"`
-	QuotaFound       bool              `json:"quotaFound"`
-	Pending          int               `json:"pending"`
-	Admitted         int               `json:"admitted"`
-	Reserving        int               `json:"reserving"`
-	GPUReserved      int64             `json:"gpuReserved"`
-	GPUUsed          int64             `json:"gpuUsed"`
-	GPUBorrowed      int64             `json:"gpuBorrowed"`
-	GPUNominal       int64             `json:"gpuNominal"`
-	GPUHeadroom      int64             `json:"gpuHeadroom"`
-	Conditions       []Condition       `json:"conditions,omitempty"`
-	PendingWorkloads []PendingWorkload `json:"pendingWorkloads,omitempty"`
+	Namespace               string            `json:"namespace,omitempty"`
+	Workspace               string            `json:"workspace,omitempty"`
+	GPUClass                string            `json:"gpuClass"`
+	Team                    string            `json:"team"`
+	Lane                    string            `json:"lane"`
+	Queue                   string            `json:"queue"`
+	ClusterQueue            string            `json:"clusterQueue"`
+	Cohort                  string            `json:"cohort,omitempty"`
+	QuotaScope              string            `json:"quotaScope,omitempty"`
+	ResourceFlavor          string            `json:"resourceFlavor"`
+	Presets                 []string          `json:"presets"`
+	QueueFound              bool              `json:"queueFound"`
+	QuotaFound              bool              `json:"quotaFound"`
+	Pending                 int               `json:"pending"`
+	Admitted                int               `json:"admitted"`
+	Reserving               int               `json:"reserving"`
+	GPUReserved             int64             `json:"gpuReserved"`
+	GPUUsed                 int64             `json:"gpuUsed"`
+	GPUBorrowed             int64             `json:"gpuBorrowed"`
+	GPUNominal              int64             `json:"gpuNominal"`
+	GPUHeadroom             int64             `json:"gpuHeadroom"`
+	GPUNominalAvailable     bool              `json:"gpuNominalAvailable"`
+	GPUReservationAvailable bool              `json:"gpuReservationAvailable"`
+	Conditions              []Condition       `json:"conditions,omitempty"`
+	PendingWorkloads        []PendingWorkload `json:"pendingWorkloads,omitempty"`
 }
 
 type Condition struct {
