@@ -73,11 +73,18 @@ func resolveClusterRunWorkloadProfile(ctx context.Context, o unresolvedRunOption
 		if err != nil {
 			return o, err
 		}
+		shared, _, err := unstructured.NestedBool(cluster.Object, "spec", "queues", "shareTeamQuotas")
+		if err != nil {
+			return o, err
+		}
+		if shared && team != "" {
+			return o, fmt.Errorf("shareTeamQuotas and capacityTeamRef are mutually exclusive")
+		}
 		profiles, _, err := unstructured.NestedSlice(cluster.Object, "spec", "workloadProfiles")
 		if err != nil {
 			return o, err
 		}
-		if team == o.workspaceTeam && len(profiles) == 0 {
+		if (shared || team == o.workspaceTeam) && len(profiles) == 0 {
 			return resolveCapacityJob(o, cluster)
 		}
 	}

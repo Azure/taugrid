@@ -72,25 +72,30 @@ compute:
 `
 	originalFetcher, originalClient := fetchRunWorkspace, newClusterProfileClient
 	t.Cleanup(func() { fetchRunWorkspace, newClusterProfileClient = originalFetcher, originalClient })
-	for _, name := range []string{"research", "development"} {
-		for _, mode := range []string{"client", "server", ""} {
-			for _, request := range []struct {
-				gpus      int
-				placement string
-			}{{gpus: 1}, {gpus: 0}, {gpus: 1, placement: "same-host"}} {
-				t.Run(fmt.Sprintf("%s/%s/%dGPU/%s", name, firstNonEmpty(mode, "submit"), request.gpus, firstNonEmpty(request.placement, "default")), func(t *testing.T) {
-					configData := fmt.Sprintf(configTemplate, request.gpus)
-					if request.placement != "" {
-						configData += "policy:\n  topology: " + request.placement + "\n"
-					}
-					if err := os.WriteFile(config, []byte(configData), 0o644); err != nil {
-						t.Fatal(err)
-					}
-					queue := managedWorkspaceClusterQueueName(name)
-					submittedPath := filepath.Join(t.TempDir(), "job.yaml")
-					logPath := ""
-					if mode != "client" {
-						logPath = fakeKubectl(t, `
+	for _, shared := range []bool{false, true} {
+		for _, name := range []string{"research", "development"} {
+			team := "research"
+			if shared {
+				team = name
+			}
+			for _, mode := range []string{"client", "server", ""} {
+				for _, request := range []struct {
+					gpus      int
+					placement string
+				}{{gpus: 1}, {gpus: 0}, {gpus: 1, placement: "same-host"}} {
+					t.Run(fmt.Sprintf("shared=%t/%s/%s/%dGPU/%s", shared, name, firstNonEmpty(mode, "submit"), request.gpus, firstNonEmpty(request.placement, "default")), func(t *testing.T) {
+						configData := fmt.Sprintf(configTemplate, request.gpus)
+						if request.placement != "" {
+							configData += "policy:\n  topology: " + request.placement + "\n"
+						}
+						if err := os.WriteFile(config, []byte(configData), 0o644); err != nil {
+							t.Fatal(err)
+						}
+						queue := managedWorkspaceClusterQueueName(name)
+						submittedPath := filepath.Join(t.TempDir(), "job.yaml")
+						logPath := ""
+						if mode != "client" {
+							logPath = fakeKubectl(t, `
 case "$*" in
   *localqueue.kueue.x-k8s.io*)
     printf '%s\n' '{"metadata":{"name":"`+queue+`"},"spec":{"clusterQueue":"`+queue+`"}}'
@@ -114,125 +119,129 @@ case "$*" in
     ;;
 esac
 `)
-					}
-					ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
-						Workspace: name, ContextName: "test-context", Namespace: name, Queue: queue,
-					}}
-					fetchRunWorkspace = func(_ *cobra.Command, _, _, _ string) (tauworkspace.Workspace, error) {
-						w := readyWorkspace()
-						w.Metadata.Name = name
-						w.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "research"}
-						w.Spec.Target.Namespace, w.Status.Target.ResolvedNamespace = name, name
-						w.Spec.Queue, w.Status.Queue.LocalQueue, w.Status.Queue.ClusterQueue = queue, queue, queue
-						return w, nil
-					}
-					newClusterProfileClient = func(string) (dynamic.Interface, error) {
-						client := readyClusterProfileClientForProfiles(t, 4, false)
-						cluster, err := client.Resource(profile.TauClusterGVR).Get(context.Background(), "cluster", metav1.GetOptions{})
-						if err != nil {
-							return nil, err
 						}
-						cluster.Object["spec"] = map[string]any{"managementMode": "Reconcile", "queues": map[string]any{
-							"capacityTeamRef": map[string]any{"name": "research"},
-						}, "workloadProfiles": []any{}}
-						if err := unstructured.SetNestedField(cluster.Object, "Ready", "status", "phase"); err != nil {
-							return nil, err
+						ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+							Workspace: name, ContextName: "test-context", Namespace: name, Queue: queue,
+						}}
+						fetchRunWorkspace = func(_ *cobra.Command, _, _, _ string) (tauworkspace.Workspace, error) {
+							w := readyWorkspace()
+							w.Metadata.Name = name
+							w.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: team}
+							w.Spec.Target.Namespace, w.Status.Target.ResolvedNamespace = name, name
+							w.Spec.Queue, w.Status.Queue.LocalQueue, w.Status.Queue.ClusterQueue = queue, queue, queue
+							return w, nil
 						}
-						if err := unstructured.SetNestedField(cluster.Object, int64(4), "status", "observedGeneration"); err != nil {
-							return nil, err
+						newClusterProfileClient = func(string) (dynamic.Interface, error) {
+							client := readyClusterProfileClientForProfiles(t, 4, false)
+							cluster, err := client.Resource(profile.TauClusterGVR).Get(context.Background(), "cluster", metav1.GetOptions{})
+							if err != nil {
+								return nil, err
+							}
+							cluster.Object["spec"] = map[string]any{"managementMode": "Reconcile", "queues": map[string]any{
+								"capacityTeamRef": map[string]any{"name": "research"},
+							}, "workloadProfiles": []any{}}
+							if shared {
+								cluster.Object["spec"].(map[string]any)["queues"] = map[string]any{"shareTeamQuotas": true}
+							}
+							if err := unstructured.SetNestedField(cluster.Object, "Ready", "status", "phase"); err != nil {
+								return nil, err
+							}
+							if err := unstructured.SetNestedField(cluster.Object, int64(4), "status", "observedGeneration"); err != nil {
+								return nil, err
+							}
+							_, err = client.Resource(profile.TauClusterGVR).Update(context.Background(), cluster, metav1.UpdateOptions{})
+							return client, err
 						}
-						_, err = client.Resource(profile.TauClusterGVR).Update(context.Background(), cluster, metav1.UpdateOptions{})
-						return client, err
-					}
-					cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer { return ensurer })
-					var stdout, stderr bytes.Buffer
-					cmd.SetOut(&stdout)
-					cmd.SetErr(&stderr)
-					args := []string{"--config", config}
-					if mode != "" {
-						args = append(args, "--dry-run="+mode)
-					}
-					cmd.SetArgs(args)
-					if err := cmd.Execute(); err != nil {
-						t.Fatalf("direct Tau run: %v\n%s", err, stderr.String())
-					}
-					manifest := stdout.Bytes()
-					if mode != "client" {
-						var err error
-						manifest, err = os.ReadFile(submittedPath)
-						if err != nil {
-							t.Fatalf("submission was not reached: %v\n%s", err, stdout.String())
+						cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer { return ensurer })
+						var stdout, stderr bytes.Buffer
+						cmd.SetOut(&stdout)
+						cmd.SetErr(&stderr)
+						args := []string{"--config", config}
+						if mode != "" {
+							args = append(args, "--dry-run="+mode)
 						}
-						calls, err := os.ReadFile(logPath)
-						if err != nil {
+						cmd.SetArgs(args)
+						if err := cmd.Execute(); err != nil {
+							t.Fatalf("direct Tau run: %v\n%s", err, stderr.String())
+						}
+						manifest := stdout.Bytes()
+						if mode != "client" {
+							var err error
+							manifest, err = os.ReadFile(submittedPath)
+							if err != nil {
+								t.Fatalf("submission was not reached: %v\n%s", err, stdout.String())
+							}
+							calls, err := os.ReadFile(logPath)
+							if err != nil {
+								t.Fatal(err)
+							}
+							if !strings.Contains(string(calls), "localqueue.kueue.x-k8s.io") || !strings.Contains(string(calls), "clusterqueue.kueue.x-k8s.io") {
+								t.Fatalf("live queue validation was skipped:\n%s", calls)
+							}
+							if mode == "server" && !strings.Contains(string(calls), "--dry-run=server") {
+								t.Fatalf("server dry-run was not preserved:\n%s", calls)
+							}
+							if mode == "" && (!strings.Contains(stdout.String(), "submitted direct (ns="+name+")") || strings.Contains(stdout.String(), "profile=")) {
+								t.Fatalf("incorrect direct submission output:\n%s", stdout.String())
+							}
+						}
+						var job struct {
+							Metadata struct {
+								Labels      map[string]string `yaml:"labels"`
+								Annotations map[string]string `yaml:"annotations"`
+							} `yaml:"metadata"`
+							Spec struct {
+								Suspend  bool `yaml:"suspend"`
+								Template struct {
+									Metadata struct {
+										Annotations map[string]string `yaml:"annotations"`
+									} `yaml:"metadata"`
+									Spec struct {
+										Tolerations []corev1.Toleration `yaml:"tolerations"`
+										Containers  []struct {
+											Resources struct {
+												Requests map[string]string `yaml:"requests"`
+												Limits   map[string]string `yaml:"limits"`
+											} `yaml:"resources"`
+										} `yaml:"containers"`
+									} `yaml:"spec"`
+								} `yaml:"template"`
+							} `yaml:"spec"`
+						}
+						if err := yaml.Unmarshal(manifest, &job); err != nil {
 							t.Fatal(err)
 						}
-						if !strings.Contains(string(calls), "localqueue.kueue.x-k8s.io") || !strings.Contains(string(calls), "clusterqueue.kueue.x-k8s.io") {
-							t.Fatalf("live queue validation was skipped:\n%s", calls)
+						if !job.Spec.Suspend || job.Metadata.Labels["kueue.x-k8s.io/queue-name"] != queue {
+							t.Fatalf("job must be suspended on verified workspace queue:\n%s", manifest)
 						}
-						if mode == "server" && !strings.Contains(string(calls), "--dry-run=server") {
-							t.Fatalf("server dry-run was not preserved:\n%s", calls)
+						if job.Metadata.Annotations[workloadmeta.AnnotationWorkloadProfileName] != "" ||
+							job.Metadata.Labels[workloadmeta.LabelProfile] != "" {
+							t.Fatal("direct job must not claim a workload profile")
 						}
-						if mode == "" && (!strings.Contains(stdout.String(), "submitted direct (ns="+name+")") || strings.Contains(stdout.String(), "profile=")) {
-							t.Fatalf("incorrect direct submission output:\n%s", stdout.String())
+						resources := job.Spec.Template.Spec.Containers[0].Resources
+						expectedGPU := ""
+						if request.gpus > 0 {
+							expectedGPU = fmt.Sprint(request.gpus)
 						}
-					}
-					var job struct {
-						Metadata struct {
-							Labels      map[string]string `yaml:"labels"`
-							Annotations map[string]string `yaml:"annotations"`
-						} `yaml:"metadata"`
-						Spec struct {
-							Suspend  bool `yaml:"suspend"`
-							Template struct {
-								Metadata struct {
-									Annotations map[string]string `yaml:"annotations"`
-								} `yaml:"metadata"`
-								Spec struct {
-									Tolerations []corev1.Toleration `yaml:"tolerations"`
-									Containers  []struct {
-										Resources struct {
-											Requests map[string]string `yaml:"requests"`
-											Limits   map[string]string `yaml:"limits"`
-										} `yaml:"resources"`
-									} `yaml:"containers"`
-								} `yaml:"spec"`
-							} `yaml:"template"`
-						} `yaml:"spec"`
-					}
-					if err := yaml.Unmarshal(manifest, &job); err != nil {
-						t.Fatal(err)
-					}
-					if !job.Spec.Suspend || job.Metadata.Labels["kueue.x-k8s.io/queue-name"] != queue {
-						t.Fatalf("job must be suspended on verified workspace queue:\n%s", manifest)
-					}
-					if job.Metadata.Annotations[workloadmeta.AnnotationWorkloadProfileName] != "" ||
-						job.Metadata.Labels[workloadmeta.LabelProfile] != "" {
-						t.Fatal("direct job must not claim a workload profile")
-					}
-					resources := job.Spec.Template.Spec.Containers[0].Resources
-					expectedGPU := ""
-					if request.gpus > 0 {
-						expectedGPU = fmt.Sprint(request.gpus)
-					}
-					if resources.Requests["nvidia.com/gpu"] != expectedGPU || resources.Limits["nvidia.com/gpu"] != expectedGPU ||
-						resources.Requests["cpu"] != "1" || resources.Requests["memory"] != "1Gi" {
-						t.Fatalf("explicit resources not preserved: %+v", resources)
-					}
-					annotations := job.Spec.Template.Metadata.Annotations
-					if request.placement == "" && annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" ||
-						request.placement == "same-host" && annotations["kueue.x-k8s.io/podset-required-topology"] != "kubernetes.io/hostname" {
-						t.Fatalf("pool topology contract not preserved: %v", annotations)
-					}
-					toleratesPool := false
-					for _, toleration := range job.Spec.Template.Spec.Tolerations {
-						toleratesPool = toleratesPool || toleration.Key == "sku" && toleration.Value == "gpu" &&
-							toleration.Operator == corev1.TolerationOpEqual && toleration.Effect == corev1.TaintEffectNoSchedule
-					}
-					if !toleratesPool {
-						t.Fatal("job must tolerate the discovered pool flavor's GPU node taint")
-					}
-				})
+						if resources.Requests["nvidia.com/gpu"] != expectedGPU || resources.Limits["nvidia.com/gpu"] != expectedGPU ||
+							resources.Requests["cpu"] != "1" || resources.Requests["memory"] != "1Gi" {
+							t.Fatalf("explicit resources not preserved: %+v", resources)
+						}
+						annotations := job.Spec.Template.Metadata.Annotations
+						if request.placement == "" && annotations["kueue.x-k8s.io/podset-unconstrained-topology"] != "true" ||
+							request.placement == "same-host" && annotations["kueue.x-k8s.io/podset-required-topology"] != "kubernetes.io/hostname" {
+							t.Fatalf("pool topology contract not preserved: %v", annotations)
+						}
+						toleratesPool := false
+						for _, toleration := range job.Spec.Template.Spec.Tolerations {
+							toleratesPool = toleratesPool || toleration.Key == "sku" && toleration.Value == "gpu" &&
+								toleration.Operator == corev1.TolerationOpEqual && toleration.Effect == corev1.TaintEffectNoSchedule
+						}
+						if !toleratesPool {
+							t.Fatal("job must tolerate the discovered pool flavor's GPU node taint")
+						}
+					})
+				}
 			}
 		}
 	}

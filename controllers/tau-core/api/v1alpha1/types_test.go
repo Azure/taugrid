@@ -283,6 +283,14 @@ func TestTauClusterCRDContract(t *testing.T) {
 		t.Fatalf("deletionPolicy default = %s, want Retain", got)
 	}
 	ownership := specProps["queues"].Properties["ownership"]
+	if specProps["queues"].Properties["shareTeamQuotas"].Type != "boolean" ||
+		len(specProps["queues"].XValidations) != 1 {
+		t.Fatal("shared team capacity must have an explicit mutually exclusive opt-in")
+	}
+	match := specProps["nodes"].Properties["labelRules"].Items.Schema.Properties["match"]
+	if match.Properties["labels"].Type != "object" {
+		t.Fatal("node classification rules must support exact authoritative labels")
+	}
 	if got := string(ownership.Default.Raw); got != `"External"` {
 		t.Fatalf("queues.ownership default = %s, want External", got)
 	}

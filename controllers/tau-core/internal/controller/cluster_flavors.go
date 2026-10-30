@@ -46,7 +46,7 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavors(
 	if r.APIReader != nil {
 		reader = r.APIReader
 	}
-	if cluster.Spec.Queues.CapacityTeamRef != nil {
+	if cluster.Spec.Queues.CapacityTeamRef != nil || cluster.Spec.Queues.ShareTeamQuotas {
 		inventory, err := discoveredPoolInventory(ctx, reader, cluster)
 		if err != nil {
 			return nil, nil, false, err
