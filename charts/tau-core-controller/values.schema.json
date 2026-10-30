@@ -139,6 +139,17 @@
         "ownership"
       ],
       "properties": {
+        "capacityTeamRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
         "ownership": {
           "type": "string",
           "enum": [

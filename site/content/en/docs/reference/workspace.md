@@ -32,6 +32,66 @@ The controller source and raw Kustomize manifests live in the [`Azure/taugrid`](
 
 Fresh clusters consume the umbrella chart through `tau cluster install`. The standalone chart is only for a separately managed controller and must not be installed alongside an umbrella release that already enables `components.tauCoreController`. See [Install TauGrid](../../platform-admin-guide/kubernetes/#3-install-taugrid) for the supported installation entry point and readiness gate. This page defines the workspace API and readiness contract only; installing the cluster control plane is covered there.
 
+## Automatically shared team capacity
+
+Automatic capacity is explicit and independent of queue `ownership`. Select one
+team in the singleton `TauCluster`; omit `spec.quota` on that team and its
+team-linked workspaces:
+
+```yaml
+apiVersion: tau.azure.com/v1alpha1
+kind: TauCluster
+metadata:
+  name: cluster
+spec:
+  managementMode: Reconcile
+  queues:
+    capacityTeamRef:
+      name: research
+```
+
+For Helm, set `tauCluster.queues.capacityTeamRef.name`. The referenced `TauTeam`
+and its `TauWorkspace` objects live in the controller's system namespace.
+Each workspace must set `spec.teamRef.name` to that team. No flavor/resource
+allocations or per-workspace splits are required. Omitting `capacityTeamRef`
+retains the existing explicit-quota and external-queue behavior; an empty quota
+does not become unlimited.
+
+The pool is the total allocatable inventory of Linux GPU nodes with
+`tau.azure.com/gpu-class`, filtered by `TauCluster.spec.nodes.selector`. Only
+Ready, schedulable, non-deleting nodes contribute. Each node is counted once in
+its GPU-class flavor; all advertised allocatable resources, including CPU,
+memory, GPU, RDMA and host slots, are accounted in their native quantities.
+Missing resources have zero quota, not unlimited quota. This is **not**
+instantaneously free capacity: running Pods are not subtracted. Kubernetes
+placement, taints and available devices still constrain actual execution.
+
+The team's root Kueue Cohort owns the inventory budget exactly once. Its
+workspace ClusterQueues have zero nominal quota and can each borrow the
+available team pool. Other workspace reservations therefore consume the same
+budget rather than independent copies. Admission checks on existing,
+authoritatively owned workspace queues are retained. External queue ownership
+and routing are never adopted as a fallback.
+
+Overlapping budgets or retained external queue reservations are rejected,
+including differently named ResourceFlavors whose selectors match pool nodes.
+Legacy GPU discovery cannot run alongside this mode. Remove conflicting
+declarations through their owners; TauGrid does not divide the pool or rewrite
+external budgets. Node, flavor, queue and team changes trigger reconciliation;
+a periodic retry also recovers missed events and transient dependency errors.
+If an established automatic pool cannot be validated, its root budget is
+zeroed to block new admissions until reconciliation succeeds.
+
+Inventory shrink reduces the root budget even below in-flight reservations;
+it never fabricates replacement capacity or evicts running work. A workspace's
+borrowing limit can temporarily retain its existing reservations, but the
+shared root remains bounded by current inventory and prevents new aggregate
+over-admission. Disappeared flavors remain with zero capacity so existing
+contracts can drain. To leave this mode, drain workloads and remove the team's
+workspaces before removing or reassigning `capacityTeamRef`. A retained
+automatic Cohort budget blocks reallocation until its owner has reconciled the
+old allocation away.
+
 ## Workspace readiness and recovery
 
 Start with the condition reason and message, rather than a guessed repair:

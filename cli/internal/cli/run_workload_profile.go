@@ -11,7 +11,10 @@ import (
 	"strings"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type selectedWorkloadProfile struct {
@@ -61,7 +64,65 @@ func resolveClusterRunWorkloadProfile(ctx context.Context, o unresolvedRunOption
 	if err != nil {
 		return o, err
 	}
+	if o.workspaceTeam != "" && !o.profileNameExplicit && o.workloadProfileSnapshot == "" && o.file == "" && o.engine == runconfig.EngineJob {
+		cluster, err := client.Resource(profile.TauClusterGVR).Get(ctx, profile.TauClusterName, metav1.GetOptions{})
+		if err != nil {
+			return o, fmt.Errorf("resolve direct job capacity policy: %w", err)
+		}
+		team, _, err := unstructured.NestedString(cluster.Object, "spec", "queues", "capacityTeamRef", "name")
+		if err != nil {
+			return o, err
+		}
+		profiles, _, err := unstructured.NestedSlice(cluster.Object, "spec", "workloadProfiles")
+		if err != nil {
+			return o, err
+		}
+		if team == o.workspaceTeam && len(profiles) == 0 {
+			return resolveCapacityJob(o, cluster)
+		}
+	}
 	return selectRunWorkloadProfile(ctx, o, profile.NewClusterProvider(client))
+}
+
+func resolveCapacityJob(o unresolvedRunOptions, cluster *unstructured.Unstructured) (unresolvedRunOptions, error) {
+	phase, _, err := unstructured.NestedString(cluster.Object, "status", "phase")
+	if err != nil {
+		return o, err
+	}
+	observed, _, err := unstructured.NestedInt64(cluster.Object, "status", "observedGeneration")
+	if err != nil {
+		return o, err
+	}
+	mode, _, err := unstructured.NestedString(cluster.Object, "spec", "managementMode")
+	if err != nil {
+		return o, err
+	}
+	if phase != "Ready" || cluster.GetGeneration() < 1 || observed != cluster.GetGeneration() || mode != "Reconcile" || cluster.GetDeletionTimestamp() != nil {
+		return o, fmt.Errorf("direct jobs require a Ready TauCluster with current observedGeneration in Reconcile mode")
+	}
+	canonicalQueue := managedWorkspaceClusterQueueName(o.workspace)
+	if !o.workspaceQueueResolved || canonicalQueue == "" || o.queue != canonicalQueue || o.workspaceClusterQueue != canonicalQueue {
+		return o, fmt.Errorf("direct jobs require verified team-managed TauWorkspace LocalQueue and ClusterQueue routing")
+	}
+	if o.team != "" && o.team != o.workspaceTeam {
+		return o, fmt.Errorf("policy.team %q conflicts with TauWorkspace team %q", o.team, o.workspaceTeam)
+	}
+	if !jobGPUsWereExplicit(o) || o.jobGPUs == nil || *o.jobGPUs < 0 {
+		return o, fmt.Errorf("direct jobs require explicit non-negative compute.gpus (use 0 for CPU jobs)")
+	}
+	if o.shape != "" {
+		return o, fmt.Errorf("direct jobs use explicit compute.gpus, not policy.shape")
+	}
+	if o.priorityTier != "" && (o.workloadPriorityClass != "" || o.podPriorityClass != "" || o.disableDefaultPriorities) {
+		return o, fmt.Errorf("priority tier cannot be combined with explicit priority classes or disabled default priorities")
+	}
+	o.team = o.workspaceTeam
+	o.directJobProfile = &profile.Profile{
+		Queue:     o.queue,
+		Topology:  profile.Topology{Placement: profile.PlacementUnconstrained},
+		Resources: profile.Resources{GPU: profile.GPUContract{Count: *o.jobGPUs}},
+	}
+	return o, nil
 }
 
 func selectRunWorkloadProfile(

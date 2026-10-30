@@ -97,7 +97,7 @@ func (r *TauClusterReconciler) reconcileGPUNodeTopology(
 			managedResources:     managedTopologyStatus(topology),
 		}, nodeErr
 	}
-	flavorResources, discoveredCapacity, flavorDrift, flavorErr := r.reconcileDiscoveredGPUFlavors(ctx, mutate)
+	flavorResources, discoveredCapacity, flavorDrift, flavorErr := r.reconcileDiscoveredGPUFlavors(ctx, cluster, mutate)
 	managedResources := append(managedTopologyStatus(topology), flavorResources...)
 	if flavorErr != nil {
 		message := flavorErr.Error()

@@ -56,9 +56,6 @@ spec:
                 properties:
                   mode:
                     default: workspace-rbac
-                    description: |-
-                      Mode controls whether the controller grants namespace-scoped access or
-                      relies on authorization the caller already has on the cluster.
                     enum:
                     - workspace-rbac
                     - cluster-wide
@@ -70,46 +67,12 @@ spec:
                     minLength: 1
                     type: string
                   priority:
-                    description: |-
-                      Priority is the workspace-level default priority tier. The controller
-                      does not read it, but the Tau CLI does: applyWorkspaceDefaults reads
-                      spec.defaults.priority off the fetched TauWorkspace and uses it as the
-                      fallback priority tier for every run submitted against the workspace.
-                      Removing it from this schema makes the API server prune the field, which
-                      silently downgrades "priority" workspaces to normal scheduling. Keep it.
                     enum:
                     - default
                     - priority
                     - normal
                     type: string
                   ttlSecondsAfterFinished:
-                    description: |-
-                      TTLSecondsAfterFinished is the workspace-level default retention for
-                      finished batch Jobs, in seconds. Like Priority, the controller does not
-                      read it: the Tau CLI does, via applyWorkspaceDefaults, and applies it to
-                      runs submitted against the workspace.
-
-                      It is an override, not a floor. When unset, tau keeps its built-in
-                      retention; when set, it wins over the built-in but still loses to an
-                      explicit run.ttl_seconds_after_finished in a run config.
-
-                      Scope is batch Jobs only, matching run.ttl_seconds_after_finished, which
-                      core/runconfig rejects for the ray engine. RayJob cleanup is governed by
-                      the Ray cluster's own shutdown behaviour and is not affected by this
-                      field.
-
-                      The minimum is deliberately well above a single observation interval.
-                      Retention races the lifecycle recorder, which polls (30s by default) and
-                      then ingests: a Job finishing just after a poll with a very short TTL is
-                      deleted along with its pods before the next pass, so the terminal row and
-                      the failure evidence are lost permanently rather than merely early. Values
-                      below MinWorkspaceTTLSecondsAfterFinished buy nothing — Kubernetes garbage
-                      collection is not the constraint on cluster capacity — and silently defeat
-                      the durable record they would otherwise be paired with.
-
-                      A pointer distinguishes "unset" from a zero the API server would
-                      otherwise elide, which matters because zero is a legal Kubernetes TTL
-                      meaning "delete immediately" and must never be inferred from absence.
                     format: int64
                     maximum: 2147483647
                     minimum: 600
@@ -118,15 +81,12 @@ spec:
               kubernetesSubject:
                 properties:
                   kind:
-                    description: Kind is the Kubernetes RBAC subject kind, usually
-                      Group.
                     enum:
                     - Group
                     - User
                     - ServiceAccount
                     type: string
                   name:
-                    description: Name is the subject value seen by Kubernetes authn/authz.
                     minLength: 1
                     type: string
                 required:
@@ -136,14 +96,9 @@ spec:
               principalRef:
                 properties:
                   name:
-                    description: Name is the external group or team reference in the
-                      selected provider.
                     minLength: 1
                     type: string
                   provider:
-                    description: |-
-                      Provider is the external identity source. Initial supported values are
-                      "entra" and "github".
                     enum:
                     - entra
                     - github
@@ -153,25 +108,15 @@ spec:
                 - provider
                 type: object
               queue:
-                description: |-
-                  Queue is the workspace LocalQueue name. It is optional: when omitted the
-                  controller resolves TauCluster.spec.workspaceDefaults.defaultQueue, which
-                  is the name the TauGrid distribution gives its baseline ClusterQueue.
-                  The effective value is always reported in status.queue.localQueue.
                 minLength: 1
                 type: string
               quota:
-                description: Quota is the workspace's guaranteed share of its team's
-                  allocation.
                 items:
                   properties:
                     borrowingLimit:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: |-
-                        BorrowingLimit is the maximum additional quota this scope may borrow.
-                        When omitted, TauGrid writes an explicit zero to Kueue.
                       maxLength: 64
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       type: string
@@ -180,17 +125,12 @@ spec:
                       - message: borrowingLimit must be non-negative
                         rule: '!string(self).startsWith(''-'')'
                     flavor:
-                      description: Flavor is the Kueue ResourceFlavor that provides
-                        this resource.
                       minLength: 1
                       type: string
                     lendingLimit:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: |-
-                        LendingLimit is the maximum unused nominal quota this scope may lend.
-                        When omitted, TauGrid writes an explicit zero to Kueue.
                       maxLength: 64
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       type: string
@@ -202,8 +142,6 @@ spec:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: NominalQuota is the guaranteed quota assigned to
-                        this scope.
                       maxLength: 64
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       type: string
@@ -212,8 +150,6 @@ spec:
                       - message: nominalQuota must be non-negative
                         rule: '!string(self).startsWith(''-'')'
                     resource:
-                      description: Resource is the Kubernetes resource name, for example
-                        nvidia.com/gpu.
                       minLength: 1
                       type: string
                   required:
@@ -228,10 +164,6 @@ spec:
                 - resource
                 x-kubernetes-list-type: map
               role:
-                description: |-
-                  Role is the logical researcher role. The legacy tau-researcher-v1 alias
-                  remains valid; both names bind the existing tau-researcher-v1 ClusterRole.
-                  No other role or arbitrary ClusterRole can be selected.
                 enum:
                 - researcher
                 - tau-researcher-v1
@@ -239,23 +171,14 @@ spec:
               target:
                 properties:
                   createNamespace:
-                    description: CreateNamespace allows the controller to create the
-                      workload namespace.
                     type: boolean
                   namespace:
-                    description: |-
-                      Namespace is the workload namespace. If empty, controllers default it to
-                      the workspace object name.
                     pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                     type: string
                 type: object
               teamRef:
-                description: |-
-                  TeamRef assigns this workspace to a team quota hierarchy. When omitted,
-                  the workspace keeps the legacy externally managed queue contract.
                 properties:
                   name:
-                    description: Name is the name of a cluster-scoped object.
                     minLength: 1
                     type: string
                 required:
@@ -264,15 +187,9 @@ spec:
               workloadIdentity:
                 properties:
                   clientId:
-                    description: |-
-                      ClientID is the Azure managed identity client ID used by Azure Workload
-                      Identity. The controller does not create or grant the identity.
                     minLength: 1
                     type: string
                   serviceAccountName:
-                    description: |-
-                      ServiceAccountName is the workload service account the controller creates
-                      or validates in the target namespace.
                     minLength: 1
                     type: string
                 required:

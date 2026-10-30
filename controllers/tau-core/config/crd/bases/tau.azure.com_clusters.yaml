@@ -52,17 +52,12 @@ spec:
             properties:
               deletionPolicy:
                 default: Retain
-                description: DeletionPolicy defaults to retaining every managed cluster
-                  resource.
                 enum:
                 - Retain
                 - DeleteManaged
                 type: string
               managementMode:
                 default: Observe
-                description: |-
-                  ManagementMode controls whether TauCluster only reports desired-state
-                  differences or is allowed to reconcile explicitly owned resources.
                 enum:
                 - Observe
                 - Reconcile
@@ -75,17 +70,11 @@ spec:
                         labels:
                           additionalProperties:
                             type: string
-                          description: |-
-                            Labels is the exact set of node label keys and values this rule desires.
-                            The controller never owns or removes keys not declared here.
                           minProperties: 1
                           type: object
                         match:
                           properties:
                             vmSizes:
-                              description: |-
-                                VMSizes limits a rule to nodes whose AKS VM-size label matches one of
-                                these values. An empty list matches every node selected by Nodes.Selector.
                               items:
                                 type: string
                               type: array
@@ -99,18 +88,23 @@ spec:
                   selector:
                     additionalProperties:
                       type: string
-                    description: Selector limits node discovery to labels that match
-                      every key/value pair.
                     type: object
                 type: object
               queues:
                 default: {}
                 properties:
+                  capacityTeamRef:
+                    properties:
+                      name:
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    type: object
                   clusterQueues:
                     items:
                       properties:
                         name:
-                          description: Name is the name of a cluster-scoped object.
                           minLength: 1
                           type: string
                       required:
@@ -122,9 +116,6 @@ spec:
                     x-kubernetes-list-type: map
                   ownership:
                     default: External
-                    description: |-
-                      Ownership controls whether queue objects are observed, explicitly
-                      adopted, or managed. External is the safe default for GitOps objects.
                     enum:
                     - External
                     - Adopt
@@ -134,7 +125,6 @@ spec:
                     items:
                       properties:
                         name:
-                          description: Name is the name of a cluster-scoped object.
                           minLength: 1
                           type: string
                       required:
@@ -148,12 +138,9 @@ spec:
                     items:
                       properties:
                         name:
-                          description: Name is the name of the referenced object.
                           minLength: 1
                           type: string
                         namespace:
-                          description: Namespace is the namespace containing the referenced
-                            object.
                           minLength: 1
                           type: string
                       required:
@@ -168,7 +155,6 @@ spec:
                   topology:
                     properties:
                       name:
-                        description: Name is the name of a cluster-scoped object.
                         minLength: 1
                         type: string
                     required:
@@ -176,13 +162,7 @@ spec:
                     type: object
                 type: object
               workloadProfiles:
-                description: |-
-                  WorkloadProfiles declares stable workload intent. Live quota, capacity,
-                  flavor selectors, and topology selectors are resolved into status instead.
                 items:
-                  description: |-
-                    WorkloadProfile is stable workload intent. It deliberately excludes observed
-                    capacity, quota, flavor selectors, and topology selectors.
                   properties:
                     applicability:
                       properties:
@@ -209,9 +189,6 @@ spec:
                       type: string
                     executionTarget:
                       default: singleCluster
-                      description: |-
-                        ExecutionTarget selects whether a profile executes on the submitting cluster
-                        or through MultiKueue.
                       enum:
                       - singleCluster
                       - multiKueue
@@ -239,9 +216,6 @@ spec:
                     priorities:
                       properties:
                         disableDefaultPriorities:
-                          description: |-
-                            DisableDefaultPriorities explicitly permits both priority class references
-                            to be absent.
                           type: boolean
                         podPriorityClassName:
                           maxLength: 253
@@ -430,9 +404,6 @@ spec:
                     type: integer
                 type: object
               workloadProfiles:
-                description: |-
-                  ProfileSetStatus is the ready-or-drifted resolved state for a workload
-                  profile declaration set.
                 properties:
                   drifted:
                     format: int32
@@ -447,9 +418,6 @@ spec:
                     type: string
                   profiles:
                     items:
-                      description: |-
-                        ResolvedWorkloadProfile combines normalized stable intent with only the
-                        observed resource identities needed by renderers and diagnostics.
                       properties:
                         applicability:
                           properties:
@@ -542,9 +510,6 @@ spec:
                           type: string
                         executionTarget:
                           default: singleCluster
-                          description: |-
-                            ExecutionTarget selects whether a profile executes on the submitting cluster
-                            or through MultiKueue.
                           enum:
                           - singleCluster
                           - multiKueue
@@ -555,8 +520,6 @@ spec:
                           type: integer
                         localQueues:
                           items:
-                            description: ResolvedLocalQueue identifies an observed
-                              LocalQueue and its ClusterQueue.
                             properties:
                               clusterQueue:
                                 type: string
@@ -598,9 +561,6 @@ spec:
                         priorities:
                           properties:
                             disableDefaultPriorities:
-                              description: |-
-                                DisableDefaultPriorities explicitly permits both priority class references
-                                to be absent.
                               type: boolean
                             podPriorityClassName:
                               maxLength: 253

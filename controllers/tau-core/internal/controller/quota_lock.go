@@ -11,7 +11,7 @@ import (
 var teamQuotaLocks sync.Map
 
 func lockTeamQuota(keys ...string) func() {
-	unique := map[string]struct{}{}
+	unique := map[string]struct{}{"capacity-pool": {}}
 	for _, key := range keys {
 		if key != "" {
 			unique[key] = struct{}{}

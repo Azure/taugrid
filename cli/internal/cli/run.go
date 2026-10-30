@@ -56,7 +56,11 @@ entrypoint, pass model and output paths through runtime.env, and set
 storage.output so "tau run get" can fetch the results.
 
 Connected runs, including --dry-run=client, select a ready workload profile
-from the configured cluster's TauCluster. Offline rendering is explicit:
+from the configured cluster's TauCluster. On an automatic-capacity cluster with
+no workload profiles, team-linked workspaces also support direct engine: job
+runs with explicit compute.gpus (0 for CPU jobs). Workspace routing and live
+cluster readiness are still required; no profile identity is invented.
+Offline rendering is explicit:
 policy.workload_profile_snapshot must name a TauWorkloadProfileSnapshot and is
 accepted only with --dry-run=client; Tau never falls back to an environment or
 embedded profile catalog.
@@ -212,7 +216,7 @@ See: tau run explain-config`,
 				targetOptions.serviceAccountName = clientDryRunServiceAccountPlaceholder
 				fmt.Fprintln(
 					cmd.ErrOrStderr(),
-					"client dry-run resolved the workload profile but leaves the service account as a placeholder; use --dry-run=server to resolve live submission defaults",
+					"client dry-run resolved workload policy but leaves the service account as a placeholder; use --dry-run=server to resolve live submission defaults",
 				)
 			}
 			if err := validateRunDispatchOptions(targetOptions); err != nil {

@@ -3,7 +3,7 @@ partOf: taugrid
 image:
   repository: mcr.microsoft.com/aks/ai-runtime/tau-core-controller
   digest: ""
-  tag: "0.4.7"
+  tag: "0.4.8"
   pullPolicy: IfNotPresent
 
 # Optional operator-owned quota hierarchy. These resources are deliberately

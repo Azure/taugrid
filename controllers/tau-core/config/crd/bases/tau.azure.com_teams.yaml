@@ -50,18 +50,12 @@ spec:
           spec:
             properties:
               quota:
-                description: |-
-                  Quota is the team's aggregate administrative allocation. Workspace
-                  guarantees and the team's shared pool are reconciled from this total.
                 items:
                   properties:
                     borrowingLimit:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: |-
-                        BorrowingLimit is the maximum additional quota this scope may borrow.
-                        When omitted, TauGrid writes an explicit zero to Kueue.
                       maxLength: 64
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       type: string
@@ -70,17 +64,12 @@ spec:
                       - message: borrowingLimit must be non-negative
                         rule: '!string(self).startsWith(''-'')'
                     flavor:
-                      description: Flavor is the Kueue ResourceFlavor that provides
-                        this resource.
                       minLength: 1
                       type: string
                     lendingLimit:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: |-
-                        LendingLimit is the maximum unused nominal quota this scope may lend.
-                        When omitted, TauGrid writes an explicit zero to Kueue.
                       maxLength: 64
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       type: string
@@ -92,8 +81,6 @@ spec:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: NominalQuota is the guaranteed quota assigned to
-                        this scope.
                       maxLength: 64
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       type: string
@@ -102,8 +89,6 @@ spec:
                       - message: nominalQuota must be non-negative
                         rule: '!string(self).startsWith(''-'')'
                     resource:
-                      description: Resource is the Kubernetes resource name, for example
-                        nvidia.com/gpu.
                       minLength: 1
                       type: string
                   required:

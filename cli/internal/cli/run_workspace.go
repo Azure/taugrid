@@ -120,6 +120,9 @@ func applyWorkspaceDefaultsWithConnection(
 	o.workspace = placement.Workspace
 	o.workspaceResultScope = w.Spec.Defaults.OutputRoot
 	o.workspaceClusterQueue = placement.ClusterQueue
+	if w.Spec.TeamRef != nil {
+		o.workspaceTeam = strings.TrimSpace(w.Spec.TeamRef.Name)
+	}
 	workspaceNamespace := placement.Namespace
 	if o.namespace != "" && o.namespace != workspaceNamespace {
 		return o, fmt.Errorf("namespace %q conflicts with TauWorkspace %q target namespace %q", o.namespace, w.Metadata.Name, workspaceNamespace)
