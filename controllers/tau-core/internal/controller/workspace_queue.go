@@ -206,6 +206,12 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceCompatibilityLocalQueues(
 			continue
 		}
 		currentClusterQueue, _, _ := unstructured.NestedString(queue.Object, "spec", "clusterQueue")
+		if _, selected, err := selectedCapacityTeam(ctx, r.apiReader(), workspace.Spec.TeamRef.Name); err != nil {
+			return false, err.Error(), err
+		} else if selected && currentClusterQueue != clusterQueue {
+			message := fmt.Sprintf("compatible LocalQueue %q must target capacity pool ClusterQueue %q; external routing is not adopted", name, clusterQueue)
+			return false, message, nil
+		}
 		if strings.TrimSpace(currentClusterQueue) == "" {
 			return false, fmt.Sprintf("compatible LocalQueue %q does not reference a ClusterQueue", name), nil
 		}
@@ -222,6 +228,13 @@ func (r *TauWorkspaceReconciler) compatibilityLocalQueueClusterQueue(
 	workspace *tauv1alpha1.TauWorkspace,
 	namespace, localQueueName, managedClusterQueue string,
 ) (string, error) {
+	if workspace.Spec.TeamRef != nil {
+		if _, selected, err := selectedCapacityTeam(ctx, r.apiReader(), workspace.Spec.TeamRef.Name); err != nil {
+			return "", err
+		} else if selected {
+			return managedClusterQueue, nil
+		}
+	}
 	if namespace != workspace.Status.Target.ResolvedNamespace {
 		return managedClusterQueue, nil
 	}
@@ -324,6 +337,19 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceClusterQueue(ctx context.Cont
 	}
 	if !apiequality.Semantic.DeepEqual(*refreshedSpec, workspace.Spec) {
 		return "", fmt.Errorf("%w: workspace %q", errWorkspaceSpecChanged, workspace.Name)
+	}
+	if cluster, selected, err := selectedCapacityTeam(ctx, r.apiReader(), requestedTeam); err != nil {
+		return "", err
+	} else if selected {
+		var team tauv1alpha1.TauTeam
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: workspace.Namespace, Name: requestedTeam}, &team); err != nil {
+			return "", err
+		}
+		reconciler := &TauTeamReconciler{Client: r.Client, APIReader: r.apiReader(), SystemNamespace: r.SystemNamespace}
+		if err := reconciler.reconcileCapacityPool(ctx, cluster, &team); err != nil {
+			return "", err
+		}
+		return workspaceClusterQueueName(workspace.Name), nil
 	}
 	if legacyQueue, retained, err := retainedEstablishedWorkspaceClusterQueue(ctx, r.apiReader(), workspace); err != nil {
 		return "", err

@@ -89,6 +89,7 @@ type TauNamespacedObjectReference struct {
 }
 
 type TauNodeMatch struct {
+	// +listType=set
 	VMSizes []string `json:"vmSizes,omitempty"`
 }
 
@@ -99,17 +100,26 @@ type TauNodeLabelRule struct {
 }
 
 type TauClusterNodesSpec struct {
-	Selector   map[string]string  `json:"selector,omitempty"`
+	Selector map[string]string `json:"selector,omitempty"`
+	// +listType=atomic
 	LabelRules []TauNodeLabelRule `json:"labelRules,omitempty"`
 }
 
 type TauClusterQueuesSpec struct {
+	CapacityTeamRef *TauClusterObjectReference `json:"capacityTeamRef,omitempty"`
 	// +kubebuilder:default=External
 	// +kubebuilder:validation:Enum=External;Adopt;Manage
-	Ownership         string                         `json:"ownership,omitempty"`
-	Topology          *TauClusterObjectReference     `json:"topology,omitempty"`
-	ResourceFlavors   []TauClusterObjectReference    `json:"resourceFlavors,omitempty"`
-	ClusterQueues     []TauClusterObjectReference    `json:"clusterQueues,omitempty"`
+	Ownership string                     `json:"ownership,omitempty"`
+	Topology  *TauClusterObjectReference `json:"topology,omitempty"`
+	// +listType=map
+	// +listMapKey=name
+	ResourceFlavors []TauClusterObjectReference `json:"resourceFlavors,omitempty"`
+	// +listType=map
+	// +listMapKey=name
+	ClusterQueues []TauClusterObjectReference `json:"clusterQueues,omitempty"`
+	// +listType=map
+	// +listMapKey=namespace
+	// +listMapKey=name
 	SharedLocalQueues []TauNamespacedObjectReference `json:"sharedLocalQueues,omitempty"`
 }
 
@@ -155,7 +165,9 @@ type TauClusterSpec struct {
 	Queues TauClusterQueuesSpec `json:"queues,omitempty"`
 	// +kubebuilder:default={}
 	WorkspaceDefaults TauClusterWorkspaceDefaults `json:"workspaceDefaults,omitempty"`
-	WorkloadProfiles  []profile.WorkloadProfile   `json:"workloadProfiles,omitempty"`
+	// +listType=map
+	// +listMapKey=name
+	WorkloadProfiles []profile.WorkloadProfile `json:"workloadProfiles,omitempty"`
 }
 
 type TauClusterSectionStatus struct {
@@ -176,15 +188,21 @@ type TauManagedResourceStatus struct {
 
 type TauClusterStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Ready;Degraded
-	Phase              string                      `json:"phase,omitempty"`
-	ObservedGeneration int64                       `json:"observedGeneration,omitempty"`
-	DesiredStateHash   string                      `json:"desiredStateHash,omitempty"`
-	Nodes              TauClusterSectionStatus     `json:"nodes,omitempty"`
-	Queues             TauClusterSectionStatus     `json:"queues,omitempty"`
-	WorkloadProfiles   profile.ProfileSetStatus    `json:"workloadProfiles,omitempty"`
+	Phase              string                   `json:"phase,omitempty"`
+	ObservedGeneration int64                    `json:"observedGeneration,omitempty"`
+	DesiredStateHash   string                   `json:"desiredStateHash,omitempty"`
+	Nodes              TauClusterSectionStatus  `json:"nodes,omitempty"`
+	Queues             TauClusterSectionStatus  `json:"queues,omitempty"`
+	WorkloadProfiles   profile.ProfileSetStatus `json:"workloadProfiles,omitempty"`
+	// +listType=map
+	// +listMapKey=flavor
+	// +listMapKey=resource
 	DiscoveredCapacity []TauResourceCapacityStatus `json:"discoveredCapacity,omitempty"`
-	ManagedResources   []TauManagedResourceStatus  `json:"managedResources,omitempty"`
-	Conditions         []metav1.Condition          `json:"conditions,omitempty"`
+	// +listType=atomic
+	ManagedResources []TauManagedResourceStatus `json:"managedResources,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -218,16 +236,21 @@ type PrincipalRef struct {
 
 type TauTeamSpec struct {
 	// +kubebuilder:validation:MaxItems=256
+	// +listType=map
+	// +listMapKey=flavor
+	// +listMapKey=resource
 	Quota []TauResourceQuota `json:"quota,omitempty"`
 }
 
 type TauTeamStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Ready;Degraded
-	Phase              string             `json:"phase,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	Cohort             string             `json:"cohort,omitempty"`
-	CohortUID          string             `json:"cohortUID,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	Phase              string `json:"phase,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	Cohort             string `json:"cohort,omitempty"`
+	CohortUID          string `json:"cohortUID,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -291,6 +314,9 @@ type WorkspaceWorkloadIdentity struct {
 type TauWorkspaceSpec struct {
 	TeamRef *TauClusterObjectReference `json:"teamRef,omitempty"`
 	// +kubebuilder:validation:MaxItems=256
+	// +listType=map
+	// +listMapKey=flavor
+	// +listMapKey=resource
 	Quota             []TauResourceQuota      `json:"quota,omitempty"`
 	Authorization     *WorkspaceAuthorization `json:"authorization,omitempty"`
 	PrincipalRef      *PrincipalRef           `json:"principalRef,omitempty"`
@@ -320,7 +346,9 @@ type TauWorkspaceStatus struct {
 	ObservedGeneration int64                 `json:"observedGeneration,omitempty"`
 	Target             WorkspaceTargetStatus `json:"target,omitempty"`
 	Queue              WorkspaceQueueStatus  `json:"queue,omitempty"`
-	Conditions         []metav1.Condition    `json:"conditions,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -360,11 +388,13 @@ type TauQuotaRequestSpec struct {
 
 type TauQuotaRequestStatus struct {
 	// +kubebuilder:validation:Enum=PendingApproval;Approved;Rejected;Expired
-	Phase              string             `json:"phase,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	Decision           string             `json:"decision,omitempty"`
-	ApprovedBy         string             `json:"approvedBy,omitempty"`
-	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	Phase              string `json:"phase,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
+	Decision           string `json:"decision,omitempty"`
+	ApprovedBy         string `json:"approvedBy,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

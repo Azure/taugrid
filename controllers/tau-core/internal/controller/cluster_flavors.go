@@ -28,22 +28,58 @@ const (
 )
 
 type discoveredGPUFlavor struct {
-	name      string
-	gpuClass  string
-	capacity  resource.Quantity
-	hostSlots resource.Quantity
+	name       string
+	gpuClass   string
+	capacity   resource.Quantity
+	hostSlots  resource.Quantity
+	nodeLabels map[string]string
 }
 
 func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavors(
 	ctx context.Context,
+	cluster *tauv1alpha1.TauCluster,
 	mutate bool,
 ) ([]tauv1alpha1.TauManagedResourceStatus, []tauv1alpha1.TauResourceCapacityStatus, bool, error) {
+	unlock := lockTeamQuota()
+	defer unlock()
+	var reader client.Reader = r.Client
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	if cluster.Spec.Queues.CapacityTeamRef != nil {
+		flavors, quotas, err := discoveredPoolInventory(ctx, reader, cluster)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		var managed []tauv1alpha1.TauManagedResourceStatus
+		var capacity []tauv1alpha1.TauResourceCapacityStatus
+		drifted := false
+		for _, flavor := range flavors {
+			object, changed, err := r.reconcileDiscoveredGPUFlavor(ctx, flavor, mutate)
+			if err != nil {
+				return managed, capacity, true, err
+			}
+			drifted = drifted || changed
+			if object != nil && object.GetLabels()[labelManagedBy] == labelManagedByValue {
+				managed = append(managed, managedResourceStatus(resourceFlavorGVK, object))
+			}
+		}
+		for _, quota := range quotas {
+			capacity = append(capacity, tauv1alpha1.TauResourceCapacityStatus{
+				Flavor: quota.Flavor, Resource: quota.Resource, Capacity: quota.NominalQuota.DeepCopy(),
+			})
+		}
+		return managed, capacity, drifted, nil
+	}
 	queueNames, err := r.discoveredGPUFlavorQueueNames(ctx)
 	if err != nil {
 		return nil, nil, false, err
 	}
 	if len(queueNames) == 0 {
 		return nil, nil, false, nil
+	}
+	if err := validateRetainedCapacityPools(ctx, reader, ""); err != nil {
+		return nil, nil, false, err
 	}
 
 	flavors, err := r.discoverGPUFlavors(ctx)
@@ -165,6 +201,9 @@ func desiredDiscoveredGPUFlavor(flavor discoveredGPUFlavor) *unstructured.Unstru
 		},
 		"topologyName": tauGPUNodeTopologyName,
 	}
+	for key, value := range flavor.nodeLabels {
+		object.Object["spec"].(map[string]any)["nodeLabels"].(map[string]any)[key] = value
+	}
 	return object
 }
 
@@ -188,8 +227,15 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavor(
 	if err != nil {
 		return nil, true, fmt.Errorf("get discovered ResourceFlavor %q: %w", flavor.name, err)
 	}
+	if err := validateDiscoveredGPUFlavor(current, flavor); err != nil {
+		return current, true, err
+	}
+	return current, false, nil
+}
+
+func validateDiscoveredGPUFlavor(current *unstructured.Unstructured, flavor discoveredGPUFlavor) error {
 	if current.GetLabels()[labelManagedBy] != labelManagedByValue {
-		return current, true, fmt.Errorf(
+		return fmt.Errorf(
 			"ResourceFlavor %q exists but is not owned by %s",
 			flavor.name,
 			labelManagedByValue,
@@ -199,13 +245,13 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavor(
 	desiredSpec, _, _ := unstructured.NestedMap(desiredDiscoveredGPUFlavor(flavor).Object, "spec")
 	currentSpec, _, _ := unstructured.NestedMap(current.Object, "spec")
 	if !reflect.DeepEqual(currentSpec, desiredSpec) {
-		return current, true, fmt.Errorf(
+		return fmt.Errorf(
 			"ResourceFlavor %q has immutable drift from discovered GPU class %q",
 			flavor.name,
 			flavor.gpuClass,
 		)
 	}
-	return current, false, nil
+	return nil
 }
 
 func (r *TauClusterReconciler) reconcileLegacyDiscoveredGPUQuota(

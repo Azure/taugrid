@@ -2,6 +2,16 @@ suite: TauCluster topology reconciliation
 templates:
   - taucluster.yaml
 tests:
+  - it: selects an exclusive discovered capacity team only when requested
+    set:
+      tauCluster.queues.capacityTeamRef.name: research
+    asserts:
+      - equal:
+          path: spec.queues.capacityTeamRef.name
+          value: research
+      - equal:
+          path: spec.queues.ownership
+          value: External
   - it: reconciles the reviewed AKS GPU label catalog by default
     asserts:
       - equal:
@@ -49,6 +59,8 @@ tests:
       - equal:
           path: spec.queues.ownership
           value: External
+      - notExists:
+          path: spec.queues.capacityTeamRef
       - notExists:
           path: spec.sites
       - lengthEqual:

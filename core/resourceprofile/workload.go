@@ -67,8 +67,11 @@ type WorkloadProfile struct {
 }
 
 type ProfileApplicability struct {
-	Teams      []string `json:"teams,omitempty" yaml:"teams,omitempty"`
-	Lanes      []string `json:"lanes,omitempty" yaml:"lanes,omitempty"`
+	// +listType=set
+	Teams []string `json:"teams,omitempty" yaml:"teams,omitempty"`
+	// +listType=set
+	Lanes []string `json:"lanes,omitempty" yaml:"lanes,omitempty"`
+	// +listType=set
 	Namespaces []string `json:"namespaces,omitempty" yaml:"namespaces,omitempty"`
 }
 
@@ -90,23 +93,35 @@ type ResolvedLocalQueue struct {
 }
 
 type ResolvedWorkloadProfile struct {
-	WorkloadProfile         `json:",inline" yaml:",inline"`
-	LocalQueues             []ResolvedLocalQueue `json:"localQueues,omitempty" yaml:"localQueues,omitempty"`
-	ClusterQueues           []string             `json:"clusterQueues,omitempty" yaml:"clusterQueues,omitempty"`
-	ResourceFlavors         []string             `json:"resourceFlavors,omitempty" yaml:"resourceFlavors,omitempty"`
-	Topologies              []string             `json:"topologies,omitempty" yaml:"topologies,omitempty"`
-	WorkloadPriorityClasses []string             `json:"workloadPriorityClasses,omitempty" yaml:"workloadPriorityClasses,omitempty"`
-	PodPriorityClasses      []string             `json:"podPriorityClasses,omitempty" yaml:"podPriorityClasses,omitempty"`
-	Conditions              []metav1.Condition   `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	WorkloadProfile `json:",inline" yaml:",inline"`
+	// +listType=map
+	// +listMapKey=namespace
+	// +listMapKey=name
+	LocalQueues []ResolvedLocalQueue `json:"localQueues,omitempty" yaml:"localQueues,omitempty"`
+	// +listType=set
+	ClusterQueues []string `json:"clusterQueues,omitempty" yaml:"clusterQueues,omitempty"`
+	// +listType=set
+	ResourceFlavors []string `json:"resourceFlavors,omitempty" yaml:"resourceFlavors,omitempty"`
+	// +listType=set
+	Topologies []string `json:"topologies,omitempty" yaml:"topologies,omitempty"`
+	// +listType=set
+	WorkloadPriorityClasses []string `json:"workloadPriorityClasses,omitempty" yaml:"workloadPriorityClasses,omitempty"`
+	// +listType=set
+	PodPriorityClasses []string `json:"podPriorityClasses,omitempty" yaml:"podPriorityClasses,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" yaml:"conditions,omitempty"`
 }
 
 type ProfileSetStatus struct {
-	ObservedGeneration int64                     `json:"observedGeneration,omitempty" yaml:"observedGeneration,omitempty"`
-	Observed           int32                     `json:"observed,omitempty" yaml:"observed,omitempty"`
-	Ready              int32                     `json:"ready,omitempty" yaml:"ready,omitempty"`
-	Drifted            int32                     `json:"drifted,omitempty" yaml:"drifted,omitempty"`
-	ProfileSetHash     string                    `json:"profileSetHash,omitempty" yaml:"profileSetHash,omitempty"`
-	Profiles           []ResolvedWorkloadProfile `json:"profiles,omitempty" yaml:"profiles,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty" yaml:"observedGeneration,omitempty"`
+	Observed           int32  `json:"observed,omitempty" yaml:"observed,omitempty"`
+	Ready              int32  `json:"ready,omitempty" yaml:"ready,omitempty"`
+	Drifted            int32  `json:"drifted,omitempty" yaml:"drifted,omitempty"`
+	ProfileSetHash     string `json:"profileSetHash,omitempty" yaml:"profileSetHash,omitempty"`
+	// +listType=map
+	// +listMapKey=name
+	Profiles []ResolvedWorkloadProfile `json:"profiles,omitempty" yaml:"profiles,omitempty"`
 }
 
 type ProfileSetSnapshot struct {

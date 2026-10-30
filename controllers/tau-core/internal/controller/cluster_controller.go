@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
@@ -39,6 +40,7 @@ const (
 
 type TauClusterReconciler struct {
 	client.Client
+	APIReader               client.Reader
 	MultiKueuePrerequisites MultiKueuePrerequisiteReader
 }
 
@@ -168,17 +170,14 @@ func nodeLabelChangePredicate() predicate.Predicate {
 			if oldNode.Spec.ProviderID != newNode.Spec.ProviderID {
 				return true
 			}
-			oldGPU := oldNode.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
-			newGPU := newNode.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
-			if oldGPU.Cmp(newGPU) != 0 {
+			if capacityNodeEligible(oldNode) != capacityNodeEligible(newNode) ||
+				!apiequality.Semantic.DeepEqual(oldNode.Status.Allocatable, newNode.Status.Allocatable) {
 				return true
 			}
 			resourceName := corev1.ResourceName(torchrunHostSlotResource)
 			oldCapacity := oldNode.Status.Capacity[resourceName]
 			newCapacity := newNode.Status.Capacity[resourceName]
-			oldAllocatable := oldNode.Status.Allocatable[resourceName]
-			newAllocatable := newNode.Status.Allocatable[resourceName]
-			return oldCapacity.Cmp(newCapacity) != 0 || oldAllocatable.Cmp(newAllocatable) != 0
+			return oldCapacity.Cmp(newCapacity) != 0
 		},
 		GenericFunc: func(event.GenericEvent) bool {
 			return false

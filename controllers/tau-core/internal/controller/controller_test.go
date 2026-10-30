@@ -473,8 +473,13 @@ func TestNodeWatchFiltersStatusUpdates(t *testing.T) {
 		Type:   corev1.NodeReady,
 		Status: corev1.ConditionTrue,
 	}}
-	if watch.Update(event.UpdateEvent{ObjectOld: original, ObjectNew: statusUpdate}) {
-		t.Fatal("status-only Node update should not enqueue a full topology reconciliation")
+	if !watch.Update(event.UpdateEvent{ObjectOld: original, ObjectNew: statusUpdate}) {
+		t.Fatal("Node readiness update must enqueue capacity discovery")
+	}
+	heartbeat := statusUpdate.DeepCopy()
+	heartbeat.Status.Conditions[0].LastHeartbeatTime = metav1.Now()
+	if watch.Update(event.UpdateEvent{ObjectOld: statusUpdate, ObjectNew: heartbeat}) {
+		t.Fatal("Node heartbeat should not enqueue topology reconciliation")
 	}
 	capacityUpdate := statusUpdate.DeepCopy()
 	capacityUpdate.Status.Allocatable = corev1.ResourceList{

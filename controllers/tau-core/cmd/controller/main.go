@@ -79,6 +79,7 @@ func main() {
 	}
 	if err := (&corecontroller.TauClusterReconciler{
 		Client:                  mgr.GetClient(),
+		APIReader:               mgr.GetAPIReader(),
 		MultiKueuePrerequisites: multiKueuePrerequisites,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TauCluster")

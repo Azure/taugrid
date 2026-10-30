@@ -25,6 +25,7 @@ const (
 	AnnotationV0Primary            = "tau.azure.com/v0-primary-workspace"
 	AnnotationAdoptionNamespaceUID = "tau.azure.com/adoption-namespace-uid"
 	AnnotationManagedQuotaKeys     = "tau.azure.com/managed-quota-keys"
+	AnnotationCapacityPool         = "tau.azure.com/discovered-capacity-pool"
 
 	FinalizerWorkspaceCleanup = "tau.azure.com/workspace-cleanup"
 	FinalizerTeamCleanup      = "tau.azure.com/team-cleanup"

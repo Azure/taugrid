@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -66,6 +67,17 @@ func (r *TauTeamReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	if cluster, selected, err := selectedCapacityTeam(ctx, r.quotaReader(), team.Name); err != nil {
+		return ctrl.Result{}, err
+	} else if selected {
+		if err := r.reconcileCapacityPool(ctx, cluster, &team); err != nil {
+			return r.reportTeamStatus(ctx, &team, false, "CapacityPoolBlocked", err.Error())
+		}
+		result, err := r.reportTeamStatus(ctx, &team, true, "CapacityPoolReady", "discovered capacity is shared by team workspaces")
+		result.RequeueAfter = notReadyRequeue
+		return result, err
+	}
+
 	if err := r.validateTeamReservations(ctx, &team); err != nil {
 		return r.reportTeamStatus(ctx, &team, false, "ReservationBlocked", err.Error())
 	}
@@ -97,9 +109,31 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 	var cluster tauv1alpha1.TauCluster
 	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil
+			return validateRetainedCapacityPools(ctx, r.quotaReader(), team.Name)
 		}
 		return err
+	}
+	if cluster.Spec.Queues.CapacityTeamRef == nil {
+		if err := validateRetainedCapacityPools(ctx, r.quotaReader(), team.Name); err != nil {
+			return err
+		}
+	}
+	if ref := cluster.Spec.Queues.CapacityTeamRef; ref != nil && ref.Name != team.Name {
+		_, quotas, err := discoveredPoolInventory(ctx, r.quotaReader(), &cluster)
+		if err != nil {
+			return err
+		}
+		poolTeam := &tauv1alpha1.TauTeam{}
+		if err := r.quotaReader().Get(ctx, client.ObjectKey{Namespace: team.Namespace, Name: ref.Name}, poolTeam); err != nil {
+			return err
+		}
+		selected, err := capacityPoolWorkspaces(ctx, r.quotaReader(), poolTeam)
+		if err != nil {
+			return err
+		}
+		if err := r.validateCapacityPoolConflicts(ctx, &cluster, poolTeam, selected, quotas); err != nil {
+			return err
+		}
 	}
 	capacity := make(map[string]resource.Quantity, len(cluster.Status.DiscoveredCapacity))
 	for _, entry := range cluster.Status.DiscoveredCapacity {
@@ -638,6 +672,11 @@ func (r *TauTeamReconciler) reportTeamStatus(
 func (r *TauTeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&tauv1alpha1.TauTeam{}).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.enqueueCapacityTeam)).
+		Watches(&tauv1alpha1.TauTeam{}, handler.EnqueueRequestsFromMapFunc(r.enqueueCapacityTeam)).
+		Watches(newQueueObject(clusterQueueGVK), handler.EnqueueRequestsFromMapFunc(r.enqueueCapacityTeam)).
+		Watches(newQueueObject(cohortGVK), handler.EnqueueRequestsFromMapFunc(r.enqueueCapacityTeam)).
+		Watches(newQueueObject(resourceFlavorGVK), handler.EnqueueRequestsFromMapFunc(r.enqueueCapacityTeam)).
 		Watches(&tauv1alpha1.TauCluster{}, handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 			if obj.GetName() != tauv1alpha1.TauClusterSingletonName {
 				return nil
@@ -665,4 +704,20 @@ func (r *TauTeamReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}}}
 		})).
 		Complete(r)
+}
+
+func (r *TauTeamReconciler) enqueueCapacityTeam(ctx context.Context, _ client.Object) []reconcile.Request {
+	var cluster tauv1alpha1.TauCluster
+	if err := r.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
+		if !apierrors.IsNotFound(err) {
+			ctrl.LoggerFrom(ctx).Error(err, "resolve discovered capacity team")
+		}
+		return nil
+	}
+	if ref := cluster.Spec.Queues.CapacityTeamRef; ref != nil {
+		return []reconcile.Request{{NamespacedName: client.ObjectKey{
+			Namespace: systemNamespace(r.SystemNamespace), Name: ref.Name,
+		}}}
+	}
+	return nil
 }
