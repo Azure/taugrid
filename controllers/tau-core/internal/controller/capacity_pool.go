@@ -303,20 +303,20 @@ func (r *TauTeamReconciler) reconcileCapacityWorkspace(ctx context.Context, work
 			if err != nil {
 				return err
 			}
-			if shared && existing.GetAnnotations()[annotationSharedQuotaHold] != "true" {
+			if found {
+				if err := unstructured.SetNestedField(queue.Object, value, "spec", field); err != nil {
+					return err
+				}
+			}
+			if shared {
 				policy, found, err := unstructured.NestedString(existing.Object, "spec", "stopPolicy")
 				if err != nil {
 					return err
 				}
-				if found {
+				if found && (existing.GetAnnotations()[annotationSharedQuotaHold] != "true" || policy != "Hold") {
 					if err := unstructured.SetNestedField(queue.Object, policy, "spec", "stopPolicy"); err != nil {
 						return err
 					}
-				}
-			}
-			if found {
-				if err := unstructured.SetNestedField(queue.Object, value, "spec", field); err != nil {
-					return err
 				}
 			}
 		}

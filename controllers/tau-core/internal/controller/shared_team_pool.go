@@ -11,6 +11,7 @@ import (
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -190,9 +191,19 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 		if workspace.Spec.TeamRef == nil {
 			continue
 		}
-		if teamNames[workspace.Spec.TeamRef.Name] == nil || len(workspace.Spec.Quota) != 0 ||
+		team := teamNames[workspace.Spec.TeamRef.Name]
+		if team == nil || len(workspace.Spec.Quota) != 0 ||
 			workspace.UID == "" || !controllerutil.ContainsFinalizer(workspace, workspaceFinalizer) {
 			return fmt.Errorf("shared capacity workspace %q requires an existing team, a UID, its cleanup finalizer and no spec.quota", workspace.Name)
+		}
+		if !team.DeletionTimestamp.IsZero() {
+			cohort, _, _, _, err := r.appliedWorkspaceQueue(ctx, workspace)
+			if err != nil {
+				return err
+			}
+			if cohort != teamCohortName(team.Name) {
+				return fmt.Errorf("workspace %q cannot join deleting team %q", workspace.Name, team.Name)
+			}
 		}
 		selected[workspaceClusterQueueName(workspace.Name)] = workspace
 	}
@@ -402,11 +413,12 @@ func (r *TauTeamReconciler) validateSharedPoolConflicts(ctx context.Context, clu
 			return false, err
 		}
 		for _, node := range inventory.nodes {
-			matches := true
-			for key, value := range selector {
-				matches = matches && node.Labels[key] == value
+			gpus := node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+			if node.Labels[corev1.LabelOSStable] != "linux" || node.Labels[labelkeys.LabelGPUClass] == "" ||
+				gpus.Sign() <= 0 || !capacityNodeEligible(&node) {
+				continue
 			}
-			if matches {
+			if nodeHasLabels(&node, selector) {
 				return true, nil
 			}
 		}

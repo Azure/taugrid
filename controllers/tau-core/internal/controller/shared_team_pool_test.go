@@ -426,6 +426,155 @@ func TestSharedTeamRejectsConflictsAndUnclassifiedCapacity(t *testing.T) {
 	}
 }
 
+func TestSharedTeamExternalBudgetOverlap(t *testing.T) {
+	for _, name := range []string{"CPU-only node", "absent empty selector", "GPU alias", "present empty selector"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			r, cluster, _, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			selector := map[string]any{"hardware.example.com/reserved": ""}
+			switch name {
+			case "CPU-only node":
+				selector = map[string]any{"pool": "cpu"}
+				if err := r.Create(ctx, &corev1.Node{
+					ObjectMeta: metav1.ObjectMeta{Name: "outside-gpu-pool", Labels: map[string]string{
+						corev1.LabelOSStable: "linux", "pool": "cpu",
+					}},
+					Status: corev1.NodeStatus{
+						Conditions:  []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+						Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")},
+					},
+				}); err != nil {
+					t.Fatal(err)
+				}
+			case "GPU alias":
+				selector = map[string]any{labelkeys.LabelGPUClass: "h200"}
+			case "present empty selector":
+				var node corev1.Node
+				if err := r.Get(ctx, client.ObjectKey{Name: "h200"}, &node); err != nil {
+					t.Fatal(err)
+				}
+				node.Labels["hardware.example.com/reserved"] = ""
+				if err := r.Update(ctx, &node); err != nil {
+					t.Fatal(err)
+				}
+			}
+			flavor := newQueueObject(resourceFlavorGVK)
+			flavor.SetName("external-cpu")
+			flavor.Object["spec"] = map[string]any{"nodeLabels": selector}
+			if err := r.Create(ctx, flavor); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Create(ctx, desiredTeamCohort(testTeam("external", "1"), []tauv1alpha1.TauResourceQuota{{
+				Flavor: flavor.GetName(), Resource: "cpu", NominalQuota: resource.MustParse("1"),
+			}})); err != nil {
+				t.Fatal(err)
+			}
+			err := r.reconcileSharedTeamPool(ctx, cluster)
+			if name == "GPU alias" || name == "present empty selector" {
+				if err == nil || !strings.Contains(err.Error(), "overlaps") {
+					t.Fatalf("overlapping physical budget was accepted: %v", err)
+				}
+				queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspaces[0].Name))
+				if policy, _, _ := unstructured.NestedString(queue.Object, "spec", "stopPolicy"); policy != "Hold" {
+					t.Fatalf("overlapping budget did not hold admissions: %q", policy)
+				}
+			} else if err != nil {
+				t.Fatalf("disjoint external supply blocked shared GPU capacity: %v", err)
+			}
+		})
+	}
+}
+
+func TestSharedTeamDeletionMembership(t *testing.T) {
+	for _, name := range []string{"join", "leave", "retain"} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+			workspace := workspaces[1]
+			if name == "join" {
+				workspace.Spec.TeamRef.Name = teams[0].Name
+				if err := r.Update(ctx, workspace); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Delete(ctx, teams[1]); err != nil {
+				t.Fatal(err)
+			}
+			if name == "join" {
+				workspace.Spec.TeamRef.Name = teams[1].Name
+			} else if name == "leave" {
+				workspace.Spec.TeamRef.Name = teams[0].Name
+			}
+			if err := r.Update(ctx, workspace); err != nil {
+				t.Fatal(err)
+			}
+			reconciler := newTestWorkspaceReconciler(r.Client)
+			_, err := reconciler.reconcileWorkspaceClusterQueue(ctx, workspace)
+			if name == "join" {
+				if err == nil || !strings.Contains(err.Error(), "cannot join deleting team") {
+					t.Fatalf("workspace joined a deleting team: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("existing workspace could not %s its deleting team: %v", name, err)
+			}
+			queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspace.Name))
+			cohort, _, _ := unstructured.NestedString(queue.Object, "spec", "cohortName")
+			expected := teams[0].Name
+			if name == "retain" {
+				expected = teams[1].Name
+			}
+			if cohort != teamCohortName(expected) {
+				t.Fatalf("workspace cohort=%q, want %q", cohort, teamCohortName(expected))
+			}
+			root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+			assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "2")
+		})
+	}
+}
+
+func TestSharedTeamHoldRecoveryPreservesOperatorPolicy(t *testing.T) {
+	for _, policy := range []string{"HoldAndDrain", "None", "Hold"} {
+		t.Run(policy, func(t *testing.T) {
+			ctx := context.Background()
+			r, cluster, _, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.holdSharedTeamQueues(ctx); err != nil {
+				t.Fatal(err)
+			}
+			queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspaces[0].Name))
+			if err := unstructured.SetNestedField(queue.Object, policy, "spec", "stopPolicy"); err != nil {
+				t.Fatal(err)
+			}
+			if policy == "Hold" {
+				annotations := queue.GetAnnotations()
+				delete(annotations, annotationSharedQuotaHold)
+				queue.SetAnnotations(annotations)
+			}
+			if err := r.Update(ctx, queue); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			queue = getSharedQueue(t, r.Client, clusterQueueGVK.Kind, queue.GetName())
+			if actual, _, _ := unstructured.NestedString(queue.Object, "spec", "stopPolicy"); actual != policy {
+				t.Fatalf("recovery cleared operator policy %q: got %q", policy, actual)
+			}
+			if queue.GetAnnotations()[annotationSharedQuotaHold] != "" {
+				t.Fatal("recovered operator policy retains controller hold ownership")
+			}
+		})
+	}
+}
+
 func getSharedQueue(t *testing.T, c client.Client, kind, name string) *unstructured.Unstructured {
 	t.Helper()
 	gvk := cohortGVK

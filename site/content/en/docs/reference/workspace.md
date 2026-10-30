@@ -47,6 +47,8 @@ without fixed workspace splits. Existing workspace names, workload namespaces,
 and storage do not need to change. Reassigning an existing workspace to another
 team preserves its namespace only when its authoritative workspace UID still
 matches; this is not permission to adopt another workspace's namespace.
+Deleting teams cannot acquire new workspaces. Existing workspaces can retain
+their applied membership or move to another team so deletion can finish.
 
 The managed `tau-shared-teams` parent Cohort contains only **unassigned
 residual capacity**: eligible discovered inventory minus the applied team
@@ -77,8 +79,9 @@ zero capacity. If guarantees or active reservations exceed supply, or inventory
 or ownership cannot be validated, owned workspace queues use Kueue `Hold`.
 **Hold preserves admitted jobs but cancels quota-only reservations**; it is not
 `HoldAndDrain`. New admissions resume after the problem clears; operator-owned
-queue holds are preserved. User-authored guarantees are never silently scaled
-down.
+queue holds are preserved, including a stop-policy change made while a
+controller-owned Hold was active. Recovery clears only the controller's Hold.
+User-authored guarantees are never silently scaled down.
 
 Eligible Linux GPU nodes must have `tau.azure.com/gpu-class`; an unclassified
 Ready, schedulable, non-deleting GPU node blocks this mode rather than silently
