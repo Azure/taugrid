@@ -369,9 +369,14 @@ func (r *TauTeamReconciler) validateCapacityPoolConflicts(ctx context.Context, c
 			if object.GetLabels()[labelDiscoverGPUFlavors] == "true" {
 				return fmt.Errorf("%s %q enables legacy discovery alongside the exclusive capacity pool", object.GetKind(), object.GetName())
 			}
-			nominals, err := clusterQueueNominalQuota(object)
-			if err != nil {
+			nominals := map[string]resource.Quantity{}
+			if _, found, err := unstructured.NestedFieldNoCopy(object.Object, "spec", "resourceGroups"); err != nil {
 				return err
+			} else if found {
+				nominals, err = clusterQueueNominalQuota(object)
+				if err != nil {
+					return err
+				}
 			}
 			if workspace := workspaces[object.GetName()]; isQueue && workspace != nil {
 				owned, err := authoritativeWorkspaceClusterQueue(object, workspace)

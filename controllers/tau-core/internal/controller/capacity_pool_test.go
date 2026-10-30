@@ -253,6 +253,66 @@ func TestCapacityPoolEligibility(t *testing.T) {
 	}
 }
 
+func TestCapacityPoolUnrelatedObjectsWithoutResourceGroups(t *testing.T) {
+	for _, kind := range []string{"ClusterQueue", "Cohort"} {
+		for _, state := range []string{"absent", "malformed", "reserved"} {
+			if kind == "Cohort" && state == "reserved" {
+				continue
+			}
+			t.Run(kind+"/"+state, func(t *testing.T) {
+				ctx := context.Background()
+				cluster, team, workspaces, nodes := capacityPoolFixture()
+				external := newQueueObject(clusterQueueGVK)
+				if kind == "Cohort" {
+					external.SetGroupVersionKind(cohortGVK)
+				}
+				external.SetName("unrelated")
+				external.Object["spec"] = map[string]any{}
+				if state == "malformed" {
+					external.Object["spec"].(map[string]any)["resourceGroups"] = "invalid"
+				}
+				if state == "reserved" {
+					external.Object["status"] = map[string]any{"flavorsReservation": []any{map[string]any{
+						"name": "taugrid-gpu-h200", "resources": []any{map[string]any{"name": nvidiaGPUResourceName, "total": "1"}},
+					}}}
+				}
+				if _, err := clusterQueueNominalQuota(external); err == nil {
+					t.Fatal("strict explicit-quota parsing unexpectedly accepts absent or malformed groups")
+				}
+				cohort := desiredCapacityCohort(team, []tauv1alpha1.TauResourceQuota{testGPUQuota("taugrid-gpu-h200", "8", "0", "0")})
+				c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cluster, team, workspaces[0], nodes[0], external, cohort,
+					desiredDiscoveredGPUFlavor(discoveredGPUFlavor{name: "taugrid-gpu-h200", gpuClass: "h200"})).Build()
+				err := (&TauTeamReconciler{Client: c}).reconcileCapacityPool(ctx, cluster, team)
+				want := "8"
+				if state != "absent" {
+					want = "0"
+					if err == nil {
+						t.Fatal("unsafe or malformed object did not block the pool")
+					}
+					if state == "reserved" && !strings.Contains(err.Error(), "retains reservations") {
+						t.Fatalf("reservation conflict was not checked: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("valid quota-free %s blocked the pool: %v", kind, err)
+				}
+				current := newQueueObject(cohortGVK)
+				if err := c.Get(ctx, client.ObjectKeyFromObject(cohort), current); err != nil {
+					t.Fatal(err)
+				}
+				assertPoolQuantity(t, current, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", want)
+				unchanged := newQueueObject(external.GroupVersionKind())
+				if err := c.Get(ctx, client.ObjectKeyFromObject(external), unchanged); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(unchanged.Object["spec"], external.Object["spec"]) ||
+					!reflect.DeepEqual(unchanged.Object["status"], external.Object["status"]) {
+					t.Fatal("unrelated object was modified")
+				}
+			})
+		}
+	}
+}
+
 func TestCapacityPoolRejectsConflictsWithoutChangingExternalResources(t *testing.T) {
 	for _, kind := range []string{"team", "legacy", "external queue", "external borrowing", "external reservations", "external cohort", "overlapping selector", "workspace guarantee", "flavor drift", "owner UID"} {
 		t.Run(kind, func(t *testing.T) {
@@ -270,7 +330,7 @@ func TestCapacityPoolRejectsConflictsWithoutChangingExternalResources(t *testing
 				external = newQueueObject(clusterQueueGVK)
 				external.SetName("legacy")
 				external.SetLabels(map[string]string{labelDiscoverGPUFlavors: "true"})
-				external.Object["spec"] = map[string]any{"resourceGroups": []any{}}
+				external.Object["spec"] = map[string]any{}
 				objects = append(objects, external)
 			case "external queue":
 				external.SetGroupVersionKind(clusterQueueGVK)
@@ -307,6 +367,7 @@ func TestCapacityPoolRejectsConflictsWithoutChangingExternalResources(t *testing
 			case "owner UID":
 				queue := desiredWorkspaceClusterQueue(workspaces[0])
 				queue.SetAnnotations(map[string]string{annotationOwnerUID: "previous-owner"})
+				delete(queue.Object["spec"].(map[string]any), "resourceGroups")
 				objects = append(objects, queue)
 			}
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()
