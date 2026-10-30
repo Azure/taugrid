@@ -119,7 +119,7 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 		}
 	}
 	if ref := cluster.Spec.Queues.CapacityTeamRef; ref != nil && ref.Name != team.Name {
-		_, quotas, err := discoveredPoolInventory(ctx, r.quotaReader(), &cluster)
+		inventory, err := discoveredPoolInventory(ctx, r.quotaReader(), &cluster)
 		if err != nil {
 			return err
 		}
@@ -131,7 +131,7 @@ func (r *TauTeamReconciler) validateTeamCapacity(ctx context.Context, team *tauv
 		if err != nil {
 			return err
 		}
-		if err := r.validateCapacityPoolConflicts(ctx, &cluster, poolTeam, selected, quotas); err != nil {
+		if err := r.validateCapacityPoolConflicts(ctx, poolTeam, selected, inventory); err != nil {
 			return err
 		}
 	}

@@ -24,6 +24,12 @@ import (
 
 const annotationCapacityPool = labelkeys.AnnotationCapacityPool
 
+type capacityPoolInventory struct {
+	nodes   []corev1.Node
+	flavors []discoveredGPUFlavor
+	quotas  []tauv1alpha1.TauResourceQuota
+}
+
 func selectedCapacityTeam(ctx context.Context, reader client.Reader, name string) (*tauv1alpha1.TauCluster, bool, error) {
 	var cluster tauv1alpha1.TauCluster
 	if err := reader.Get(ctx, client.ObjectKey{Name: tauv1alpha1.TauClusterSingletonName}, &cluster); err != nil {
@@ -36,10 +42,10 @@ func selectedCapacityTeam(ctx context.Context, reader client.Reader, name string
 	return &cluster, ref != nil && ref.Name == name, nil
 }
 
-func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster *tauv1alpha1.TauCluster) ([]discoveredGPUFlavor, []tauv1alpha1.TauResourceQuota, error) {
+func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster *tauv1alpha1.TauCluster) (*capacityPoolInventory, error) {
 	var nodes corev1.NodeList
 	if err := reader.List(ctx, &nodes, client.MatchingLabels(cluster.Spec.Nodes.Selector)); err != nil {
-		return nil, nil, fmt.Errorf("list capacity pool nodes: %w", err)
+		return nil, fmt.Errorf("list capacity pool nodes: %w", err)
 	}
 	byFlavor := map[string]corev1.ResourceList{}
 	classes := map[string]string{}
@@ -53,7 +59,7 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 		}
 		name := discoveredGPUFlavorName(class)
 		if previous, found := classes[name]; found && previous != class {
-			return nil, nil, fmt.Errorf("GPU classes %q and %q resolve to the same flavor %q", previous, class, name)
+			return nil, fmt.Errorf("GPU classes %q and %q resolve to the same flavor %q", previous, class, name)
 		}
 		classes[name] = class
 		if byFlavor[name] == nil {
@@ -64,7 +70,7 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 		}
 		for resourceName, quantity := range node.Status.Allocatable {
 			if quantity.Sign() < 0 {
-				return nil, nil, fmt.Errorf("node %q has negative allocatable %s", node.Name, resourceName)
+				return nil, fmt.Errorf("node %q has negative allocatable %s", node.Name, resourceName)
 			}
 			total := byFlavor[name][resourceName]
 			total.Add(quantity)
@@ -75,7 +81,7 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 	if err := reader.Get(ctx, client.ObjectKey{Name: teamCohortName(cluster.Spec.Queues.CapacityTeamRef.Name)}, cohort); err == nil {
 		previous, err := clusterQueueNominalQuota(cohort)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		for key := range previous {
 			resourceName, flavor, _ := strings.Cut(key, "\x00")
@@ -87,7 +93,7 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 			}
 		}
 	} else if !apierrors.IsNotFound(err) {
-		return nil, nil, err
+		return nil, err
 	}
 	resourceNames := map[corev1.ResourceName]bool{corev1.ResourceName(nvidiaGPUResourceName): true}
 	for _, resources := range byFlavor {
@@ -117,7 +123,7 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 			})
 		}
 	}
-	return flavors, quotas, nil
+	return &capacityPoolInventory{nodes: nodes.Items, flavors: flavors, quotas: quotas}, nil
 }
 
 func capacityNodeEligible(node *corev1.Node) bool {
@@ -140,28 +146,29 @@ func (r *TauTeamReconciler) reconcileCapacityPool(ctx context.Context, cluster *
 	if err == nil {
 		return nil
 	}
+	return errors.Join(err, r.withdrawCapacityPool(ctx, team))
+}
+
+func (r *TauTeamReconciler) withdrawCapacityPool(ctx context.Context, team *tauv1alpha1.TauTeam) error {
 	cohort := newQueueObject(cohortGVK)
-	if getErr := r.quotaReader().Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, cohort); getErr != nil {
-		if apierrors.IsNotFound(getErr) {
-			return err
-		}
-		return errors.Join(err, getErr)
+	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, cohort); err != nil {
+		return client.IgnoreNotFound(err)
 	}
 	if cohort.GetLabels()[labelManagedBy] != labelManagedByValue || cohort.GetLabels()[labelTeam] != team.Name ||
 		cohort.GetAnnotations()[annotationOwnerUID] != string(team.UID) || cohort.GetAnnotations()[annotationCapacityPool] != "true" {
-		return err
+		return nil
 	}
-	nominals, readErr := clusterQueueNominalQuota(cohort)
-	if readErr != nil {
-		return errors.Join(err, readErr)
+	nominals, err := clusterQueueNominalQuota(cohort)
+	if err != nil {
+		return err
 	}
 	var zero []tauv1alpha1.TauResourceQuota
 	for key := range nominals {
 		resourceName, flavor, _ := strings.Cut(key, "\x00")
 		zero = append(zero, tauv1alpha1.TauResourceQuota{Resource: resourceName, Flavor: flavor})
 	}
-	return errors.Join(err, reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(),
-		desiredCapacityCohort(team, zero), labelTeam, team.Name))
+	return reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(),
+		desiredCapacityCohort(team, zero), labelTeam, team.Name)
 }
 
 func (r *TauTeamReconciler) applyCapacityPool(ctx context.Context, cluster *tauv1alpha1.TauCluster, team *tauv1alpha1.TauTeam) error {
@@ -171,11 +178,11 @@ func (r *TauTeamReconciler) applyCapacityPool(ctx context.Context, cluster *tauv
 	if !team.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(team, teamFinalizer) || len(team.Spec.Quota) != 0 {
 		return fmt.Errorf("capacity pool team %q must have its cleanup finalizer, be non-deleting and omit spec.quota", team.Name)
 	}
-	flavors, quotas, err := discoveredPoolInventory(ctx, r.quotaReader(), cluster)
+	inventory, err := discoveredPoolInventory(ctx, r.quotaReader(), cluster)
 	if err != nil {
 		return err
 	}
-	for _, flavor := range flavors {
+	for _, flavor := range inventory.flavors {
 		current := newQueueObject(resourceFlavorGVK)
 		if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: flavor.name}, current); err != nil {
 			return err
@@ -188,14 +195,14 @@ func (r *TauTeamReconciler) applyCapacityPool(ctx context.Context, cluster *tauv
 	if err != nil {
 		return err
 	}
-	if err := r.validateCapacityPoolConflicts(ctx, cluster, team, selected, quotas); err != nil {
+	if err := r.validateCapacityPoolConflicts(ctx, team, selected, inventory); err != nil {
 		return err
 	}
-	if err := validateQuotaFlavors(ctx, r.quotaReader(), quotas); err != nil {
+	if err := validateQuotaFlavors(ctx, r.quotaReader(), inventory.quotas); err != nil {
 		return err
 	}
 	if err := reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(),
-		desiredCapacityCohort(team, quotas), labelTeam, team.Name); err != nil {
+		desiredCapacityCohort(team, inventory.quotas), labelTeam, team.Name); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(selected))
@@ -208,7 +215,7 @@ func (r *TauTeamReconciler) applyCapacityPool(ctx context.Context, cluster *tauv
 		if !workspace.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(workspace, workspaceFinalizer) {
 			continue
 		}
-		if err := r.reconcileCapacityWorkspace(ctx, workspace, quotas); err != nil {
+		if err := r.reconcileCapacityWorkspace(ctx, workspace, inventory.quotas); err != nil {
 			return err
 		}
 	}
@@ -305,13 +312,9 @@ func (r *TauTeamReconciler) reconcileCapacityWorkspace(ctx context.Context, work
 	return reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(), queue, labelWorkspace, workspace.Name)
 }
 
-func (r *TauTeamReconciler) validateCapacityPoolConflicts(ctx context.Context, cluster *tauv1alpha1.TauCluster, team *tauv1alpha1.TauTeam, workspaces map[string]*tauv1alpha1.TauWorkspace, quotas []tauv1alpha1.TauResourceQuota) error {
-	var nodes corev1.NodeList
-	if err := r.quotaReader().List(ctx, &nodes, client.MatchingLabels(cluster.Spec.Nodes.Selector)); err != nil {
-		return err
-	}
+func (r *TauTeamReconciler) validateCapacityPoolConflicts(ctx context.Context, team *tauv1alpha1.TauTeam, workspaces map[string]*tauv1alpha1.TauWorkspace, inventory *capacityPoolInventory) error {
 	poolFlavors := map[string]bool{}
-	for _, quota := range quotas {
+	for _, quota := range inventory.quotas {
 		poolFlavors[quota.Flavor] = true
 	}
 	overlaps := func(name string) (bool, error) {
@@ -326,8 +329,8 @@ func (r *TauTeamReconciler) validateCapacityPoolConflicts(ctx context.Context, c
 		if err != nil {
 			return false, err
 		}
-		for i := range nodes.Items {
-			node := &nodes.Items[i]
+		for i := range inventory.nodes {
+			node := &inventory.nodes[i]
 			if node.Labels[corev1.LabelOSStable] == "linux" && node.Labels[labelkeys.LabelGPUClass] != "" &&
 				labels.SelectorFromSet(selector).Matches(labels.Set(node.Labels)) {
 				return true, nil
@@ -366,95 +369,109 @@ func (r *TauTeamReconciler) validateCapacityPoolConflicts(ctx context.Context, c
 			if !isQueue && object.GetName() == teamCohortName(team.Name) {
 				continue
 			}
-			if object.GetLabels()[labelDiscoverGPUFlavors] == "true" {
-				return fmt.Errorf("%s %q enables legacy discovery alongside the exclusive capacity pool", object.GetKind(), object.GetName())
+			var workspace *tauv1alpha1.TauWorkspace
+			if isQueue {
+				workspace = workspaces[object.GetName()]
 			}
-			nominals := map[string]resource.Quantity{}
-			if _, found, err := unstructured.NestedFieldNoCopy(object.Object, "spec", "resourceGroups"); err != nil {
+			if err := validateCapacityPoolObject(object, isQueue, team.Name, workspace, overlaps); err != nil {
 				return err
-			} else if found {
-				nominals, err = clusterQueueNominalQuota(object)
-				if err != nil {
-					return err
-				}
 			}
-			if workspace := workspaces[object.GetName()]; isQueue && workspace != nil {
-				owned, err := authoritativeWorkspaceClusterQueue(object, workspace)
-				if err != nil {
-					return err
-				}
-				if !owned {
-					return fmt.Errorf("capacity pool ClusterQueue %q is externally owned", object.GetName())
-				}
-				cohort, _, err := unstructured.NestedString(object.Object, "spec", "cohortName")
-				if err != nil {
-					return err
-				}
-				if cohort != teamCohortName(team.Name) && len(nominals) != 0 {
-					return fmt.Errorf("capacity pool ClusterQueue %q belongs to another Cohort", object.GetName())
-				}
-				for _, nominal := range nominals {
-					if nominal.Sign() != 0 {
-						return fmt.Errorf("capacity pool ClusterQueue %q has a duplicate nominal budget", object.GetName())
-					}
-				}
+		}
+
+	}
+	return nil
+}
+
+func validateCapacityPoolObject(
+	object *unstructured.Unstructured,
+	isQueue bool,
+	teamName string,
+	workspace *tauv1alpha1.TauWorkspace,
+	overlapsFlavor func(string) (bool, error),
+) error {
+	if object.GetLabels()[labelDiscoverGPUFlavors] == "true" {
+		return fmt.Errorf("%s %q enables legacy discovery alongside the exclusive capacity pool", object.GetKind(), object.GetName())
+	}
+	nominals := map[string]resource.Quantity{}
+	if _, found, err := unstructured.NestedFieldNoCopy(object.Object, "spec", "resourceGroups"); err != nil {
+		return err
+	} else if found {
+		nominals, err = clusterQueueNominalQuota(object)
+		if err != nil {
+			return err
+		}
+	}
+	cohort, _, err := unstructured.NestedString(object.Object, "spec", "cohortName")
+	if err != nil {
+		return err
+	}
+	if workspace != nil {
+		owned, err := authoritativeWorkspaceClusterQueue(object, workspace)
+		if err != nil {
+			return err
+		}
+		if !owned {
+			return fmt.Errorf("capacity pool ClusterQueue %q is externally owned", object.GetName())
+		}
+		if cohort != teamCohortName(teamName) && len(nominals) != 0 {
+			return fmt.Errorf("capacity pool ClusterQueue %q belongs to another Cohort", object.GetName())
+		}
+		for _, nominal := range nominals {
+			if nominal.Sign() != 0 {
+				return fmt.Errorf("capacity pool ClusterQueue %q has a duplicate nominal budget", object.GetName())
+			}
+		}
+		return nil
+	}
+	if isQueue {
+		reservations, err := clusterQueueReservations(object)
+		if err != nil {
+			return err
+		}
+		for key, quantity := range reservations {
+			if quantity.Sign() <= 0 {
 				continue
 			}
-			if isQueue {
-				reservations, err := clusterQueueReservations(object)
-				if err != nil {
-					return err
-				}
-				for key, quantity := range reservations {
-					if quantity.Sign() <= 0 {
-						continue
-					}
-					_, flavor, _ := strings.Cut(key, "\x00")
-					if conflict, err := overlaps(flavor); err != nil {
-						return err
-					} else if conflict {
-						return fmt.Errorf("ClusterQueue %q retains reservations overlapping the exclusive capacity pool", object.GetName())
-					}
-				}
+			_, flavor, _ := strings.Cut(key, "\x00")
+			if conflict, err := overlapsFlavor(flavor); err != nil {
+				return err
+			} else if conflict {
+				return fmt.Errorf("ClusterQueue %q retains reservations overlapping the exclusive capacity pool", object.GetName())
 			}
-			quotaObjects, err := clusterQueueQuotaObjects(object)
+		}
+	}
+	quotaObjects, err := clusterQueueQuotaObjects(object)
+	if err != nil {
+		return err
+	}
+	for flavor, resources := range quotaObjects {
+		active := false
+		for _, quota := range resources {
+			nominal, err := resource.ParseQuantity(fmt.Sprint(quota["nominalQuota"]))
 			if err != nil {
 				return err
 			}
-			cohort, _, err := unstructured.NestedString(object.Object, "spec", "cohortName")
-			if err != nil {
-				return err
-			}
-			for flavor, resources := range quotaObjects {
-				active := false
-				for _, quota := range resources {
-					nominal, err := resource.ParseQuantity(fmt.Sprint(quota["nominalQuota"]))
+			active = active || nominal.Sign() != 0
+			if isQueue && cohort != "" {
+				limit, found := quota["borrowingLimit"]
+				if !found {
+					active = true
+				} else {
+					borrowing, err := resource.ParseQuantity(fmt.Sprint(limit))
 					if err != nil {
 						return err
 					}
-					active = active || nominal.Sign() != 0
-					if isQueue && cohort != "" {
-						limit, found := quota["borrowingLimit"]
-						if !found {
-							active = true
-						} else {
-							borrowing, err := resource.ParseQuantity(fmt.Sprint(limit))
-							if err != nil {
-								return err
-							}
-							active = active || borrowing.Sign() != 0
-						}
-					}
-				}
-				if !active {
-					continue
-				}
-				if conflict, err := overlaps(flavor); err != nil {
-					return err
-				} else if conflict {
-					return fmt.Errorf("%s %q flavor %q budget overlaps exclusive capacity pool", object.GetKind(), object.GetName(), flavor)
+					active = active || borrowing.Sign() != 0
 				}
 			}
+		}
+		if !active {
+			continue
+		}
+		if conflict, err := overlapsFlavor(flavor); err != nil {
+			return err
+		} else if conflict {
+			return fmt.Errorf("%s %q flavor %q budget overlaps exclusive capacity pool", object.GetKind(), object.GetName(), flavor)
 		}
 	}
 	return nil

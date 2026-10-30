@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestCapacityPoolSharesAndRefreshes(t *testing.T) {
@@ -32,7 +33,16 @@ func TestCapacityPoolSharesAndRefreshes(t *testing.T) {
 	for _, node := range nodes {
 		objects = append(objects, node)
 	}
+	nodeLists := 0
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.NodeList); ok {
+					nodeLists++
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
 		WithStatusSubresource(&tauv1alpha1.TauTeam{}, &corev1.Node{}).Build()
 	managed, capacity, drifted, err := (&TauClusterReconciler{Client: c}).reconcileDiscoveredGPUFlavors(ctx, cluster, true)
 	if err != nil || drifted || len(managed) != 2 || len(capacity) != 8 {
@@ -41,8 +51,12 @@ func TestCapacityPoolSharesAndRefreshes(t *testing.T) {
 	reconciler := &TauTeamReconciler{Client: c}
 	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(team)}
 	for range 2 {
+		before := nodeLists
 		if _, err := reconciler.Reconcile(ctx, request); err != nil {
 			t.Fatal(err)
+		}
+		if nodeLists-before != 1 {
+			t.Fatalf("pool reconciliation listed nodes %d times; inventory and conflicts must share one snapshot", nodeLists-before)
 		}
 	}
 	cohort := newQueueObject(cohortGVK)
@@ -163,11 +177,14 @@ func TestCapacityPoolCountsEachNodeOnce(t *testing.T) {
 	cordoned.Name = "cordoned"
 	cordoned.Spec.Unschedulable = true
 	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(nodes[0], second, cordoned).Build()
-	flavors, quotas, err := discoveredPoolInventory(context.Background(), c, cluster)
-	if err != nil || len(flavors) != 1 {
-		t.Fatalf("inventory: flavors=%v err=%v", flavors, err)
+	inventory, err := discoveredPoolInventory(context.Background(), c, cluster)
+	if err != nil {
+		t.Fatal(err)
 	}
-	cohort := desiredCapacityCohort(team, quotas)
+	if len(inventory.flavors) != 1 {
+		t.Fatalf("inventory flavors=%v", inventory.flavors)
+	}
+	cohort := desiredCapacityCohort(team, inventory.quotas)
 	for resourceName, want := range map[string]string{
 		nvidiaGPUResourceName: "16", "cpu": "63", "memory": "256Gi", "rdma/ib": "126",
 	} {
@@ -238,17 +255,17 @@ func TestCapacityPoolEligibility(t *testing.T) {
 			node.Labels["pool"] = "shared"
 			test.change(node)
 			c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(node).Build()
-			_, quotas, err := discoveredPoolInventory(context.Background(), c, cluster)
+			inventory, err := discoveredPoolInventory(context.Background(), c, cluster)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if test.want == "" {
-				if len(quotas) != 0 {
-					t.Fatalf("ineligible node counted: %v", quotas)
+				if len(inventory.quotas) != 0 {
+					t.Fatalf("ineligible node counted: %v", inventory.quotas)
 				}
 				return
 			}
-			assertPoolQuantity(t, desiredTeamCohort(testTeam("pool", "0"), quotas), "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", test.want)
+			assertPoolQuantity(t, desiredTeamCohort(testTeam("pool", "0"), inventory.quotas), "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", test.want)
 		})
 	}
 }

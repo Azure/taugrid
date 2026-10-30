@@ -47,14 +47,14 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavors(
 		reader = r.APIReader
 	}
 	if cluster.Spec.Queues.CapacityTeamRef != nil {
-		flavors, quotas, err := discoveredPoolInventory(ctx, reader, cluster)
+		inventory, err := discoveredPoolInventory(ctx, reader, cluster)
 		if err != nil {
 			return nil, nil, false, err
 		}
 		var managed []tauv1alpha1.TauManagedResourceStatus
 		var capacity []tauv1alpha1.TauResourceCapacityStatus
 		drifted := false
-		for _, flavor := range flavors {
+		for _, flavor := range inventory.flavors {
 			object, changed, err := r.reconcileDiscoveredGPUFlavor(ctx, flavor, mutate)
 			if err != nil {
 				return managed, capacity, true, err
@@ -64,7 +64,7 @@ func (r *TauClusterReconciler) reconcileDiscoveredGPUFlavors(
 				managed = append(managed, managedResourceStatus(resourceFlavorGVK, object))
 			}
 		}
-		for _, quota := range quotas {
+		for _, quota := range inventory.quotas {
 			capacity = append(capacity, tauv1alpha1.TauResourceCapacityStatus{
 				Flavor: quota.Flavor, Resource: quota.Resource, Capacity: quota.NominalQuota.DeepCopy(),
 			})
