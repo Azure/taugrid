@@ -19,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -48,6 +49,216 @@ func TestRunHelpDocumentsProfileSource(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "policy.workload_profile_snapshot") {
 		t.Fatalf("run help missing profile snapshot contract:\n%s", stdout.String())
+	}
+}
+
+func TestCapacityWorkspaceRunWithoutProfiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "train.sh"), []byte("#!/bin/sh\necho train\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: direct
+engine: job
+entrypoint: train.sh
+runtime:
+  image: mcr.microsoft.com/azurelinux/base/core:3.0
+compute:
+  gpus: 1
+  cpu_request: "1"
+  memory_request: 1Gi
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalFetcher, originalClient := fetchRunWorkspace, newClusterProfileClient
+	t.Cleanup(func() { fetchRunWorkspace, newClusterProfileClient = originalFetcher, originalClient })
+	for _, name := range []string{"research", "development"} {
+		t.Run(name, func(t *testing.T) {
+			queue := managedWorkspaceClusterQueueName(name)
+			ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+				Workspace: name, ContextName: "test-context", Namespace: name, Queue: queue,
+			}}
+			fetchRunWorkspace = func(_ *cobra.Command, _, _, _ string) (tauworkspace.Workspace, error) {
+				w := readyWorkspace()
+				w.Metadata.Name = name
+				w.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "research"}
+				w.Spec.Target.Namespace, w.Status.Target.ResolvedNamespace = name, name
+				w.Spec.Queue, w.Status.Queue.LocalQueue, w.Status.Queue.ClusterQueue = queue, queue, queue
+				return w, nil
+			}
+			newClusterProfileClient = func(string) (dynamic.Interface, error) {
+				client := readyClusterProfileClientForProfiles(t, 4, false)
+				cluster, err := client.Resource(profile.TauClusterGVR).Get(context.Background(), "cluster", metav1.GetOptions{})
+				if err != nil {
+					return nil, err
+				}
+				cluster.Object["spec"] = map[string]any{"managementMode": "Reconcile", "queues": map[string]any{
+					"capacityTeamRef": map[string]any{"name": "research"},
+				}, "workloadProfiles": []any{}}
+				if err := unstructured.SetNestedField(cluster.Object, "Ready", "status", "phase"); err != nil {
+					return nil, err
+				}
+				if err := unstructured.SetNestedField(cluster.Object, int64(4), "status", "observedGeneration"); err != nil {
+					return nil, err
+				}
+				_, err = client.Resource(profile.TauClusterGVR).Update(context.Background(), cluster, metav1.UpdateOptions{})
+				return client, err
+			}
+			cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer { return ensurer })
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs([]string{"--config", config, "--dry-run=client"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("direct Tau run: %v\n%s", err, stderr.String())
+			}
+			var job struct {
+				Metadata struct {
+					Labels      map[string]string `yaml:"labels"`
+					Annotations map[string]string `yaml:"annotations"`
+				} `yaml:"metadata"`
+				Spec struct {
+					Suspend  bool `yaml:"suspend"`
+					Template struct {
+						Spec struct {
+							Containers []struct {
+								Resources struct {
+									Requests map[string]string `yaml:"requests"`
+									Limits   map[string]string `yaml:"limits"`
+								} `yaml:"resources"`
+							} `yaml:"containers"`
+						} `yaml:"spec"`
+					} `yaml:"template"`
+				} `yaml:"spec"`
+			}
+			if err := yaml.Unmarshal(stdout.Bytes(), &job); err != nil {
+				t.Fatal(err)
+			}
+			if !job.Spec.Suspend || job.Metadata.Labels["kueue.x-k8s.io/queue-name"] != queue {
+				t.Fatalf("job must be suspended on verified workspace queue:\n%s", stdout.String())
+			}
+			if job.Metadata.Annotations[workloadmeta.AnnotationWorkloadProfileName] != "" ||
+				job.Metadata.Labels[workloadmeta.LabelProfile] != "" {
+				t.Fatal("direct job must not claim a workload profile")
+			}
+			resources := job.Spec.Template.Spec.Containers[0].Resources
+			if resources.Requests["nvidia.com/gpu"] != "1" || resources.Limits["nvidia.com/gpu"] != "1" ||
+				resources.Requests["cpu"] != "1" || resources.Requests["memory"] != "1Gi" {
+				t.Fatalf("explicit resources not preserved: %+v", resources)
+			}
+		})
+	}
+}
+
+func TestCapacityJobPolicyGuards(t *testing.T) {
+	originalClient := newClusterProfileClient
+	t.Cleanup(func() { newClusterProfileClient = originalClient })
+	for _, tt := range []struct {
+		name   string
+		change func(*unresolvedRunOptions, *unstructured.Unstructured)
+		want   string
+	}{
+		{name: "explicit CPU", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { *o.jobGPUs = 0 }},
+		{name: "missing cardinality", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.jobGPUs = nil }, want: "explicit non-negative compute.gpus"},
+		{name: "negative cardinality", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { *o.jobGPUs = -1 }, want: "explicit non-negative compute.gpus"},
+		{name: "shape", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.shape = "1x" }, want: "not policy.shape"},
+		{name: "unverified queue", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.workspaceQueueResolved = false }, want: "verified team-managed"},
+		{name: "external queue", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.workspaceClusterQueue = "external" }, want: "verified team-managed"},
+		{name: "external LocalQueue", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.queue = "external" }, want: "verified team-managed"},
+		{name: "team conflict", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.team = "another" }, want: "conflicts with TauWorkspace team"},
+		{name: "stale cluster", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) { cluster.SetGeneration(5) }, want: "current observedGeneration"},
+		{name: "degraded cluster", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["status"].(map[string]any)["phase"] = "Degraded"
+		}, want: "Ready TauCluster"},
+		{name: "observe mode", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["managementMode"] = "Observe"
+		}, want: "Reconcile mode"},
+		{name: "deleted cluster", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			now := metav1.Now()
+			cluster.SetDeletionTimestamp(&now)
+		}, want: "Ready TauCluster"},
+		{name: "malformed catalog", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["workloadProfiles"] = "invalid"
+		}, want: "expected []interface{}"},
+		{name: "nonempty catalog requires profile", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["workloadProfiles"] = []any{map[string]any{"name": "pending"}}
+		}, want: "no ready workload profile"},
+		{name: "different pool team", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.workspaceTeam = "another" }, want: "no ready workload profile"},
+		{name: "teamless workspace", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.workspaceTeam = "" }, want: "no ready workload profile"},
+		{name: "explicit profile", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) {
+			o.profileNameExplicit = true
+			o.profileName = "requested"
+		}, want: "requested"},
+		{name: "Ray requires profile", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.engine = runconfig.EngineRayJob }, want: "no ready workload profile"},
+		{name: "managed workflow requires profile", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.file = "workflow.yaml" }, want: "no ready workload profile"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := readyClusterProfileClientForProfiles(t, 4, false)
+			cluster, err := client.Resource(profile.TauClusterGVR).Get(context.Background(), profile.TauClusterName, metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster.Object["spec"] = map[string]any{
+				"managementMode":   "Reconcile",
+				"queues":           map[string]any{"capacityTeamRef": map[string]any{"name": "research"}},
+				"workloadProfiles": []any{},
+			}
+			status := cluster.Object["status"].(map[string]any)
+			status["phase"], status["observedGeneration"] = "Ready", int64(4)
+			o := defaultRunDispatchOptions()
+			o.engine = runconfig.EngineJob
+			o.workspace, o.workspaceTeam = "sample", "research"
+			o.workspaceQueueResolved = true
+			o.queue, o.workspaceClusterQueue = "tau-ws-sample", "tau-ws-sample"
+			gpus := 1
+			o.jobGPUs = &gpus
+			tt.change(&o, cluster)
+			if _, err := client.Resource(profile.TauClusterGVR).Update(context.Background(), cluster, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			newClusterProfileClient = func(string) (dynamic.Interface, error) { return client, nil }
+			got, err := resolveClusterRunWorkloadProfile(context.Background(), o)
+			if tt.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("error = %v, want %q", err, tt.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.directJobProfile == nil || got.selectedWorkloadProfile != nil || got.directJobProfile.Resources.GPU.Count != *o.jobGPUs {
+				t.Fatalf("unexpected direct GPU contract: %#v", got.directJobProfile)
+			}
+		})
+	}
+}
+
+func TestCapacityJobRetainsReadyProfileSelection(t *testing.T) {
+	originalClient := newClusterProfileClient
+	t.Cleanup(func() { newClusterProfileClient = originalClient })
+	client := readyClusterProfileClientForProfiles(t, 4, false, testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 4))
+	cluster, err := client.Resource(profile.TauClusterGVR).Get(context.Background(), profile.TauClusterName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster.Object["spec"] = map[string]any{
+		"queues":           map[string]any{"capacityTeamRef": map[string]any{"name": "research"}},
+		"workloadProfiles": []any{map[string]any{"name": "research-profile"}},
+	}
+	if _, err := client.Resource(profile.TauClusterGVR).Update(context.Background(), cluster, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	newClusterProfileClient = func(string) (dynamic.Interface, error) { return client, nil }
+	o := defaultRunDispatchOptions()
+	o.engine = runconfig.EngineJob
+	o.workspaceTeam, o.team, o.lane, o.namespace = "research", "research", "training", "alpha"
+	got, err := resolveClusterRunWorkloadProfile(context.Background(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.selectedWorkloadProfile == nil || got.selectedWorkloadProfile.Selection.Profile.Name != "research-profile" || got.directJobProfile != nil {
+		t.Fatalf("ready profile was bypassed: %#v", got.selectedWorkloadProfile)
 	}
 }
 

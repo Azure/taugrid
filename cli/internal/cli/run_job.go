@@ -22,6 +22,7 @@ import (
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/kube"
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	runtopology "github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -112,17 +113,25 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 
 	topo := resolvedRunTopologyFlags(o.runPlacement)
 	selected := o.selectedWorkloadProfile
-	if err := validateSelectedWorkloadProfileMode(selected, o.dryRun); err != nil {
-		return err
+	var p profile.Profile
+	resolvedProfileName := ""
+	if selected != nil {
+		if err := validateSelectedWorkloadProfileMode(selected, o.dryRun); err != nil {
+			return err
+		}
+		p = selected.Render
+		resolvedProfileName = selected.Selection.Profile.Name
+	} else if o.directJobProfile != nil {
+		p = *o.directJobProfile
+	} else {
+		return fmt.Errorf("no TauCluster workload profile or verified direct job capacity policy was resolved")
 	}
-	resolvedProfileName := selected.Selection.Profile.Name
 	warnings := []string{}
 
 	jobGPUCount, err := resolveDirectJobGPUCount(o.jobGPUs, topo.shape)
 	if err != nil {
 		return err
 	}
-	p := selected.Render
 	namespaceExplicit := strings.TrimSpace(o.namespace) != ""
 	ns := o.namespace
 	if ns == "" {
@@ -321,13 +330,15 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	if o.metricsOffloadEnabled {
 		opts.Annotations[workloadmeta.AnnotationMetricsSession] = o.metricsSessionID
 	}
-	opts.Labels, opts.Annotations, err = stampSelectedWorkloadProfile(
-		opts.Labels,
-		opts.Annotations,
-		selected,
-	)
-	if err != nil {
-		return err
+	if selected != nil {
+		opts.Labels, opts.Annotations, err = stampSelectedWorkloadProfile(
+			opts.Labels,
+			opts.Annotations,
+			selected,
+		)
+		if err != nil {
+			return err
+		}
 	}
 	renderJob := func() ([]byte, error) {
 		return jobrender.Render(p, opts)
@@ -777,6 +788,12 @@ func validateProfiler(mode string) (string, error) {
 }
 
 func formatRunJobSubmission(name, profileName, namespace, kubeContext string) string {
+	if profileName == "" {
+		return fmt.Sprintf(
+			"submitted %s (ns=%s)\nstatus:  tau run status %s -n %s%s\nlogs:    tau logs %s -n %s -f%s\n",
+			name, namespace, name, namespace, contextFlag(kubeContext), name, namespace, contextFlag(kubeContext),
+		)
+	}
 	return fmt.Sprintf(
 		"submitted %s (profile=%s, ns=%s)\nstatus:  tau run status %s -n %s%s\nlogs:    tau logs %s -n %s -f%s\nprofile: tau run status %s -n %s --run-profile%s\n",
 		name, profileName, namespace,

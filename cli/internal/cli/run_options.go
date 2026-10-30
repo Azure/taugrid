@@ -6,6 +6,7 @@ package cli
 import (
 	"time"
 
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 )
 
@@ -26,6 +27,7 @@ type runRouting struct {
 	configHash             string
 	workspaceQueueResolved bool
 	workspaceClusterQueue  string
+	workspaceTeam          string
 }
 
 type runRoutingInput struct {
@@ -40,6 +42,7 @@ type runPlacement struct {
 	queue                     string
 	workloadProfileSnapshot   string
 	selectedWorkloadProfile   *selectedWorkloadProfile
+	directJobProfile          *profile.Profile
 	team                      string
 	lane                      string
 	gpuClass                  string

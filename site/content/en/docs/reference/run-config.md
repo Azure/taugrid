@@ -53,6 +53,38 @@ needed, omit `storage.data_pvc`. TauGrid still provides the pod-local `/mnt`
 `emptyDir` scratch path through `TAU_HOT_DIR`; its contents disappear with the
 pod.
 
+### Jobs without workload profiles
+
+When `TauCluster.spec.queues.capacityTeamRef` selects your workspace's team
+and `spec.workloadProfiles` is empty, a connected team-linked workspace supports
+direct batch Jobs without a preset:
+
+```yaml
+name: train
+engine: job
+entrypoint: train.py
+runtime:
+  image: <pinned-image>
+compute:
+  gpus: 1
+  cpu_request: "1"
+  memory_request: 1Gi
+```
+
+Run `tau run --config tau.yaml` from a repository connected to the workspace.
+`compute.gpus` is required; set it to `0` for a CPU Job. The workspace and cluster
+must be Ready with current observed generations, the cluster must use Reconcile
+mode, and routing must use the workspace's managed LocalQueue and ClusterQueue.
+Jobs remain suspended until Kueue admits them against the shared team pool;
+GPU requests and limits equal the explicit count. CPU and memory retain their
+normal explicit-resource validation. No workload-profile identity is stamped.
+
+This path does not accept `policy.shape`, replace an explicitly requested
+`policy.profile`, or bypass a nonempty profile catalog. RayJobs and managed
+workflows still require a ready workload profile. Client dry-run still reads
+live workspace and cluster policy; offline profile snapshots remain a separate
+client-dry-run-only contract.
+
 Direct batch Jobs can stage an immutable reference directory from another image,
 skipping ConfigMap creation:
 
