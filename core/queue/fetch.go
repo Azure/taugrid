@@ -175,6 +175,28 @@ func applyClusterQueueQuota(g *Group, cq kueueapi.ClusterQueue, flavor string) {
 	g.QuotaFound = nominalOK || reservationOK || usageOK
 	g.GPUNominal = nominal
 	g.GPUReserved = reserved
+	g.GPUNominalAvailable = nominalOK
+	g.GPUReservationAvailable = reservationOK
+	if !nominalOK && !reservationOK && !usageOK {
+		for _, resourceGroup := range cq.Spec.ResourceGroups {
+			for _, candidate := range resourceGroup.Flavors {
+				if (flavor == "" || candidate.Name == flavor) && len(candidate.Resources) > 0 {
+					g.GPUNominalAvailable = true
+					g.GPUReservationAvailable = true
+				}
+			}
+		}
+	}
+	if flavor == "" {
+		for _, resourceGroup := range cq.Spec.ResourceGroups {
+			for _, candidate := range resourceGroup.Flavors {
+				if _, hasGPU := cq.NominalGPU(candidate.Name); hasGPU {
+					_, _, reported := cq.StatusGPU(cq.Status.FlavorsReservation, candidate.Name)
+					g.GPUReservationAvailable = g.GPUReservationAvailable && reported
+				}
+			}
+		}
+	}
 	g.GPUUsed = used
 	g.GPUBorrowed = borrowed
 	headroom := nominal - reserved
