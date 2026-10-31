@@ -335,6 +335,67 @@ func TestSharedWorkspaceTeamReassignmentPreservesNamespace(t *testing.T) {
 	}
 }
 
+func TestSharedWorkspaceTeamReassignmentUpdatesLocalQueues(t *testing.T) {
+	for _, owner := range []string{"same-workspace", "different-uid", "external", "legacy-unbound"} {
+		t.Run(owner, func(t *testing.T) {
+			ctx := context.Background()
+			r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+			workspace := workspaces[1]
+			workspace.Spec.Queue = "jobqueue"
+			if err := r.Update(ctx, workspace); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{workspaceLocalQueueName(workspace), "jobqueue"} {
+				queue := newWorkspaceLocalQueue(workspace, workspace.Name, name, workspaceClusterQueueName(workspace.Name), true)
+				queue.SetUID(types.UID("local-" + name))
+				labels := queue.GetLabels()
+				labels[labelTeam], labels["keep"] = teams[0].Name, "value"
+				if name == "jobqueue" && owner == "external" {
+					labels[labelManagedBy] = "external"
+				}
+				queue.SetLabels(labels)
+				if name == "jobqueue" && owner == "different-uid" {
+					setOwnerUIDAnnotation(queue, "different-workspace")
+				}
+				if name == "jobqueue" && owner == "legacy-unbound" {
+					queue.SetAnnotations(nil)
+				}
+				queue.Object["spec"].(map[string]any)["stopPolicy"] = "Hold"
+				if err := r.Create(ctx, queue); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reconciler := newTestWorkspaceReconciler(r.Client)
+			_, ready, message, err := reconciler.reconcileQueue(ctx, workspace, workspace.Name)
+			if owner == "different-uid" {
+				if ready {
+					t.Fatal("LocalQueue team metadata must not change for another workspace UID")
+				}
+			} else if !ready || err != nil {
+				t.Fatalf("reconcile LocalQueue metadata: %s: %v", message, err)
+			}
+			for _, name := range []string{workspaceLocalQueueName(workspace), "jobqueue"} {
+				queue := newQueueObject(localQueueGVK)
+				if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: workspace.Name}, queue); err != nil {
+					t.Fatal(err)
+				}
+				expectedTeam := teams[1].Name
+				if name == "jobqueue" && owner != "same-workspace" {
+					expectedTeam = teams[0].Name
+				}
+				policy, _, _ := unstructured.NestedString(queue.Object, "spec", "stopPolicy")
+				if queue.GetLabels()[labelTeam] != expectedTeam || queue.GetLabels()["keep"] != "value" ||
+					queue.GetUID() != types.UID("local-"+name) || policy != "Hold" {
+					t.Fatalf("LocalQueue %q did not preserve ownership/policy while reconciling its team: %#v", name, queue.Object)
+				}
+			}
+		})
+	}
+}
+
 func TestNodeClassificationByExactHardwareLabels(t *testing.T) {
 	rules := []tauv1alpha1.TauNodeLabelRule{
 		{Match: tauv1alpha1.TauNodeMatch{VMSizes: []string{"legacy-size"}}, Labels: map[string]string{labelkeys.LabelGPUClass: "legacy"}},

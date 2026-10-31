@@ -47,6 +47,8 @@ without fixed workspace splits. Existing workspace names, workload namespaces,
 and storage do not need to change. Reassigning an existing workspace to another
 team preserves its namespace only when its authoritative workspace UID still
 matches; this is not permission to adopt another workspace's namespace.
+Owned LocalQueue team labels follow the same workspace UID; external queues
+are not relabeled, and existing queue policies are preserved.
 Deleting teams cannot acquire new workspaces. Existing workspaces can retain
 their applied membership or move to another team so deletion can finish.
 Direct Jobs in shared mode retain the workspace's LocalQueue, including the
