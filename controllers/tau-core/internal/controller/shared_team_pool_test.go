@@ -62,6 +62,15 @@ func sharedTeamFixture(t *testing.T, intercept interceptor.Funcs) (*TauTeamRecon
 func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 	ctx := context.Background()
 	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+	extraWorkspace := workspaces[0].DeepCopy()
+	extraWorkspace.Name += "-second"
+	extraWorkspace.UID = types.UID(extraWorkspace.Name)
+	extraWorkspace.ResourceVersion = ""
+	extraWorkspace.Spec.Target.Namespace = extraWorkspace.Name
+	if err := r.Create(ctx, extraWorkspace); err != nil {
+		t.Fatal(err)
+	}
+	workspaces = append(workspaces, extraWorkspace)
 	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +121,10 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(queue.Object, &cq); err != nil {
 			t.Fatal(err)
 		}
+		cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
+		if err != nil || cohort != teamCohortName(workspace.Spec.TeamRef.Name) {
+			t.Fatalf("workspace %q cohort = %q, want its team cohort: %v", workspace.Name, cohort, err)
+		}
 		if cq.Spec.Preemption.ReclaimWithinCohort != kueue.PreemptionPolicyNever ||
 			cq.Spec.Preemption.BorrowWithinCohort.Policy != kueue.BorrowWithinCohortPolicyNever {
 			t.Fatal("borrowed jobs must not be preempted by another queue")
@@ -126,18 +139,19 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 	}
 	first := snapshot.ClusterQueue(kueue.ClusterQueueReference(workspaceClusterQueueName(workspaces[0].Name)))
 	second := snapshot.ClusterQueue(kueue.ClusterQueueReference(workspaceClusterQueueName(workspaces[1].Name)))
-	if first == nil || second == nil {
+	third := snapshot.ClusterQueue(kueue.ClusterQueueReference(workspaceClusterQueueName(extraWorkspace.Name)))
+	if first == nil || second == nil || third == nil {
 		t.Fatal("shared workspace queues must be in the pinned Kueue scheduling snapshot")
 	}
 	fr := resources.FlavorResource{Flavor: "taugrid-gpu-h200", Resource: corev1.ResourceName(nvidiaGPUResourceName)}
 	usage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(8)}}
-	if first.Available(fr).CmpInt64(8) != 0 || second.Available(fr).CmpInt64(8) != 0 {
+	if first.Available(fr).CmpInt64(8) != 0 || second.Available(fr).CmpInt64(8) != 0 || third.Available(fr).CmpInt64(8) != 0 {
 		t.Fatal("each zero-nominal workspace must be able to spill over to the whole pool, not just its team guarantee")
 	}
 	t.Logf("Before borrowing: either workspace can use %s GPUs", first.Available(fr).String())
 	first.AddUsage(usage)
-	if second.Available(fr).CmpInt64(0) != 0 {
-		t.Fatal("the sibling must wait while the first team borrows all supply")
+	if second.Available(fr).CmpInt64(0) != 0 || third.Available(fr).CmpInt64(0) != 0 {
+		t.Fatal("both same-team and other-team workspaces must wait while the first workspace borrows all supply")
 	}
 	t.Logf("One team borrows all 8 GPUs: sibling available=%s; no cross-team preemption", second.Available(fr).String())
 	first.RemoveUsage(usage)
@@ -145,6 +159,22 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 		t.Fatal("completed borrowed usage must return capacity to the sibling")
 	}
 	t.Logf("Borrowed job finishes: sibling available=%s GPUs", second.Available(fr).String())
+	firstUsage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(3)}}
+	first.AddUsage(firstUsage)
+	if third.Available(fr).CmpInt64(5) != 0 {
+		t.Fatal("a second workspace must share its team entitlement and remaining pool without a fixed split")
+	}
+	thirdUsage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(5)}}
+	third.AddUsage(thirdUsage)
+	if second.Available(fr).CmpInt64(0) != 0 {
+		t.Fatal("usage across a team's workspaces must consume one shared physical budget")
+	}
+	third.RemoveUsage(thirdUsage)
+	if second.Available(fr).CmpInt64(5) != 0 {
+		t.Fatal("completed usage must return capacity to the other team")
+	}
+	first.RemoveUsage(firstUsage)
+	t.Log("Two workspaces share one team guarantee; combined usage never duplicates physical capacity.")
 }
 
 func TestSharedTeamOrderedQuotaTransfers(t *testing.T) {
