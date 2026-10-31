@@ -85,13 +85,13 @@ func resolveClusterRunWorkloadProfile(ctx context.Context, o unresolvedRunOption
 			return o, err
 		}
 		if (shared || team == o.workspaceTeam) && len(profiles) == 0 {
-			return resolveCapacityJob(o, cluster)
+			return resolveCapacityJob(o, cluster, shared)
 		}
 	}
 	return selectRunWorkloadProfile(ctx, o, profile.NewClusterProvider(client))
 }
 
-func resolveCapacityJob(o unresolvedRunOptions, cluster *unstructured.Unstructured) (unresolvedRunOptions, error) {
+func resolveCapacityJob(o unresolvedRunOptions, cluster *unstructured.Unstructured, shared bool) (unresolvedRunOptions, error) {
 	phase, _, err := unstructured.NestedString(cluster.Object, "status", "phase")
 	if err != nil {
 		return o, err
@@ -108,7 +108,7 @@ func resolveCapacityJob(o unresolvedRunOptions, cluster *unstructured.Unstructur
 		return o, fmt.Errorf("direct jobs require a Ready TauCluster with current observedGeneration in Reconcile mode")
 	}
 	canonicalQueue := managedWorkspaceClusterQueueName(o.workspace)
-	if !o.workspaceQueueResolved || canonicalQueue == "" || o.queue != canonicalQueue || o.workspaceClusterQueue != canonicalQueue {
+	if !o.workspaceQueueResolved || canonicalQueue == "" || o.queue == "" || o.workspaceClusterQueue != canonicalQueue || (!shared && o.queue != canonicalQueue) {
 		return o, fmt.Errorf("direct jobs require verified team-managed TauWorkspace LocalQueue and ClusterQueue routing")
 	}
 	if o.team != "" && o.team != o.workspaceTeam {

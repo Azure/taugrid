@@ -49,6 +49,9 @@ team preserves its namespace only when its authoritative workspace UID still
 matches; this is not permission to adopt another workspace's namespace.
 Deleting teams cannot acquire new workspaces. Existing workspaces can retain
 their applied membership or move to another team so deletion can finish.
+Direct Jobs in shared mode retain the workspace's LocalQueue, including the
+default `jobqueue`, while verifying its canonical workspace ClusterQueue.
+No LocalQueue rename or workload profile preset is required.
 
 The managed `tau-shared-teams` parent Cohort contains only **unassigned
 residual capacity**: eligible discovered inventory minus the applied team

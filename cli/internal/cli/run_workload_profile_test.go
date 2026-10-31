@@ -91,17 +91,21 @@ compute:
 						if err := os.WriteFile(config, []byte(configData), 0o644); err != nil {
 							t.Fatal(err)
 						}
-						queue := managedWorkspaceClusterQueueName(name)
+						clusterQueue := managedWorkspaceClusterQueueName(name)
+						queue := clusterQueue
+						if shared {
+							queue = "jobqueue"
+						}
 						submittedPath := filepath.Join(t.TempDir(), "job.yaml")
 						logPath := ""
 						if mode != "client" {
 							logPath = fakeKubectl(t, `
 case "$*" in
   *localqueue.kueue.x-k8s.io*)
-    printf '%s\n' '{"metadata":{"name":"`+queue+`"},"spec":{"clusterQueue":"`+queue+`"}}'
+    printf '%s\n' '{"metadata":{"name":"`+queue+`"},"spec":{"clusterQueue":"`+clusterQueue+`"}}'
     ;;
   *clusterqueue.kueue.x-k8s.io*)
-    printf '%s\n' '{"metadata":{"name":"`+queue+`"},"spec":{"cohort":"team-research","resourceGroups":[{"coveredResources":["cpu","memory","nvidia.com/gpu"],"flavors":[{"name":"gpu-test","resources":[{"name":"cpu","nominalQuota":"0","borrowingLimit":"8"},{"name":"memory","nominalQuota":"0","borrowingLimit":"16Gi"},{"name":"nvidia.com/gpu","nominalQuota":"0","borrowingLimit":"2"}]}]}]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
+    printf '%s\n' '{"metadata":{"name":"`+clusterQueue+`"},"spec":{"cohort":"team-research","resourceGroups":[{"coveredResources":["cpu","memory","nvidia.com/gpu"],"flavors":[{"name":"gpu-test","resources":[{"name":"cpu","nominalQuota":"0","borrowingLimit":"8"},{"name":"memory","nominalQuota":"0","borrowingLimit":"16Gi"},{"name":"nvidia.com/gpu","nominalQuota":"0","borrowingLimit":"2"}]}]}]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
     ;;
   *resourceflavor.kueue.x-k8s.io*)
     printf '%s\n' '{"metadata":{"name":"gpu-test"},"spec":{"nodeLabels":{"kubernetes.io/os":"linux","tau.azure.com/gpu-class":"test"},"nodeTaints":[{"key":"sku","value":"gpu","effect":"NoSchedule"}],"topologyName":"taugrid-gpu-topology"}}'
@@ -128,7 +132,7 @@ esac
 							w.Metadata.Name = name
 							w.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: team}
 							w.Spec.Target.Namespace, w.Status.Target.ResolvedNamespace = name, name
-							w.Spec.Queue, w.Status.Queue.LocalQueue, w.Status.Queue.ClusterQueue = queue, queue, queue
+							w.Spec.Queue, w.Status.Queue.LocalQueue, w.Status.Queue.ClusterQueue = queue, queue, clusterQueue
 							return w, nil
 						}
 						newClusterProfileClient = func(string) (dynamic.Interface, error) {
@@ -262,6 +266,18 @@ func TestCapacityJobPolicyGuards(t *testing.T) {
 		{name: "unverified queue", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.workspaceQueueResolved = false }, want: "verified team-managed"},
 		{name: "external queue", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.workspaceClusterQueue = "external" }, want: "verified team-managed"},
 		{name: "external LocalQueue", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.queue = "external" }, want: "verified team-managed"},
+		{name: "shared default LocalQueue", change: func(o *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["queues"] = map[string]any{"shareTeamQuotas": true}
+			o.queue = "jobqueue"
+		}},
+		{name: "shared missing LocalQueue", change: func(o *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["queues"] = map[string]any{"shareTeamQuotas": true}
+			o.queue = ""
+		}, want: "verified team-managed"},
+		{name: "shared external ClusterQueue", change: func(o *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["queues"] = map[string]any{"shareTeamQuotas": true}
+			o.queue, o.workspaceClusterQueue = "jobqueue", "external"
+		}, want: "verified team-managed"},
 		{name: "team conflict", change: func(o *unresolvedRunOptions, _ *unstructured.Unstructured) { o.team = "another" }, want: "conflicts with TauWorkspace team"},
 		{name: "stale cluster", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) { cluster.SetGeneration(5) }, want: "current observedGeneration"},
 		{name: "degraded cluster", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
