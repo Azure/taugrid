@@ -719,5 +719,17 @@ func (r *TauTeamReconciler) enqueueCapacityTeam(ctx context.Context, _ client.Ob
 			Namespace: systemNamespace(r.SystemNamespace), Name: ref.Name,
 		}}}
 	}
+	if cluster.Spec.Queues.ShareTeamQuotas {
+		var teams tauv1alpha1.TauTeamList
+		if err := r.List(ctx, &teams, client.InNamespace(systemNamespace(r.SystemNamespace))); err != nil {
+			ctrl.LoggerFrom(ctx).Error(err, "list shared capacity teams")
+			return nil
+		}
+		requests := make([]reconcile.Request, 0, len(teams.Items))
+		for i := range teams.Items {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&teams.Items[i])})
+		}
+		return requests
+	}
 	return nil
 }

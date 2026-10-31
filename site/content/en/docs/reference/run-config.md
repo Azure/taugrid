@@ -55,7 +55,8 @@ pod.
 
 ## Jobs without workload profiles
 
-When `TauCluster.spec.queues.capacityTeamRef` selects your workspace's team
+When `TauCluster.spec.queues.shareTeamQuotas` is enabled, or
+`TauCluster.spec.queues.capacityTeamRef` selects your workspace's team,
 and `spec.workloadProfiles` is empty, a connected team-linked workspace supports
 direct batch Jobs without a preset:
 

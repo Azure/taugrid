@@ -32,7 +32,93 @@ The controller source and raw Kustomize manifests live in the [`Azure/taugrid`](
 
 Fresh clusters consume the umbrella chart through `tau cluster install`. The standalone chart is only for a separately managed controller and must not be installed alongside an umbrella release that already enables `components.tauCoreController`. See [Install TauGrid](../../platform-admin-guide/kubernetes/#3-install-taugrid) for the supported installation entry point and readiness gate. This page defines the workspace API and readiness contract only; installing the cluster control plane is covered there.
 
-## Automatically shared team capacity
+## Guaranteed team quotas with shared spare capacity
+
+Set `TauCluster.spec.queues.shareTeamQuotas: true` (Helm:
+`tauCluster.queues.shareTeamQuotas`) to share unused capacity between teams.
+This opt-in is mutually exclusive with `capacityTeamRef`; both fields are
+unset by default. Existing explicit-quota and exclusive capacity modes keep
+their previous behavior.
+
+Each `TauTeam` in the controller's system namespace must declare its guarantee
+using `spec.quota`, by exact ResourceFlavor and resource. Workspaces set
+`spec.teamRef.name` and omit `spec.quota`: they share their team's entitlement
+without fixed workspace splits. Existing workspace names, workload namespaces,
+and storage do not need to change. Reassigning an existing workspace to another
+team preserves its namespace only when its authoritative workspace UID still
+matches; this is not permission to adopt another workspace's namespace.
+Owned LocalQueue team labels follow the same workspace UID; external queues
+are not relabeled, and existing queue policies are preserved.
+Deleting teams cannot acquire new workspaces. Existing workspaces can retain
+their applied membership or move to another team so deletion can finish.
+Direct Jobs in shared mode retain the workspace's LocalQueue, including the
+default `jobqueue`, while verifying its canonical workspace ClusterQueue.
+No LocalQueue rename or workload profile preset is required.
+
+The managed `tau-shared-teams` parent Cohort contains only **unassigned
+residual capacity**: eligible discovered inventory minus the applied team
+guarantees. Child team Cohorts contain their explicit nominal guarantees;
+workspace ClusterQueues have zero nominal quota. Thus the parent and children
+never each receive a copy of the physical inventory. CPU, memory and other
+resources without team guarantees remain shared at the parent, in their native
+quantities. GPU classes are separate flavors, not interchangeable equivalents.
+Capacity is allocatable supply, not instantaneously free devices or a guarantee
+that a particular image, architecture or placement can run on every node.
+
+A team's nominal quota is an **eventual entitlement, not a hard usage cap**.
+Omit team `borrowingLimit` and `lendingLimit` to borrow available spare capacity
+from the whole tree and lend unused guarantees. An explicit zero disables that
+direction; a finite borrowing limit caps additional usage above nominal.
+Workspaces receive derived borrowing ceilings, not additional nominal budgets.
+Cross-queue reclaim and borrow-preemption are disabled: borrowed jobs finish
+normally, so an entitled team may wait for borrowers to complete. Guarantees
+are not immediately reclaimable and are not preserved through physical supply
+loss.
+
+The controller reduces parent residual before increasing guarantees, and
+reduces applied guarantees before increasing residual. Overlapping external
+budgets, legacy full-inventory discovery queues, duplicate workspace nominal
+quotas, and retained exclusive capacity allocations block reconciliation rather
+than being silently adopted. Missing resources and disappeared flavors have
+zero capacity. If guarantees or active reservations exceed supply, or inventory
+or ownership cannot be validated, owned workspace queues use Kueue `Hold`.
+**Hold preserves admitted jobs but cancels quota-only reservations**; it is not
+`HoldAndDrain`. New admissions resume after the problem clears; operator-owned
+queue holds are preserved, including a stop-policy change made while a
+controller-owned Hold was active. Recovery clears only the controller's Hold.
+User-authored guarantees are never silently scaled down.
+
+Eligible Linux GPU nodes must have `tau.azure.com/gpu-class`; an unclassified
+Ready, schedulable, non-deleting GPU node blocks this mode rather than silently
+disappearing from whole-pool accounting. When instance-type labels are absent,
+platform-owned label rules can match exact authoritative hardware labels:
+
+```yaml
+tauCluster:
+  extraNodeLabelRules:
+    - match:
+        labels:
+          nvidia.com/gpu.product: NVIDIA-GB10
+          nvidia.com/gpu.machine: NVIDIA_DGX_Spark
+          kubernetes.io/arch: arm64
+      labels:
+        tau.azure.com/gpu-class: gb10
+```
+
+This declares a distinct class without inferring dedicated GPU memory from
+unified host RAM. Every match label must be present and equal. Existing
+`match.vmSizes` rules remain supported; if both selectors are supplied, both
+must match. Conflicting rules on an actual node fail reconciliation.
+
+Upgrade the controller and CRDs together before enabling the mode. To migrate
+from exclusive capacity, drain its workloads and reconcile the old exclusive
+budget to zero first, then replace the opt-in and declare the team guarantees.
+The shared reconciler does not take over a nonzero exclusive budget. To leave
+shared mode, drain the hierarchy and remove its root through the platform
+owner; a retained shared root blocks other capacity modes. Published releases
+are never rewritten by this migration.
+
+## Automatically shared exclusive team capacity
 
 Automatic capacity is explicit and independent of queue `ownership`. Select one
 team in the singleton `TauCluster`; omit `spec.quota` on that team and its
