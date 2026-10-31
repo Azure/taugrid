@@ -89,6 +89,7 @@ type TauNamespacedObjectReference struct {
 }
 
 type TauNodeMatch struct {
+	Labels map[string]string `json:"labels,omitempty"`
 	// +listType=set
 	VMSizes []string `json:"vmSizes,omitempty"`
 }
@@ -105,7 +106,9 @@ type TauClusterNodesSpec struct {
 	LabelRules []TauNodeLabelRule `json:"labelRules,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.capacityTeamRef) || !has(self.shareTeamQuotas) || !self.shareTeamQuotas",message="shareTeamQuotas and capacityTeamRef are mutually exclusive"
 type TauClusterQueuesSpec struct {
+	ShareTeamQuotas bool                       `json:"shareTeamQuotas,omitempty"`
 	CapacityTeamRef *TauClusterObjectReference `json:"capacityTeamRef,omitempty"`
 	// +kubebuilder:default=External
 	// +kubebuilder:validation:Enum=External;Adopt;Manage

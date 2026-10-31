@@ -16,6 +16,7 @@ const (
 	LabelAcceleratorDomain  = "tau.azure.com/accelerator-domain"
 	LabelInfiniband         = "tau.azure.com/infiniband"
 	LabelDiscoverGPUFlavors = "tau.azure.com/discover-gpu-flavors"
+	LabelSharedTeamQuotas   = "tau.azure.com/shared-team-quotas"
 
 	AnnotationApproved             = "tau.azure.com/approved"
 	AnnotationRejected             = "tau.azure.com/rejected"
@@ -26,6 +27,7 @@ const (
 	AnnotationAdoptionNamespaceUID = "tau.azure.com/adoption-namespace-uid"
 	AnnotationManagedQuotaKeys     = "tau.azure.com/managed-quota-keys"
 	AnnotationCapacityPool         = "tau.azure.com/discovered-capacity-pool"
+	AnnotationSharedQuotaHold      = "tau.azure.com/shared-quota-hold"
 
 	FinalizerWorkspaceCleanup = "tau.azure.com/workspace-cleanup"
 	FinalizerTeamCleanup      = "tau.azure.com/team-cleanup"

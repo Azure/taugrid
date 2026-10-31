@@ -2,6 +2,28 @@ suite: TauCluster topology reconciliation
 templates:
   - taucluster.yaml
 tests:
+  - it: opts into team guarantees and exact hardware classification without instance types
+    set:
+      tauCluster.queues.shareTeamQuotas: true
+      tauCluster.extraNodeLabelRules:
+        - match:
+            labels:
+              nvidia.com/gpu.product: distinct-product
+              kubernetes.io/arch: arm64
+          labels:
+            tau.azure.com/gpu-class: distinct
+    asserts:
+      - equal:
+          path: spec.queues.shareTeamQuotas
+          value: true
+      - equal:
+          path: spec.nodes.labelRules[14].match.labels["nvidia.com/gpu.product"]
+          value: distinct-product
+      - equal:
+          path: spec.nodes.labelRules[14].labels["tau.azure.com/gpu-class"]
+          value: distinct
+      - notExists:
+          path: spec.queues.capacityTeamRef
   - it: selects an exclusive discovered capacity team only when requested
     set:
       tauCluster.queues.capacityTeamRef.name: research
