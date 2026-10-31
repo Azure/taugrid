@@ -561,7 +561,7 @@ func TestRunConfigKindRayExampleDryRun(t *testing.T) {
 		"kind: RayJob",
 		"name: tau-kind-ray",
 		"namespace: ray",
-		"image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0",
+		"image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0",
 		"kueue.x-k8s.io/queue-name: kind-cpu",
 		"kueue.x-k8s.io/priority-class: taugrid-default",
 		"priorityClassName: taugrid-default",

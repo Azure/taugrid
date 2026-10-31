@@ -38,6 +38,7 @@ ENGINE_RECOMMENDED_MEMORY_MIB="${TAU_KIND_ENGINE_RECOMMENDED_MEMORY_MIB:-${TAU_K
 KIND_NODE_TASKS_MAX="${TAU_KIND_NODE_TASKS_MAX:-4096}"
 KIND_NODE_PIDS_LIMIT="${TAU_KIND_NODE_PIDS_LIMIT:-8192}"
 RAY_COMPLETION_MARKER="${TAU_KIND_RAY_COMPLETION_MARKER:-tau kind ray smoke complete}"
+CLEAN_HOST_STORAGE="${TAU_KIND_CLEAN_HOST_STORAGE:-0}"
 DIAGNOSTICS_READY=0
 
 for tool in kind kubectl helm go "$CONTAINER_ENGINE"; do
@@ -100,6 +101,23 @@ container_engine_preflight() {
 
 load_controller_image() {
   tau_kind_load_image "${CONTAINER_ENGINE}" "${CLUSTER_NAME}" "${CONTROLLER_IMAGE}"
+}
+
+clean_host_image() {
+  local image="$1"
+  if [[ "$CLEAN_HOST_STORAGE" != "1" ]]; then
+    return
+  fi
+  echo "Removing host copy of ${image}"
+  "$CONTAINER_ENGINE" image rm "$image"
+}
+
+clean_host_build_cache() {
+  if [[ "$CLEAN_HOST_STORAGE" != "1" ]]; then
+    return
+  fi
+  echo "Removing host container build cache"
+  "$CONTAINER_ENGINE" builder prune --all --force
 }
 
 wait_for_taucluster_profiles() {
@@ -400,6 +418,8 @@ if [[ "${TAU_KIND_SKIP_CONTROLLER_BUILD:-0}" != "1" ]]; then
     --tag "$CONTROLLER_IMAGE" \
     "$REPO_ROOT"
   load_controller_image
+  clean_host_image "$CONTROLLER_IMAGE"
+  clean_host_build_cache
 fi
 
 "$REPO_ROOT/scripts/ci/vendor-taugrid-dependencies.sh" \
@@ -422,6 +442,7 @@ for image in "$KUEUE_IMAGE" "$KUBERAY_IMAGE" "$JOB_IMAGE" "$RAY_IMAGE"; do
   echo "Preloading ${preload_image} into Kind"
   "$CONTAINER_ENGINE" pull "$preload_image"
   tau_kind_load_image "$CONTAINER_ENGINE" "$CLUSTER_NAME" "$preload_image"
+  clean_host_image "$preload_image"
 done
 
 install_taugrid() {
