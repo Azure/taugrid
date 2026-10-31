@@ -13,11 +13,13 @@ import (
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -626,6 +628,64 @@ func TestSharedTeamDeletionMembership(t *testing.T) {
 			root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
 			assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "2")
 		})
+	}
+}
+
+func TestSharedTeamFinalizerRetryDoesNotRecreateCohort(t *testing.T) {
+	ctx := context.Background()
+	failFinalizerUpdate := false
+	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, object client.Object, opts ...client.UpdateOption) error {
+			if team, ok := object.(*tauv1alpha1.TauTeam); ok && failFinalizerUpdate && len(team.Finalizers) == 0 {
+				failFinalizerUpdate = false
+				return fmt.Errorf("finalizer update unavailable")
+			}
+			return c.Update(ctx, object, opts...)
+		},
+	})
+	workspaces[1].Finalizers = nil
+	if err := r.Update(ctx, workspaces[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, workspaces[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	cohort := getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(teams[1].Name))
+	cohort.SetUID("original-cohort")
+	if err := r.Update(ctx, cohort); err != nil {
+		t.Fatal(err)
+	}
+	teams[1].Status.CohortUID = string(cohort.GetUID())
+	if err := r.Status().Update(ctx, teams[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, teams[1]); err != nil {
+		t.Fatal(err)
+	}
+	failFinalizerUpdate = true
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(teams[1])}
+	if _, err := r.Reconcile(ctx, request); err == nil || !strings.Contains(err.Error(), "finalizer update unavailable") {
+		t.Fatalf("did not exercise a failed finalizer update: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(cohort), newQueueObject(cohortGVK)); !apierrors.IsNotFound(err) {
+		t.Fatalf("cohort was not deleted before the failed finalizer update: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(teams[0])}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(cohort), newQueueObject(cohortGVK)); !apierrors.IsNotFound(err) {
+		t.Fatalf("sibling reconciliation recreated a terminating team's Cohort: %v", err)
+	}
+	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "5")
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("team finalization did not recover: %v", err)
+	}
+	if err := r.Get(ctx, request.NamespacedName, &tauv1alpha1.TauTeam{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("terminating team remains after the successful finalizer retry: %v", err)
 	}
 }
 

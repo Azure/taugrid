@@ -146,6 +146,8 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 			}
 		} else if !apierrors.IsNotFound(err) {
 			return err
+		} else if !team.DeletionTimestamp.IsZero() {
+			continue
 		}
 		requested := map[string]tauv1alpha1.TauResourceQuota{}
 		for _, quota := range team.Spec.Quota {
