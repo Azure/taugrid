@@ -1106,6 +1106,9 @@ runtime:
 			t.Fatalf("managed workflow render: %v\nstderr:\n%s", err, stderr.String())
 		}
 		assertProfileRevisionMetadata(t, stdout.String(), options.selectedWorkloadProfile)
+		if !strings.Contains(stdout.String(), workloadmeta.AnnotationTauVersion+":") {
+			t.Fatalf("managed workflow render missing %s:\n%s", workloadmeta.AnnotationTauVersion, stdout.String())
+		}
 	})
 }
 
