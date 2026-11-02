@@ -1,6 +1,6 @@
 dependencies:
 - name: kube-state-metrics
   repository: https://prometheus-community.github.io/helm-charts
-  version: 8.7.1
-digest: sha256:e565b27f825bca4cab7b45bee09613d317ba3bde63fe2a8b3b9c543ee129cc08
-generated: "2026-10-26T09:25:13.291202851Z"
+  version: 8.8.0
+digest: sha256:0c8b1f06fbd67d2f6842a474857656356b1611886d8153bb186bc003c4507301
+generated: "2026-10-30T09:08:59.803437126Z"
