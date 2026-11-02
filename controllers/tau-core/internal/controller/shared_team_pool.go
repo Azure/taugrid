@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
@@ -28,7 +29,6 @@ const (
 
 type sharedTeamAllocation struct {
 	team    *tauv1alpha1.TauTeam
-	current map[string]resource.Quantity
 	desired []tauv1alpha1.TauResourceQuota
 }
 
@@ -89,6 +89,17 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 		!cluster.DeletionTimestamp.IsZero() || cluster.UID == "" {
 		return fmt.Errorf("shared team quotas require a non-deleting TauCluster with a UID in Reconcile mode and no capacityTeamRef")
 	}
+	root := newQueueObject(cohortGVK)
+	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: sharedTeamCohortName}, root); err != nil {
+		return fmt.Errorf("provide the platform-owned static Cohort %q before enabling shared quotas: %w", sharedTeamCohortName, err)
+	}
+	if root.GetLabels()[labelSharedTeamQuotas] != cluster.Name || root.GetLabels()[labelManagedBy] == labelManagedByValue {
+		return fmt.Errorf("Cohort %q must be platform-owned static spare, labeled %s=%s, not an automatic TauGrid budget", root.GetName(), labelSharedTeamQuotas, cluster.Name)
+	}
+	spare, err := sharedTeamSpare(root)
+	if err != nil {
+		return err
+	}
 	inventory, err := discoveredPoolInventory(ctx, r.quotaReader(), cluster)
 	if err != nil {
 		return err
@@ -109,7 +120,48 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 	sort.Slice(teams.Items, func(i, j int) bool { return teams.Items[i].Name < teams.Items[j].Name })
 	supply := quotaNominals(inventory.quotas)
 	allocated := map[string]resource.Quantity{}
-	transitional := map[string]resource.Quantity{}
+	declared := map[string]bool{}
+	for key, quantity := range spare {
+		allocated[key] = quantity.DeepCopy()
+		declared[key] = true
+	}
+	for _, team := range teams.Items {
+		cohort := newQueueObject(cohortGVK)
+		if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, cohort); err == nil {
+			if err := validateSharedPoolOwner(cohort, labelTeam, team.Name, string(team.UID)); err != nil {
+				return err
+			}
+			current, err := clusterQueueNominalQuota(cohort)
+			if err != nil {
+				return err
+			}
+			for key, quantity := range current {
+				if quantity.IsZero() {
+					declared[key] = true
+				}
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return err
+		} else if !team.DeletionTimestamp.IsZero() {
+			continue
+		}
+		for _, quota := range team.Spec.Quota {
+			declared[quotaKey(quota)] = true
+		}
+	}
+	keys := make([]string, 0, len(declared))
+	for key := range declared {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	poolQuotas := make([]tauv1alpha1.TauResourceQuota, 0, len(keys))
+	for _, key := range keys {
+		resourceName, flavor, _ := strings.Cut(key, "\x00")
+		poolQuotas = append(poolQuotas, tauv1alpha1.TauResourceQuota{Resource: resourceName, Flavor: flavor})
+	}
+	if err := validateQuotaValues(poolQuotas); err != nil {
+		return fmt.Errorf("shared parent and team declarations have incompatible resource groups: %w", err)
+	}
 	teamNames := map[string]*tauv1alpha1.TauTeam{}
 	allocations := make([]sharedTeamAllocation, 0, len(teams.Items))
 	for i := range teams.Items {
@@ -160,8 +212,8 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 			}
 			requested[key] = quota
 		}
-		desired := make([]tauv1alpha1.TauResourceQuota, 0, len(supply))
-		for _, capacity := range inventory.quotas {
+		desired := make([]tauv1alpha1.TauResourceQuota, 0, len(poolQuotas))
+		for _, capacity := range poolQuotas {
 			key := quotaKey(capacity)
 			quota, found := requested[key]
 			if !found {
@@ -169,18 +221,13 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 			}
 			desired = append(desired, quota)
 			addQuotaQuantity(allocated, key, quota.NominalQuota)
-			amount := quota.NominalQuota
-			if previous := current[key]; previous.Cmp(amount) > 0 {
-				amount = previous
-			}
-			addQuotaQuantity(transitional, key, amount)
 		}
 		for key, quantity := range current {
 			if _, found := supply[key]; !found && quantity.Sign() > 0 {
 				return fmt.Errorf("team %q has an applied quota outside discovered capacity", team.Name)
 			}
 		}
-		allocations = append(allocations, sharedTeamAllocation{team: team, current: current, desired: desired})
+		allocations = append(allocations, sharedTeamAllocation{team: team, desired: desired})
 		teamNames[team.Name] = team
 	}
 	var workspaces tauv1alpha1.TauWorkspaceList
@@ -214,9 +261,11 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 	}
 	reservations := map[string]resource.Quantity{}
 	teamReservations := map[string]map[string]resource.Quantity{}
+	hasQueues := false
 	for name, workspace := range selected {
 		queue := newQueueObject(clusterQueueGVK)
 		if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: name}, queue); err == nil {
+			hasQueues = true
 			usage, err := clusterQueueReservations(queue)
 			if err != nil {
 				return err
@@ -244,77 +293,22 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 			}
 		}
 	}
-	root := desiredSharedTeamRoot(cluster, inventory.quotas)
-	existing := newQueueObject(cohortGVK)
-	currentResidual := map[string]resource.Quantity{}
-	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: sharedTeamCohortName}, existing); err == nil {
-		if err := validateSharedPoolOwner(existing, labelSharedTeamQuotas, cluster.Name, string(cluster.UID)); err != nil {
-			return err
-		}
-		currentResidual, err = clusterQueueNominalQuota(existing)
-		if err != nil {
-			return err
-		}
-	} else if !apierrors.IsNotFound(err) {
-		return err
-	}
-	intermediate := make([]tauv1alpha1.TauResourceQuota, len(inventory.quotas))
-	residual := make([]tauv1alpha1.TauResourceQuota, len(inventory.quotas))
-	var shortage error
-	for i, quota := range inventory.quotas {
-		key := quotaKey(quota)
-		remaining := quota.NominalQuota.DeepCopy()
-		remaining.Sub(allocated[key])
-		if remaining.Sign() < 0 {
-			shortage = errors.Join(shortage, fmt.Errorf("team guarantees exceed discovered capacity for %q", key))
-			remaining = resource.Quantity{}
-		}
-		residual[i] = tauv1alpha1.TauResourceQuota{Flavor: quota.Flavor, Resource: quota.Resource, NominalQuota: remaining}
-		available := quota.NominalQuota.DeepCopy()
-		available.Sub(transitional[key])
-		if available.Sign() < 0 {
-			available = resource.Quantity{}
-		}
-		if current := currentResidual[key]; current.Cmp(available) < 0 {
-			available = current.DeepCopy()
-		}
-		intermediate[i] = tauv1alpha1.TauResourceQuota{Flavor: quota.Flavor, Resource: quota.Resource, NominalQuota: available}
-	}
-	root.Object["spec"].(map[string]any)["resourceGroups"] = quotaResourceGroups(intermediate, false)
-	if err := reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(), root, labelSharedTeamQuotas, cluster.Name); err != nil {
-		return err
-	}
-	if shortage != nil {
-		return shortage
-	}
-	for _, allocation := range allocations {
-		reduced := make([]tauv1alpha1.TauResourceQuota, len(allocation.desired))
-		for i, quota := range allocation.desired {
-			reduced[i] = quota
-			if current := allocation.current[quotaKey(quota)]; current.Cmp(quota.NominalQuota) < 0 {
-				reduced[i].NominalQuota = current.DeepCopy()
-			}
-			if quota.LendingLimit != nil && quota.LendingLimit.Cmp(reduced[i].NominalQuota) > 0 {
-				limit := reduced[i].NominalQuota.DeepCopy()
-				reduced[i].LendingLimit = &limit
-			}
-		}
-		if err := r.applySharedTeamCohort(ctx, allocation.team, reduced); err != nil {
-			return err
-		}
-	}
-	for _, allocation := range allocations {
-		if err := r.applySharedTeamCohort(ctx, allocation.team, allocation.desired); err != nil {
-			return err
-		}
-	}
-	root.Object["spec"].(map[string]any)["resourceGroups"] = quotaResourceGroups(residual, false)
-	if err := reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(), root, labelSharedTeamQuotas, cluster.Name); err != nil {
-		return err
-	}
 	for key, quantity := range reservations {
 		if capacity := supply[key]; quantity.Cmp(capacity) > 0 {
 			return fmt.Errorf("active reservations exceed discovered capacity for %q; admitted jobs are retained", key)
+		}
+	}
+	for i := range poolQuotas {
+		key := quotaKey(poolQuotas[i])
+		total := allocated[key]
+		if capacity := supply[key]; total.Cmp(capacity) > 0 {
+			return fmt.Errorf("fixed team guarantees plus static spare exceed discovered capacity for %q; quotas are unchanged", key)
+		}
+		poolQuotas[i].NominalQuota = total.DeepCopy()
+	}
+	for _, allocation := range allocations {
+		if err := r.applySharedTeamCohort(ctx, allocation.team, allocation.desired, !hasQueues); err != nil {
+			return err
 		}
 	}
 	names := make([]string, 0, len(selected))
@@ -324,7 +318,7 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 	sort.Strings(names)
 	for _, name := range names {
 		if selected[name].DeletionTimestamp.IsZero() {
-			if err := r.reconcileCapacityWorkspace(ctx, selected[name], inventory.quotas, true); err != nil {
+			if err := r.reconcileCapacityWorkspace(ctx, selected[name], poolQuotas, true); err != nil {
 				return err
 			}
 		}
@@ -332,7 +326,7 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 	return nil
 }
 
-func (r *TauTeamReconciler) applySharedTeamCohort(ctx context.Context, team *tauv1alpha1.TauTeam, quotas []tauv1alpha1.TauResourceQuota) error {
+func (r *TauTeamReconciler) applySharedTeamCohort(ctx context.Context, team *tauv1alpha1.TauTeam, quotas []tauv1alpha1.TauResourceQuota, allowCreate bool) error {
 	var current tauv1alpha1.TauTeam
 	if err := r.quotaReader().Get(ctx, client.ObjectKeyFromObject(team), &current); err != nil {
 		return err
@@ -364,16 +358,22 @@ func (r *TauTeamReconciler) applySharedTeamCohort(ctx context.Context, team *tau
 		}
 	}
 	cohort.Object["spec"].(map[string]any)["resourceGroups"] = groups
-	return reconcileManagedUnstructuredWithReader(ctx, r.Client, r.quotaReader(), cohort, labelTeam, team.Name)
-}
-
-func desiredSharedTeamRoot(cluster *tauv1alpha1.TauCluster, quotas []tauv1alpha1.TauResourceQuota) *unstructured.Unstructured {
-	root := newQueueObject(cohortGVK)
-	root.SetName(sharedTeamCohortName)
-	root.SetLabels(map[string]string{labelManagedBy: labelManagedByValue, labelSharedTeamQuotas: cluster.Name})
-	setOwnerUIDAnnotation(root, cluster.UID)
-	root.Object["spec"] = map[string]any{"resourceGroups": quotaResourceGroups(quotas, false)}
-	return root
+	existing := newQueueObject(cohortGVK)
+	if err := r.quotaReader().Get(ctx, client.ObjectKeyFromObject(cohort), existing); err == nil {
+		if err := validateSharedPoolOwner(existing, labelTeam, team.Name, string(team.UID)); err != nil {
+			return err
+		}
+		if !apiequality.Semantic.DeepEqual(existing.Object["spec"], cohort.Object["spec"]) {
+			return fmt.Errorf("team %q has an established fixed quota; stop the scheduler and reconcile its Cohort under operator maintenance before changing quotas", team.Name)
+		}
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+	if !allowCreate {
+		return fmt.Errorf("cannot create team %q quota in an established hierarchy; stop the scheduler and remove workspace queues under operator maintenance first", team.Name)
+	}
+	return r.Create(ctx, cohort)
 }
 
 func validateSharedPoolOwner(object *unstructured.Unstructured, label, name, uid string) error {
@@ -382,6 +382,15 @@ func validateSharedPoolOwner(object *unstructured.Unstructured, label, name, uid
 		return fmt.Errorf("%s %q does not have authoritative shared quota ownership", object.GetKind(), object.GetName())
 	}
 	return nil
+}
+
+func sharedTeamSpare(root *unstructured.Unstructured) (map[string]resource.Quantity, error) {
+	if _, found, err := unstructured.NestedFieldNoCopy(root.Object, "spec", "resourceGroups"); err != nil {
+		return nil, err
+	} else if !found {
+		return map[string]resource.Quantity{}, nil
+	}
+	return clusterQueueNominalQuota(root)
 }
 
 func quotaNominals(quotas []tauv1alpha1.TauResourceQuota) map[string]resource.Quantity {
@@ -440,9 +449,6 @@ func (r *TauTeamReconciler) validateSharedPoolConflicts(ctx context.Context, clu
 			object := &objects.Items[i]
 			if !gvk.queue {
 				if object.GetName() == sharedTeamCohortName {
-					if err := validateSharedPoolOwner(object, labelSharedTeamQuotas, cluster.Name, string(cluster.UID)); err != nil {
-						return err
-					}
 					parent, _, err := unstructured.NestedString(object.Object, "spec", "parentName")
 					if err != nil {
 						return err
@@ -486,6 +492,22 @@ func (r *TauTeamReconciler) validateSharedPoolConflicts(ctx context.Context, clu
 					return fmt.Errorf("shared workspace queue %q enables legacy discovery", object.GetName())
 				}
 				continue
+			}
+			parentField := "parentName"
+			if gvk.queue {
+				parentField = "cohortName"
+			}
+			parent, _, err := unstructured.NestedString(object.Object, "spec", parentField)
+			if err != nil {
+				return err
+			}
+			for name := range teams {
+				if parent == teamCohortName(name) {
+					return fmt.Errorf("%s %q is an external member of the shared hierarchy", object.GetKind(), object.GetName())
+				}
+			}
+			if parent == sharedTeamCohortName {
+				return fmt.Errorf("%s %q is an external member of the shared hierarchy", object.GetKind(), object.GetName())
 			}
 			if err := validateCapacityPoolObject(object, gvk.queue, "", nil, overlaps); err != nil {
 				return err

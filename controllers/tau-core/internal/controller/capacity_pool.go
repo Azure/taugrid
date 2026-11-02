@@ -87,7 +87,11 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 		cohortName = teamCohortName(cluster.Spec.Queues.CapacityTeamRef.Name)
 	}
 	if err := reader.Get(ctx, client.ObjectKey{Name: cohortName}, cohort); err == nil {
-		previous, err := clusterQueueNominalQuota(cohort)
+		readNominals := clusterQueueNominalQuota
+		if cluster.Spec.Queues.ShareTeamQuotas {
+			readNominals = sharedTeamSpare
+		}
+		previous, err := readNominals(cohort)
 		if err != nil {
 			return nil, err
 		}

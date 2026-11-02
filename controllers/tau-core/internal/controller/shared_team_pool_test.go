@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -27,6 +28,7 @@ import (
 	kueuecache "sigs.k8s.io/kueue/pkg/cache/scheduler"
 	kueueindex "sigs.k8s.io/kueue/pkg/controller/core/indexer"
 	"sigs.k8s.io/kueue/pkg/resources"
+	kueuewebhooks "sigs.k8s.io/kueue/pkg/webhooks"
 	"sigs.k8s.io/kueue/pkg/workload"
 )
 
@@ -37,7 +39,16 @@ func sharedTeamFixture(t *testing.T, intercept interceptor.Funcs) (*TauTeamRecon
 	cluster.Spec.Queues.CapacityTeamRef = nil
 	cluster.Spec.Queues.ShareTeamQuotas = true
 	teams := []*tauv1alpha1.TauTeam{}
-	objects := []client.Object{cluster}
+	root := newQueueObject(cohortGVK)
+	root.SetName(sharedTeamCohortName)
+	root.SetLabels(map[string]string{labelSharedTeamQuotas: cluster.Name})
+	root.Object["spec"] = map[string]any{"resourceGroups": quotaResourceGroups([]tauv1alpha1.TauResourceQuota{
+		{Flavor: "taugrid-gpu-h200", Resource: nvidiaGPUResourceName, NominalQuota: resource.MustParse("2")},
+		{Flavor: "taugrid-gpu-a100", Resource: nvidiaGPUResourceName, NominalQuota: resource.MustParse("4")},
+		{Flavor: "taugrid-gpu-h200", Resource: "cpu", NominalQuota: resource.MustParse("31500m")},
+		{Flavor: "taugrid-gpu-a100", Resource: "cpu", NominalQuota: resource.MustParse("31500m")},
+	}, false)}
+	objects := []client.Object{cluster, root}
 	for i, workspace := range workspaces {
 		team := testTeam(fmt.Sprintf("team-%d", i), "3")
 		team.UID = types.UID(team.Name)
@@ -61,7 +72,7 @@ func sharedTeamFixture(t *testing.T, intercept interceptor.Funcs) (*TauTeamRecon
 	return &TauTeamReconciler{Client: c}, cluster, teams, workspaces
 }
 
-func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
+func TestSharedTeamStaticSpareAndBorrowingContract(t *testing.T) {
 	ctx := context.Background()
 	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
 	extraWorkspace := workspaces[0].DeepCopy()
@@ -80,7 +91,7 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 	assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "2")
 	assertPoolQuantity(t, root, "taugrid-gpu-a100", nvidiaGPUResourceName, "nominalQuota", "4")
 	assertPoolQuantity(t, root, "taugrid-gpu-h200", "cpu", "nominalQuota", "31500m")
-	t.Logf("GPU supply=8; team guarantees=3+3; parent residual=%s; workspace nominal=0",
+	t.Logf("GPU supply=8; fixed team guarantees=3+3; explicit static spare=%s; workspace nominal=0",
 		quotaFromResourceGroups(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota"))
 	scheme := runtime.NewScheme()
 	if err := kueue.AddToScheme(scheme); err != nil {
@@ -97,6 +108,9 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 		var cohort kueue.Cohort
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(object.Object, &cohort); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := (&kueuewebhooks.CohortWebhook{}).ValidateCreate(ctx, &cohort); err != nil {
+			t.Fatalf("generated Cohort %q is invalid: %v", cohort.Name, err)
 		}
 		if err := cache.AddOrUpdateCohort(&cohort); err != nil {
 			t.Fatal(err)
@@ -122,6 +136,9 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 		var cq kueue.ClusterQueue
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(queue.Object, &cq); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := (&kueuewebhooks.ClusterQueueWebhook{}).ValidateCreate(ctx, &cq); err != nil {
+			t.Fatalf("generated ClusterQueue %q is invalid: %v", cq.Name, err)
 		}
 		cohort, _, err := unstructured.NestedString(queue.Object, "spec", "cohortName")
 		if err != nil || cohort != teamCohortName(workspace.Spec.TeamRef.Name) {
@@ -161,6 +178,11 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 		t.Fatal("completed borrowed usage must return capacity to the sibling")
 	}
 	t.Logf("Borrowed job finishes: sibling available=%s GPUs", second.Available(fr).String())
+	second.AddUsage(usage)
+	if first.Available(fr).CmpInt64(0) != 0 || third.Available(fr).CmpInt64(0) != 0 {
+		t.Fatal("borrowing the whole fixed tree must also work in the other team direction")
+	}
+	second.RemoveUsage(usage)
 	firstUsage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(3)}}
 	first.AddUsage(firstUsage)
 	if third.Available(fr).CmpInt64(5) != 0 {
@@ -177,63 +199,318 @@ func TestSharedTeamResidualAndBorrowingContract(t *testing.T) {
 	}
 	first.RemoveUsage(firstUsage)
 	t.Log("Two workspaces share one team guarantee; combined usage never duplicates physical capacity.")
+	cohorts := []*unstructured.Unstructured{root}
+	for _, team := range teams {
+		cohorts = append(cohorts, getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(team.Name)))
+	}
+	unit := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(1)}}
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
+		for _, cohort := range cohorts {
+			cache.DeleteCohort(kueue.CohortReference(cohort.GetName()))
+		}
+		var reserved []*kueue.Workload
+		for step, index := range order {
+			addCohort(cohorts[index])
+			snapshot, err := cache.Snapshot(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			used := len(reserved)
+			for _, workspace := range workspaces {
+				queue := snapshot.ClusterQueue(kueue.ClusterQueueReference(workspaceClusterQueueName(workspace.Name)))
+				if queue == nil {
+					continue
+				}
+				for queue.Available(fr).CmpInt64(1) >= 0 {
+					count := int32(1)
+					item := &kueue.Workload{
+						ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("reserved-%d", used), Namespace: "test"},
+						Spec:       kueue.WorkloadSpec{PodSets: []kueue.PodSet{{Name: "main", Count: count}}},
+					}
+					workload.SetQuotaReservation(item, &kueue.Admission{
+						ClusterQueue: queue.Name,
+						PodSetAssignments: []kueue.PodSetAssignment{{
+							Name: "main", Count: &count,
+							Flavors:       map[corev1.ResourceName]kueue.ResourceFlavorReference{fr.Resource: fr.Flavor},
+							ResourceUsage: corev1.ResourceList{fr.Resource: resource.MustParse("1")},
+						}},
+					}, clock.RealClock{})
+					if quantity := workload.NewInfo(item).FlavorResourceUsage()[fr]; quantity.CmpInt64(1) != 0 {
+						t.Fatalf("reservation does not consume exactly one GPU: %s", quantity.String())
+					}
+					if !cache.AddOrUpdateWorkload(logr.Discard(), item) {
+						t.Fatal("could not preserve the reservation in the actual Kueue cache")
+					}
+					reserved = append(reserved, item)
+					queue.AddUsage(unit)
+					used++
+					if used > 8 {
+						t.Fatalf("consumer order %v step %d exposed more than the fixed 8 GPUs", order, step)
+					}
+				}
+			}
+			if step == len(order)-1 && used != 8 {
+				t.Fatalf("consumer order %v exposed %d GPUs after complete ingestion, want 8", order, used)
+			}
+		}
+		for _, item := range reserved {
+			if err := cache.DeleteWorkload(logr.Discard(), workload.Key(item)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Log("All six Cohort consumer orders preserve the fixed budget while workspace reservations interleave.")
 }
 
-func TestSharedTeamOrderedQuotaTransfers(t *testing.T) {
+func TestSharedTeamRejectsLiveQuotaEditsAndRecreation(t *testing.T) {
 	ctx := context.Background()
 	r, cluster, teams, _ := sharedTeamFixture(t, interceptor.Funcs{})
 	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
-	var snapshots []string
-	base := r.Client
-	r.Client = interceptor.NewClient(base.(client.WithWatch), interceptor.Funcs{
-		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if err := c.Update(ctx, obj, opts...); err != nil {
-				return err
-			}
-			cohorts := &unstructured.UnstructuredList{}
-			cohorts.SetGroupVersionKind(cohortGVK.GroupVersion().WithKind("CohortList"))
-			if err := c.List(ctx, cohorts); err != nil {
-				return err
-			}
-			total := resource.Quantity{}
-			for i := range cohorts.Items {
-				quota, err := clusterQueueNominalQuota(&cohorts.Items[i])
-				if err != nil {
-					return err
-				}
-				total.Add(quota[nvidiaGPUResourceName+"\x00taugrid-gpu-h200"])
-			}
-			if total.Cmp(resource.MustParse("8")) > 0 {
-				t.Fatalf("transient duplicate physical budget after updating %s: %s", obj.GetName(), total.String())
-			}
-			if obj.GetObjectKind().GroupVersionKind().Kind == cohortGVK.Kind {
-				snapshots = append(snapshots, obj.GetName())
-			}
-			return nil
-		},
-	})
-	for _, amount := range []string{"4", "2"} {
+	for _, amount := range []string{"2", "4"} {
 		team := &tauv1alpha1.TauTeam{}
-		if err := base.Get(ctx, client.ObjectKeyFromObject(teams[0]), team); err != nil {
+		if err := r.Get(ctx, client.ObjectKeyFromObject(teams[0]), team); err != nil {
 			t.Fatal(err)
 		}
 		team.Spec.Quota[0].NominalQuota = resource.MustParse(amount)
-		if err := base.Update(ctx, team); err != nil {
+		if err := r.Update(ctx, team); err != nil {
 			t.Fatal(err)
 		}
-		snapshots = nil
+		if err := r.reconcileSharedTeamPool(ctx, cluster); err == nil {
+			t.Fatal("live quota redistribution was accepted")
+		}
+		assertPoolQuantity(t, getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName),
+			"taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "2")
+		assertPoolQuantity(t, getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(team.Name)),
+			"taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "3")
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(teams[0]), teams[0]); err != nil {
+		t.Fatal(err)
+	}
+	teams[0].Spec.Quota[0].NominalQuota = resource.MustParse("3")
+	if err := r.Update(ctx, teams[0]); err != nil {
+		t.Fatal(err)
+	}
+	cohort := getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(teams[1].Name))
+	if err := r.Delete(ctx, cohort); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err == nil || !strings.Contains(err.Error(), "operator maintenance") {
+		t.Fatalf("missing live Cohort was recreated without maintenance: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(cohort), newQueueObject(cohortGVK)); !apierrors.IsNotFound(err) {
+		t.Fatalf("missing Cohort was recreated: %v", err)
+	}
+}
+
+func TestSharedTeamCombinedResourceGroupsRequireAlignment(t *testing.T) {
+	ctx := context.Background()
+	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	root.Object["spec"] = map[string]any{"resourceGroups": quotaResourceGroups([]tauv1alpha1.TauResourceQuota{
+		{Flavor: "taugrid-gpu-h200", Resource: "cpu", NominalQuota: resource.MustParse("31500m")},
+	}, false)}
+	if err := r.Update(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	teams[1].Spec.Quota[0].Flavor = "taugrid-gpu-a100"
+	if err := r.Update(ctx, teams[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err == nil || !strings.Contains(err.Error(), "identical or disjoint") {
+		t.Fatalf("incompatible combined resource groups were accepted: %v", err)
+	}
+	for _, team := range teams {
+		if err := r.Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, newQueueObject(cohortGVK)); !apierrors.IsNotFound(err) {
+			t.Fatalf("invalid Team Cohort was created: %v", err)
+		}
+	}
+	for _, workspace := range workspaces {
+		if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, newQueueObject(clusterQueueGVK)); !apierrors.IsNotFound(err) {
+			t.Fatalf("invalid workspace queue was created: %v", err)
+		}
+	}
+}
+
+func TestSharedTeamZeroSpare(t *testing.T) {
+	for _, groups := range []any{nil, []any{}} {
+		t.Run(fmt.Sprintf("%T", groups), func(t *testing.T) {
+			ctx := context.Background()
+			r, cluster, _, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+			root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+			root.Object["spec"] = map[string]any{}
+			if groups != nil {
+				root.Object["spec"].(map[string]any)["resourceGroups"] = groups
+			}
+			if err := r.Update(ctx, root); err != nil {
+				t.Fatal(err)
+			}
+			version := root.GetResourceVersion()
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+				t.Fatalf("zero-spare parent was rejected: %v", err)
+			}
+			root = getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+			if root.GetResourceVersion() != version {
+				t.Fatal("zero-spare parent was rewritten")
+			}
+			for _, workspace := range workspaces {
+				queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspace.Name))
+				assertPoolQuantity(t, queue, "taugrid-gpu-h200", nvidiaGPUResourceName, "borrowingLimit", "6")
+			}
+		})
+	}
+}
+
+func TestSharedTeamDeletionPreservesEstablishedZeroQuotas(t *testing.T) {
+	ctx := context.Background()
+	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	root.Object["spec"] = map[string]any{"resourceGroups": quotaResourceGroups([]tauv1alpha1.TauResourceQuota{
+		{Flavor: "taugrid-gpu-h200", Resource: nvidiaGPUResourceName, NominalQuota: resource.MustParse("2")},
+	}, false)}
+	if err := r.Update(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	rootVersion := root.GetResourceVersion()
+	teams[1].Spec.Quota[0].Flavor = "taugrid-gpu-a100"
+	if err := r.Update(ctx, teams[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	survivor := getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(teams[0].Name))
+	version := survivor.GetResourceVersion()
+	queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspaces[1].Name))
+	if err := r.Delete(ctx, queue); err != nil {
+		t.Fatal(err)
+	}
+	workspaces[1].Finalizers = nil
+	if err := r.Update(ctx, workspaces[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, workspaces[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, teams[1]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(teams[1])}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
 		if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+			t.Fatalf("deleting an unrelated guarantee wedged the surviving team: %v", err)
+		}
+	}
+	survivor = getSharedQueue(t, r.Client, cohortGVK.Kind, survivor.GetName())
+	if survivor.GetResourceVersion() != version {
+		t.Fatal("surviving Team Cohort was rewritten")
+	}
+	assertPoolQuantity(t, survivor, "taugrid-gpu-a100", nvidiaGPUResourceName, "nominalQuota", "0")
+	root = getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	if root.GetResourceVersion() != rootVersion {
+		t.Fatal("deleted guarantee was transferred to the parent")
+	}
+	queue = getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspaces[0].Name))
+	assertPoolQuantity(t, queue, "taugrid-gpu-a100", nvidiaGPUResourceName, "borrowingLimit", "0")
+	policy, _, err := unstructured.NestedString(queue.Object, "spec", "stopPolicy")
+	if err != nil || policy == "Hold" || policy == "HoldAndDrain" {
+		t.Fatalf("surviving workspace was stopped: %q, %v", policy, err)
+	}
+}
+
+func TestSharedTeamInventoryNeverRebalancesBudgets(t *testing.T) {
+	ctx := context.Background()
+	r, cluster, _, _ := sharedTeamFixture(t, interceptor.Funcs{})
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	version := root.GetResourceVersion()
+	for _, amount := range []string{"16", "7", "0", "8"} {
+		var node corev1.Node
+		if err := r.Get(ctx, client.ObjectKey{Name: "h200"}, &node); err != nil {
 			t.Fatal(err)
 		}
-		if len(snapshots) < 2 {
-			t.Fatalf("missing ordered transfers: %v", snapshots)
+		node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)] = resource.MustParse(amount)
+		if err := r.Status().Update(ctx, &node); err != nil {
+			t.Fatal(err)
 		}
-		if amount == "4" && snapshots[0] != sharedTeamCohortName ||
-			amount == "2" && snapshots[len(snapshots)-1] != sharedTeamCohortName {
-			t.Fatalf("incorrect residual transfer order: %v", snapshots)
+		err := r.reconcileSharedTeamPool(ctx, cluster)
+		if (amount == "7" || amount == "0") != (err != nil) {
+			t.Fatalf("inventory=%s: unexpected validation result: %v", amount, err)
 		}
+		root = getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+		if root.GetResourceVersion() != version {
+			t.Fatal("inventory changes wrote to the static spare Cohort")
+		}
+		assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "2")
+	}
+}
+
+func TestSharedTeamCreationRequiresMaintenanceWithExistingQueues(t *testing.T) {
+	ctx := context.Background()
+	r, cluster, _, _ := sharedTeamFixture(t, interceptor.Funcs{})
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: "h200"}, &node); err != nil {
+		t.Fatal(err)
+	}
+	node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)] = resource.MustParse("16")
+	if err := r.Status().Update(ctx, &node); err != nil {
+		t.Fatal(err)
+	}
+	team := testTeam("new-team", "1")
+	team.UID = "new-team"
+	team.Finalizers = []string{teamFinalizer}
+	team.Spec.Quota[0].BorrowingLimit = nil
+	team.Spec.Quota[0].LendingLimit = nil
+	if err := r.Create(ctx, team); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err == nil || !strings.Contains(err.Error(), "operator maintenance") {
+		t.Fatalf("new team quota was introduced into the live tree: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Name: teamCohortName(team.Name)}, newQueueObject(cohortGVK)); !apierrors.IsNotFound(err) {
+		t.Fatalf("new Cohort exists despite maintenance requirement: %v", err)
+	}
+}
+
+func TestSharedTeamStaticRootMustBeProvidedByItsOwner(t *testing.T) {
+	for _, change := range []string{"missing", "automatic", "different cluster"} {
+		t.Run(change, func(t *testing.T) {
+			ctx := context.Background()
+			r, cluster, _, _ := sharedTeamFixture(t, interceptor.Funcs{})
+			root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+			if change == "missing" {
+				if err := r.Delete(ctx, root); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				labels := root.GetLabels()
+				if change == "automatic" {
+					labels[labelManagedBy] = labelManagedByValue
+				} else {
+					labels[labelSharedTeamQuotas] = "different"
+				}
+				root.SetLabels(labels)
+				if err := r.Update(ctx, root); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.reconcileSharedTeamPool(ctx, cluster); err == nil {
+				t.Fatal("static root ownership contract was not enforced")
+			}
+			if change == "missing" {
+				if err := r.Get(ctx, client.ObjectKeyFromObject(root), newQueueObject(cohortGVK)); !apierrors.IsNotFound(err) {
+					t.Fatalf("controller recreated the static spare: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -310,13 +587,20 @@ func TestSharedTeamShortageAndBorrowedReservations(t *testing.T) {
 
 func TestSharedTeamOddResidualAndExplicitLimits(t *testing.T) {
 	ctx := context.Background()
-	r, cluster, teams, _ := sharedTeamFixture(t, interceptor.Funcs{})
+	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
 	node := &corev1.Node{}
 	if err := r.Get(ctx, client.ObjectKey{Name: "h200"}, node); err != nil {
 		t.Fatal(err)
 	}
 	node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)] = resource.MustParse("7")
 	if err := r.Status().Update(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	root.Object["spec"] = map[string]any{"resourceGroups": quotaResourceGroups([]tauv1alpha1.TauResourceQuota{
+		{Flavor: "taugrid-gpu-h200", Resource: nvidiaGPUResourceName, NominalQuota: resource.MustParse("1")},
+	}, false)}
+	if err := r.Update(ctx, root); err != nil {
 		t.Fatal(err)
 	}
 	zero := resource.Quantity{}
@@ -328,11 +612,47 @@ func TestSharedTeamOddResidualAndExplicitLimits(t *testing.T) {
 	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
 		t.Fatal(err)
 	}
-	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
+	root = getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
 	assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "1")
 	cohort := getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(teams[0].Name))
 	assertPoolQuantity(t, cohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "borrowingLimit", "0")
 	assertPoolQuantity(t, cohort, "taugrid-gpu-h200", nvidiaGPUResourceName, "lendingLimit", "0")
+	scheme := runtime.NewScheme()
+	if err := kueue.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cache := kueuecache.New(fake.NewClientBuilder().WithScheme(scheme).
+		WithIndex(&kueue.LocalQueue{}, kueueindex.QueueClusterQueueKey, kueueindex.IndexQueueClusterQueue).
+		WithIndex(&kueue.Workload{}, kueueindex.WorkloadClusterQueueKey, kueueindex.IndexWorkloadClusterQueue).Build())
+	cache.AddOrUpdateResourceFlavor(logr.Discard(), &kueue.ResourceFlavor{ObjectMeta: metav1.ObjectMeta{Name: "taugrid-gpu-h200"}})
+	for _, name := range []string{sharedTeamCohortName, teamCohortName(teams[0].Name), teamCohortName(teams[1].Name)} {
+		var typed kueue.Cohort
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(getSharedQueue(t, r.Client, cohortGVK.Kind, name).Object, &typed); err != nil {
+			t.Fatal(err)
+		}
+		if err := cache.AddOrUpdateCohort(&typed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, workspace := range workspaces {
+		var typed kueue.ClusterQueue
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspace.Name)).Object, &typed); err != nil {
+			t.Fatal(err)
+		}
+		if err := cache.AddClusterQueue(ctx, &typed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := cache.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr := resources.FlavorResource{Flavor: "taugrid-gpu-h200", Resource: corev1.ResourceName(nvidiaGPUResourceName)}
+	first := snapshot.ClusterQueue(kueue.ClusterQueueReference(workspaceClusterQueueName(workspaces[0].Name)))
+	second := snapshot.ClusterQueue(kueue.ClusterQueueReference(workspaceClusterQueueName(workspaces[1].Name)))
+	if first.Available(fr).CmpInt64(3) != 0 || second.Available(fr).CmpInt64(4) != 0 {
+		t.Fatal("explicit zero must prevent the first team borrowing and lending, while the other can borrow the one static spare GPU")
+	}
 }
 
 func TestSharedWorkspaceTeamReassignmentPreservesNamespace(t *testing.T) {
@@ -680,7 +1000,7 @@ func TestSharedTeamFinalizerRetryDoesNotRecreateCohort(t *testing.T) {
 		t.Fatalf("sibling reconciliation recreated a terminating team's Cohort: %v", err)
 	}
 	root := getSharedQueue(t, r.Client, cohortGVK.Kind, sharedTeamCohortName)
-	assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "5")
+	assertPoolQuantity(t, root, "taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "2")
 	if _, err := r.Reconcile(ctx, request); err != nil {
 		t.Fatalf("team finalization did not recover: %v", err)
 	}
