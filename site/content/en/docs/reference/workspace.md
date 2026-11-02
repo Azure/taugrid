@@ -109,6 +109,13 @@ queue holds are preserved, including a stop-policy change made while a
 controller-owned Hold was active. Recovery clears only the controller's Hold.
 User-authored guarantees are never silently scaled down.
 
+Recovery also clears controller-owned Holds on existing deleting-workspace
+queues so pending work can finish before cleanup. It does not recreate missing
+queues or change their routing, quotas or operator-owned stop policies.
+Workspace cleanup and finalizer removal share the quota-reconciliation lock;
+both paths refresh Workspace identity inside that boundary before mutating
+queue state.
+
 Eligible Linux GPU nodes must have `tau.azure.com/gpu-class`; an unclassified
 Ready, schedulable, non-deleting GPU node blocks this mode rather than silently
 disappearing from whole-pool accounting. When instance-type labels are absent,

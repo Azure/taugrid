@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -54,6 +55,19 @@ func (r *TauWorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 	storedQueue := workspace.Spec.Queue
 	if !workspace.ObjectMeta.DeletionTimestamp.IsZero() {
+		unlock := lockTeamQuota()
+		defer unlock()
+		uid := workspace.UID
+		if err := r.apiReader().Get(ctx, req.NamespacedName, &workspace); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		if workspace.UID != uid {
+			return ctrl.Result{}, fmt.Errorf("workspace %q changed identity while waiting for quota locks; retrying", workspace.Name)
+		}
+		if workspace.DeletionTimestamp.IsZero() {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		storedQueue = workspace.Spec.Queue
 		if controllerutil.ContainsFinalizer(&workspace, workspaceFinalizer) {
 			if workspace.UID == "" || workspace.Annotations[annotationOwnerUID] != string(workspace.UID) {
 				migrated, err := r.migrateLegacyWorkspaceOwnership(ctx, &workspace)

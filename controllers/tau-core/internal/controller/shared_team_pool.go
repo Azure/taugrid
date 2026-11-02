@@ -317,10 +317,8 @@ func (r *TauTeamReconciler) applySharedTeamPool(ctx context.Context, cluster *ta
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if selected[name].DeletionTimestamp.IsZero() {
-			if err := r.reconcileCapacityWorkspace(ctx, selected[name], poolQuotas, true); err != nil {
-				return err
-			}
+		if err := r.reconcileCapacityWorkspace(ctx, selected[name], poolQuotas, true); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -391,6 +389,35 @@ func sharedTeamSpare(root *unstructured.Unstructured) (map[string]resource.Quant
 		return map[string]resource.Quantity{}, nil
 	}
 	return clusterQueueNominalQuota(root)
+}
+
+func (r *TauTeamReconciler) recoverDeletingWorkspaceHold(ctx context.Context, workspace *tauv1alpha1.TauWorkspace) error {
+	queue := newQueueObject(clusterQueueGVK)
+	if err := r.quotaReader().Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(workspace.Name)}, queue); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	owned, err := authoritativeWorkspaceClusterQueue(queue, workspace)
+	if err != nil || !owned {
+		return err
+	}
+	if workspace.Status.Queue.ClusterQueue == queue.GetName() && workspace.Status.Queue.ClusterQueueUID != "" &&
+		workspace.Status.Queue.ClusterQueueUID != string(queue.GetUID()) {
+		return fmt.Errorf("ClusterQueue %q changed UID before deleting Workspace Hold recovery", queue.GetName())
+	}
+	annotations := queue.GetAnnotations()
+	if annotations[annotationSharedQuotaHold] != "true" {
+		return nil
+	}
+	policy, _, err := unstructured.NestedString(queue.Object, "spec", "stopPolicy")
+	if err != nil {
+		return err
+	}
+	if policy == "Hold" {
+		unstructured.RemoveNestedField(queue.Object, "spec", "stopPolicy")
+	}
+	delete(annotations, annotationSharedQuotaHold)
+	queue.SetAnnotations(annotations)
+	return r.Update(ctx, queue)
 }
 
 func quotaNominals(quotas []tauv1alpha1.TauResourceQuota) map[string]resource.Quantity {

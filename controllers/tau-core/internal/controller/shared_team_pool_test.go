@@ -6,8 +6,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
@@ -1017,6 +1019,7 @@ func TestSharedTeamHoldRecoveryPreservesOperatorPolicy(t *testing.T) {
 			if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
 				t.Fatal(err)
 			}
+
 			if err := r.holdSharedTeamQueues(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -1043,6 +1046,280 @@ func TestSharedTeamHoldRecoveryPreservesOperatorPolicy(t *testing.T) {
 				t.Fatal("recovered operator policy retains controller hold ownership")
 			}
 		})
+	}
+}
+
+func TestSharedDeletingWorkspaceRecoversHoldWithPendingWork(t *testing.T) {
+	ctx := context.Background()
+	r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+	workspace := workspaces[0]
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	if err := r.Update(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	namespace := testNamespace(workspace.Name)
+	namespace.Annotations[annotationOwnerUID] = string(workspace.UID)
+	namespace.Labels = workspaceNamespaceLabels(workspace.Name, workspace.Spec.Queue)
+	queueName := workspaceClusterQueueName(workspace.Name)
+	pending := newQueueObject(workloadGVK)
+	pending.SetName("pending")
+	pending.SetNamespace(namespace.Name)
+	pending.Object["spec"] = map[string]any{"queueName": workspace.Spec.Queue}
+	for _, object := range []client.Object{namespace, testLocalQueue(namespace.Name, workspace.Spec.Queue, queueName), pending} {
+		if err := r.Create(ctx, object); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	var node corev1.Node
+	if err := r.Get(ctx, client.ObjectKey{Name: "h200"}, &node); err != nil {
+		t.Fatal(err)
+	}
+	node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)] = resource.MustParse("7")
+	if err := r.Status().Update(ctx, &node); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err == nil {
+		t.Fatal("shortage did not hold queues")
+	}
+	if err := r.Delete(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := &TauWorkspaceReconciler{Client: r.Client}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)}
+	if _, err := cleanup.Reconcile(ctx, request); err == nil || !strings.Contains(err.Error(), "waiting for Workload") {
+		t.Fatalf("deletion did not retain pending work: %v", err)
+	}
+	queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, queueName)
+	before, _, err := unstructured.NestedMap(queue.Object, "spec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	capacity := node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+	t.Logf("Shortage: capacity=%s, deleting Workspace stopPolicy=%v; pending Workload retained",
+		capacity.String(), before["stopPolicy"])
+	delete(before, "stopPolicy")
+	node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)] = resource.MustParse("8")
+	if err := r.Status().Update(ctx, &node); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	queue = getSharedQueue(t, r.Client, clusterQueueGVK.Kind, queueName)
+	if policy, _, err := unstructured.NestedString(queue.Object, "spec", "stopPolicy"); err != nil || policy == "Hold" {
+		t.Fatalf("deleting workspace remained on Hold after recovery: %q, %v", policy, err)
+	}
+	after, _, err := unstructured.NestedMap(queue.Object, "spec")
+	if err != nil || !reflect.DeepEqual(before, after) || queue.GetAnnotations()[annotationSharedQuotaHold] != "" {
+		t.Fatalf("recovery changed the queue contract or retained its Hold marker: %v", err)
+	}
+	capacity = node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+	t.Logf("Recovery: capacity=%s, deleting Workspace stopPolicy=%v; queue routing and quota unchanged",
+		capacity.String(), after["stopPolicy"])
+	assertPoolQuantity(t, getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(teams[0].Name)),
+		"taugrid-gpu-h200", nvidiaGPUResourceName, "nominalQuota", "3")
+	if err := unstructured.SetNestedSlice(pending.Object, []any{map[string]any{"type": "Finished", "status": "True"}}, "status", "conditions"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Update(ctx, pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cleanup.Reconcile(ctx, request); err != nil {
+		t.Fatalf("workspace could not finish deletion after work completed: %v", err)
+	}
+	if err := r.Get(ctx, request.NamespacedName, &tauv1alpha1.TauWorkspace{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("workspace finalizer remains: %v", err)
+	}
+	t.Log("Work completed: Workspace cleanup and finalizer removal finished.")
+}
+
+func TestSharedWorkspaceDeletionAfterListDoesNotRecreateQueue(t *testing.T) {
+	ctx := context.Background()
+	armed := false
+	var target *tauv1alpha1.TauWorkspace
+	r, cluster, _, workspaces := sharedTeamFixture(t, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, objects client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, objects, opts...); err != nil {
+				return err
+			}
+			if _, ok := objects.(*tauv1alpha1.TauWorkspaceList); ok && armed {
+				armed = false
+				if err := c.Delete(ctx, target); err != nil {
+					return err
+				}
+				_, err := (&TauWorkspaceReconciler{Client: c}).Reconcile(ctx,
+					ctrl.Request{NamespacedName: client.ObjectKeyFromObject(target)})
+				return err
+			}
+			return nil
+		},
+	})
+	target = workspaces[0]
+	target.Annotations = map[string]string{annotationOwnerUID: string(target.UID)}
+	if err := r.Update(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	armed = true
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Name: workspaceClusterQueueName(target.Name)}, newQueueObject(clusterQueueGVK)); !apierrors.IsNotFound(err) {
+		t.Fatalf("cleanup's removed queue was recreated from the stale Workspace list: %v", err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatalf("orphaned queue stopped surviving workspaces: %v", err)
+	}
+}
+
+func TestSharedWorkspaceCleanupRefreshesIdentityUnderQuotaLock(t *testing.T) {
+	ctx := context.Background()
+	cleanupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	initialRead := make(chan struct{})
+	reads := 0
+	r, cluster, _, workspaces := sharedTeamFixture(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, object client.Object, opts ...client.GetOption) error {
+			err := c.Get(ctx, key, object, opts...)
+			if _, ok := object.(*tauv1alpha1.TauWorkspace); ok && ctx == cleanupCtx && err == nil {
+				reads++
+				if reads == 1 {
+					close(initialRead)
+				}
+			}
+			return err
+		},
+	})
+	workspace := workspaces[0]
+	workspace.Annotations = map[string]string{annotationOwnerUID: string(workspace.UID)}
+	if err := r.Update(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Delete(ctx, workspace); err != nil {
+		t.Fatal(err)
+	}
+	unlock := lockTeamQuota()
+	locked := true
+	defer func() {
+		if locked {
+			unlock()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := (&TauWorkspaceReconciler{Client: r.Client}).Reconcile(cleanupCtx,
+			ctrl.Request{NamespacedName: client.ObjectKeyFromObject(workspace)})
+		done <- err
+	}()
+	select {
+	case <-initialRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup did not read its initial Workspace snapshot")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("cleanup bypassed the shared quota lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	old := &tauv1alpha1.TauWorkspace{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(workspace), old); err != nil {
+		t.Fatal(err)
+	}
+	old.Finalizers = nil
+	if err := r.Update(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	replacement := workspace.DeepCopy()
+	replacement.ResourceVersion = ""
+	replacement.UID = "replacement-workspace"
+	replacement.Annotations[annotationOwnerUID] = string(replacement.UID)
+	if err := r.Create(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	locked = false
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "identity") {
+			t.Fatalf("cleanup did not reject its stale Workspace UID: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup did not resume after the quota lock was released")
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(replacement), replacement); err != nil {
+		t.Fatal(err)
+	}
+	if len(replacement.Finalizers) == 0 {
+		t.Fatal("cleanup removed the replacement Workspace's finalizer")
+	}
+	getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspace.Name))
+}
+
+func TestSharedDeletingWorkspaceHoldRecoveryPreservesQueue(t *testing.T) {
+	for _, policy := range []string{"Hold", "HoldAndDrain", "None"} {
+		for _, owned := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/controller-owned=%v", policy, owned), func(t *testing.T) {
+				ctx := context.Background()
+				r, cluster, teams, workspaces := sharedTeamFixture(t, interceptor.Funcs{})
+				if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+					t.Fatal(err)
+				}
+				queue := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, workspaceClusterQueueName(workspaces[0].Name))
+				queue.SetUID("existing-queue")
+				annotations := queue.GetAnnotations()
+				annotations["keep"] = "operator-data"
+				if owned {
+					annotations[annotationSharedQuotaHold] = "true"
+				}
+				queue.SetAnnotations(annotations)
+				if err := unstructured.SetNestedField(queue.Object, policy, "spec", "stopPolicy"); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Update(ctx, queue); err != nil {
+					t.Fatal(err)
+				}
+				before, _, err := unstructured.NestedMap(queue.Object, "spec")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if owned && policy == "Hold" {
+					delete(before, "stopPolicy")
+				}
+				workspaces[0].Spec.TeamRef.Name = teams[1].Name
+				if err := r.Update(ctx, workspaces[0]); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Delete(ctx, workspaces[0]); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+					t.Fatal(err)
+				}
+				after := getSharedQueue(t, r.Client, clusterQueueGVK.Kind, queue.GetName())
+				spec, _, err := unstructured.NestedMap(after.Object, "spec")
+				if err != nil || !reflect.DeepEqual(spec, before) || after.GetUID() != queue.GetUID() ||
+					after.GetAnnotations()["keep"] != "operator-data" {
+					t.Fatalf("deleting queue was recreated, retargeted or its operator policy changed: %v", err)
+				}
+				if err := r.Delete(ctx, after); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.reconcileSharedTeamPool(ctx, cluster); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Get(ctx, client.ObjectKeyFromObject(after), newQueueObject(clusterQueueGVK)); !apierrors.IsNotFound(err) {
+					t.Fatalf("missing deleting queue was recreated: %v", err)
+				}
+			})
+		}
 	}
 }
 

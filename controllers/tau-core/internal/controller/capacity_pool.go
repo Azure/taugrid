@@ -13,6 +13,7 @@ import (
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -293,6 +294,20 @@ func validateRetainedCapacityPools(ctx context.Context, reader client.Reader, ex
 }
 
 func (r *TauTeamReconciler) reconcileCapacityWorkspace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, quotas []tauv1alpha1.TauResourceQuota, shared bool) error {
+	if shared {
+		var current tauv1alpha1.TauWorkspace
+		if err := r.quotaReader().Get(ctx, client.ObjectKeyFromObject(workspace), &current); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		if current.UID != workspace.UID || !apiequality.Semantic.DeepEqual(current.Spec, workspace.Spec) ||
+			!controllerutil.ContainsFinalizer(&current, workspaceFinalizer) {
+			return fmt.Errorf("workspace %q changed identity, spec or finalizer during shared quota reconciliation; retrying", workspace.Name)
+		}
+		if !current.DeletionTimestamp.IsZero() {
+			return r.recoverDeletingWorkspaceHold(ctx, &current)
+		}
+		workspace = &current
+	}
 	queue := desiredWorkspaceClusterQueue(workspace)
 	borrowing := make([]tauv1alpha1.TauResourceQuota, len(quotas))
 	reservations := map[string]resource.Quantity{}
