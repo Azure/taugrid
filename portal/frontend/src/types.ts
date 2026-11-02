@@ -17,6 +17,8 @@ export interface Tracking { experimentPath?: string; experimentTracking?: string
 export interface Run extends Tracking { name: string; namespace?: string; kind: string; status: string; age: string; resourceUid?: string }
 export interface Runs extends Scoped { namespace?: string; total: number; historyState?: string; historyDiagnostic?: string; runs: Run[] }
 export interface Overview extends Scoped {
+  generatedAt?: string;
+  runtimeScopes?: { namespace: string; queue: string }[];
   workloadProfiles?: Profiles; activeUnavailable?: string; runningUnavailable?: string;
   pending: {
     name: string; namespace: string; queue: string; clusterQueue?: string; gpuRequested?: number;
@@ -42,6 +44,8 @@ export interface Overview extends Scoped {
     health?: { totalGPUs: number; errorGPUs: number };
     queue?: {
       admitted: number; pending: number; gpuUsed: number; gpuHeadroom: number;
+      gpuReserved?: number; gpuNominal?: number; gpuReservationAvailable?: boolean; gpuNominalAvailable?: boolean;
+      observedAt?: string;
       queues?: { namespace: string; queue: string; clusterQueue?: string; admitted: number; pending: number }[];
     };
     cost?: { totalGPUHours: number; window: string; idleGPUs: number };
@@ -77,6 +81,9 @@ export interface Cluster extends Scoped {
   models: { modelName: string; gpus: number }[]; gpus: GPU[];
 }
 export interface Nodes extends Scoped {
+  generatedAt?: string;
+  gpuActivity?: { runningPods: number; pendingPods: number; otherPods: number; terminatingPods: number };
+  gpuActivityError?: string;
   totalNodes: number; readyNodes: number; gpuNodes: number; totalGPUs: number;
   gpuAllocatable: number; gpuSchedulable: number; gpuAllocated: number; gpuAvailable: number; gpuAllocationKnown: boolean; gpuAllocationError?: string;
   totalCPUCores: number; totalMemoryGiB: number; rdmaAdvertisedGpuNodes?: number;

@@ -559,6 +559,8 @@ type boardLink struct {
 }
 
 type overviewResponse struct {
+	GeneratedAt        time.Time                `json:"generatedAt"`
+	RuntimeScopes      []runtimeScope           `json:"runtimeScopes"`
 	Boards             []boardLink              `json:"boards"`
 	Cards              overviewCards            `json:"cards"`
 	Pending            []queue.PendingWorkload  `json:"pending"`
@@ -600,11 +602,16 @@ type healthCard struct {
 }
 
 type queueCard struct {
-	Pending     int         `json:"pending"`
-	Admitted    int         `json:"admitted"`
-	GPUUsed     int64       `json:"gpuUsed"`
-	GPUHeadroom int64       `json:"gpuHeadroom"`
-	Queues      []queueLane `json:"queues"`
+	ObservedAt              time.Time   `json:"observedAt"`
+	GPUReserved             int64       `json:"gpuReserved"`
+	GPUNominal              int64       `json:"gpuNominal"`
+	GPUReservationAvailable bool        `json:"gpuReservationAvailable"`
+	GPUNominalAvailable     bool        `json:"gpuNominalAvailable"`
+	Pending                 int         `json:"pending"`
+	Admitted                int         `json:"admitted"`
+	GPUUsed                 int64       `json:"gpuUsed"`
+	GPUHeadroom             int64       `json:"gpuHeadroom"`
+	Queues                  []queueLane `json:"queues"`
 }
 
 type queueLane struct {
@@ -613,6 +620,11 @@ type queueLane struct {
 	ClusterQueue string `json:"clusterQueue,omitempty"`
 	Pending      int    `json:"pending"`
 	Admitted     int    `json:"admitted"`
+}
+
+type runtimeScope struct {
+	Namespace string `json:"namespace"`
+	Queue     string `json:"queue"`
 }
 
 type costCard struct {
@@ -696,6 +708,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	resp := overviewResponse{
 		Boards: s.boardsForScope(scope), Pending: []queue.PendingWorkload{},
 		Active: []runs.Run{}, Running: []runningItem{}, Waiting: []runningItem{},
+		RuntimeScopes: []runtimeScope{},
+	}
+	if jobScopes, err := s.resolvedJobScopes(scope); err == nil {
+		for _, jobScope := range jobScopes {
+			resp.RuntimeScopes = append(resp.RuntimeScopes, runtimeScope{Namespace: jobScope.Namespace, Queue: jobScope.Queue})
+		}
 	}
 	resp.WorkloadProfiles = jobs.ReadProfiles(r.Context(), s.jobs.Profiles, s.profileScopes(scope), "")
 	if view == "workloads" {
@@ -705,6 +723,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	s.resolveRunning(r.Context(), &resp, scope)
 	s.resolveActiveRuns(r.Context(), &resp, scope)
+	resp.GeneratedAt = time.Now().UTC()
 	writeScopedJSON(w, http.StatusOK, resp, scope, "ready")
 }
 
@@ -785,6 +804,9 @@ func (s *Server) resolveQueueCard(ctx context.Context, resp *overviewResponse, s
 	} else {
 		summary := jobs.Summarize(snap.Snapshot)
 		resp.Cards.Queue = &queueCard{
+			ObservedAt:  time.Now().UTC(),
+			GPUReserved: summary.GPUReserved, GPUNominal: summary.GPUNominal,
+			GPUReservationAvailable: summary.GPUReservationAvailable, GPUNominalAvailable: summary.GPUNominalAvailable,
 			Pending: summary.Pending, Admitted: summary.Admitted,
 			GPUUsed: summary.GPUUsed, GPUHeadroom: summary.GPUHeadroom,
 			Queues: queueLanes(snap.Groups),

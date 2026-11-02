@@ -238,8 +238,66 @@ func TestBoardCorrelatesSharedQueueNameByExplicitTeamAndNamespace(t *testing.T) 
 	if summary.Pending != 5 || summary.Admitted != 5 {
 		t.Fatalf("queue summary = %#v, want pending=5 admitted=5", summary)
 	}
-	if summary.GPUUsed != 5 || summary.GPUHeadroom != 2 {
+	if summary.GPUUsed != 5 || summary.GPUHeadroom != 2 || summary.GPUReserved != 6 || summary.GPUNominal != 8 ||
+		!summary.GPUReservationAvailable || !summary.GPUNominalAvailable {
 		t.Fatalf("GPU summary = %#v, want shared quota counted once", summary)
+	}
+}
+
+func TestSummarizePreservesReservationAndNominalQuotaWhenBorrowing(t *testing.T) {
+	summary := Summarize(queue.Snapshot{Groups: []queue.Group{
+		{ClusterQueue: "shared", Queue: "one", GPUNominal: 8, GPUReserved: 12, GPUUsed: 10,
+			GPUNominalAvailable: true, GPUReservationAvailable: true},
+		{ClusterQueue: "shared", Queue: "two", GPUNominal: 8, GPUReserved: 12, GPUUsed: 10,
+			GPUNominalAvailable: true, GPUReservationAvailable: true},
+	}})
+	if summary.GPUNominal != 8 || summary.GPUReserved != 12 || summary.GPUUsed != 10 ||
+		!summary.GPUNominalAvailable || !summary.GPUReservationAvailable {
+		t.Fatalf("summary = %+v; want 12 reserved / 8 nominal, 10 used, counted once", summary)
+	}
+}
+
+func TestBoardSummarizesMixedCPUAndGPUQueues(t *testing.T) {
+	reader := &fakeReader{
+		localByNS: map[string][]byte{
+			"compute":  []byte(`{"items":[{"metadata":{"name":"cpu","namespace":"compute"},"spec":{"clusterQueue":"cpu-cq"}}]}`),
+			"training": []byte(`{"items":[{"metadata":{"name":"gpu","namespace":"training"},"spec":{"clusterQueue":"gpu-cq"}}]}`),
+		},
+		workloadByNS: map[string][]byte{
+			"compute":  []byte(`{"items":[]}`),
+			"training": []byte(`{"items":[]}`),
+		},
+		clusterJSON: []byte(`{"items":[
+		  {"metadata":{"name":"cpu-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"cpu","resources":[{"name":"cpu","nominalQuota":"64"}]}]}]}},
+		  {"metadata":{"name":"gpu-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"gpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}]}]},
+		    "status":{"flavorsReservation":[{"name":"gpu","resources":[{"name":"nvidia.com/gpu","total":"2"}]}],
+		      "flavorsUsage":[{"name":"gpu","resources":[{"name":"nvidia.com/gpu","total":"1"}]}]}}
+		]}`),
+	}
+	snapshot, err := Board(context.Background(), reader, Options{Scopes: []Scope{
+		{Team: "compute", Namespace: "compute", Queue: "cpu"},
+		{Team: "training", Namespace: "training", Queue: "gpu"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := Summarize(snapshot.Snapshot)
+	if summary.GPUReserved != 2 || summary.GPUNominal != 8 || summary.GPUHeadroom != 6 || summary.GPUUsed != 1 ||
+		!summary.GPUReservationAvailable || !summary.GPUNominalAvailable {
+		t.Fatalf("mixed CPU/GPU summary = %+v; want known 2 reserved / 8 nominal, 6 unreserved, 1 used", summary)
+	}
+}
+
+func TestSummarizeDoesNotTreatMissingReservationStatusAsZero(t *testing.T) {
+	summary := Summarize(queue.Snapshot{Groups: []queue.Group{
+		{ClusterQueue: "one", GPUNominal: 8, GPUNominalAvailable: true, GPUReservationAvailable: true},
+		{ClusterQueue: "two", GPUNominal: 8, GPUNominalAvailable: true},
+	}})
+	if summary.GPUReservationAvailable || !summary.GPUNominalAvailable {
+		t.Fatalf("summary = %+v; want nominal known, reservation unknown", summary)
+	}
+	if empty := Summarize(queue.Snapshot{}); empty.GPUReservationAvailable || empty.GPUNominalAvailable {
+		t.Fatalf("empty summary = %+v; quota must be unknown", empty)
 	}
 }
 

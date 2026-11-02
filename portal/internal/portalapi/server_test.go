@@ -239,6 +239,10 @@ func TestOverviewResolvesRunningCrossLinks(t *testing.T) {
 	if got.ActiveUnavailable != "" {
 		t.Fatalf("ActiveUnavailable = %q, want empty", got.ActiveUnavailable)
 	}
+	if got.GeneratedAt.IsZero() || len(got.RuntimeScopes) != 1 ||
+		got.RuntimeScopes[0].Namespace != "ray" || got.RuntimeScopes[0].Queue != "jobqueue" {
+		t.Fatalf("overview source metadata = %v / %+v", got.GeneratedAt, got.RuntimeScopes)
+	}
 	if len(got.Active) != 2 {
 		t.Fatalf("active = %+v, want running Job and RayJob only", got.Active)
 	}

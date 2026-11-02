@@ -165,24 +165,34 @@ type SKUCount struct {
 }
 
 type Snapshot struct {
-	TotalNodes             int         `json:"totalNodes"`
-	ReadyNodes             int         `json:"readyNodes"`
-	GPUNodes               int         `json:"gpuNodes"`
-	TotalCPUCores          int64       `json:"totalCPUCores"`
-	TotalMemoryGiB         float64     `json:"totalMemoryGiB"`
-	TotalGPUs              int64       `json:"totalGPUs"`
-	GPUAllocatable         int64       `json:"gpuAllocatable"`
-	GPUSchedulable         int64       `json:"gpuSchedulable"`
-	GPUAllocated           int64       `json:"gpuAllocated"`
-	GPUAvailable           int64       `json:"gpuAvailable"`
-	GPUAllocationKnown     bool        `json:"gpuAllocationKnown"`
-	GPUAllocationError     string      `json:"gpuAllocationError,omitempty"`
-	RDMAAdvertisedGPUNodes int         `json:"rdmaAdvertisedGpuNodes"`
-	SKUs                   []SKUCount  `json:"skus"`
-	Nodes                  []Node      `json:"nodes"`
-	DaemonSets             []DaemonSet `json:"daemonSets,omitempty"`
-	DaemonSetsError        string      `json:"daemonSetsError,omitempty"`
-	NodeMetricsError       string      `json:"nodeMetricsError,omitempty"`
+	GeneratedAt            time.Time    `json:"generatedAt"`
+	GPUActivity            *GPUActivity `json:"gpuActivity,omitempty"`
+	GPUActivityError       string       `json:"gpuActivityError,omitempty"`
+	TotalNodes             int          `json:"totalNodes"`
+	ReadyNodes             int          `json:"readyNodes"`
+	GPUNodes               int          `json:"gpuNodes"`
+	TotalCPUCores          int64        `json:"totalCPUCores"`
+	TotalMemoryGiB         float64      `json:"totalMemoryGiB"`
+	TotalGPUs              int64        `json:"totalGPUs"`
+	GPUAllocatable         int64        `json:"gpuAllocatable"`
+	GPUSchedulable         int64        `json:"gpuSchedulable"`
+	GPUAllocated           int64        `json:"gpuAllocated"`
+	GPUAvailable           int64        `json:"gpuAvailable"`
+	GPUAllocationKnown     bool         `json:"gpuAllocationKnown"`
+	GPUAllocationError     string       `json:"gpuAllocationError,omitempty"`
+	RDMAAdvertisedGPUNodes int          `json:"rdmaAdvertisedGpuNodes"`
+	SKUs                   []SKUCount   `json:"skus"`
+	Nodes                  []Node       `json:"nodes"`
+	DaemonSets             []DaemonSet  `json:"daemonSets,omitempty"`
+	DaemonSetsError        string       `json:"daemonSetsError,omitempty"`
+	NodeMetricsError       string       `json:"nodeMetricsError,omitempty"`
+}
+
+type GPUActivity struct {
+	RunningPods     int `json:"runningPods"`
+	PendingPods     int `json:"pendingPods"`
+	OtherPods       int `json:"otherPods"`
+	TerminatingPods int `json:"terminatingPods"`
 }
 
 func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
@@ -200,6 +210,7 @@ func Board(ctx context.Context, r Reader, opts Options) (Snapshot, error) {
 	if opts.IncludeMetrics {
 		attachNodeMetrics(ctx, r, &snap)
 	}
+	snap.GeneratedAt = time.Now().UTC()
 	if !opts.IncludeDaemonSets {
 		return snap, nil
 	}
@@ -342,6 +353,9 @@ type podList struct {
 }
 
 type pod struct {
+	Metadata struct {
+		DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+	} `json:"metadata"`
 	Spec struct {
 		NodeName       string            `json:"nodeName"`
 		Containers     []podContainer    `json:"containers"`
@@ -378,16 +392,40 @@ func attachGPUAllocations(ctx context.Context, r Reader, snap *Snapshot) {
 		return
 	}
 	allocatedByNode := map[string]int64{}
+	activity := &GPUActivity{}
 	for _, pod := range pods.Items {
-		if pod.Spec.NodeName == "" || pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
+		if pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
 			continue
 		}
 		request, supported := podGPURequest(pod)
 		if !supported {
+			if pod.Spec.NodeName == "" {
+				snap.GPUActivityError = "GPU pod activity is incomplete: an unbound pod uses unsupported MIG or dynamic-resource claims"
+				continue
+			}
 			snap.GPUAllocationError = "active pod uses an unsupported MIG or dynamic-resource allocation"
 			return
 		}
+		if request > 0 {
+			switch pod.Status.Phase {
+			case "Running":
+				activity.RunningPods++
+			case "Pending":
+				activity.PendingPods++
+			default:
+				activity.OtherPods++
+			}
+			if pod.Metadata.DeletionTimestamp != nil {
+				activity.TerminatingPods++
+			}
+		}
+		if pod.Spec.NodeName == "" {
+			continue
+		}
 		allocatedByNode[pod.Spec.NodeName] += request
+	}
+	if snap.GPUActivityError == "" {
+		snap.GPUActivity = activity
 	}
 	snap.GPUAllocationKnown = true
 	for i := range snap.Nodes {

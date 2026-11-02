@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Azure/taugrid/core/kueueapi"
 	"github.com/Azure/taugrid/core/topology"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
@@ -155,6 +156,40 @@ func TestBuildSnapshotUsesWorkspaceDerivedClusterQueue(t *testing.T) {
 	}
 	if a100.GPUNominal != 8 || a100.GPUReserved != 3 || a100.GPUHeadroom != 5 {
 		t.Fatalf("workspace quota conflated with legacy cluster queue: %#v", a100)
+	}
+	if !a100.GPUNominalAvailable || !a100.GPUReservationAvailable {
+		t.Fatalf("known workspace quota marked unavailable: %+v", a100)
+	}
+}
+
+func TestQuotaAvailabilityDistinguishesZeroFromMissingStatus(t *testing.T) {
+	for _, reservation := range []struct {
+		name   string
+		status string
+		known  bool
+	}{
+		{name: "missing", status: `{}`},
+		{name: "zero", status: `{"status":{"flavorsReservation":[{"name":"gpu","resources":[{"name":"nvidia.com/gpu","total":"0"}]}]}}`, known: true},
+		{name: "cpu-only", status: `{"spec":{"resourceGroups":[{"flavors":[{"name":"cpu","resources":[{"name":"cpu","nominalQuota":"64"}]}]}]}}`, known: true},
+		{name: "partial", status: `{
+		  "spec":{"resourceGroups":[{"flavors":[
+		    {"name":"gpu","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]},
+		    {"name":"missing","resources":[{"name":"nvidia.com/gpu","nominalQuota":"8"}]}
+		  ]}]},
+		  "status":{"flavorsReservation":[{"name":"gpu","resources":[{"name":"nvidia.com/gpu","total":"0"}]}]}
+		}`},
+	} {
+		t.Run(reservation.name, func(t *testing.T) {
+			var cq kueueapi.ClusterQueue
+			if err := json.Unmarshal([]byte(reservation.status), &cq); err != nil {
+				t.Fatal(err)
+			}
+			var group Group
+			applyClusterQueueQuota(&group, cq, "")
+			if group.GPUReservationAvailable != reservation.known || group.GPUReserved != 0 {
+				t.Fatalf("quota availability = %+v", group)
+			}
+		})
 	}
 }
 

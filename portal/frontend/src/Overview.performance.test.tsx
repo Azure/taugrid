@@ -100,7 +100,8 @@ describe('Overview performance guardrails', () => {
     vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
       const url = String(input);
       if (url.includes('/api/portal/overview')) return Promise.resolve(json({
-        cards: { queue: { admitted: 1, pending: 0, gpuUsed: 8, gpuHeadroom: 8, queues: [] } },
+        cards: { queue: { admitted: 1, pending: 0, gpuUsed: 8, gpuHeadroom: 8, queues: [],
+          gpuReserved: 8, gpuNominal: 16, gpuReservationAvailable: true, gpuNominalAvailable: true } },
         pending: [], active: [], waiting: [], running: [],
       }));
       if (url.includes('/api/portal/quota')) return Promise.resolve(json({
@@ -118,7 +119,7 @@ describe('Overview performance guardrails', () => {
     </MemoryRouter></QueryClientProvider>);
 
     expect(await screen.findByRole('heading', { name: 'Infrastructure topology' })).toBeVisible();
-    expect(screen.getByText('Queue pressure').parentElement).toHaveTextContent('8/16');
+    expect(screen.getByText('Queue reservations').parentElement).toHaveTextContent('8/16');
     expect(screen.getByLabelText('Infrastructure overview source freshness')).toHaveTextContent('Fleet capacity: loading');
 
     resolveNodes?.(json(scaledNodes()));

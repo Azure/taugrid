@@ -65,10 +65,14 @@ type Snapshot struct {
 }
 
 type Summary struct {
-	Pending     int
-	Admitted    int
-	GPUUsed     int64
-	GPUHeadroom int64
+	Pending                 int
+	Admitted                int
+	GPUUsed                 int64
+	GPUHeadroom             int64
+	GPUReserved             int64
+	GPUNominal              int64
+	GPUReservationAvailable bool
+	GPUNominalAvailable     bool
 }
 
 func ValidateScopes(scopes []Scope) error {
@@ -237,7 +241,7 @@ func profileMatchesAnyScope(candidate profile.ResolvedWorkloadProfile, scopes []
 }
 
 func Summarize(snapshot queue.Snapshot) Summary {
-	var out Summary
+	out := Summary{GPUReservationAvailable: len(snapshot.Groups) > 0, GPUNominalAvailable: len(snapshot.Groups) > 0}
 	queueSeen := map[string]struct{}{}
 	quotaSeen := map[string]struct{}{}
 	aggregateQuota := map[string]struct{}{}
@@ -261,6 +265,10 @@ func Summarize(snapshot queue.Snapshot) Summary {
 			quotaSeen[quotaKey] = struct{}{}
 			out.GPUUsed += group.GPUUsed
 			out.GPUHeadroom += group.GPUHeadroom
+			out.GPUReserved += group.GPUReserved
+			out.GPUNominal += group.GPUNominal
+			out.GPUReservationAvailable = out.GPUReservationAvailable && group.GPUReservationAvailable
+			out.GPUNominalAvailable = out.GPUNominalAvailable && group.GPUNominalAvailable
 		}
 	}
 	return out
