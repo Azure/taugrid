@@ -165,7 +165,7 @@ func TestSharedTeamStaticSpareAndBorrowingContract(t *testing.T) {
 		t.Fatal("shared workspace queues must be in the pinned Kueue scheduling snapshot")
 	}
 	fr := resources.FlavorResource{Flavor: "taugrid-gpu-h200", Resource: corev1.ResourceName(nvidiaGPUResourceName)}
-	usage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(8)}}
+	usage := workload.Usage{Quota: workload.ResourceUsage{Assigned: resources.FlavorResourceQuantities{fr: resources.NewAmount(8)}}}
 	if first.Available(fr).CmpInt64(8) != 0 || second.Available(fr).CmpInt64(8) != 0 || third.Available(fr).CmpInt64(8) != 0 {
 		t.Fatal("each zero-nominal workspace must be able to spill over to the whole pool, not just its team guarantee")
 	}
@@ -185,12 +185,12 @@ func TestSharedTeamStaticSpareAndBorrowingContract(t *testing.T) {
 		t.Fatal("borrowing the whole fixed tree must also work in the other team direction")
 	}
 	second.RemoveUsage(usage)
-	firstUsage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(3)}}
+	firstUsage := workload.Usage{Quota: workload.ResourceUsage{Assigned: resources.FlavorResourceQuantities{fr: resources.NewAmount(3)}}}
 	first.AddUsage(firstUsage)
 	if third.Available(fr).CmpInt64(5) != 0 {
 		t.Fatal("a second workspace must share its team entitlement and remaining pool without a fixed split")
 	}
-	thirdUsage := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(5)}}
+	thirdUsage := workload.Usage{Quota: workload.ResourceUsage{Assigned: resources.FlavorResourceQuantities{fr: resources.NewAmount(5)}}}
 	third.AddUsage(thirdUsage)
 	if second.Available(fr).CmpInt64(0) != 0 {
 		t.Fatal("usage across a team's workspaces must consume one shared physical budget")
@@ -205,7 +205,7 @@ func TestSharedTeamStaticSpareAndBorrowingContract(t *testing.T) {
 	for _, team := range teams {
 		cohorts = append(cohorts, getSharedQueue(t, r.Client, cohortGVK.Kind, teamCohortName(team.Name)))
 	}
-	unit := workload.Usage{Quota: resources.FlavorResourceQuantities{fr: resources.NewAmount(1)}}
+	unit := workload.Usage{Quota: workload.ResourceUsage{Assigned: resources.FlavorResourceQuantities{fr: resources.NewAmount(1)}}}
 	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}} {
 		for _, cohort := range cohorts {
 			cache.DeleteCohort(kueue.CohortReference(cohort.GetName()))
@@ -237,10 +237,10 @@ func TestSharedTeamStaticSpareAndBorrowingContract(t *testing.T) {
 							ResourceUsage: corev1.ResourceList{fr.Resource: resource.MustParse("1")},
 						}},
 					}, clock.RealClock{})
-					if quantity := workload.NewInfo(item).FlavorResourceUsage()[fr]; quantity.CmpInt64(1) != 0 {
+					if quantity := workload.NewInfo(logr.Discard(), item).ResourceUsage().Assigned[fr]; quantity.CmpInt64(1) != 0 {
 						t.Fatalf("reservation does not consume exactly one GPU: %s", quantity.String())
 					}
-					if !cache.AddOrUpdateWorkload(logr.Discard(), item) {
+					if !cache.AddOrUpdateWorkload(ctx, logr.Discard(), item) {
 						t.Fatal("could not preserve the reservation in the actual Kueue cache")
 					}
 					reserved = append(reserved, item)
