@@ -307,6 +307,17 @@ func (r *TauClusterReconciler) reconcileNodeLabels(
 
 func validateNodeLabelRules(rules []tauv1alpha1.TauNodeLabelRule) error {
 	for i, rule := range rules {
+		for key, value := range rule.Match.Labels {
+			if problems := k8svalidation.IsQualifiedName(key); len(problems) > 0 {
+				return fmt.Errorf("nodes.labelRules[%d].match.labels[%q]: %s", i, key, problems[0])
+			}
+			if problems := k8svalidation.IsValidLabelValue(value); len(problems) > 0 {
+				return fmt.Errorf("nodes.labelRules[%d].match.labels[%q]: %s", i, key, problems[0])
+			}
+			if output, found := rule.Labels[key]; found && output != value {
+				return fmt.Errorf("nodes.labelRules[%d] must not change its own match label %q", i, key)
+			}
+		}
 		if len(rule.Labels) == 0 {
 			return fmt.Errorf("nodes.labelRules[%d].labels must not be empty", i)
 		}
@@ -349,7 +360,11 @@ func isDerivedTopologyLabel(key string) bool {
 func validateNodeLabelRuleConflicts(rules []tauv1alpha1.TauNodeLabelRule) error {
 	for i := range rules {
 		for j := i + 1; j < len(rules); j++ {
-			if !vmSizeRulesOverlap(rules[i].Match.VMSizes, rules[j].Match.VMSizes) {
+			if !vmSizeRulesOverlap(rules[i].Match.VMSizes, rules[j].Match.VMSizes) ||
+				!nodeMatchLabelsOverlap(rules[i].Match.Labels, rules[j].Match.Labels) {
+				continue
+			}
+			if (len(rules[i].Match.Labels) == 0) != (len(rules[j].Match.Labels) == 0) {
 				continue
 			}
 			keys := make([]string, 0, len(rules[i].Labels))
@@ -379,12 +394,24 @@ func vmSizeRulesOverlap(left, right []string) bool {
 	return false
 }
 
+func nodeMatchLabelsOverlap(left, right map[string]string) bool {
+	for key, value := range left {
+		if other, found := right[key]; found && value != other {
+			return false
+		}
+	}
+	return true
+}
+
 func desiredNodeLabels(node *corev1.Node, rules []tauv1alpha1.TauNodeLabelRule) (map[string]string, bool, error) {
 	vmSize := node.Labels[azureVMSizeLabel]
 	desired := map[string]string{}
 	matched := false
 	for i, rule := range rules {
 		if len(rule.Match.VMSizes) > 0 && !slices.Contains(rule.Match.VMSizes, vmSize) {
+			continue
+		}
+		if !nodeHasLabels(node, rule.Match.Labels) {
 			continue
 		}
 		matched = true
@@ -400,7 +427,7 @@ func desiredNodeLabels(node *corev1.Node, rules []tauv1alpha1.TauNodeLabelRule) 
 
 func nodeHasLabels(node *corev1.Node, desired map[string]string) bool {
 	for key, value := range desired {
-		if node.Labels[key] != value {
+		if actual, exists := node.Labels[key]; !exists || actual != value {
 			return false
 		}
 	}

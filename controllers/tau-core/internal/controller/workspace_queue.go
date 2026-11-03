@@ -111,7 +111,7 @@ func (r *TauWorkspaceReconciler) reconcileQueue(
 			fmt.Sprintf("LocalQueue %q is owned by TauWorkspace %q", localQueueName, labels[labelWorkspace]), nil
 	}
 	if ownedByWorkspace(labels, workspace.Name) {
-		if err := r.ensureWorkspaceObjectUID(ctx, localQueue, workspace); err != nil {
+		if err := r.reconcileWorkspaceLocalQueueTeam(ctx, localQueue, workspace); err != nil {
 			return tauv1alpha1.WorkspaceQueueStatus{LocalQueue: localQueueName, ClusterQueue: clusterQueueName}, false,
 				fmt.Sprintf("LocalQueue %q ownership is not authoritative: %v", localQueueName, err), nil
 		}
@@ -219,8 +219,29 @@ func (r *TauWorkspaceReconciler) reconcileWorkspaceCompatibilityLocalQueues(
 		if err := r.Get(ctx, client.ObjectKey{Name: currentClusterQueue}, backingQueue); err != nil {
 			return false, fmt.Sprintf("compatible LocalQueue %q backing ClusterQueue %q is not ready: %v", name, currentClusterQueue, err), nil
 		}
+		if queue.GetAnnotations()[annotationOwnerUID] != "" {
+			if err := r.reconcileWorkspaceLocalQueueTeam(ctx, queue, workspace); err != nil {
+				return false, fmt.Sprintf("compatible LocalQueue %q metadata is not authoritative: %v", name, err), err
+			}
+		}
 	}
 	return true, "compatible LocalQueues are reconciled", nil
+}
+
+func (r *TauWorkspaceReconciler) reconcileWorkspaceLocalQueueTeam(ctx context.Context, queue *unstructured.Unstructured, workspace *tauv1alpha1.TauWorkspace) error {
+	if !ownedByWorkspace(queue.GetLabels(), workspace.Name) {
+		return nil
+	}
+	if err := r.ensureWorkspaceObjectUID(ctx, queue, workspace); err != nil {
+		return err
+	}
+	if workspace.Spec.TeamRef == nil || queue.GetLabels()[labelTeam] == workspace.Spec.TeamRef.Name {
+		return nil
+	}
+	labels := queue.GetLabels()
+	labels[labelTeam] = workspace.Spec.TeamRef.Name
+	queue.SetLabels(labels)
+	return r.Update(ctx, queue)
 }
 
 func (r *TauWorkspaceReconciler) compatibilityLocalQueueClusterQueue(

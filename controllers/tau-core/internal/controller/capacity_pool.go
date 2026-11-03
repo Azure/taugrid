@@ -13,6 +13,7 @@ import (
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -39,7 +40,7 @@ func selectedCapacityTeam(ctx context.Context, reader client.Reader, name string
 		return nil, false, err
 	}
 	ref := cluster.Spec.Queues.CapacityTeamRef
-	return &cluster, ref != nil && ref.Name == name, nil
+	return &cluster, cluster.Spec.Queues.ShareTeamQuotas || ref != nil && ref.Name == name, nil
 }
 
 func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster *tauv1alpha1.TauCluster) (*capacityPoolInventory, error) {
@@ -53,6 +54,10 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 		node := &nodes.Items[i]
 		class := node.Labels[labelkeys.LabelGPUClass]
 		gpus := node.Status.Allocatable[corev1.ResourceName(nvidiaGPUResourceName)]
+		if cluster.Spec.Queues.ShareTeamQuotas && node.Labels[corev1.LabelOSStable] == "linux" &&
+			gpus.Sign() > 0 && class == "" && capacityNodeEligible(node) {
+			return nil, fmt.Errorf("eligible GPU node %q has no GPU class; classify it before enabling shared team quotas", node.Name)
+		}
 		if node.Labels[corev1.LabelOSStable] != "linux" || class == "" ||
 			gpus.Sign() <= 0 {
 			continue
@@ -78,8 +83,16 @@ func discoveredPoolInventory(ctx context.Context, reader client.Reader, cluster 
 		}
 	}
 	cohort := newQueueObject(cohortGVK)
-	if err := reader.Get(ctx, client.ObjectKey{Name: teamCohortName(cluster.Spec.Queues.CapacityTeamRef.Name)}, cohort); err == nil {
-		previous, err := clusterQueueNominalQuota(cohort)
+	cohortName := sharedTeamCohortName
+	if !cluster.Spec.Queues.ShareTeamQuotas {
+		cohortName = teamCohortName(cluster.Spec.Queues.CapacityTeamRef.Name)
+	}
+	if err := reader.Get(ctx, client.ObjectKey{Name: cohortName}, cohort); err == nil {
+		readNominals := clusterQueueNominalQuota
+		if cluster.Spec.Queues.ShareTeamQuotas {
+			readNominals = sharedTeamSpare
+		}
+		previous, err := readNominals(cohort)
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +152,9 @@ func capacityNodeEligible(node *corev1.Node) bool {
 }
 
 func (r *TauTeamReconciler) reconcileCapacityPool(ctx context.Context, cluster *tauv1alpha1.TauCluster, team *tauv1alpha1.TauTeam) error {
+	if cluster.Spec.Queues.ShareTeamQuotas {
+		return r.reconcileSharedTeamPool(ctx, cluster)
+	}
 	if cluster.Spec.ManagementMode != tauv1alpha1.ClusterManagementModeReconcile {
 		return fmt.Errorf("capacity pool requires TauCluster Reconcile mode")
 	}
@@ -215,7 +231,7 @@ func (r *TauTeamReconciler) applyCapacityPool(ctx context.Context, cluster *tauv
 		if !workspace.DeletionTimestamp.IsZero() || !controllerutil.ContainsFinalizer(workspace, workspaceFinalizer) {
 			continue
 		}
-		if err := r.reconcileCapacityWorkspace(ctx, workspace, inventory.quotas); err != nil {
+		if err := r.reconcileCapacityWorkspace(ctx, workspace, inventory.quotas, false); err != nil {
 			return err
 		}
 	}
@@ -257,6 +273,9 @@ func validateRetainedCapacityPools(ctx context.Context, reader client.Reader, ex
 	}
 	for i := range cohorts.Items {
 		cohort := &cohorts.Items[i]
+		if cohort.GetLabels()[labelSharedTeamQuotas] != "" {
+			return fmt.Errorf("Cohort %q retains shared team quotas; drain and remove its hierarchy before changing capacity modes", cohort.GetName())
+		}
 		if cohort.GetAnnotations()[annotationCapacityPool] != "true" ||
 			(exceptTeam != "" && cohort.GetLabels()[labelTeam] == exceptTeam) {
 			continue
@@ -274,7 +293,21 @@ func validateRetainedCapacityPools(ctx context.Context, reader client.Reader, ex
 	return nil
 }
 
-func (r *TauTeamReconciler) reconcileCapacityWorkspace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, quotas []tauv1alpha1.TauResourceQuota) error {
+func (r *TauTeamReconciler) reconcileCapacityWorkspace(ctx context.Context, workspace *tauv1alpha1.TauWorkspace, quotas []tauv1alpha1.TauResourceQuota, shared bool) error {
+	if shared {
+		var current tauv1alpha1.TauWorkspace
+		if err := r.quotaReader().Get(ctx, client.ObjectKeyFromObject(workspace), &current); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		if current.UID != workspace.UID || !apiequality.Semantic.DeepEqual(current.Spec, workspace.Spec) ||
+			!controllerutil.ContainsFinalizer(&current, workspaceFinalizer) {
+			return fmt.Errorf("workspace %q changed identity, spec or finalizer during shared quota reconciliation; retrying", workspace.Name)
+		}
+		if !current.DeletionTimestamp.IsZero() {
+			return r.recoverDeletingWorkspaceHold(ctx, &current)
+		}
+		workspace = &current
+	}
 	queue := desiredWorkspaceClusterQueue(workspace)
 	borrowing := make([]tauv1alpha1.TauResourceQuota, len(quotas))
 	reservations := map[string]resource.Quantity{}
@@ -292,6 +325,17 @@ func (r *TauTeamReconciler) reconcileCapacityWorkspace(ctx context.Context, work
 			if found {
 				if err := unstructured.SetNestedField(queue.Object, value, "spec", field); err != nil {
 					return err
+				}
+			}
+			if shared {
+				policy, found, err := unstructured.NestedString(existing.Object, "spec", "stopPolicy")
+				if err != nil {
+					return err
+				}
+				if found && (existing.GetAnnotations()[annotationSharedQuotaHold] != "true" || policy != "Hold") {
+					if err := unstructured.SetNestedField(queue.Object, policy, "spec", "stopPolicy"); err != nil {
+						return err
+					}
 				}
 			}
 		}

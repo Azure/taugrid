@@ -138,7 +138,14 @@
       "required": [
         "ownership"
       ],
+      "not": {
+        "required": ["capacityTeamRef", "shareTeamQuotas"],
+        "properties": {"shareTeamQuotas": {"const": true}}
+      },
       "properties": {
+        "shareTeamQuotas": {
+          "type": "boolean"
+        },
         "capacityTeamRef": {
           "type": "object",
           "additionalProperties": false,
@@ -171,10 +178,16 @@
         "match": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "vmSizes"
+          "anyOf": [
+            {"required": ["vmSizes"]},
+            {"required": ["labels"]}
           ],
           "properties": {
+            "labels": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {"type": "string"}
+            },
             "vmSizes": {
               "type": "array",
               "minItems": 1,
