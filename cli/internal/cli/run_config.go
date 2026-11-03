@@ -216,6 +216,7 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	o.output = c.Storage.Output
 	o.outputPublish = c.Storage.Publish
 	o.checkpointArtifact = c.Storage.Checkpoint
+	o.hotSize = c.Storage.HotSize
 	o.volumeSpecs = append([]string{}, c.Storage.Volumes...)
 	o.mountSpecs = append([]string{}, c.Storage.Mounts...)
 	o.imageAssets = append([]runconfig.ImageAsset{}, c.Storage.ImageAssets...)

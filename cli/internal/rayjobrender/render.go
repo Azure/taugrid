@@ -84,6 +84,7 @@ type Options struct {
 	ArtifactPublish    artifactpublish.Runtime
 
 	CheckpointArtifact string
+	HotSize            string
 	MetricsOffload     metricsoffload.Runtime
 
 	TuneMetric              string
@@ -915,9 +916,13 @@ func volumes(o Options, isHead bool) []any {
 			vols = append(vols, metricsoffload.RuntimeVolume())
 		}
 	}
+	hot := map[string]any{}
+	if o.HotSize != "" {
+		hot["sizeLimit"] = o.HotSize
+	}
 	return append(vols,
 		data,
-		map[string]any{"name": "tau-hot", "emptyDir": map[string]any{}},
+		map[string]any{"name": "tau-hot", "emptyDir": hot},
 		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
 	)
 }

@@ -294,6 +294,7 @@ type Storage struct {
 	ImageAssets []ImageAsset `yaml:"image_assets"`
 
 	Checkpoint string `yaml:"checkpoint"`
+	HotSize    string `yaml:"hot_size"`
 }
 
 type ImageAsset struct {
@@ -560,6 +561,9 @@ func (s Storage) Validate() error {
 	if err := s.ValidateImageAssets(); err != nil {
 		return err
 	}
+	if err := s.ValidateHotSize(); err != nil {
+		return err
+	}
 	switch s.Publish {
 	case "", "staged":
 		return nil
@@ -667,6 +671,20 @@ func imageAssetPathsOverlap(a, b string) bool {
 func validateImageAssetPath(field, value string) error {
 	if value == "" || !strings.HasPrefix(value, "/") || value == "/" || path.Clean(value) != value {
 		return fmt.Errorf("%s must be a clean absolute path below /", field)
+	}
+	return nil
+}
+
+func (s Storage) ValidateHotSize() error {
+	if s.HotSize == "" {
+		return nil
+	}
+	quantity, err := resource.ParseQuantity(s.HotSize)
+	if err != nil {
+		return fmt.Errorf("storage.hot_size %q is not a valid Kubernetes resource quantity", s.HotSize)
+	}
+	if quantity.Sign() <= 0 {
+		return fmt.Errorf("storage.hot_size must be > 0, got %q", s.HotSize)
 	}
 	return nil
 }

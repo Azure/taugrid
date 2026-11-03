@@ -60,6 +60,8 @@ type Options struct {
 
 	CheckpointArtifact string
 
+	HotSize string
+
 	Command []string
 
 	Launcher string
@@ -122,8 +124,9 @@ type Options struct {
 }
 
 type Volume struct {
-	Name string
-	PVC  string
+	Name      string
+	PVC       string
+	SizeLimit string
 }
 
 type VolumeMount struct {
@@ -200,6 +203,8 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if storagePlan.HasDurableData {
 		env = mergeEnv(storage.RuntimeEnv(), env)
 		cmd = wrapCommandWithStoragePreflight(cmd)
+	} else if o.HotSize != "" {
+		env = mergeEnv(map[string]string{"TAU_HOT_DIR": storage.HotRoot}, env)
 	}
 
 	if o.profileOptions().Mode != "" {
@@ -772,9 +777,13 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 				})
 				continue
 			}
+			emptyDir := map[string]any{}
+			if v.SizeLimit != "" {
+				emptyDir["sizeLimit"] = v.SizeLimit
+			}
 			volumes = append(volumes, map[string]any{
 				"name":     v.Name,
-				"emptyDir": map[string]any{},
+				"emptyDir": emptyDir,
 			})
 		}
 		pod["volumes"] = volumes
@@ -1174,9 +1183,12 @@ func buildStoragePlan(o Options) (storagePlan, error) {
 			break
 		}
 	}
-	if plan.HasDurableData && !plan.hasMountPath(storage.HotRoot) {
+	if o.HotSize != "" && plan.hasMountPath(storage.HotRoot) {
+		return storagePlan{}, fmt.Errorf("storage.hot_size sizes the Tau-managed %s volume; remove the custom mount at %s", storage.HotRoot, storage.HotRoot)
+	}
+	if (plan.HasDurableData || o.HotSize != "") && !plan.hasMountPath(storage.HotRoot) {
 		if err := plan.addVolumeMount(
-			Volume{Name: "tau-hot"},
+			Volume{Name: "tau-hot", SizeLimit: o.HotSize},
 			VolumeMount{Name: "tau-hot", MountPath: storage.HotRoot},
 		); err != nil {
 			return storagePlan{}, err
