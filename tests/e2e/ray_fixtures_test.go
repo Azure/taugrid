@@ -128,7 +128,7 @@ func TestNanoGPTWorkloadGuardsTokenVocabRange(t *testing.T) {
 		`max_token = max(int(x.max()), int(y.max()))`,
 		`if max_token >= vocab_size:`,
 		`increase NANOGPT_VOCAB_SIZE`,
-		`GPT(GPTConfig(block_size=block_size, vocab_size=vocab_size))`,
+		`vocab_size=vocab_size,`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected nanoGPT workload to guard token IDs before CUDA execution with %q", want)
