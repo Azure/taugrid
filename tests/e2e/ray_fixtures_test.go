@@ -128,7 +128,7 @@ func TestNanoGPTWorkloadGuardsTokenVocabRange(t *testing.T) {
 		`max_token = max(int(x.max()), int(y.max()))`,
 		`if max_token >= vocab_size:`,
 		`increase NANOGPT_VOCAB_SIZE`,
-		`GPT(GPTConfig(block_size=block_size, vocab_size=vocab_size))`,
+		`vocab_size=vocab_size`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected nanoGPT workload to guard token IDs before CUDA execution with %q", want)
@@ -136,10 +136,14 @@ func TestNanoGPTWorkloadGuardsTokenVocabRange(t *testing.T) {
 	}
 }
 
-func TestGPURayJobFixturesPinSubmitterToCPUPool(t *testing.T) {
+func TestStackRayJobFixturesUseHTTPMode(t *testing.T) {
 	fixtures := []string{
+		"tests/e2e/stack/fixtures/inference-rayjob.yaml",
 		"tests/e2e/stack/fixtures/inference-rayjob-gpu.yaml",
+		"tests/e2e/stack/fixtures/training-rayjob.yaml",
 		"tests/e2e/stack/fixtures/training-rayjob-gpu.yaml",
+		"tests/e2e/stack/fixtures/fineweb-rayjob-16xh200-ib.yaml",
+		"tests/e2e/stack/fixtures/nanogpt-rayjob-large-gpu.yaml",
 	}
 
 	for _, fixture := range fixtures {
@@ -154,20 +158,11 @@ func TestGPURayJobFixturesPinSubmitterToCPUPool(t *testing.T) {
 			}
 			text := string(data)
 
-			for _, want := range []string{
-				"submitterPodTemplate:",
-				"restartPolicy: Never",
-				"{{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}",
-				"name: ray-job-submitter",
-				"image: {{RAY_IMAGE}}",
-				"cpu: \"500m\"",
-				"memory: \"200Mi\"",
-				"cpu: \"1\"",
-				"memory: \"1Gi\"",
-			} {
-				if !strings.Contains(text, want) {
-					t.Fatalf("expected %s to contain %q", fixture, want)
-				}
+			if !strings.Contains(text, "submissionMode: HTTPMode") {
+				t.Fatalf("expected %s to use the product RayJob submission mode", fixture)
+			}
+			if strings.Contains(text, "submitterPodTemplate:") {
+				t.Fatalf("expected %s not to configure a K8sJobMode submitter", fixture)
 			}
 		})
 	}
@@ -182,7 +177,6 @@ func TestRayJobFixturesShareRayTempForDriverLogs(t *testing.T) {
 				"name: ray-driver-log-offload",
 				"chmod 1777 /tmp/ray",
 				"mountPath: /tmp/ray",
-				"subPathExpr: $(POD_NAME)",
 				"rm -rf /tmp/ray/* || true",
 				"job-driver-*.log",
 			} {
@@ -195,6 +189,13 @@ func TestRayJobFixturesShareRayTempForDriverLogs(t *testing.T) {
 			}
 			if got := strings.Count(text, "name: prepare-ray-tmp"); got != 2 {
 				t.Fatalf("expected %s to prepare /tmp/ray on head and worker, got %d", tc.fixture, got)
+			}
+			if strings.Contains(tc.fixture, "fineweb-") {
+				if strings.Contains(text, "subPathExpr: $(POD_NAME)") {
+					t.Fatal("FineWeb shares a pod-local emptyDir without hostPath subdirectories")
+				}
+			} else if !strings.Contains(text, "subPathExpr: $(POD_NAME)") {
+				t.Fatalf("expected %s to preserve its ray-tmp subPath contract", tc.fixture)
 			}
 		})
 	}
@@ -214,7 +215,8 @@ func TestNanoGPTRayJobFixtureUsesBaselineCompatibleRayTemp(t *testing.T) {
 
 func TestOtherRayJobFixturesUseResourceDiskForRayTemp(t *testing.T) {
 	for _, tc := range rayDriverLogFixtureCases {
-		if tc.fixture == "tests/e2e/stack/fixtures/nanogpt-rayjob-large-gpu.yaml" {
+		if tc.fixture == "tests/e2e/stack/fixtures/nanogpt-rayjob-large-gpu.yaml" ||
+			tc.fixture == "tests/e2e/stack/fixtures/fineweb-rayjob-16xh200-ib.yaml" {
 			continue
 		}
 		t.Run(tc.fixture, func(t *testing.T) {
@@ -335,7 +337,7 @@ func splitFixtureSections(t *testing.T, fixture, text string) (string, string, i
 	return text[:workerIdx], text[workerIdx:], workerIdx
 }
 
-func TestStackRayJobTestsWaitForSubmitterLogMarkers(t *testing.T) {
+func TestStackRayJobTestsWaitForRuntimeLogMarkers(t *testing.T) {
 	path, err := findRepoFile("tests/e2e/stack/integration_test.go")
 	if err != nil {
 		t.Fatal(err)
@@ -347,12 +349,14 @@ func TestStackRayJobTestsWaitForSubmitterLogMarkers(t *testing.T) {
 	text := string(data)
 
 	if strings.Contains(text, "GetPodLogsByLabel(") {
-		t.Fatal("stack RayJob tests should wait for submitter log markers instead of reading logs once; Ray worker stdout can lag RayJob SUCCEEDED")
+		t.Fatal("stack RayJob tests should wait for runtime log markers instead of reading logs once; Ray worker stdout can lag RayJob SUCCEEDED")
 	}
 	waitMarkers := strings.Count(text, "WaitForPodLogsByLabelContaining(") +
-		strings.Count(text, "WaitForFullPodLogsByLabelContaining(")
-	if waitMarkers != 6 {
-		t.Fatalf("expected CPU inference/training, GPU inference/training, large GPU nanoGPT, and FineWeb IB tests to wait for submitter log markers, got %d", waitMarkers)
+		strings.Count(text, "WaitForFullPodLogsByLabelContaining(") +
+		strings.Count(text, "WaitForPodContainerLogsByLabelContaining(") +
+		strings.Count(text, "WaitForFullPodContainerLogsByLabelContaining(")
+	if waitMarkers != 7 {
+		t.Fatalf("expected six RayJob success log waits plus FineWeb failure capture, got %d", waitMarkers)
 	}
 }
 
@@ -377,8 +381,8 @@ func TestStackGPURayJobTestsAssertPlacement(t *testing.T) {
 			t.Fatalf("expected stack GPU tests to assert placement using %q", want)
 		}
 	}
-	if got := strings.Count(text, "requirePodsOnSelectedNodes(t,"); got != 10 {
-		t.Fatalf("expected GPU inference/training workers, submitters, large GPU nanoGPT, and FineWeb IB head/worker/submitter placement assertions, got %d", got)
+	if got := strings.Count(text, "requirePodsOnSelectedNodes(t,"); got != 6 {
+		t.Fatalf("expected GPU inference/training workers plus large GPU nanoGPT and FineWeb IB head/worker placement assertions, got %d", got)
 	}
 }
 

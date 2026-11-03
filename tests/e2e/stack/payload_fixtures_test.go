@@ -297,7 +297,6 @@ func TestNanoGPTRayJobFixtureOptsIntoTASOnlyForArgoCDQueue(t *testing.T) {
 				name     string
 				template podTemplate
 			}{
-				{name: "submitter", template: doc.Spec.SubmitterPodTemplate},
 				{name: "head", template: doc.Spec.RayClusterSpec.HeadGroupSpec.Template},
 				{name: "workers", template: doc.Spec.RayClusterSpec.WorkerGroupSpecs[0].Template},
 			}

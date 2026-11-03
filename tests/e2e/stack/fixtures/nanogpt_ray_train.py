@@ -300,7 +300,13 @@ def train_loop(config: dict) -> None:
         )
     )
 
-    model = GPT(GPTConfig(block_size=block_size, vocab_size=vocab_size)).to(device)
+    model = GPT(GPTConfig(
+        block_size=block_size,
+        vocab_size=vocab_size,
+        n_layer=int(config["n_layer"]),
+        n_head=int(config["n_head"]),
+        n_embd=int(config["n_embd"]),
+    )).to(device)
     model = ray_train_torch.prepare_model(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["learning_rate"]), betas=(0.9, 0.95))
     report_every = int(config["report_every"])
@@ -346,6 +352,11 @@ def main() -> None:
     batch_size = env_int("NANOGPT_BATCH_SIZE", 2)
     vocab_size = env_int("NANOGPT_VOCAB_SIZE", 65536)
     report_every = env_int("NANOGPT_REPORT_EVERY", 25)
+    n_layer = env_int("NANOGPT_N_LAYER", 4)
+    n_head = env_int("NANOGPT_N_HEAD", 4)
+    n_embd = env_int("NANOGPT_N_EMBD", 256)
+    if min(n_layer, n_head, n_embd) <= 0 or n_embd % n_head:
+        raise RuntimeError("nanoGPT dimensions must be positive and n_embd divisible by n_head")
 
     ray.init()
     resources = ray.cluster_resources()
@@ -365,11 +376,14 @@ def main() -> None:
             "block_size": block_size,
             "batch_size": batch_size,
             "vocab_size": vocab_size,
+            "n_layer": n_layer,
+            "n_head": n_head,
+            "n_embd": n_embd,
             "report_every": report_every,
             "learning_rate": 3e-4,
             "seed": 1337,
         },
-        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True),
+        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True, trainer_resources={"CPU": 0}),
         run_config=RunConfig(name="nanogpt-ray-train-large-gpu"),
     )
     result = trainer.fit()
