@@ -383,7 +383,7 @@ def main() -> None:
             "learning_rate": 3e-4,
             "seed": 1337,
         },
-        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True),
+        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True, trainer_resources={"CPU": 0}),
         run_config=RunConfig(name="nanogpt-ray-train-large-gpu"),
     )
     result = trainer.fit()

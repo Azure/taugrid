@@ -234,11 +234,11 @@ func TestInferenceRayJob(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobName, "SUCCEEDED", 8*time.Minute)
 	require.NoError(t, err, "RayJob should reach SUCCEEDED status")
 
-	_, err = tc.WaitForPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName), []string{
+	_, err = tc.WaitForPodContainerLogsByLabelContaining(stackNamespace, rayHeadSelector(t, tc, rayJobName), "ray-driver-log-offload", []string{
 		"Label:",
 		"SUCCESS: All images classified",
 	}, time.Minute)
-	require.NoError(t, err, "submitter logs should show classification predictions and inference success")
+	require.NoError(t, err, "head driver logs should show classification predictions and inference success")
 }
 
 func TestInferenceRayJobGPU(t *testing.T) {
@@ -283,13 +283,11 @@ func TestInferenceRayJobGPU(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameGPU, "SUCCEEDED", gpuRayJobTimeout)
 	require.NoError(t, err, "GPU RayJob should reach SUCCEEDED status")
 
-	_, err = tc.WaitForPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameGPU), []string{
+	_, err = tc.WaitForPodContainerLogsByLabelContaining(stackNamespace, headSelector, "ray-driver-log-offload", []string{
 		"Device: cuda",
 		"SUCCESS: All images classified",
 	}, time.Minute)
-	require.NoError(t, err, "submitter logs should show CUDA execution and inference success")
-	requirePodsOnSelectedNodes(t, tc, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameGPU), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
-		"GPU inference submitter should stay on the selected CPU node pool")
+	require.NoError(t, err, "head driver logs should show CUDA execution and inference success")
 }
 
 func TestTrainingRayJobGPU(t *testing.T) {
@@ -334,13 +332,11 @@ func TestTrainingRayJobGPU(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameTrainGPU, "SUCCEEDED", gpuRayJobTimeout)
 	require.NoError(t, err, "GPU training RayJob should reach SUCCEEDED status")
 
-	_, err = tc.WaitForPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameTrainGPU), []string{
+	_, err = tc.WaitForPodContainerLogsByLabelContaining(stackNamespace, headSelector, "ray-driver-log-offload", []string{
 		"Device: cuda",
 		"SUCCESS: GPU training loss decreased",
 	}, time.Minute)
-	require.NoError(t, err, "submitter logs should show CUDA execution and decreasing training loss")
-	requirePodsOnSelectedNodes(t, tc, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameTrainGPU), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
-		"GPU training submitter should stay on the selected CPU node pool")
+	require.NoError(t, err, "head driver logs should show CUDA execution and decreasing training loss")
 }
 
 func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
@@ -414,14 +410,12 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameNanoGPT, "SUCCEEDED", largeGPURayJobTimeout)
 	require.NoError(t, err, "16-GPU nanoGPT RayJob should reach SUCCEEDED status")
 
-	_, err = tc.WaitForPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameNanoGPT), []string{
+	_, err = tc.WaitForPodContainerLogsByLabelContaining(stackNamespace, headSelector, "ray-driver-log-offload", []string{
 		"NANOGPT_RAY_TRAIN_SUCCESS",
 		fmt.Sprintf("step=%d", steps),
 		fmt.Sprintf("world_size=%d", workers),
 	}, 2*time.Minute)
-	require.NoError(t, err, "submitter logs should show Ray Train nanoGPT success at the configured step count")
-	requirePodsOnSelectedNodes(t, tc, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameNanoGPT), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
-		"nanoGPT submitter should stay on the selected CPU node pool")
+	require.NoError(t, err, "head driver logs should show Ray Train nanoGPT success at the configured step count")
 }
 
 func requireNanoGPTFlavorAssignments(t *testing.T, workload *unstructured.Unstructured, gpuFlavor string) {
@@ -456,10 +450,6 @@ func requireNanoGPTFlavorAssignments(t *testing.T, workload *unstructured.Unstru
 			"memory":         gpuFlavor,
 			"nvidia.com/gpu": gpuFlavor,
 		},
-		"submitter": {
-			"cpu":    "tau-system",
-			"memory": "tau-system",
-		},
 	}, got, "Kueue should assign the canonical system and GPU ResourceFlavors")
 }
 
@@ -481,13 +471,6 @@ func TestRequireNanoGPTFlavorAssignments(t *testing.T) {
 							"cpu":            "nd-h200-v5",
 							"memory":         "nd-h200-v5",
 							"nvidia.com/gpu": "nd-h200-v5",
-						},
-					},
-					map[string]interface{}{
-						"name": "submitter",
-						"flavors": map[string]interface{}{
-							"cpu":    "tau-system",
-							"memory": "tau-system",
 						},
 					},
 				},
@@ -578,20 +561,17 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameFineWeb, "SUCCEEDED", rayJobTimeout)
 	require.NoError(t, err, "16-GPU FineWeb IB RayJob should reach SUCCEEDED status")
 
-	logs, err := tc.WaitForFullPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameFineWeb), []string{
+	logs, err := tc.WaitForFullPodContainerLogsByLabelContaining(stackNamespace, headSelector, "ray-driver-log-offload", []string{
 		"NET/IB",
 		"FINEWEB_FIRST_CHECKPOINT",
 		"FINEWEB_RAY_TRAIN_SUCCESS",
 		fmt.Sprintf("step=%d", steps),
 		fmt.Sprintf("world_size=%d", workers),
 	}, 3*time.Minute)
-	require.NoError(t, err, "submitter logs should show InfiniBand NCCL, the first checkpoint sentinel, and FineWeb Ray Train success")
+	require.NoError(t, err, "head driver logs should show InfiniBand NCCL, the first checkpoint sentinel, and FineWeb Ray Train success")
 
 	requireInfiniBandEngaged(t, logs)
 	requireFirstCheckpointPersisted(t, logs)
-
-	requirePodsOnSelectedNodes(t, tc, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameFineWeb), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
-		"FineWeb submitter should stay on the selected CPU node pool")
 }
 
 var fineWebFirstCheckpointRE = regexp.MustCompile(`FINEWEB_FIRST_CHECKPOINT step=(\d+) path=(\S+) bytes=(\d+) params=(\d+)`)
@@ -876,9 +856,16 @@ func TestTrainingRayJob(t *testing.T) {
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameTrain, "SUCCEEDED", 8*time.Minute)
 	require.NoError(t, err, "RayJob should reach SUCCEEDED status")
 
-	_, err = tc.WaitForPodLogsByLabelContaining(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobNameTrain), []string{
+	_, err = tc.WaitForPodContainerLogsByLabelContaining(stackNamespace, rayHeadSelector(t, tc, rayJobNameTrain), "ray-driver-log-offload", []string{
 		"step=",
 		"TRAINING_COMPLETE",
 	}, 2*time.Minute)
-	require.NoError(t, err, "submitter logs should contain per-step loss output and the training success marker")
+	require.NoError(t, err, "head driver logs should contain per-step loss output and the training success marker")
+}
+
+func rayHeadSelector(t *testing.T, tc *e2e.TestContext, rayJobName string) string {
+	t.Helper()
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobName)
+	require.NoError(t, err, "RayJob should report its generated RayCluster before head log verification")
+	return fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster)
 }

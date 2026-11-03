@@ -306,9 +306,18 @@ available; callers may impose narrower deployment-specific entrypoints.
 Harness acceptance uses `go test -json` and requires exactly one selected test
 run, one selected test pass, and one package pass. No match, skip, malformed or
 truncated output, duplicate execution, package failure, and nonzero Go exit
-status are failures. Submission templates and submitter-log evidence remain
-unchanged. Readiness and worker placement are scoped to the owned RayCluster
-rather than namespace-wide worker matches.
+status are failures. CPU and GPU RayJobs use HTTP submission and require their
+actual success markers in driver logs. Readiness, placement, and log evidence
+are scoped to the owned RayCluster rather than namespace-wide worker matches.
+
+The six CPU inference/training, GPU inference/training, nanoGPT, and FineWeb
+fixtures use `HTTPMode` without submitter Pod templates. Runtime evidence comes
+from the head's named `ray-driver-log-offload` container, including CUDA and
+loss/progress markers where applicable. Placement and flavor assertions cover
+the head and workers, not nonexistent submitter Pods. The nanoGPT trainer
+coordinator requests zero Ray CPUs because the head advertises zero Ray CPUs.
+FineWeb's runtime, scratch, security, retention, and checkpoint behavior remain
+unchanged in this layer; verified runner checkpoint capture is not added here.
 
 With the default 250-minute execution-step budget, Go receives 245 minutes and
 execution API requests share a 230-minute context. The remaining time reserves

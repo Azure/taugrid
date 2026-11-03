@@ -9,6 +9,7 @@ metadata:
     tau.azure.com/payload-digest: "{{TRAINING_CPU_SCRIPT_PAYLOAD_DIGEST}}"
 spec:
   entrypoint: python /home/ray/scripts/training_job_cpu.py
+  submissionMode: HTTPMode
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
   runtimeEnvYAML: |
