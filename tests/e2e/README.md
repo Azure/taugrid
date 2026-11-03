@@ -52,7 +52,7 @@ RAY_SUBMITTER_NODE_SELECTOR_VALUE='<cpu node selector value>' \
 NANOGPT_DATASET_URIS='<comma-separated pre-tokenized OpenWebText shard URLs>' \
 NANOGPT_DATASET_SHA256S='<comma-separated 64-character hexadecimal SHA256s>' \
 NANOGPT_DATASET_TOKEN_COUNTS='<comma-separated positive integer token counts>' \
-go test -v -timeout 120m -run '^TestNanoGPTRayTrainLargeGPU$' ./stack/
+go test -v -timeout 245m -run '^TestNanoGPTRayTrainLargeGPU$' ./stack/
 
 # Run the Tau Python SDK entrypoint smoke against a prepared stack/flex cluster
 AI_RUNTIME_E2E=1 E2E_TAU_PY_ENTRYPOINT=1 \
@@ -174,14 +174,12 @@ different credential and a different cluster API server from the worker cluster;
 the harness never calls `az aks get-credentials` or falls back to the current
 kubectl context. Manager submission receives only the manager kubeconfig plus
 the validated non-secret worker cluster identity; a separate platform-context
-capacity recheck runs immediately before submission so late contention still
-skips cleanly. Manager cleanup waits only for the fixed manager-visible RayJob
+capacity recheck runs immediately before submission; temporary reservations do
+not bypass the selected test. Manager cleanup waits only for the fixed manager-visible RayJob
 to disappear and never lists namespace Pods; platform-direct cleanup retains a
 label-scoped drain for that RayJob's Pods. Pre-run stale RayJob deletion is
 foreground and fail-hard so capacity is trustworthy. Final fixed-RayJob cleanup
-is non-waiting and best-effort so an API/finalizer cleanup problem cannot
-overwrite a successful conformance result; the next run repeats the fail-hard
-reset.
+waits for foreground deletion and fails on cleanup errors.
 
 Manual runs default to `target=all` and `workload_profile=conformance`, which
 runs 2,000 optimizer steps on all three configured targets. Manual runs can also
@@ -218,7 +216,7 @@ Required configuration:
 | `LARGE_GPU_WORKLOAD_STACK_NAMESPACE` | var or `workload_stack_namespace` dispatch input | Pre-provisioned workload namespace; defaults to `taugrid-e2e` |
 | `LARGE_GPU_WORKLOAD_STACK_QUEUE` | var or `workload_stack_queue` dispatch input | Pre-provisioned default LocalQueue; defaults to `jobqueue` |
 | `LARGE_GPU_WORKLOAD_STACK_LARGE_GPU_QUEUE` | var or `workload_stack_large_gpu_queue` dispatch input | Pre-provisioned large-GPU LocalQueue; defaults to `jobqueue` |
-| `AKS_AI_RUNTIME_EASTUS2_H200_SELECTOR`, `AKS_AI_RUNTIME_FLEX_MANAGED_A100_SELECTOR`, `AKS_AI_RUNTIME_FLEX_H200_SELECTOR` | vars | Optional `key=value` selectors whose Ready schedulable nodes have at least 16 available `nvidia.com/gpu`; defaults match the current cluster baseline. `AKS_AI_RUNTIME_FLEX_A100_SELECTOR` remains accepted as a compatibility fallback for the managed A100 pool on `<cluster>` |
+| `AKS_AI_RUNTIME_EASTUS2_H200_SELECTOR`, `AKS_AI_RUNTIME_FLEX_MANAGED_A100_SELECTOR`, `AKS_AI_RUNTIME_FLEX_H200_SELECTOR` | vars | Optional `key=value` selectors whose Ready schedulable nodes have at least 16 allocatable `nvidia.com/gpu`; temporary reservations do not prevent submission. `AKS_AI_RUNTIME_FLEX_A100_SELECTOR` remains accepted as a compatibility fallback for the managed A100 pool on `<cluster>` |
 | `AKS_AI_RUNTIME_EASTUS2_SUBMITTER_SELECTOR`, `AKS_AI_RUNTIME_FLEX_SUBMITTER_SELECTOR` | vars | Optional CPU pool selectors for Ray head and submitter pods; default is `kubernetes.azure.com/mode=system` |
 | `NANOGPT_OPENWEBTEXT_URIS` | secret or var | Comma-separated Azure-accessible URLs for fixed pre-tokenized OpenWebText `.bin` shards |
 | `NANOGPT_OPENWEBTEXT_SHA256S` | secret or var | Comma-separated SHA256 checksums matching the shard URLs |
@@ -264,22 +262,80 @@ Recommended shard shapes:
 
 The large-GPU workflow fails before submitting the RayJob if selector parsing,
 dataset metadata, explicit access contracts, AKS credentials, the pre-provisioned
-namespace/queue, or available GPU capacity are invalid. Success means
+namespace/queue, or structural GPU capacity are invalid. In direct mode, success means
 the submitter logs contain `NANOGPT_RAY_TRAIN_SUCCESS step=<configured steps>
 world_size=16`.
 This is admission/scheduling/runtime conformance only; it is not a throughput,
 NCCL, or model-quality benchmark.
 
-### Optional workload sizing and priority
+### Shared-cluster conformance contracts
+
+The FineWeb and large-GPU harnesses submit to explicitly configured, existing
+namespaces and LocalQueues. They do not create or delete shared queue resources
+or namespaces. Capacity preflight checks Ready, schedulable, **allocatable**
+GPUs rather than subtracting temporary reservations: a structurally sufficient
+but busy pool still submits to Kueue and must admit within the configured bound.
+FineWeb requires 16 GPU workers; nanoGPT defaults to 16 and permits an explicitly
+configured positive worker count matching `REQUIRED_GPUS`. Smoke reduces training
+steps and dataset size without silently changing the selected worker count.
+`NANOGPT_SKIP_IF_BUSY` and `FINEWEB_SKIP_IF_BUSY` do not turn selected conformance
+tests into successful skips. FineWeb's `assert-capacity` command checks this
+contract; `skip-if-busy` remains a compatibility alias.
+
+The `ensure-managed-flavor-labels` commands are read-only assertions: every node
+in the selected instance-type pool must carry the exact requested GPU-series
+label, and that series must not select another instance type. Empty pools,
+missing labels, and mismatches fail without modifying nodes. Installation through
+FineWeb's separate preparation command requires explicit
+`FINEWEB_PLATFORM_PREP_MODE=direct-platform` and
+`FINEWEB_WORKLOAD_ACCESS_MODE=platform-direct`; assert-only preparation never
+authorizes installation. Independent manager and federation helpers remain
+available; callers may impose narrower deployment-specific entrypoints.
 
 | Environment | Contract |
 |-------------|----------|
+| `CONFORMANCE_ADMISSION_TIMEOUT` | Positive Go duration; large-GPU default `30m`, single-GPU default `30s`, maximum `90m`. Admission expiry fails with diagnostics, never skips. |
+| `CONFORMANCE_GO_TEST_TIMEOUT` | Positive Go duration passed to `go test -timeout`; default `245m`, maximum `365m`. Execution must allow at least five additional minutes for shell cleanup. |
 | `NANOGPT_WORKLOAD_PRIORITY_CLASS` | Optional existing Kueue WorkloadPriorityClass name, validated as a Kubernetes DNS subdomain and label value (at most 63 characters). Applied to the single-GPU inference, SGD training, and nanoGPT RayJobs. Unset leaves priority unchanged; no deployment-specific allowlist is imposed. |
 | `NANOGPT_N_LAYER`, `NANOGPT_N_HEAD`, `NANOGPT_N_EMBD` | Positive model dimensions, default `4`, `4`, and `256`; embedding size must be divisible by head count. |
 | `NANOGPT_HEAD_CPU_REQUEST`, `FINEWEB_HEAD_CPU_REQUEST` | Optional positive CPU request no greater than the fixed two-CPU limit; default `2`. |
+| `FINEWEB_CLEANUP_OWNER` | `test` (default) or `caller`. Caller ownership requires unconditional, separately bounded outer cleanup, including failure and cancellation. |
+| `FINEWEB_RAYJOB_TIMEOUT_MINUTES` | Positive completion allowance, default `120`, maximum `180`; separate from admission. |
+| `RAY_E2E_IMAGE`, `RAY_FINEWEB_IMAGE`, `RAY_NANOGPT_IMAGE` | The shared image override takes precedence over the workload-specific aliases. Explicit images are preserved exactly, including tag-plus-digest references. `RAY_E2E_VERSION` is required when the image tag does not identify a Ray version; a conflicting inferred version fails. Callers must verify publication; selecting a version does not prove its image exists. |
 
-These controls preserve the existing submission templates and workload behavior
-when unset.
+Harness acceptance uses `go test -json` and requires exactly one selected test
+run, one selected test pass, and one package pass. No match, skip, malformed or
+truncated output, duplicate execution, package failure, and nonzero Go exit
+status are failures. Submission templates and submitter-log evidence remain
+unchanged. Readiness and worker placement are scoped to the owned RayCluster
+rather than namespace-wide worker matches.
+
+With the default 250-minute execution-step budget, Go receives 245 minutes and
+execution API requests share a 230-minute context. The remaining time reserves
+fresh cleanup and diagnostics. Setup requests share a two-minute deadline;
+admission, readiness, and completion requests inherit their phase deadlines.
+Cleanup uses a fresh five-minute deadline, not an expired execution context.
+The outer step also bounds compilation and TestMain setup, which Go's test
+timeout does not include.
+
+FineWeb's minimum execution-step budget is completion plus 130 minutes, increased
+by any admission allowance over 30 minutes and reserved capture allowance over
+15 minutes, rounded up to whole minutes. The shared budget contract reserves
+`FINEWEB_CHECKPOINT_CAPTURE_TIMEOUT` (default `15m`, maximum `30m`) for subsequent
+checkpoint capture support; it does not add checkpoint capture in this layer.
+Large-GPU starts from 250 minutes with the same admission increase. The
+corresponding minimum Go timeout is five minutes shorter. FineWeb completion of
+180 minutes requires Go timeout `305m` and at least 310 minutes for execution.
+Callers must additionally budget setup, diagnostics, publication, and
+cancellation cleanup; the harness does not raise pipeline limits.
+
+Default cleanup deletes the named owned RayJob using a UID precondition and
+waits for owned Workloads and Pods to drain. Transient errors retry within a
+fresh deadline; only NotFound is ignored. Neither selected conformance workload
+honors `E2E_PRESERVE_KUEUE_RECORDS` as permission to leave GPU Pods alive.
+Large-GPU manager mode proves admission and mirrored completion only and emits
+`MANAGER_STATUS_ONLY`; it cannot prove worker placement, CUDA world size, or
+transport.
 
 The PR-gated chart integration workflow triggers on PRs touching `charts/**`,
 `tests/e2e/**`, or the workflow file itself.

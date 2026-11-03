@@ -208,8 +208,13 @@ func (tc *TestContext) findWorkloadForJob(ns, jobName string) (*unstructured.Uns
 }
 
 func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, timeout time.Duration) (result *WorkloadConditionResult, err error) {
+	diagnosticContext := context.WithoutCancel(tc.ctx)
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
 	defer func() {
 		if err != nil {
+			tc, cancel := tc.WithContext(diagnosticContext).WithTimeout(time.Minute)
+			defer cancel()
 			if managerWorkloadOnly() {
 				tc.DumpWorkloads(ns)
 				return
@@ -222,7 +227,6 @@ func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, ti
 		}
 	}()
 
-	deadline := time.After(timeout)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -230,7 +234,7 @@ func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, ti
 	var lastReason, lastStatus, lastMessage, lastWorkload string
 	for {
 		select {
-		case <-deadline:
+		case <-tc.ctx.Done():
 			msg := fmt.Sprintf("timed out waiting for workload owned by rayjob %s/%s to have Admitted=True", ns, rayJobName)
 			if lastWorkload == "" {
 				msg += " (no matching workload observed)"
@@ -250,9 +254,7 @@ func (tc *TestContext) WaitForWorkloadAdmittedByRayJob(ns, rayJobName string, ti
 			if lastErr != nil {
 				msg += fmt.Sprintf("; last poll error: %v", lastErr)
 			}
-			return nil, fmt.Errorf("%s", msg)
-		case <-tc.ctx.Done():
-			return nil, tc.ctx.Err()
+			return nil, fmt.Errorf("%s: %w", msg, tc.ctx.Err())
 		case <-ticker.C:
 			rj, err := tc.dynamicClient.Resource(RayJobGVR).Namespace(ns).Get(tc.ctx, rayJobName, metav1.GetOptions{})
 			if err != nil {
@@ -302,10 +304,15 @@ func hasOwnerRef(obj *unstructured.Unstructured, kind, name, uid string) bool {
 }
 
 func (tc *TestContext) WaitForRayJobStatus(ns, name, targetStatus string, timeout time.Duration) (err error) {
+	diagnosticContext := context.WithoutCancel(tc.ctx)
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
 	defer func() {
 		if err == nil {
 			return
 		}
+		tc, cancel := tc.WithContext(diagnosticContext).WithTimeout(time.Minute)
+		defer cancel()
 		if managerWorkloadOnly() {
 			tc.DumpWorkloads(ns)
 			return
@@ -315,18 +322,15 @@ func (tc *TestContext) WaitForRayJobStatus(ns, name, targetStatus string, timeou
 		tc.DumpPods(ns, "ray.io/node-type=worker")
 	}()
 
-	deadline := time.After(timeout)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	var lastJobStatus, lastDeploymentStatus string
 	for {
 		select {
-		case <-deadline:
-			return fmt.Errorf("timed out waiting for rayjob %s/%s to reach status %q (last seen: jobStatus=%q jobDeploymentStatus=%q)",
-				ns, name, targetStatus, lastJobStatus, lastDeploymentStatus)
 		case <-tc.ctx.Done():
-			return tc.ctx.Err()
+			return fmt.Errorf("timed out waiting for rayjob %s/%s to reach status %q (last seen: jobStatus=%q jobDeploymentStatus=%q): %w",
+				ns, name, targetStatus, lastJobStatus, lastDeploymentStatus, tc.ctx.Err())
 		case <-ticker.C:
 			obj, err := tc.dynamicClient.Resource(RayJobGVR).Namespace(ns).Get(tc.ctx, name, metav1.GetOptions{})
 			if err != nil {
@@ -348,6 +352,8 @@ func (tc *TestContext) WaitForRayJobStatus(ns, name, targetStatus string, timeou
 }
 
 func (tc *TestContext) WaitForRayJobDeleted(ns, name string, timeout time.Duration) error {
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(pollInterval)
@@ -390,14 +396,14 @@ func rayJobTerminalFailure(jobStatus, deploymentStatus string) (bool, string) {
 }
 
 func (tc *TestContext) GetPodLogsByLabel(ns, labelSelector string) (string, error) {
-	return tc.getPodLogsByLabelTail(ns, labelSelector, int64Ptr(500))
+	return tc.getPodLogsByLabelTail(ns, labelSelector, "", int64Ptr(500))
 }
 
 func (tc *TestContext) GetFullPodLogsByLabel(ns, labelSelector string) (string, error) {
-	return tc.getPodLogsByLabelTail(ns, labelSelector, nil)
+	return tc.getPodLogsByLabelTail(ns, labelSelector, "", nil)
 }
 
-func (tc *TestContext) getPodLogsByLabelTail(ns, labelSelector string, tailLines *int64) (string, error) {
+func (tc *TestContext) getPodLogsByLabelTail(ns, labelSelector, container string, tailLines *int64) (string, error) {
 	pods, err := tc.kubeClient.CoreV1().Pods(ns).List(tc.ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
@@ -413,7 +419,7 @@ func (tc *TestContext) getPodLogsByLabelTail(ns, labelSelector string, tailLines
 			latest = p
 		}
 	}
-	logOpts := &corev1.PodLogOptions{TailLines: tailLines}
+	logOpts := &corev1.PodLogOptions{Container: container, TailLines: tailLines}
 	logs, err := tc.kubeClient.CoreV1().Pods(ns).GetLogs(latest.Name, logOpts).Do(tc.ctx).Raw()
 	if err != nil {
 		return "", fmt.Errorf("getting logs from pod %s/%s: %w", ns, latest.Name, err)
@@ -422,42 +428,56 @@ func (tc *TestContext) getPodLogsByLabelTail(ns, labelSelector string, tailLines
 }
 
 func (tc *TestContext) WaitForPodLogsByLabelContaining(ns, labelSelector string, expected []string, timeout time.Duration) (lastLogs string, err error) {
-	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, expected, timeout, false)
+	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, "", expected, timeout, false)
 }
 
 func (tc *TestContext) WaitForFullPodLogsByLabelContaining(ns, labelSelector string, expected []string, timeout time.Duration) (lastLogs string, err error) {
-	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, expected, timeout, true)
+	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, "", expected, timeout, true)
 }
 
-func (tc *TestContext) waitForPodLogsByLabelContaining(ns, labelSelector string, expected []string, timeout time.Duration, full bool) (lastLogs string, err error) {
+func (tc *TestContext) WaitForPodContainerLogsByLabelContaining(ns, labelSelector, container string, expected []string, timeout time.Duration) (string, error) {
+	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, container, expected, timeout, false)
+}
+
+func (tc *TestContext) WaitForFullPodContainerLogsByLabelContaining(ns, labelSelector, container string, expected []string, timeout time.Duration) (string, error) {
+	return tc.waitForPodLogsByLabelContaining(ns, labelSelector, container, expected, timeout, true)
+}
+
+func (tc *TestContext) waitForPodLogsByLabelContaining(ns, labelSelector, container string, expected []string, timeout time.Duration, full bool) (lastLogs string, err error) {
+	diagnosticContext := context.WithoutCancel(tc.ctx)
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
 	defer func() {
 		if err != nil {
+			tc, cancel := tc.WithContext(diagnosticContext).WithTimeout(time.Minute)
+			defer cancel()
 			tc.DumpPods(ns, labelSelector)
 		}
 	}()
 
-	deadline := time.After(timeout)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	getLogs := tc.GetPodLogsByLabel
+	getLogs := func(ns, selector string) (string, error) {
+		return tc.getPodLogsByLabelTail(ns, selector, container, int64Ptr(500))
+	}
 	if full {
-		getLogs = tc.GetFullPodLogsByLabel
+		getLogs = func(ns, selector string) (string, error) {
+			return tc.getPodLogsByLabelTail(ns, selector, container, nil)
+		}
 	}
 
 	missing := expected
 	var lastErr error
 	for {
 		select {
-		case <-deadline:
-			if lastErr != nil && lastLogs == "" {
-				return "", fmt.Errorf("timed out waiting for logs from pod selector %q in %s to contain %v: last error: %w",
-					labelSelector, ns, expected, lastErr)
-			}
-			return lastLogs, fmt.Errorf("timed out waiting for logs from pod selector %q in %s to contain %v; missing %v; last logs:\n%s",
-				labelSelector, ns, expected, missing, lastLogs)
 		case <-tc.ctx.Done():
-			return lastLogs, tc.ctx.Err()
+			if lastErr != nil && lastLogs == "" {
+				return "", fmt.Errorf("timed out waiting for logs from pod selector %q in %s to contain %v: last error: %v: %w",
+					labelSelector, ns, expected, lastErr, tc.ctx.Err())
+			}
+			return lastLogs, fmt.Errorf("timed out waiting for logs from pod selector %q in %s to contain %v; missing %v; last logs:\n%s: %w",
+				labelSelector, ns, expected, missing, lastLogs, tc.ctx.Err())
 		case <-ticker.C:
 			logs, err := getLogs(ns, labelSelector)
 			if err != nil {
@@ -609,24 +629,26 @@ func (tc *TestContext) WaitForRunningJobPods(ns, jobName string, wantCount int, 
 }
 
 func (tc *TestContext) WaitForRunningPodsByLabel(ns, labelSelector string, wantCount int, timeout time.Duration) (err error) {
+	diagnosticContext := context.WithoutCancel(tc.ctx)
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
 	defer func() {
 		if err != nil {
+			tc, cancel := tc.WithContext(diagnosticContext).WithTimeout(time.Minute)
+			defer cancel()
 			tc.DumpPods(ns, labelSelector)
 		}
 	}()
 
-	deadline := time.After(timeout)
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	var lastCount int
 	for {
 		select {
-		case <-deadline:
-			return fmt.Errorf("timed out waiting for %d running+ready pods with selector %q in %s (last seen: %d)",
-				wantCount, labelSelector, ns, lastCount)
 		case <-tc.ctx.Done():
-			return tc.ctx.Err()
+			return fmt.Errorf("timed out waiting for %d running+ready pods with selector %q in %s (last seen: %d): %w",
+				wantCount, labelSelector, ns, lastCount, tc.ctx.Err())
 		case <-ticker.C:
 			pods, err := tc.kubeClient.CoreV1().Pods(ns).List(tc.ctx, metav1.ListOptions{
 				LabelSelector: labelSelector,
@@ -687,18 +709,21 @@ func (tc *TestContext) WaitForNoPods(ns string, timeout time.Duration) (err erro
 }
 
 func (tc *TestContext) WaitForNoPodsByLabel(ns, labelSelector string, timeout time.Duration) (err error) {
+	diagnosticContext := context.WithoutCancel(tc.ctx)
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
 	labelSelector = strings.TrimSpace(labelSelector)
 	if labelSelector == "" {
 		return fmt.Errorf("label selector is required when waiting for scoped pod cleanup in %s", ns)
 	}
 	defer func() {
 		if err != nil {
+			tc, cancel := tc.WithContext(diagnosticContext).WithTimeout(time.Minute)
+			defer cancel()
 			tc.DumpPods(ns, labelSelector)
 		}
 	}()
 
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
@@ -722,11 +747,9 @@ func (tc *TestContext) WaitForNoPodsByLabel(ns, labelSelector string, timeout ti
 		}
 
 		select {
-		case <-deadline.C:
-			return fmt.Errorf("timed out waiting for pods matching %q in namespace %s to be deleted (last seen: %s)",
-				labelSelector, ns, strings.Join(lastSeen, ", "))
 		case <-tc.ctx.Done():
-			return tc.ctx.Err()
+			return fmt.Errorf("timed out waiting for pods matching %q in namespace %s to be deleted (last seen: %s): %w",
+				labelSelector, ns, strings.Join(lastSeen, ", "), tc.ctx.Err())
 		case <-ticker.C:
 		}
 	}
