@@ -5,8 +5,15 @@ package stack
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
@@ -126,4 +133,153 @@ func registerRayJobCleanup(t *testing.T, fixture string, cleanup func()) {
 		}
 	}
 	t.Cleanup(cleanup)
+}
+
+type fineWebCheckpoint struct {
+	Step      int    `json:"step"`
+	Path      string `json:"source_path"`
+	Bytes     int64  `json:"bytes"`
+	Params    int64  `json:"params"`
+	SHA256    string `json:"sha256"`
+	Pod       string `json:"source_pod"`
+	Namespace string `json:"namespace"`
+	RayJob    string `json:"ray_job"`
+	File      string `json:"file"`
+}
+
+var verifiedCheckpointRE = regexp.MustCompile(`FINEWEB_FIRST_CHECKPOINT step=(\d+) path=(/mnt/fineweb-ckpt/fineweb-step-\d+\.pt) bytes=(\d+) params=(\d+) sha256=([a-f0-9]{64}) pod=([a-z0-9][a-z0-9.-]*) readback=verified`)
+
+func parseVerifiedCheckpoint(logs string) (fineWebCheckpoint, error) {
+	m := verifiedCheckpointRE.FindStringSubmatch(logs)
+	if m == nil {
+		return fineWebCheckpoint{}, fmt.Errorf("missing full-state readback-verified checkpoint metadata")
+	}
+	step, err := strconv.Atoi(m[1])
+	if err != nil {
+		return fineWebCheckpoint{}, err
+	}
+	size, err := strconv.ParseInt(m[3], 10, 64)
+	if err != nil || size <= 0 || size > 32<<30 {
+		return fineWebCheckpoint{}, fmt.Errorf("checkpoint size must be in (0, 32GiB]")
+	}
+	params, err := strconv.ParseInt(m[4], 10, 64)
+	if err != nil || step <= 0 || m[2] != fmt.Sprintf("/mnt/fineweb-ckpt/fineweb-step-%d.pt", step) {
+		return fineWebCheckpoint{}, fmt.Errorf("invalid checkpoint step/path/params")
+	}
+	return fineWebCheckpoint{
+		Step: step, Path: m[2], Bytes: size, Params: params, SHA256: m[5], Pod: m[6],
+		Namespace: stackNamespace, RayJob: rayJobNameFineWeb, File: filepath.Base(m[2]),
+	}, nil
+}
+
+func checkpointArtifactDir(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("FINEWEB_CHECKPOINT_ARTIFACT_DIR must be an absolute existing runner artifact directory")
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("checkpoint artifact directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("checkpoint artifact destination is not a directory")
+	}
+	return nil
+}
+
+type checkpointWriter struct {
+	ctx  context.Context
+	dst  io.Writer
+	left int64
+}
+
+func (w *checkpointWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if int64(len(p)) > w.left {
+		return 0, fmt.Errorf("checkpoint exceeds advertised size")
+	}
+	n, err := w.dst.Write(p)
+	w.left -= int64(n)
+	return n, err
+}
+
+func streamCheckpoint(ctx context.Context, dir string, meta fineWebCheckpoint, copySource func(context.Context, io.Writer) error) (err error) {
+	if err := checkpointArtifactDir(dir); err != nil {
+		return err
+	}
+	if meta.File != filepath.Base(meta.File) || meta.File == "." || meta.File == "" {
+		return fmt.Errorf("unsafe checkpoint artifact name")
+	}
+	final := filepath.Join(dir, meta.File)
+	for _, path := range []string{final, filepath.Join(dir, "fineweb-checkpoint.json")} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return fmt.Errorf("checkpoint artifact already exists or cannot be checked: %s", path)
+		}
+	}
+	partial := final + ".partial"
+	f, err := os.OpenFile(partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		f.Close()
+		os.Remove(partial)
+	}()
+	hash := sha256.New()
+	writer := &checkpointWriter{ctx: ctx, dst: io.MultiWriter(f, hash), left: meta.Bytes}
+	if err := copySource(ctx, writer); err != nil {
+		return fmt.Errorf("copy checkpoint: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if writer.left != 0 || hex.EncodeToString(hash.Sum(nil)) != meta.SHA256 {
+		return fmt.Errorf("checkpoint size/SHA256 mismatch after streaming")
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(partial, final); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(final)
+		}
+	}()
+	payload, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	m, err := os.OpenFile(filepath.Join(dir, "fineweb-checkpoint.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := m.Write(append(payload, '\n'))
+	syncErr := m.Sync()
+	closeErr := m.Close()
+	for _, e := range []error{writeErr, syncErr, closeErr} {
+		if e != nil {
+			os.Remove(m.Name())
+			return e
+		}
+	}
+	return nil
+}
+
+func copyCheckpointFromPod(ctx context.Context, meta fineWebCheckpoint, out io.Writer) error {
+	args := []string{}
+	if name := os.Getenv("AI_RUNTIME_E2E_KUBE_CONTEXT"); name != "" {
+		args = append(args, "--context", name)
+	}
+	args = append(args, "-n", meta.Namespace, "exec", meta.Pod, "-c", "ray-worker", "--", "cat", meta.Path)
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Stdout = out
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }

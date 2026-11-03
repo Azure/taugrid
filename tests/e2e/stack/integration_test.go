@@ -6,6 +6,7 @@ package stack
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"sort"
@@ -495,8 +496,15 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 
 	workers := envInt(t, "FINEWEB_TRAIN_WORKERS", defaultFineWebTrainWorkers)
 	steps := envInt(t, "FINEWEB_TRAIN_STEPS", defaultFineWebTrainSteps)
+	require.Equal(t, 16, workers, "FineWeb conformance requires 16 GPUs and 8+8 placement")
+	require.False(t, largeGPUUsesManagerWorkloadAccess() || strings.EqualFold(strings.TrimSpace(os.Getenv("FINEWEB_WORKLOAD_ACCESS_MODE")), "manager"),
+		"FineWeb requires direct worker evidence and checkpoint capture")
 	admissionTimeout, err := boundedDuration(os.Getenv("CONFORMANCE_ADMISSION_TIMEOUT"), 30*time.Minute, 90*time.Minute)
 	require.NoError(t, err)
+	captureTimeout, err := boundedDuration(os.Getenv("FINEWEB_CHECKPOINT_CAPTURE_TIMEOUT"), 15*time.Minute, 30*time.Minute)
+	require.NoError(t, err)
+	artifactDir := os.Getenv("FINEWEB_CHECKPOINT_ARTIFACT_DIR")
+	require.NoError(t, checkpointArtifactDir(artifactDir))
 	_, err = fineWebCallerOwnsCleanup()
 	require.NoError(t, err)
 	rayJobTimeout := largeGPURayJobTimeout
@@ -523,6 +531,50 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 
 	requireGPUNodeKubeletProxyReachable(t, tc)
 	applyRayJobFixture(t, tc, "fineweb-rayjob-16xh200-ib.yaml", rayJobNameFineWeb)
+	captureAttempted := false
+	capture := func(ctx context.Context, logs string) {
+		captureAttempted = true
+		captureCtx, cancel := context.WithTimeout(ctx, captureTimeout)
+		defer cancel()
+		tc := tc.WithContext(captureCtx)
+		requireFirstCheckpointPersisted(t, logs)
+		meta, err := parseVerifiedCheckpoint(logs)
+		require.NoError(t, err)
+		pod, err := tc.KubeClient().CoreV1().Pods(stackNamespace).Get(tc.Ctx(), meta.Pod, metav1.GetOptions{})
+		require.NoError(t, err)
+		cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameFineWeb)
+		require.NoError(t, err)
+		require.Equal(t, cluster, pod.Labels["ray.io/cluster"], "checkpoint source must belong to the owned RayJob")
+		require.Equal(t, "worker", pod.Labels["ray.io/node-type"])
+		require.Equal(t, "fineweb-16xh200-ib", pod.Labels["e2e-test"])
+		require.NoError(t, streamCheckpoint(captureCtx, artifactDir, meta, func(ctx context.Context, out io.Writer) error {
+			return copyCheckpointFromPod(ctx, meta, out)
+		}), "retain checkpoint in runner artifacts before owned RayJob cleanup")
+		t.Logf("FINEWEB_CHECKPOINT_RETAINED file=%s bytes=%d sha256=%s storage=runner-local upload=pending", meta.File, meta.Bytes, meta.SHA256)
+	}
+	t.Cleanup(func() {
+		if captureAttempted {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(tc.Ctx()), captureTimeout+time.Minute)
+		defer cancel()
+		cluster, err := conformanceRayCluster(ctx, tc.DynamicClient(), stackNamespace, rayJobNameFineWeb)
+		if err != nil {
+			t.Logf("No owned cluster available for failure capture: %v", err)
+			return
+		}
+		logs, err := tc.WithContext(ctx).WaitForFullPodContainerLogsByLabelContaining(stackNamespace,
+			fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster), "ray-driver-log-offload", nil, time.Minute)
+		if err != nil {
+			t.Logf("No checkpoint available for failure capture: %v", err)
+			return
+		}
+		if _, err := parseVerifiedCheckpoint(logs); err != nil {
+			t.Logf("No verified first checkpoint available for failure capture: %v", err)
+			return
+		}
+		capture(ctx, logs)
+	})
 
 	_, err = tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, admissionTimeout)
 	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
@@ -570,8 +622,8 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	}, 3*time.Minute)
 	require.NoError(t, err, "head driver logs should show InfiniBand NCCL, the first checkpoint sentinel, and FineWeb Ray Train success")
 
+	capture(tc.Ctx(), logs)
 	requireInfiniBandEngaged(t, logs)
-	requireFirstCheckpointPersisted(t, logs)
 }
 
 var fineWebFirstCheckpointRE = regexp.MustCompile(`FINEWEB_FIRST_CHECKPOINT step=(\d+) path=(\S+) bytes=(\d+) params=(\d+)`)

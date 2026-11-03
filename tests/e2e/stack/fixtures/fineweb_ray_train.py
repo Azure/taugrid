@@ -12,9 +12,9 @@ ways that matter for the conformance contract:
      (FULL_SHARD) so parameter and optimizer state are genuinely partitioned.
   2. It writes a real model checkpoint at a configurable interval. The FULL state
      dict is a *collective*: every rank enters the FSDP state-dict context and
-     calls state_dict(); only rank 0 receives the gathered weights and writes
-     them to a cleanup-excluded hostPath. A dist.barrier() rendezvous follows.
-  3. The success contract is "reach + persist the FIRST checkpoint", emitted as a
+     calls state_dict(); only rank 0 receives full model/optimizer state and
+     verifies a disk readback. The runner retains it outside the cluster.
+  3. The success contract is "verify + retain the FIRST checkpoint", emitted as a
      single parseable sentinel line the Go test asserts on:
          FINEWEB_FIRST_CHECKPOINT step=<N> path=<...> bytes=<size> params=<count>
 
@@ -24,11 +24,13 @@ uint16 shards (sourced from FineWeb sample-10BT), wired via FINEWEB_DATASET_*.
 
 from __future__ import annotations
 
+import ctypes
 import functools
 import hashlib
 import math
 import os
 import random
+import resource
 import time
 import urllib.error
 import urllib.parse
@@ -48,6 +50,7 @@ from ray.train import torch as ray_train_torch
 from ray.train.torch import TorchTrainer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import (
+    FullOptimStateDictConfig,
     FullStateDictConfig,
     MixedPrecision,
     ShardingStrategy,
@@ -56,6 +59,24 @@ from torch.distributed.fsdp import (
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 DEFAULT_FINEWEB_VOCAB_SIZE = 65536
+
+def require_rdma_prerequisites() -> None:
+    minimum = 1024 * 1024 * 1024
+    soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+    if hard != resource.RLIM_INFINITY and hard < minimum:
+        raise RuntimeError(
+            f"FINEWEB_RDMA_PREREQUISITE: inherited memlock hard={hard} is below "
+            f"{minimum} bytes; platform runtime must provide >=1GiB or unlimited. "
+            "No privilege escalation or socket fallback is permitted."
+        )
+    resource.setrlimit(resource.RLIMIT_MEMLOCK, (hard, hard))
+    try:
+        ctypes.CDLL("libibverbs.so.1")
+    except OSError as exc:
+        raise RuntimeError("FINEWEB_RDMA_PREREQUISITE: libibverbs.so.1 could not be loaded") from exc
+    if not list(Path("/dev/infiniband").glob("uverbs*")):
+        raise RuntimeError("FINEWEB_RDMA_PREREQUISITE: no /dev/infiniband/uverbs* device")
+    print(f"FINEWEB_RDMA_PREREQUISITE_OK memlock_soft={soft} effective={hard}", flush=True)
 
 @dataclass(frozen=True)
 class GPTConfig:
@@ -184,7 +205,7 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 def download_shard(uri: str, expected_sha256: str, rank: int) -> Path:
-    cache_dir = Path("/tmp/fineweb-shards")
+    cache_dir = Path("/tmp/ray/fineweb-shards")
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = cache_dir / f"rank-{rank}-{hashlib.sha256(uri.encode()).hexdigest()[:16]}.bin"
     if path.exists() and sha256_file(path) == expected_sha256:
@@ -300,6 +321,7 @@ def build_fsdp_model(config: GPTConfig, device: torch.device) -> tuple[FSDP, int
 
 def save_first_checkpoint(
     model: FSDP,
+    optimizer,
     checkpoint_dir: Path,
     step: int,
     param_count: int,
@@ -309,33 +331,62 @@ def save_first_checkpoint(
 
     The state-dict gather is a collective: ALL ranks must enter the context and
     call state_dict(); only rank 0 receives the materialized weights. Rank 0
-    writes them, re-stats the file (bytes>0) before any pod teardown, and emits
+    writes model and optimizer, verifies the full disk readback, and emits
     the parseable first-checkpoint sentinel. A barrier rendezvous follows so no
     rank races ahead of the persisted artifact.
     """
     save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
-    with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
+    optim_policy = FullOptimStateDictConfig(offload_to_cpu=True, rank0_only=True)
+    with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy, optim_policy):
         cpu_state = model.state_dict()
+        optimizer_state = FSDP.optim_state_dict(model, optimizer)
 
     if rank == 0:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         checkpoint_path = checkpoint_dir / f"fineweb-step-{step}.pt"
         tmp_path = checkpoint_path.with_suffix(".pt.tmp")
-        torch.save({"step": step, "params": param_count, "model": cpu_state}, tmp_path)
+        state = {"step": step, "params": param_count, "model": cpu_state,
+                 "optimizer": optimizer_state}
+        torch.save(state, tmp_path)
+        with tmp_path.open("rb") as fh:
+            os.fsync(fh.fileno())
+        restored = torch.load(tmp_path, map_location="cpu", weights_only=True, mmap=True)
+        verify_checkpoint_state(state, restored)
+        del restored
         tmp_path.replace(checkpoint_path)
         size_bytes = checkpoint_path.stat().st_size
         if size_bytes <= 0:
             raise RuntimeError(f"checkpoint {checkpoint_path} persisted with {size_bytes} bytes")
         print(
             f"FINEWEB_FIRST_CHECKPOINT step={step} path={checkpoint_path} "
-            f"bytes={size_bytes} params={param_count}",
+            f"bytes={size_bytes} params={param_count} "
+            f"sha256={sha256_file(checkpoint_path)} pod={os.environ['FINEWEB_WORKER_POD']} "
+            "readback=verified",
             flush=True,
         )
 
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
 
+def verify_checkpoint_state(expected, actual) -> None:
+    if isinstance(expected, torch.Tensor):
+        if not isinstance(actual, torch.Tensor) or expected.dtype != actual.dtype or not torch.equal(expected, actual):
+            raise RuntimeError("checkpoint tensor readback mismatch")
+    elif isinstance(expected, dict):
+        if not isinstance(actual, dict) or expected.keys() != actual.keys():
+            raise RuntimeError("checkpoint dictionary readback mismatch")
+        for key in expected:
+            verify_checkpoint_state(expected[key], actual[key])
+    elif isinstance(expected, (list, tuple)):
+        if type(expected) is not type(actual) or len(expected) != len(actual):
+            raise RuntimeError("checkpoint sequence readback mismatch")
+        for left, right in zip(expected, actual):
+            verify_checkpoint_state(left, right)
+    elif type(expected) is not type(actual) or expected != actual:
+        raise RuntimeError("checkpoint value readback mismatch")
+
 def train_loop(config: dict) -> None:
+    require_rdma_prerequisites()
     ctx = train.get_context()
     rank = ctx.get_world_rank()
     world_size = ctx.get_world_size()
@@ -438,7 +489,7 @@ def train_loop(config: dict) -> None:
             )
 
         if not first_checkpoint_done and step % checkpoint_interval == 0:
-            save_first_checkpoint(model, checkpoint_dir, step, param_count, rank)
+            save_first_checkpoint(model, optimizer, checkpoint_dir, step, param_count, rank)
             first_checkpoint_done = True
 
     if not first_checkpoint_done:
@@ -475,6 +526,10 @@ def main() -> None:
     n_embd = env_int("FINEWEB_N_EMBD", 2048)
     report_every = env_int("FINEWEB_REPORT_EVERY", 10)
     checkpoint_dir = os.environ.get("FINEWEB_CHECKPOINT_DIR", "/mnt/fineweb-ckpt")
+    if workers != 16:
+        raise RuntimeError("FineWeb conformance requires exactly 16 GPU workers")
+    if checkpoint_dir != "/mnt/fineweb-ckpt":
+        raise RuntimeError("FineWeb checkpoint staging must use /mnt/fineweb-ckpt for runner capture")
 
     ray.init()
     resources = ray.cluster_resources()
@@ -509,7 +564,7 @@ def main() -> None:
             "learning_rate": 3e-4,
             "seed": 1337,
         },
-        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True),
+        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True, trainer_resources={"CPU": 0}),
         run_config=RunConfig(name="fineweb-ray-train-16xh200-ib"),
     )
     result = trainer.fit()
