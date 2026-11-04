@@ -70,6 +70,7 @@ type managedConfigProjection struct {
 		Output      string       `yaml:"output"`
 		Publish     string       `yaml:"publish"`
 		ImageAssets []ImageAsset `yaml:"image_assets"`
+		HotSize     string       `yaml:"hot_size"`
 	} `yaml:"storage"`
 }
 
@@ -494,6 +495,7 @@ func (p managedConfigProjection) config() Config {
 			Output:      p.Storage.Output,
 			Publish:     p.Storage.Publish,
 			ImageAssets: append([]ImageAsset{}, p.Storage.ImageAssets...),
+			HotSize:     p.Storage.HotSize,
 		},
 		Profiler:   p.Profiler,
 		Metrics:    p.Metrics,

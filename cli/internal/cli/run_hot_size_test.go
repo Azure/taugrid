@@ -4,6 +4,7 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,34 @@ policy:
 		t.Fatal(err)
 	}
 	return config
+}
+
+func TestRunConfigHotSizeRejectedForManagedWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "train.py"), []byte("print('train')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`schema_version: 1
+name: hot-size-managed
+run:
+  entrypoint: train.py
+compute: { gpus: 1 }
+runtime:
+  pip:
+    - torch==2.4.0
+storage:
+  hot_size: 500Gi
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newConnectedRunConfigTestCommand(t, []string{"run", "--config", config, "--dry-run=client"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "storage.hot_size is not supported for managed workflow configs") {
+		t.Fatalf("expected managed workflow hot_size rejection, got %v", err)
+	}
 }
 
 func TestRunConfigHotSizeDryRun(t *testing.T) {
