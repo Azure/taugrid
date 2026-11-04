@@ -25,10 +25,6 @@ prewarm:
   images:
     - mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0
 
-spegel:
-  enabled: false
-  namespace: spegel
-
 stellar:
   enabled: false
   replicaCount: 1
