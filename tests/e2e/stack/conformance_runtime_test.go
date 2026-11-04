@@ -268,7 +268,7 @@ func TestConformanceOwnedClusterAndDeadline(t *testing.T) {
 }
 
 func TestConformancePythonContracts(t *testing.T) {
-	for _, path := range []string{"harness/conformance_contract_test.py"} {
+	for _, path := range []string{"harness/conformance_contract_test.py", "fixtures/nanogpt_runtime_test.py"} {
 		t.Run(path, func(t *testing.T) {
 			cmd := exec.Command("python3", "-B", path)
 			out, err := cmd.CombinedOutput()
