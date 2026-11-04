@@ -87,6 +87,58 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	}
 }
 
+func TestClusterInstallPortalHelpExample(t *testing.T) {
+	const override = "taugrid-core.portal.enabled=false"
+	cmd := newClusterInstallCmd()
+	var args []string
+	for _, line := range strings.Split(cmd.Example, "\n") {
+		if strings.Contains(line, "--set") {
+			args = strings.Fields(line)[2:]
+		}
+	}
+	if !containsArgPair(args, "--set", override) {
+		t.Fatalf("install help example must disable the subchart Portal: %q", cmd.Example)
+	}
+
+	var upgrades int
+	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+		upgrades++
+		if !containsArgPair(args, "--set", override) {
+			t.Fatalf("Helm pass %d lost the Portal override: %v", upgrades, args)
+		}
+		return nil
+	})
+	fakeHelm := runHelmCommand
+	runHelmCommand = func(ctx context.Context, in io.Reader, out, errOut io.Writer, args []string) error {
+		if len(args) > 1 && args[0] == "get" && args[1] == "values" {
+			_, err := io.WriteString(out, `{"taugrid-core":{"portal":{"enabled":false}}}`)
+			return err
+		}
+		return fakeHelm(ctx, in, out, errOut, args)
+	}
+	waitForTauGridInstallation = func(_ context.Context, _ installationcheck.Runner, opts installationcheck.Options) (installationcheck.Report, error) {
+		if !slices.Equal(opts.DisabledComponents, []installationcheck.Component{installationcheck.ComponentPortal}) {
+			t.Fatalf("disabled components = %v, want only Portal", opts.DisabledComponents)
+		}
+		return readyInstallationReport(), nil
+	}
+	out, err := runCluster(t, args...)
+	if err != nil {
+		t.Fatalf("help example failed: %v\n%s", err, out)
+	}
+	if upgrades != 2 {
+		t.Fatalf("Helm passes = %d, want bootstrap and queue-policy passes", upgrades)
+	}
+	for _, want := range []string{
+		"before Helm overrides",
+		"enabled components ready; disabled components skipped",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("install plan missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 	stubForceConflicts(t, false)
 	stubRollbackOnFailure(t, true)
