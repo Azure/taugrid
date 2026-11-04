@@ -19,6 +19,8 @@ import (
 	"github.com/Azure/taugrid/tests/e2e/internal/scriptpayload"
 	"github.com/Azure/taugrid/tests/e2e/results"
 
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -190,6 +192,20 @@ func readFixture(name string) ([]byte, error) {
 		}
 		data = bytes.ReplaceAll(data, []byte("{{NANOGPT_TAS_ANNOTATION}}"), []byte(annotation))
 	}
+	if bytes.Contains(data, []byte("{{NANOGPT_PRIORITY_LABEL}}")) {
+		priority := os.Getenv("NANOGPT_WORKLOAD_PRIORITY_CLASS")
+		label := ""
+		if priority != "" {
+			if problems := validation.IsDNS1123Subdomain(priority); len(problems) != 0 {
+				return nil, fmt.Errorf("invalid workload priority class %q: %s", priority, strings.Join(problems, "; "))
+			}
+			if problems := validation.IsValidLabelValue(priority); len(problems) != 0 {
+				return nil, fmt.Errorf("invalid workload priority class label %q: %s", priority, strings.Join(problems, "; "))
+			}
+			label = "kueue.x-k8s.io/priority-class: " + priority
+		}
+		data = bytes.ReplaceAll(data, []byte("{{NANOGPT_PRIORITY_LABEL}}"), []byte(label))
+	}
 	if bytes.Contains(data, []byte("{{FINEWEB_TAS_ANNOTATIONS}}")) {
 		mode := strings.ToLower(strings.TrimSpace(os.Getenv("FINEWEB_TAS_MODE")))
 		if mode == "" {
@@ -251,6 +267,11 @@ func readFixture(name string) ([]byte, error) {
 		{"{{NANOGPT_BLOCK_SIZE}}", "NANOGPT_BLOCK_SIZE", "256"},
 		{"{{NANOGPT_VOCAB_SIZE}}", "NANOGPT_VOCAB_SIZE", "65536"},
 		{"{{NANOGPT_REPORT_EVERY}}", "NANOGPT_REPORT_EVERY", "25"},
+		{"{{NANOGPT_N_LAYER}}", "NANOGPT_N_LAYER", "4"},
+		{"{{NANOGPT_N_HEAD}}", "NANOGPT_N_HEAD", "4"},
+		{"{{NANOGPT_N_EMBD}}", "NANOGPT_N_EMBD", "256"},
+		{"{{NANOGPT_HEAD_CPU_REQUEST}}", "NANOGPT_HEAD_CPU_REQUEST", "2"},
+		{"{{FINEWEB_HEAD_CPU_REQUEST}}", "FINEWEB_HEAD_CPU_REQUEST", "2"},
 		{"{{NANOGPT_TORCH_SPEC}}", "NANOGPT_TORCH_SPEC", "torch==2.7.1"},
 		{"{{NANOGPT_TORCH_INDEX_URL}}", "NANOGPT_TORCH_INDEX_URL", "https://download.pytorch.org/whl/cu128"},
 		{"{{NANOGPT_NCCL_SOCKET_IFNAME}}", "NANOGPT_NCCL_SOCKET_IFNAME", "eth0"},
@@ -290,6 +311,13 @@ func readFixture(name string) ([]byte, error) {
 					return nil, fmt.Errorf("fixture %s uses %s but %s env var is not set", name, sub.placeholder, sub.envVar)
 				}
 				v = sub.defaultValue
+			}
+			if sub.envVar == "NANOGPT_HEAD_CPU_REQUEST" || sub.envVar == "FINEWEB_HEAD_CPU_REQUEST" {
+				cpu, err := resource.ParseQuantity(v)
+				if err != nil || cpu.Sign() <= 0 || cpu.Cmp(resource.MustParse("2")) > 0 {
+					return nil, fmt.Errorf("%s must be a positive CPU quantity <= 2, got %q", sub.envVar, v)
+				}
+				v = cpu.String()
 			}
 			data = bytes.ReplaceAll(data, []byte(sub.placeholder), []byte(v))
 		}

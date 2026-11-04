@@ -5,6 +5,7 @@ metadata:
   namespace: {{STACK_NAMESPACE}}
   labels:
     kueue.x-k8s.io/queue-name: {{STACK_QUEUE}}
+    {{NANOGPT_PRIORITY_LABEL}}
   annotations:
     tau.azure.com/payload-digest: "{{TRAINING_GPU_SCRIPT_PAYLOAD_DIGEST}}"
 spec:

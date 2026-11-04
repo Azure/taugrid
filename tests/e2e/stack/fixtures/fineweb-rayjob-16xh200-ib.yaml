@@ -156,7 +156,7 @@ spec:
                   fieldPath: metadata.name
             resources:
               requests:
-                cpu: "2"
+                cpu: "{{FINEWEB_HEAD_CPU_REQUEST}}"
                 memory: "8Gi"
               limits:
                 cpu: "2"

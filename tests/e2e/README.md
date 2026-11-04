@@ -270,6 +270,17 @@ world_size=16`.
 This is admission/scheduling/runtime conformance only; it is not a throughput,
 NCCL, or model-quality benchmark.
 
+### Optional workload sizing and priority
+
+| Environment | Contract |
+|-------------|----------|
+| `NANOGPT_WORKLOAD_PRIORITY_CLASS` | Optional existing Kueue WorkloadPriorityClass name, validated as a Kubernetes DNS subdomain and label value (at most 63 characters). Applied to the single-GPU inference, SGD training, and nanoGPT RayJobs. Unset leaves priority unchanged; no deployment-specific allowlist is imposed. |
+| `NANOGPT_N_LAYER`, `NANOGPT_N_HEAD`, `NANOGPT_N_EMBD` | Positive model dimensions, default `4`, `4`, and `256`; embedding size must be divisible by head count. |
+| `NANOGPT_HEAD_CPU_REQUEST`, `FINEWEB_HEAD_CPU_REQUEST` | Optional positive CPU request no greater than the fixed two-CPU limit; default `2`. |
+
+These controls preserve the existing submission templates and workload behavior
+when unset.
+
 The PR-gated chart integration workflow triggers on PRs touching `charts/**`,
 `tests/e2e/**`, or the workflow file itself.
 
