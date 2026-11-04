@@ -1177,7 +1177,7 @@ func buildStoragePlan(o Options) (storagePlan, error) {
 	}
 
 	for _, vm := range plan.VolumeMounts {
-		if vm.MountPath == storage.DurableRoot {
+		if path.Clean(vm.MountPath) == storage.DurableRoot {
 			plan.HasDurableData = true
 			plan.HasWritableDurableData = !vm.ReadOnly
 			break
@@ -1267,9 +1267,9 @@ func (p *storagePlan) hasVolumeName(name string) bool {
 	return false
 }
 
-func (p *storagePlan) hasMountPath(path string) bool {
+func (p *storagePlan) hasMountPath(mountPath string) bool {
 	for _, vm := range p.VolumeMounts {
-		if vm.MountPath == path {
+		if path.Clean(vm.MountPath) == path.Clean(mountPath) {
 			return true
 		}
 	}
@@ -1286,10 +1286,10 @@ func (p *storagePlan) removeVolumeName(name string) {
 	p.Volumes = filtered
 }
 
-func (p *storagePlan) removeMountPath(path string) {
+func (p *storagePlan) removeMountPath(mountPath string) {
 	filtered := p.VolumeMounts[:0]
 	for _, vm := range p.VolumeMounts {
-		if vm.MountPath != path {
+		if path.Clean(vm.MountPath) != path.Clean(mountPath) {
 			filtered = append(filtered, vm)
 		}
 	}

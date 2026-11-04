@@ -126,15 +126,55 @@ func TestRender_NoHotSizeKeepsUnboundedTauHot(t *testing.T) {
 }
 
 func TestRender_HotSizeRejectsCustomMntMount(t *testing.T) {
+	for _, mountPath := range []string{"/mnt", "/mnt/", "/mnt/.", "//mnt", "/mnt/../mnt"} {
+		t.Run(mountPath, func(t *testing.T) {
+			_, err := Render(trainProfile(), Options{
+				Name:         "hot",
+				Namespace:    "tau",
+				Command:      []string{"python", "train.py"},
+				Volumes:      []Volume{{Name: "scratch", PVC: "scratch-pvc"}},
+				VolumeMounts: []VolumeMount{{Name: "scratch", MountPath: mountPath}},
+				HotSize:      "500Gi",
+			})
+			if err == nil || !strings.Contains(err.Error(), "storage.hot_size") {
+				t.Fatalf("Render error = %v, want storage.hot_size conflict with custom %s mount", err, mountPath)
+			}
+		})
+	}
+}
+
+func TestRender_DurableDataSkipsTauHotForCanonicalMntMount(t *testing.T) {
+	for _, mountPath := range []string{"/mnt/", "/mnt/."} {
+		t.Run(mountPath, func(t *testing.T) {
+			pod := renderedPodSpec(t, Options{
+				Name:      "hot",
+				Namespace: "tau",
+				Command:   []string{"python", "train.py"},
+				PVCMount:  "data-pvc",
+				Volumes:   []Volume{{Name: "scratch", PVC: "scratch-pvc"}},
+				VolumeMounts: []VolumeMount{
+					{Name: "scratch", MountPath: mountPath},
+				},
+			})
+			if podVolume(pod, "tau-hot") != nil {
+				t.Fatalf("tau-hot mounted over custom %s mount", mountPath)
+			}
+		})
+	}
+}
+
+func TestRender_RejectsDuplicateCanonicalMountPaths(t *testing.T) {
 	_, err := Render(trainProfile(), Options{
-		Name:         "hot",
-		Namespace:    "tau",
-		Command:      []string{"python", "train.py"},
-		Volumes:      []Volume{{Name: "scratch", PVC: "scratch-pvc"}},
-		VolumeMounts: []VolumeMount{{Name: "scratch", MountPath: "/mnt"}},
-		HotSize:      "500Gi",
+		Name:      "hot",
+		Namespace: "tau",
+		Command:   []string{"python", "train.py"},
+		Volumes:   []Volume{{Name: "a", PVC: "a-pvc"}, {Name: "b", PVC: "b-pvc"}},
+		VolumeMounts: []VolumeMount{
+			{Name: "a", MountPath: "/work"},
+			{Name: "b", MountPath: "/work/"},
+		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "storage.hot_size") {
-		t.Fatalf("Render error = %v, want storage.hot_size conflict with custom /mnt mount", err)
+	if err == nil || !strings.Contains(err.Error(), "declared more than once") {
+		t.Fatalf("Render error = %v, want duplicate mountPath rejection", err)
 	}
 }
