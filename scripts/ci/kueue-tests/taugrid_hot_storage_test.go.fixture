@@ -59,7 +59,7 @@ type tauGridHotStorageCase struct {
 	nodeHot          string
 	headHot          string
 	workerHot        string
-	workers          int32
+	workers          int
 	excludeHot       bool
 	ignoreUndeclared bool
 	wantAdmitted     bool
