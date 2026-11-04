@@ -5,6 +5,7 @@ metadata:
   namespace: {{STACK_NAMESPACE}}
   labels:
     kueue.x-k8s.io/queue-name: {{STACK_LARGE_GPU_QUEUE}}
+    {{NANOGPT_PRIORITY_LABEL}}
   annotations:
     tau.azure.com/payload-digest: "{{NANOGPT_SCRIPT_PAYLOAD_DIGEST}}"
 spec:
@@ -55,6 +56,9 @@ spec:
       NANOGPT_BATCH_SIZE: "{{NANOGPT_BATCH_SIZE}}"
       NANOGPT_BLOCK_SIZE: "{{NANOGPT_BLOCK_SIZE}}"
       NANOGPT_VOCAB_SIZE: "{{NANOGPT_VOCAB_SIZE}}"
+      NANOGPT_N_LAYER: "{{NANOGPT_N_LAYER}}"
+      NANOGPT_N_HEAD: "{{NANOGPT_N_HEAD}}"
+      NANOGPT_N_EMBD: "{{NANOGPT_N_EMBD}}"
       NANOGPT_REPORT_EVERY: "{{NANOGPT_REPORT_EVERY}}"
       NCCL_SOCKET_IFNAME: "{{NANOGPT_NCCL_SOCKET_IFNAME}}"
       NCCL_IB_DISABLE: "{{NANOGPT_NCCL_IB_DISABLE}}"
@@ -154,7 +158,7 @@ spec:
                   fieldPath: metadata.name
             resources:
               requests:
-                cpu: "2"
+                cpu: "{{NANOGPT_HEAD_CPU_REQUEST}}"
                 memory: "8Gi"
               limits:
                 cpu: "2"
