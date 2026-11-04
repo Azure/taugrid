@@ -6,16 +6,20 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Annotated SemVer tag matching the dispatch ref
+        description: Existing annotated product tag (dispatch trusted orchestration from main)
         required: true
         type: string
+      resume_publisher:
+        description: Resume the matching run configured in the protected environment
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 env:
   RELEASE_TAG: ${{ inputs.tag }}
-  RELEASE_SOURCE_REF: ${{ github.sha }}
 
 concurrency:
   group: release-tau-${{ inputs.tag }}
@@ -25,26 +29,26 @@ jobs:
   validate:
     name: Validate release tag
     runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      tag_object: ${{ steps.release.outputs.tag_object }}
     steps:
       - name: Check out main with tags
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Validate immutable release inputs
+        id: release
         env:
           DISPATCH_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
-            echo "Dispatch from the release tag, not $GITHUB_REF" >&2
-            exit 1
-          fi
-          if [[ "$DISPATCH_TAG" != "$GITHUB_REF_NAME" ]]; then
-            echo "tag input must match the dispatch ref $GITHUB_REF_NAME" >&2
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Dispatch reviewed release orchestration from main" >&2
             exit 1
           fi
           TAG="$DISPATCH_TAG"
@@ -52,6 +56,10 @@ jobs:
           semver_re='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*))(\.((0|[1-9][0-9]*)|([0-9]*[A-Za-z-][0-9A-Za-z-]*)))*)?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
           if [[ ! "$TAG" =~ $semver_re ]]; then
             echo "tag must be SemVer with a v prefix, got '$TAG'" >&2
+            exit 1
+          fi
+          if [[ "$TAG" == *+* || ${#TAG} -gt 128 ]]; then
+            echo "Coordinated image tags do not support SemVer build metadata or tags over 128 characters" >&2
             exit 1
           fi
           if [[ "$TAG" != "$RELEASE_TAG" ]]; then
@@ -66,11 +74,12 @@ jobs:
           fi
 
           commit="$(git rev-parse "$TAG^{commit}")"
-          source_commit="$(git rev-parse "$RELEASE_SOURCE_REF^{commit}")"
-          if [[ "$commit" != "$source_commit" ]]; then
-            echo "$TAG points to $commit, not the workflow source $source_commit" >&2
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Orchestration revision is not on main" >&2
             exit 1
           fi
+          echo "source_sha=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag_object=$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
           if ! git merge-base --is-ancestor "$commit" origin/main; then
             echo "$TAG points to $commit, which is not on main" >&2
             exit 1
@@ -97,8 +106,10 @@ jobs:
             404)
               ;;
             200)
-              echo "Published GitHub Release $TAG already exists; releases are never overwritten" >&2
-              exit 1
+              if [[ "$(jq -r .draft "$RUNNER_TEMP/existing-release.json")" != "true" ]]; then
+                echo "Published GitHub Release $TAG already exists; releases are never overwritten" >&2
+                exit 1
+              fi
               ;;
             *)
               echo "cannot verify whether GitHub Release $TAG exists (HTTP $status)" >&2
@@ -132,7 +143,7 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ env.RELEASE_SOURCE_REF }}
+          ref: ${{ needs.validate.outputs.source_sha }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -174,7 +185,7 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ env.RELEASE_SOURCE_REF }}
+          ref: ${{ needs.validate.outputs.source_sha }}
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -207,7 +218,8 @@ jobs:
           wheel_first_dir="$RUNNER_TEMP/tau-python-wheel-a"
           wheel_second_dir="$RUNNER_TEMP/tau-python-wheel-b"
 
-          export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
           python -m build --wheel --outdir "$wheel_first_dir" ./sdk/python/python
           python -m build --wheel --outdir "$wheel_second_dir" ./sdk/python/python
 
@@ -307,6 +319,98 @@ jobs:
           & (Join-Path $releaseDir "tau-gen-windows-amd64.exe") --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "tau-gen Windows help failed" }
 
+  coordinated-artifacts:
+    name: Build and verify coordinated images and charts
+    needs:
+      - validate
+      - gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    environment: release-publication
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Verify installed release environment protections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          environment_path="/repos/$GITHUB_REPOSITORY/environments/release-publication"
+          gh api "$environment_path" > "$RUNNER_TEMP/release-environment.json"
+          jq -e '
+            any(.protection_rules[]; .type == "required_reviewers" and (.reviewers | length) > 0) and
+            .deployment_branch_policy.custom_branch_policies == true and
+            .deployment_branch_policy.protected_branches == false
+          ' "$RUNNER_TEMP/release-environment.json" >/dev/null
+          gh api --paginate "$environment_path/deployment-branch-policies?per_page=100" \
+            --jq '.branch_policies[] | [.name, .type] | @tsv' \
+            > "$RUNNER_TEMP/release-branch-policies"
+          test "$(wc -l < "$RUNNER_TEMP/release-branch-policies")" -eq 1
+          test "$(cat "$RUNNER_TEMP/release-branch-policies")" = $'main\tbranch'
+
+      - name: Check out trusted orchestration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+
+      - name: Check out immutable product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.source_sha }}
+          path: payload
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
+        with:
+          version: v3.20.0
+
+      - name: Install trusted release dependencies
+        run: python -m pip install --disable-pip-version-check -r release-tools/scripts/ci/release-requirements.txt
+
+      - name: Run approved publisher and independently verify public artifacts
+        env:
+          RELEASE_BACKEND_URL: ${{ secrets.RELEASE_BACKEND_URL }}
+          RELEASE_BACKEND_PIPELINE_ID: ${{ secrets.RELEASE_BACKEND_PIPELINE_ID }}
+          RELEASE_BACKEND_CONTROL_REF: ${{ secrets.RELEASE_BACKEND_CONTROL_REF }}
+          RELEASE_BACKEND_CONTROL_SHA: ${{ secrets.RELEASE_BACKEND_CONTROL_SHA }}
+          RELEASE_TENANT_ID: ${{ secrets.RELEASE_TENANT_ID }}
+          RELEASE_CLIENT_ID: ${{ secrets.RELEASE_CLIENT_ID }}
+          RELEASE_OIDC_AUDIENCE: ${{ secrets.RELEASE_OIDC_AUDIENCE }}
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+          ORCHESTRATION_SHA: ${{ github.sha }}
+          RESUME_PUBLISHER: ${{ inputs.resume_publisher }}
+          PUBLISHER_RUN: ${{ secrets.RELEASE_BACKEND_RESUME_RUN }}
+        run: |
+          set -euo pipefail
+          resume=()
+          if [[ "$RESUME_PUBLISHER" == "true" ]]; then
+            if [[ ! "$PUBLISHER_RUN" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Protected resume run must be a positive run ID" >&2
+              exit 1
+            fi
+            resume=(--resume-run "$PUBLISHER_RUN")
+          fi
+          python release-tools/scripts/ci/release_backend.py \
+            --source payload --source-commit "$SOURCE_SHA" \
+            --orchestration-commit "$ORCHESTRATION_SHA" --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/release-artifacts.json" "${resume[@]}"
+
+      - name: Upload public artifact evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: tau-public-artifacts-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/release-artifacts.json
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish immutable GitHub Release
     needs:
@@ -314,6 +418,7 @@ jobs:
       - gates
       - build
       - validate-windows-assets
+      - coordinated-artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -321,7 +426,7 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ env.RELEASE_SOURCE_REF }}
+          ref: ${{ needs.validate.outputs.source_sha }}
 
       - name: Download validated release assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -361,16 +466,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ env.RELEASE_TAG }}
+          EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
         run: |
           set -euo pipefail
 
           EXPECTED_COMMIT="$(git rev-parse HEAD)"
           verify_remote_tag() {
+            remote_tag="$(
+              git ls-remote origin "refs/tags/$TAG" |
+                awk 'NR == 1 { print $1 }'
+            )"
             remote_commit="$(
               git ls-remote origin "refs/tags/$TAG^{}" |
                 awk 'NR == 1 { print $1 }'
             )"
-            if [[ "$remote_commit" != "$EXPECTED_COMMIT" ]]; then
+            if [[ "$remote_commit" != "$EXPECTED_COMMIT" || "$remote_tag" != "$EXPECTED_TAG_OBJECT" ]]; then
               echo "$TAG no longer points to validated commit $EXPECTED_COMMIT" >&2
               exit 1
             fi
@@ -521,7 +631,7 @@ jobs:
       - name: Check out reviewed source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ env.RELEASE_SOURCE_REF }}
+          ref: ${{ needs.validate.outputs.source_sha }}
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
