@@ -20,7 +20,7 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 	p.Queue = "kind-cpu"
 	options := Options{
 		Name: "tau-kind-serve", Namespace: "ray",
-		Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0", RayVersion: "2.58.0",
+		Image: "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0", RayVersion: "2.54.0",
 		ImportPath: "serve_app:app", ServePort: 9000, Workers: 2, ShmSize: "256Mi",
 		Env: map[string]string{
 			"GRPC_DNS_RESOLVER":    "native",

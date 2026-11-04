@@ -30,7 +30,10 @@ func TestKindSmokeExercisesRayServiceAndLegacyCRDUpgrade(t *testing.T) {
 		"TestRenderKindRayServiceFixture",
 		`KIND_NODE_TASKS_MAX="${TAU_KIND_NODE_TASKS_MAX:-4096}"`,
 		`KIND_NODE_PIDS_LIMIT="${TAU_KIND_NODE_PIDS_LIMIT:-8192}"`,
+		`CLEAN_HOST_STORAGE="${TAU_KIND_CLEAN_HOST_STORAGE:-0}"`,
 		`"$CONTAINER_ENGINE" update --pids-limit "$KIND_NODE_PIDS_LIMIT"`,
+		`"$CONTAINER_ENGINE" image rm "$image"`,
+		`"$CONTAINER_ENGINE" builder prune --all --force`,
 		"wait_for_workload_admitted rayservice.ray.io",
 		`--for=condition=Ready --timeout="$RAY_WAIT_TIMEOUT"`,
 		`":9000/-/healthz"`,
@@ -41,6 +44,21 @@ func TestKindSmokeExercisesRayServiceAndLegacyCRDUpgrade(t *testing.T) {
 	} {
 		if !strings.Contains(string(script), want) {
 			t.Errorf("runtime smoke missing %q", want)
+		}
+	}
+}
+
+func TestADOKindSmokeReclaimsContainerStorage(t *testing.T) {
+	pipeline, err := os.ReadFile("../../../.ado/tau-cli-e2e.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"docker system prune --all --force",
+		`TAU_KIND_CLEAN_HOST_STORAGE: "1"`,
+	} {
+		if !strings.Contains(string(pipeline), want) {
+			t.Errorf("ADO Kind smoke pipeline missing %q", want)
 		}
 	}
 }
