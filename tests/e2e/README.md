@@ -443,7 +443,11 @@ than silently omitted.
 The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
 profile adds all native and cross-node shapes. `rdmaConformance=true` adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
-it is not part of the default hardware matrix.
+it is not part of the default hardware matrix. The optional job creates and
+exports `FINEWEB_CHECKPOINT_ARTIFACT_DIR` under
+`$(Build.ArtifactStagingDirectory)/fineweb-checkpoints`; the retained checkpoint
+and its SHA256 metadata are included in the always-published RDMA diagnostics
+artifact.
 
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
