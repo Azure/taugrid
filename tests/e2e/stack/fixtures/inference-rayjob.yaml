@@ -9,6 +9,7 @@ metadata:
     tau.azure.com/payload-digest: "{{INFERENCE_SCRIPT_PAYLOAD_DIGEST}}"
 spec:
   entrypoint: python /script/inference_job.py
+  submissionMode: HTTPMode
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
   runtimeEnvYAML: |

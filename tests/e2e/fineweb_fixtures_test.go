@@ -104,11 +104,11 @@ func TestFineWebFixtureUsesInfiniBandNCCLEnv(t *testing.T) {
 	}
 }
 
-func TestFineWebFixturePinsSubmitterAndHeadToCPUPool(t *testing.T) {
+func TestFineWebFixturePinsHeadToCPUPool(t *testing.T) {
 	text := readFineWebFixture(t)
 
-	if got := strings.Count(text, "{{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}"); got != 2 {
-		t.Fatalf("expected submitter and head to be pinned to the CPU pool selector (2), got %d", got)
+	if got := strings.Count(text, "{{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}"); got != 1 {
+		t.Fatalf("expected the head to be pinned to the CPU pool selector (1), got %d", got)
 	}
 	if !strings.Contains(text, "{{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}") {
 		t.Fatal("expected workers to target the GPU node selector")

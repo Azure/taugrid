@@ -58,6 +58,23 @@ func conformancePod(t *testing.T, obj map[string]interface{}, fields ...string) 
 	return pod
 }
 
+func TestLargeGPURequestedWorldSize(t *testing.T) {
+	t.Setenv("NANOGPT_TRAIN_WORKERS", "16")
+	obj := conformanceFixture(t, "nanogpt-rayjob-large-gpu.yaml")
+	workers, _, err := unstructured.NestedSlice(obj, "spec", "rayClusterSpec", "workerGroupSpecs")
+	require.NoError(t, err)
+	require.Len(t, workers, 1)
+	w := workers[0].(map[string]interface{})
+	for _, field := range []string{"replicas", "minReplicas", "maxReplicas"} {
+		require.EqualValues(t, 16, w[field])
+	}
+	pod := conformancePod(t, w, "template")
+	q := pod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"]
+	require.EqualValues(t, 1, q.Value())
+	q = pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]
+	require.EqualValues(t, 1, q.Value())
+}
+
 func TestLargeGPUHeadCPURequests(t *testing.T) {
 	for _, c := range []struct {
 		fixture, key string
@@ -251,7 +268,7 @@ func TestConformanceOwnedClusterAndDeadline(t *testing.T) {
 }
 
 func TestConformancePythonContracts(t *testing.T) {
-	for _, path := range []string{"harness/conformance_contract_test.py"} {
+	for _, path := range []string{"harness/conformance_contract_test.py", "fixtures/nanogpt_runtime_test.py"} {
 		t.Run(path, func(t *testing.T) {
 			cmd := exec.Command("python3", "-B", path)
 			out, err := cmd.CombinedOutput()
