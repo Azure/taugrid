@@ -91,6 +91,27 @@ taugrid-portal experiment import jsonl \
   --group ray-smoke
 ```
 
+### Data-loading wait
+
+When the Tau Python SDK is importable, rank 0 wraps the training batches in
+`tau.datasets.timed` and adds a `data/wait_seconds` and `data/step_seconds`
+row to `stellar/history.jsonl` for every optimizer step. The last step also
+records `data/epoch_wait_seconds` and `data/epoch_seconds` for the whole run.
+After import, these metrics appear on the run's experiment page beside
+`train/*` and `val/*`, giving a data-wait baseline for storage changes.
+
+The workload image does not include the SDK. To record these metrics on a
+cluster, add the SDK to `runtime.pip` in your `tau.yaml`, pinned to a release
+tag or commit:
+
+```yaml
+runtime:
+  pip:
+    - "tau @ git+https://github.com/Azure/taugrid@<tag-or-commit>#subdirectory=sdk/python/python"
+```
+
+Without the SDK the script trains the same way and skips the data-wait rows.
+
 ## Scale knobs
 
 Edit your `tau.yaml` rather than adding `tau run` flags:

@@ -35,8 +35,9 @@ def main() -> None:
 
     metrics = json.loads(Path(args.metrics).read_text(encoding="utf-8"))
     history = read_history(Path(args.history))
-    if len(history) < args.min_history_rows:
-        raise SystemExit(f"history rows {len(history)} < required {args.min_history_rows}")
+    train_history = [row for row in history if "train/loss" in row]
+    if len(train_history) < args.min_history_rows:
+        raise SystemExit(f"train history rows {len(train_history)} < required {args.min_history_rows}")
     if args.require_cuda and metrics.get("device") != "cuda":
         raise SystemExit(f"expected cuda device, got {metrics.get('device')!r}")
     if args.require_fineweb and "fineweb" not in str(metrics.get("dataset_source", "")).lower():
@@ -63,14 +64,17 @@ def main() -> None:
         raise SystemExit("HellaSwag accuracy missing")
     if hellaswag_accuracy is not None and float(hellaswag_accuracy) < args.min_hellaswag:
         raise SystemExit(f"HellaSwag accuracy {hellaswag_accuracy} < required {args.min_hellaswag}")
-    first = history[0]
-    last = history[-1]
+    first = train_history[0]
+    last = train_history[-1]
+    data_rows = [row for row in history if "data/wait_seconds" in row]
     summary = {
         "run": metrics.get("run"),
         "dataset_source": metrics.get("dataset_source"),
         "device": metrics.get("device"),
         "parameter_count": metrics.get("parameter_count"),
         "history_rows": len(history),
+        "train_history_rows": len(train_history),
+        "data_wait_seconds": sum(float(row["data/wait_seconds"]) for row in data_rows) if data_rows else None,
         "first_train_loss": first.get("train/loss"),
         "last_train_loss": last.get("train/loss"),
         "best_val_loss": metrics.get("best_val_loss"),

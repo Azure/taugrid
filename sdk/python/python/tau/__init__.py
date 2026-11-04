@@ -50,7 +50,7 @@ from tau.entrypoints import call_staged_function, load_staged_function, load_sta
 from tau.workloads import Ctx, eval, train
 from tau.jsonl import read_jsonl_objects
 from tau.serve import ServeHandle, serve
-from tau import stellar, workloads
+from tau import datasets, stellar, workloads
 
 __all__ = [
     "train",
@@ -63,6 +63,7 @@ __all__ = [
     "call_staged_function",
     "config",
     "dataset_file_reference",
+    "datasets",
     "load_config",
     "load_staged_function",
     "load_staged_module",
