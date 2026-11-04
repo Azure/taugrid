@@ -28,11 +28,8 @@ func TestFineWebFixtureRequestsInfiniBand(t *testing.T) {
 	if !strings.Contains(text, "{{FINEWEB_TAS_ANNOTATIONS}}") {
 		t.Fatal("expected worker podset to expose the configurable FineWeb TAS annotations block")
 	}
-	if !strings.Contains(text, "IPC_LOCK") {
-		t.Fatal("expected worker securityContext to add the IPC_LOCK capability for RDMA")
-	}
-	if !strings.Contains(text, "runAsUser: 0") {
-		t.Fatal("expected the worker to run as root (runAsUser: 0) so CAP_IPC_LOCK is effective for IB memory registration")
+	if strings.Contains(text, "IPC_LOCK") {
+		t.Fatal("Baseline forbids IPC_LOCK; require inherited memlock instead")
 	}
 	for _, want := range []string{"medium: Memory", "sizeLimit: 16Gi", "mountPath: /dev/shm"} {
 		if !strings.Contains(text, want) {
@@ -191,6 +188,7 @@ func TestFineWebDefaultsCoverUint16TokenShards(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+
 			data, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read %s: %v", tc.path, err)
@@ -199,5 +197,23 @@ func TestFineWebDefaultsCoverUint16TokenShards(t *testing.T) {
 				t.Fatalf("expected %s to default FineWeb vocab to 65536 for uint16 token shards", tc.path)
 			}
 		})
+	}
+}
+
+func TestFineWebChecksRDMAInsideEachTrainingWorker(t *testing.T) {
+	path, err := findRepoFile("tests/e2e/stack/fixtures/fineweb_ray_train.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "NodeAffinitySchedulingStrategy") {
+		t.Fatal("FineWeb must not use redundant hard-affinity RDMA probe tasks")
+	}
+	if !strings.Contains(text, "def train_loop(config: dict) -> None:\n    require_rdma_prerequisites()") {
+		t.Fatal("each TorchTrainer worker must check RDMA prerequisites before distributed initialization")
 	}
 }

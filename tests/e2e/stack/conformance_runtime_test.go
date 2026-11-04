@@ -5,7 +5,9 @@ package stack
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	psa "k8s.io/pod-security-admission/api"
+	"k8s.io/pod-security-admission/policy"
 	"sigs.k8s.io/yaml"
 )
 
@@ -56,6 +60,67 @@ func conformancePod(t *testing.T, obj map[string]interface{}, fields ...string) 
 	var pod corev1.PodTemplateSpec
 	require.NoError(t, runtime.DefaultUnstructuredConverter.FromUnstructured(m, &pod))
 	return pod
+}
+
+func fineWebPodTemplates(t *testing.T) []corev1.PodTemplateSpec {
+	t.Helper()
+	t.Setenv("FINEWEB_TRAIN_WORKERS", "16")
+	obj := conformanceFixture(t, "fineweb-rayjob-16xh200-ib.yaml")
+	head := conformancePod(t, obj, "spec", "rayClusterSpec", "headGroupSpec", "template")
+	workers, found, err := unstructured.NestedSlice(obj, "spec", "rayClusterSpec", "workerGroupSpecs")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, workers, 1)
+	w := workers[0].(map[string]interface{})
+	require.EqualValues(t, 16, w["replicas"])
+	return []corev1.PodTemplateSpec{head, conformancePod(t, w, "template")}
+}
+
+func TestFineWebBaselinePods(t *testing.T) {
+	evaluator, err := policy.NewEvaluator(policy.DefaultChecks(), nil)
+	require.NoError(t, err)
+	for i, pod := range fineWebPodTemplates(t) {
+		result := policy.AggregateCheckResults(evaluator.EvaluatePod(
+			psa.LevelVersion{Level: psa.LevelBaseline, Version: psa.LatestVersion()},
+			&pod.ObjectMeta, &pod.Spec))
+		require.True(t, result.Allowed, "pod template %d: %s", i, result.ForbiddenDetail())
+	}
+}
+
+func TestFineWebScratchAndCheckpointContract(t *testing.T) {
+	pods := fineWebPodTemplates(t)
+	for _, pod := range pods {
+		volumes := map[string]bool{}
+		for _, v := range pod.Spec.Volumes {
+			require.Nil(t, v.HostPath)
+			if v.Name == "ray-tmp" || v.Name == "fineweb-ckpt" {
+				volumes[v.Name] = true
+				require.NotNil(t, v.EmptyDir)
+				require.NotNil(t, v.EmptyDir.SizeLimit)
+				require.Positive(t, v.EmptyDir.SizeLimit.Value())
+			}
+		}
+		require.True(t, volumes["ray-tmp"])
+		for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
+			for _, m := range c.VolumeMounts {
+				if m.Name == "ray-tmp" {
+					require.Empty(t, m.SubPathExpr)
+				}
+			}
+		}
+	}
+	worker := pods[1].Spec.Containers[0]
+	q := worker.Resources.Requests["nvidia.com/gpu"]
+	require.EqualValues(t, 1, q.Value())
+	q = worker.Resources.Limits["nvidia.com/gpu"]
+	require.EqualValues(t, 1, q.Value())
+	obj := conformanceFixture(t, "fineweb-rayjob-16xh200-ib.yaml")
+	shutdown, _, err := unstructured.NestedBool(obj, "spec", "shutdownAfterJobFinishes")
+	require.NoError(t, err)
+	require.True(t, shutdown)
+	ttl, _, err := unstructured.NestedFloat64(obj, "spec", "ttlSecondsAfterFinished")
+	require.NoError(t, err)
+	require.EqualValues(t, 7200, ttl)
 }
 
 func TestLargeGPURequestedWorldSize(t *testing.T) {
@@ -233,6 +298,64 @@ func TestConformanceGoTestTimeoutInterface(t *testing.T) {
 	}
 }
 
+func TestFineWebCheckpointStreaming(t *testing.T) {
+	payload := "small full-state stand-in"
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(payload)))
+	sentinel := fmt.Sprintf("FINEWEB_FIRST_CHECKPOINT step=50 path=/mnt/fineweb-ckpt/fineweb-step-50.pt bytes=%d params=1716000000 sha256=%s pod=owned-worker readback=verified", len(payload), digest)
+	meta, err := parseVerifiedCheckpoint(sentinel)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, content     string
+		copyErr, canceled bool
+		ok                bool
+	}{
+		{"success", payload, false, false, true},
+		{"truncated", payload[:5], false, false, false},
+		{"hashMismatch", strings.Repeat("x", len(payload)), false, false, false},
+		{"oversize", payload + "extra", false, false, false},
+		{"copyFailed", payload, true, false, false},
+		{"deadline", payload, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := conformanceArtifactDir(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			err := streamCheckpoint(ctx, dir, meta, func(ctx context.Context, out io.Writer) error {
+				if tc.copyErr {
+					return fmt.Errorf("mock exec failure")
+				}
+				_, err := io.Copy(out, strings.NewReader(tc.content))
+				return err
+			})
+			if tc.ok {
+				require.NoError(t, err)
+				got, err := os.ReadFile(filepath.Join(dir, meta.File))
+				require.NoError(t, err)
+				require.Equal(t, payload, string(got))
+				require.FileExists(t, filepath.Join(dir, "fineweb-checkpoint.json"))
+				require.Error(t, streamCheckpoint(ctx, dir, meta, nil))
+			} else {
+				require.Error(t, err)
+				entries, err := os.ReadDir(dir)
+				require.NoError(t, err)
+				require.Empty(t, entries)
+			}
+		})
+	}
+	require.Error(t, checkpointArtifactDir("relative"))
+	for _, bad := range []string{
+		strings.ReplaceAll(sentinel, "readback=verified", "readback=unchecked"),
+		strings.ReplaceAll(sentinel, "/mnt/fineweb-ckpt/", "/etc/"),
+		strings.ReplaceAll(sentinel, "step-50.pt", "step-51.pt"),
+	} {
+		_, err := parseVerifiedCheckpoint(bad)
+		require.Error(t, err)
+	}
+}
+
 func TestFineWebCleanupOwnership(t *testing.T) {
 	for _, owner := range []string{"", "test", "caller"} {
 		t.Run("owner="+owner, func(t *testing.T) {
@@ -267,8 +390,54 @@ func TestConformanceOwnedClusterAndDeadline(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestFineWebCheckpointExecAndWriteErrors(t *testing.T) {
+	bin := conformanceArtifactDir(t)
+	argsFile := filepath.Join(bin, "args")
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "kubectl"), []byte(
+		"#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FINEWEB_UNIT_ARGS\"\nprintf 'a\\000b'\n"), 0700))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FINEWEB_UNIT_ARGS", argsFile)
+	t.Setenv("AI_RUNTIME_E2E_KUBE_CONTEXT", "unit-context")
+	payload := "a\x00b"
+	meta := fineWebCheckpoint{
+		Bytes: 3, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(payload))),
+		File: "fineweb-step-50.pt", Path: "/mnt/fineweb-ckpt/fineweb-step-50.pt",
+		Pod: "owned-worker", Namespace: "unit-namespace",
+	}
+	dir := conformanceArtifactDir(t)
+	require.NoError(t, streamCheckpoint(context.Background(), dir, meta, func(ctx context.Context, out io.Writer) error {
+		return copyCheckpointFromPod(ctx, meta, out)
+	}))
+	data, err := os.ReadFile(filepath.Join(dir, meta.File))
+	require.NoError(t, err)
+	require.Equal(t, payload, string(data))
+	args, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	require.Equal(t, "--context\nunit-context\n-n\nunit-namespace\nexec\nowned-worker\n-c\nray-worker\n--\ncat\n"+meta.Path+"\n", string(args))
+	dir = conformanceArtifactDir(t)
+	err = streamCheckpoint(context.Background(), dir, meta, func(_ context.Context, out io.Writer) error {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "fineweb-checkpoint.json"), []byte("other owner"), 0600))
+		_, err := io.WriteString(out, payload)
+		return err
+	})
+	require.Error(t, err)
+	require.NoFileExists(t, filepath.Join(dir, meta.File))
+	data, err = os.ReadFile(filepath.Join(dir, "fineweb-checkpoint.json"))
+	require.NoError(t, err)
+	require.Equal(t, "other owner", string(data))
+	w := checkpointWriter{ctx: context.Background(), dst: failingCheckpointWriter{}, left: 10}
+	_, err = w.Write([]byte("x"))
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+}
+
+type failingCheckpointWriter struct{}
+
+func (failingCheckpointWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
 func TestConformancePythonContracts(t *testing.T) {
-	for _, path := range []string{"harness/conformance_contract_test.py", "fixtures/nanogpt_runtime_test.py"} {
+	for _, path := range []string{"harness/conformance_contract_test.py", "fixtures/nanogpt_runtime_test.py", "fixtures/fineweb_runtime_test.py"} {
 		t.Run(path, func(t *testing.T) {
 			cmd := exec.Command("python3", "-B", path)
 			out, err := cmd.CombinedOutput()

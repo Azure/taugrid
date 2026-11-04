@@ -177,7 +177,6 @@ func TestRayJobFixturesShareRayTempForDriverLogs(t *testing.T) {
 				"name: ray-driver-log-offload",
 				"chmod 1777 /tmp/ray",
 				"mountPath: /tmp/ray",
-				"subPathExpr: $(POD_NAME)",
 				"rm -rf /tmp/ray/* || true",
 				"job-driver-*.log",
 			} {
@@ -190,6 +189,13 @@ func TestRayJobFixturesShareRayTempForDriverLogs(t *testing.T) {
 			}
 			if got := strings.Count(text, "name: prepare-ray-tmp"); got != 2 {
 				t.Fatalf("expected %s to prepare /tmp/ray on head and worker, got %d", tc.fixture, got)
+			}
+			if strings.Contains(tc.fixture, "fineweb-") {
+				if strings.Contains(text, "subPathExpr: $(POD_NAME)") {
+					t.Fatal("FineWeb shares a pod-local emptyDir without hostPath subdirectories")
+				}
+			} else if !strings.Contains(text, "subPathExpr: $(POD_NAME)") {
+				t.Fatalf("expected %s to preserve its ray-tmp subPath contract", tc.fixture)
 			}
 		})
 	}
@@ -209,7 +215,8 @@ func TestNanoGPTRayJobFixtureUsesBaselineCompatibleRayTemp(t *testing.T) {
 
 func TestOtherRayJobFixturesUseResourceDiskForRayTemp(t *testing.T) {
 	for _, tc := range rayDriverLogFixtureCases {
-		if tc.fixture == "tests/e2e/stack/fixtures/nanogpt-rayjob-large-gpu.yaml" {
+		if tc.fixture == "tests/e2e/stack/fixtures/nanogpt-rayjob-large-gpu.yaml" ||
+			tc.fixture == "tests/e2e/stack/fixtures/fineweb-rayjob-16xh200-ib.yaml" {
 			continue
 		}
 		t.Run(tc.fixture, func(t *testing.T) {
@@ -348,8 +355,8 @@ func TestStackRayJobTestsWaitForRuntimeLogMarkers(t *testing.T) {
 		strings.Count(text, "WaitForFullPodLogsByLabelContaining(") +
 		strings.Count(text, "WaitForPodContainerLogsByLabelContaining(") +
 		strings.Count(text, "WaitForFullPodContainerLogsByLabelContaining(")
-	if waitMarkers != 6 {
-		t.Fatalf("expected six RayJob success log waits, got %d", waitMarkers)
+	if waitMarkers != 7 {
+		t.Fatalf("expected six RayJob success log waits plus FineWeb failure capture, got %d", waitMarkers)
 	}
 }
 

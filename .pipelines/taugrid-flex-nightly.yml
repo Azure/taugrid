@@ -523,6 +523,8 @@ jobs:
             export AI_RUNTIME_E2E=1
             export E2E_GPU=1
             export E2E_FINEWEB=1
+            export FINEWEB_CHECKPOINT_ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/fineweb-checkpoints"
+            mkdir -p "${FINEWEB_CHECKPOINT_ARTIFACT_DIR}"
             export E2E_STACK_USE_ARGOCD_QUEUE=1
             export E2E_STACK_NAMESPACE="${namespace}"
             export E2E_STACK_QUEUE=h200

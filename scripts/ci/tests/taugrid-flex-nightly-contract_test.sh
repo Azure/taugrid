@@ -88,6 +88,13 @@ grep -Fq 'value: "1"' "$PIPELINE" ||
   fail "two-step RDMA qualification must checkpoint within the run"
 grep -Fq 'FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)' "$PIPELINE" ||
   fail "RDMA qualification must forward its checkpoint interval to the fixture"
+rdma_job="$(sed -n '/^  - job: h200_rdma$/,/^  - job: nightly_report$/p' "$PIPELINE")"
+grep -Fq 'export FINEWEB_CHECKPOINT_ARTIFACT_DIR="$(Build.ArtifactStagingDirectory)/fineweb-checkpoints"' <<<"$rdma_job" ||
+  fail "RDMA qualification must export its checkpoint directory under published artifact staging"
+grep -Fq 'mkdir -p "${FINEWEB_CHECKPOINT_ARTIFACT_DIR}"' <<<"$rdma_job" ||
+  fail "RDMA qualification must create its checkpoint artifact directory before running FineWeb"
+grep -Fq 'targetPath: $(Build.ArtifactStagingDirectory)' <<<"$rdma_job" ||
+  fail "RDMA qualification must publish its checkpoint artifact staging directory"
 grep -Fq "export FINEWEB_TAS_MODE=site" "$PIPELINE" ||
   fail "H200 RDMA extension must use site-level topology for its two-node shape"
 grep -Fq "trap cleanup EXIT" "$PIPELINE" ||

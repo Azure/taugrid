@@ -11,7 +11,7 @@ spec:
   entrypoint: python /script/fineweb_ray_train.py
   submissionMode: HTTPMode
   shutdownAfterJobFinishes: true
-  ttlSecondsAfterFinished: 600
+  ttlSecondsAfterFinished: 7200
   runtimeEnvYAML: |
     pip:
       packages:
@@ -71,7 +71,6 @@ spec:
             volumeMounts:
             - name: ray-tmp
               mountPath: /tmp/ray
-              subPathExpr: $(POD_NAME)
           - name: tau-payload
             image: {{RAY_IMAGE}}
             command:
@@ -157,7 +156,6 @@ spec:
             volumeMounts:
             - name: ray-tmp
               mountPath: /tmp/ray
-              subPathExpr: $(POD_NAME)
             - name: script
               mountPath: /script
               readOnly: true
@@ -252,13 +250,11 @@ spec:
             volumeMounts:
             - name: ray-tmp
               mountPath: /tmp/ray
-              subPathExpr: $(POD_NAME)
               readOnly: true
           volumes:
           - name: ray-tmp
-            hostPath:
-              path: /mnt/taugrid-ray-tmp
-              type: DirectoryOrCreate
+            emptyDir:
+              sizeLimit: 32Gi
           - name: script
             emptyDir: {}
           nodeSelector:
@@ -314,19 +310,21 @@ spec:
             volumeMounts:
             - name: ray-tmp
               mountPath: /tmp/ray
-              subPathExpr: $(POD_NAME)
             - name: fineweb-ckpt
               mountPath: /mnt/fineweb-ckpt
           containers:
           - name: ray-worker
             image: {{RAY_IMAGE}}
             securityContext:
-              runAsUser: 0
+              allowPrivilegeEscalation: false
               capabilities:
-                add:
-                - IPC_LOCK
+                drop: [ALL]
             env:
             - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: FINEWEB_WORKER_POD
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
@@ -357,7 +355,6 @@ spec:
             volumeMounts:
             - name: ray-tmp
               mountPath: /tmp/ray
-              subPathExpr: $(POD_NAME)
             - name: dshm
               mountPath: /dev/shm
             - name: fineweb-ckpt
@@ -373,19 +370,18 @@ spec:
               subPath: drivers
           volumes:
           - name: ray-tmp
-            hostPath:
-              path: /mnt/taugrid-ray-tmp
-              type: DirectoryOrCreate
+            emptyDir:
+              sizeLimit: 32Gi
           - name: dshm
             emptyDir:
               medium: Memory
               sizeLimit: 16Gi
           - name: fineweb-ckpt
-            hostPath:
-              path: /mnt/taugrid-fineweb-ckpt
-              type: DirectoryOrCreate
+            emptyDir:
+              sizeLimit: 32Gi
           - name: ib-libs
-            emptyDir: {}
+            emptyDir:
+              sizeLimit: 1Gi
           nodeSelector:
             {{GPU_NODE_SELECTOR_KEY}}: {{GPU_NODE_SELECTOR_VALUE}}
           topologySpreadConstraints:

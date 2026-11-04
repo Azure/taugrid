@@ -294,13 +294,15 @@ available; callers may impose narrower deployment-specific entrypoints.
 
 | Environment | Contract |
 |-------------|----------|
-| `CONFORMANCE_ADMISSION_TIMEOUT` | Positive Go duration; large-GPU default `30m`, single-GPU default `30s`, maximum `90m`. Admission expiry fails with diagnostics, never skips. |
+| `CONFORMANCE_ADMISSION_TIMEOUT` | Positive Go duration; default `30m`, maximum `90m`. Admission expiry fails with diagnostics, never skips. |
 | `CONFORMANCE_GO_TEST_TIMEOUT` | Positive Go duration passed to `go test -timeout`; default `245m`, maximum `365m`. Execution must allow at least five additional minutes for shell cleanup. |
 | `NANOGPT_WORKLOAD_PRIORITY_CLASS` | Optional existing Kueue WorkloadPriorityClass name, validated as a Kubernetes DNS subdomain and label value (at most 63 characters). Applied to the single-GPU inference, SGD training, and nanoGPT RayJobs. Unset leaves priority unchanged; no deployment-specific allowlist is imposed. |
 | `NANOGPT_N_LAYER`, `NANOGPT_N_HEAD`, `NANOGPT_N_EMBD` | Positive model dimensions, default `4`, `4`, and `256`; embedding size must be divisible by head count. |
 | `NANOGPT_HEAD_CPU_REQUEST`, `FINEWEB_HEAD_CPU_REQUEST` | Optional positive CPU request no greater than the fixed two-CPU limit; default `2`. |
-| `FINEWEB_CLEANUP_OWNER` | `test` (default) or `caller`. Caller ownership requires unconditional, separately bounded outer cleanup, including failure and cancellation. |
-| `FINEWEB_RAYJOB_TIMEOUT_MINUTES` | Positive completion allowance, default `120`, maximum `180`; separate from admission. |
+| `FINEWEB_CHECKPOINT_ARTIFACT_DIR` | Required absolute, existing runner directory on a filesystem supporting hard links, with sufficient free space. Existing captures are never overwritten. |
+| `FINEWEB_CHECKPOINT_CAPTURE_TIMEOUT` | Positive Go duration; default `15m`, maximum `30m`. Copy, size, SHA256, filesystem, and timeout errors fail acceptance. |
+| `FINEWEB_CLEANUP_OWNER` | `test` (default) or `caller`. Caller ownership requires unconditional, separately bounded outer cleanup after the native artifact upload attempt, including failure and cancellation. |
+| `FINEWEB_RAYJOB_TIMEOUT_MINUTES` | Positive completion allowance, default `120`, maximum `180`; separate from admission and checkpoint capture. |
 | `RAY_E2E_IMAGE`, `RAY_FINEWEB_IMAGE`, `RAY_NANOGPT_IMAGE` | The shared image override takes precedence over the workload-specific aliases. Explicit images are preserved exactly, including tag-plus-digest references. `RAY_E2E_VERSION` is required when the image tag does not identify a Ray version; a conflicting inferred version fails. Callers must verify publication; selecting a version does not prove its image exists. |
 
 Harness acceptance uses `go test -json` and requires exactly one selected test
@@ -314,38 +316,82 @@ The six CPU inference/training, GPU inference/training, nanoGPT, and FineWeb
 fixtures use `HTTPMode` without submitter Pod templates. Runtime evidence comes
 from the head's named `ray-driver-log-offload` container, including CUDA and
 loss/progress markers where applicable. Placement and flavor assertions cover
-the head and workers, not nonexistent submitter Pods. The nanoGPT scaling config
-omits the V1-only `trainer_resources` argument: the default Ray 2.58 runtime uses
-Train V2, which rejects that argument and already reserves no coordinator CPUs.
-FineWeb's runtime, scratch, security, retention, and checkpoint behavior remain
-unchanged in this layer; verified runner checkpoint capture is not added here.
+the head and workers, not nonexistent submitter Pods. The nanoGPT and FineWeb
+scaling configs omit the V1-only `trainer_resources` argument: the default Ray
+2.58 runtime uses Train V2, which rejects that argument and already reserves no
+coordinator CPUs.
 
 With the default 250-minute execution-step budget, Go receives 245 minutes and
 execution API requests share a 230-minute context. The remaining time reserves
 fresh cleanup and diagnostics. Setup requests share a two-minute deadline;
-admission, readiness, and completion requests inherit their phase deadlines.
-Cleanup uses a fresh five-minute deadline, not an expired execution context.
-The outer step also bounds compilation and TestMain setup, which Go's test
-timeout does not include.
+admission, readiness, completion, and capture requests inherit their phase
+deadlines. Cleanup uses a fresh five-minute deadline, not an expired execution
+context. The outer step also bounds compilation and TestMain setup, which Go's
+test timeout does not include.
 
 FineWeb's minimum execution-step budget is completion plus 130 minutes, increased
-by any admission allowance over 30 minutes and reserved capture allowance over
-15 minutes, rounded up to whole minutes. The shared budget contract reserves
-`FINEWEB_CHECKPOINT_CAPTURE_TIMEOUT` (default `15m`, maximum `30m`) for subsequent
-checkpoint capture support; it does not add checkpoint capture in this layer.
-Large-GPU starts from 250 minutes with the same admission increase. The
-corresponding minimum Go timeout is five minutes shorter. FineWeb completion of
-180 minutes requires Go timeout `305m` and at least 310 minutes for execution.
-Callers must additionally budget setup, diagnostics, publication, and
-cancellation cleanup; the harness does not raise pipeline limits.
+by any admission allowance over 30 minutes and capture allowance over 15 minutes,
+rounded up to whole minutes. Large-GPU starts from 250 minutes with the same
+increases. The corresponding minimum Go timeout is five minutes shorter.
+For example, FineWeb completion of 180 minutes requires Go timeout `305m` and at
+least 310 minutes for execution. Callers must additionally budget setup,
+diagnostics, native artifact upload, and cancellation cleanup; the harness does
+not raise pipeline limits. Preinstall dependencies and run the offline suite
+before live execution.
 
-Default cleanup deletes the named owned RayJob using a UID precondition and
-waits for owned Workloads and Pods to drain. Transient errors retry within a
-fresh deadline; only NotFound is ignored. Neither selected conformance workload
-honors `E2E_PRESERVE_KUEUE_RECORDS` as permission to leave GPU Pods alive.
+### FineWeb runtime and checkpoint evidence
+
+FineWeb requires direct worker-cluster access and exactly two Ready eight-GPU
+nodes with 8+8 placement. Each worker requests one GPU and uses the existing
+platform's RDMA-device discovery contract rather than assuming a particular
+device-plugin resource name. Real collective logs must show `NET/IB : Using`
+without `NET/Socket : Using` fallback. The complete rendered head, worker, and
+submitter Pod specs, including init containers and log sidecars, must satisfy
+Kubernetes Baseline Pod Security.
+
+Each real training worker checks prerequisites before distributed
+initialization: accessible verbs devices, loadable RDMA userspace, and an
+inherited `RLIMIT_MEMLOCK` hard limit
+of at least 1 GiB. Each training process raises only its soft limit to the
+existing hard limit. Missing prerequisites fail with
+`FINEWEB_RDMA_PREREQUISITE`; the harness does not add capabilities, change runtime
+limits, escalate privileges, or weaken Pod Security. These probes are not proof
+of IB operation; the real collective and transport assertions remain mandatory.
+
+Head and sidecar share bounded 32-GiB pod-local Ray scratch. Workers have
+32-GiB scratch, 16-GiB memory-backed `/dev/shm` charged to their 48-GiB memory
+limit, a 1-GiB RDMA-library volume, and separate 32-GiB checkpoint staging.
+Permissions are initialized without host mounts, PVCs, or new RBAC resources.
+Platform disk capacity must cover actual concurrent scratch, image, and
+checkpoint usage; avoid shards that exhaust scratch or cause eviction.
+
+The first checkpoint contains full model and optimizer state, step, and parameter
+count. Rank zero fsyncs it, reloads it on CPU with weights-only memory mapping,
+compares every nested tensor/value, and emits size, SHA256, and Pod identity.
+This proves serialization readback, not resumed training or cross-rank RNG
+replay. Budget roughly 20 GiB for the default checkpoint and at least 32 GiB of
+free runner artifact space.
+
+The Go test streams binary `kubectl exec` output from the owned rank-zero worker,
+verifies size and SHA256, fsyncs the runner file, and writes
+`fineweb-checkpoint.json`. Existing workload credentials need `pods/exec`; the
+harness grants no permissions. Capture is attempted before cleanup even after a
+later assertion fails when verified checkpoint metadata exists. A failed copy
+never becomes an accepted artifact. Native artifact publication is the caller's
+responsibility and must itself be required for pipeline acceptance.
+
+`shutdownAfterJobFinishes: true` preserves Kueue's webhook contract;
+`ttlSecondsAfterFinished: 7200` retains workers through bounded capture and
+publication. Default cleanup deletes the named owned RayJob using a UID
+precondition and waits for owned Workloads and Pods to drain. Transient errors
+retry within a fresh deadline; only NotFound is ignored. Caller-owned cleanup
+defers deletion until outer publication completes. Neither selected conformance
+workload honors `E2E_PRESERVE_KUEUE_RECORDS` as permission to leave GPU Pods alive.
+
 Large-GPU manager mode proves admission and mirrored completion only and emits
 `MANAGER_STATUS_ONLY`; it cannot prove worker placement, CUDA world size, or
-transport.
+transport. FineWeb rejects manager-only access because its placement, transport,
+and checkpoint capture require direct access.
 
 The PR-gated chart integration workflow triggers on PRs touching `charts/**`,
 `tests/e2e/**`, or the workflow file itself.
@@ -397,7 +443,11 @@ than silently omitted.
 The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
 profile adds all native and cross-node shapes. `rdmaConformance=true` adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
-it is not part of the default hardware matrix.
+it is not part of the default hardware matrix. The optional job creates and
+exports `FINEWEB_CHECKPOINT_ARTIFACT_DIR` under
+`$(Build.ArtifactStagingDirectory)/fineweb-checkpoints`; the retained checkpoint
+and its SHA256 metadata are included in the always-published RDMA diagnostics
+artifact.
 
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
