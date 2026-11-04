@@ -38,6 +38,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
+          persist-credentials: false
 
       - name: Validate immutable release inputs
         id: release
@@ -78,8 +79,6 @@ jobs:
             echo "Orchestration revision is not on main" >&2
             exit 1
           fi
-          echo "source_sha=$commit" >> "$GITHUB_OUTPUT"
-          echo "tag_object=$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
           if ! git merge-base --is-ancestor "$commit" origin/main; then
             echo "$TAG points to $commit, which is not on main" >&2
             exit 1
@@ -117,6 +116,8 @@ jobs:
               ;;
           esac
 
+          echo "source_sha=$commit" >> "$GITHUB_OUTPUT"
+          echo "tag_object=$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"
           date="$(git show -s --format=%cI "$commit")"
           {
             echo "### Validated release input"
@@ -144,6 +145,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -186,6 +188,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
@@ -355,12 +358,14 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: release-tools
+          persist-credentials: false
 
       - name: Check out immutable product source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
           path: payload
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
@@ -427,6 +432,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Download validated release assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -632,6 +638,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ needs.validate.outputs.source_sha }}
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0

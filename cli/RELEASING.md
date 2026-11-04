@@ -11,6 +11,9 @@ represent it without changing the product version.
 The workflow revision, publisher control revision, and product source revision
 are separate immutable commits. Recovery of an older unpublished product tag
 uses current reviewed orchestration without moving or replacing that tag.
+Product source must be an ancestor of `main`; validation emits source outputs
+only after all checks pass. Every payload consumer depends on successful
+validation, and no checkout persists repository credentials.
 
 ## Distribution contract
 
