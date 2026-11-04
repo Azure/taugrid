@@ -1,0 +1,256 @@
+/*
+Copyright The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package scheduler
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	testingclock "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+
+	config "sigs.k8s.io/kueue/apis/config/v1beta2"
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
+	qcache "sigs.k8s.io/kueue/pkg/cache/queue"
+	schdcache "sigs.k8s.io/kueue/pkg/cache/scheduler"
+	tasindexer "sigs.k8s.io/kueue/pkg/controller/tas/indexer"
+	preemptexpectations "sigs.k8s.io/kueue/pkg/scheduler/preemption/expectations"
+	"sigs.k8s.io/kueue/pkg/util/routine"
+	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
+	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
+	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
+	testingnode "sigs.k8s.io/kueue/pkg/util/testingjobs/node"
+)
+
+const (
+	tauGridHotStorage    = corev1.ResourceName("tau.azure.com/hot-storage")
+	tauGridGPU           = corev1.ResourceName("nvidia.com/gpu")
+	tauGridNetworkDomain = "tau.azure.com/network-domain"
+)
+
+type tauGridHotStorageCase struct {
+	name             string
+	coverHot         bool
+	hotQuota         string
+	tas              bool
+	nodeHot          string
+	headHot          string
+	workerHot        string
+	workers          int32
+	excludeHot       bool
+	ignoreUndeclared bool
+	wantAdmitted     bool
+	wantMsgContain   string
+	wantAssign       string
+}
+
+func TestTauGridHotStorageAdmission(t *testing.T) {
+	for _, tc := range []tauGridHotStorageCase{
+		{name: "uncovered-resource-blocks-admission", headHot: "4", workerHot: "64", workers: 2, wantMsgContain: "unavailable in ClusterQueue"},
+		{name: "covered-resource-admits-rayjob-shape", coverHot: true, hotQuota: "3600", headHot: "4", workerHot: "64", workers: 2, wantAdmitted: true, wantMsgContain: "workers.hot=128"},
+		{name: "covered-resource-over-quota-stays-pending", coverHot: true, hotQuota: "100", headHot: "4", workerHot: "64", workers: 2, wantMsgContain: "insufficient quota for tau.azure.com/hot-storage"},
+		{name: "covered-resource-admits-head-without-request", coverHot: true, hotQuota: "3600", workerHot: "64", workers: 2, wantAdmitted: true},
+		{name: "covered-resource-admits-coarse-units", coverHot: true, hotQuota: "1800", workerHot: "1792", workers: 1, wantAdmitted: true},
+		{name: "covered-resource-admits-byte-quantities", coverHot: true, hotQuota: "28Ti", workerHot: "2Ti", workers: 2, wantAdmitted: true},
+		{name: "non-tas-flavor-ignores-node-capacity", coverHot: true, hotQuota: "3600", nodeHot: "32", workerHot: "64", workers: 2, wantAdmitted: true},
+		{name: "excluded-resource-admits-uncovered", excludeHot: true, headHot: "4", workerHot: "64", workers: 2, wantAdmitted: true},
+		{name: "ignore-undeclared-admits-uncovered", ignoreUndeclared: true, headHot: "4", workerHot: "64", workers: 2, wantAdmitted: true},
+		{name: "tas-node-capacity-spreads-workers", coverHot: true, hotQuota: "3600", tas: true, nodeHot: "100", workerHot: "64", workers: 2, wantAdmitted: true, wantAssign: "workers=host-a:1,host-b:1"},
+		{name: "tas-nodes-without-capacity-stay-pending", coverHot: true, hotQuota: "3600", tas: true, workerHot: "64", workers: 2, wantMsgContain: `resource "tau.azure.com/hot-storage"`},
+		{name: "tas-node-capacity-too-small-stays-pending", coverHot: true, hotQuota: "3600", tas: true, nodeHot: "32", workerHot: "64", workers: 2, wantMsgContain: `resource "tau.azure.com/hot-storage"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			admitted, msg, assign := runTauGridHotStorageScheduler(t, tc)
+			t.Logf("admitted=%v assign=%q msg=%q", admitted, assign, msg)
+			if admitted != tc.wantAdmitted {
+				t.Fatalf("admitted = %v, want %v (msg %q)", admitted, tc.wantAdmitted, msg)
+			}
+			if tc.wantMsgContain != "" && !strings.Contains(msg, tc.wantMsgContain) {
+				t.Fatalf("message %q does not contain %q", msg, tc.wantMsgContain)
+			}
+			if tc.wantAssign != "" && assign != tc.wantAssign {
+				t.Fatalf("assignment = %q, want %q", assign, tc.wantAssign)
+			}
+		})
+	}
+}
+
+func runTauGridHotStorageScheduler(t *testing.T, tc tauGridHotStorageCase) (bool, string, string) {
+	t.Helper()
+	now := time.Now().Truncate(time.Second)
+	ctx, log := utiltesting.ContextWithLog(t)
+
+	topology := utiltestingapi.MakeTopology("taugrid").Levels(tauGridNetworkDomain, corev1.LabelHostname).Obj()
+	flavorWrapper := utiltestingapi.MakeResourceFlavor("gpu").NodeLabel("tas-node", "true")
+	if tc.tas {
+		flavorWrapper = flavorWrapper.TopologyName(topology.Name)
+	}
+	flavor := flavorWrapper.Obj()
+	fq := utiltestingapi.MakeFlavorQuotas("gpu").
+		Resource(corev1.ResourceCPU, "100").
+		Resource(corev1.ResourceMemory, "1Ti").
+		Resource(tauGridGPU, "16")
+	if tc.coverHot {
+		fq.Resource(tauGridHotStorage, tc.hotQuota)
+	}
+	clusterQueue := utiltestingapi.MakeClusterQueue("gpu").ResourceGroup(*fq.Obj()).Obj()
+	localQueue := utiltestingapi.MakeLocalQueue("gpu", metav1.NamespaceDefault).ClusterQueue(clusterQueue.Name).Obj()
+
+	head := utiltestingapi.MakePodSet("head", 1).Request(corev1.ResourceCPU, "1").Request(corev1.ResourceMemory, "4Gi")
+	if tc.headHot != "" {
+		head.Request(tauGridHotStorage, tc.headHot).Limit(tauGridHotStorage, tc.headHot)
+	}
+	workers := utiltestingapi.MakePodSet("workers", tc.workers).
+		Request(corev1.ResourceCPU, "4").
+		Request(corev1.ResourceMemory, "16Gi").
+		Request(tauGridGPU, "1").
+		Request(tauGridHotStorage, tc.workerHot).
+		Limit(tauGridHotStorage, tc.workerHot)
+	podSets := []kueue.PodSet{*head.Obj(), *workers.Obj()}
+	if tc.tas {
+		podSets = []kueue.PodSet{*workers.RequiredTopologyRequest(tauGridNetworkDomain).Obj()}
+	}
+	workload := utiltestingapi.MakeWorkload("taugrid-hot-storage", metav1.NamespaceDefault).
+		Queue(kueue.LocalQueueName(localQueue.Name)).
+		PodSets(podSets...).
+		Obj()
+
+	makeNode := func(name string) corev1.Node {
+		allocatable := corev1.ResourceList{
+			tauGridGPU:            resource.MustParse("8"),
+			corev1.ResourcePods:   resource.MustParse("110"),
+			corev1.ResourceCPU:    resource.MustParse("96"),
+			corev1.ResourceMemory: resource.MustParse("512Gi"),
+		}
+		if tc.nodeHot != "" {
+			allocatable[tauGridHotStorage] = resource.MustParse(tc.nodeHot)
+		}
+		return *testingnode.MakeNode(name).
+			Label("tas-node", "true").
+			Label(tauGridNetworkDomain, "net-a").
+			Label(corev1.LabelHostname, name).
+			StatusAllocatable(allocatable).
+			Ready().
+			Obj()
+	}
+	nodes := []corev1.Node{makeNode("host-a"), makeNode("host-b")}
+
+	clientBuilder := utiltesting.NewClientBuilder().
+		WithLists(
+			&kueue.WorkloadList{Items: []kueue.Workload{*workload}},
+			&kueue.TopologyList{Items: []kueue.Topology{*topology}},
+			&corev1.NodeList{Items: nodes},
+			&kueue.LocalQueueList{Items: []kueue.LocalQueue{*localQueue}}).
+		WithObjects(utiltesting.MakeNamespace(metav1.NamespaceDefault)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(
+				ctx context.Context,
+				c client.Client,
+				subResourceName string,
+				obj client.Object,
+				patch client.Patch,
+				opts ...client.SubResourcePatchOption,
+			) error {
+				return utiltesting.TreatSSAAsStrategicMerge(ctx, c, subResourceName, obj, patch, opts...)
+			},
+		}).
+		WithStatusSubresource(&kueue.Workload{}, &kueue.ClusterQueue{}, &kueue.LocalQueue{})
+	_ = tasindexer.SetupIndexes(ctx, utiltesting.AsIndexer(clientBuilder))
+	cl := clientBuilder.Build()
+
+	var cacheOpts []schdcache.Option
+	queueOpts := []qcache.Option{qcache.WithClock(testingclock.NewFakeClock(now))}
+	if tc.excludeHot {
+		cacheOpts = append(cacheOpts, schdcache.WithExcludedResourcePrefixes([]string{string(tauGridHotStorage)}))
+		queueOpts = append(queueOpts, qcache.WithExcludedResourcePrefixes([]string{string(tauGridHotStorage)}))
+	}
+	schedulerCache := schdcache.New(cl, cacheOpts...)
+	queueManager := qcache.NewManagerForUnitTests(cl, schedulerCache, queueOpts...)
+	for i := range nodes {
+		schedulerCache.TASCache().SyncNode(&nodes[i])
+	}
+	schedulerCache.AddOrUpdateResourceFlavor(log, flavor)
+	schedulerCache.AddOrUpdateTopology(log, topology)
+	if err := schedulerCache.AddClusterQueue(ctx, clusterQueue); err != nil {
+		t.Fatalf("add ClusterQueue to scheduler cache: %v", err)
+	}
+	if err := queueManager.AddClusterQueue(ctx, clusterQueue); err != nil {
+		t.Fatalf("add ClusterQueue to queue manager: %v", err)
+	}
+	if err := cl.Create(ctx, clusterQueue); err != nil {
+		t.Fatalf("create ClusterQueue: %v", err)
+	}
+	if err := queueManager.AddLocalQueue(ctx, localQueue); err != nil {
+		t.Fatalf("add LocalQueue: %v", err)
+	}
+
+	opts := []Option{WithPreemptionExpectations(preemptexpectations.New())}
+	if tc.ignoreUndeclared {
+		opts = append(opts, WithQuotaCheckStrategy(config.QuotaCheckIgnoreUndeclared))
+	}
+	scheduler := New(queueManager, schedulerCache, cl, &utiltesting.EventRecorder{}, opts...)
+	var wg sync.WaitGroup
+	scheduler.setAdmissionRoutineWrapper(routine.NewWrapper(
+		func() { wg.Add(1) },
+		func() { wg.Done() },
+	))
+
+	scheduleCtx, cancel := context.WithTimeout(ctx, queueingTimeout)
+	defer cancel()
+	go queueManager.CleanUpOnContext(scheduleCtx)
+	scheduler.schedule(scheduleCtx)
+	wg.Wait()
+
+	var got kueue.Workload
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(workload), &got); err != nil {
+		t.Fatalf("get scheduled Workload: %v", err)
+	}
+	msgs := make([]string, 0, len(got.Status.Conditions))
+	for _, c := range got.Status.Conditions {
+		msgs = append(msgs, fmt.Sprintf("%s=%s:%s", c.Type, c.Status, c.Message))
+	}
+	msg := strings.Join(msgs, "; ")
+	if got.Status.Admission == nil {
+		return false, msg, ""
+	}
+	var assignments []string
+	for _, a := range got.Status.Admission.PodSetAssignments {
+		hot := a.ResourceUsage[tauGridHotStorage]
+		msg += fmt.Sprintf(" %s.hot=%s", a.Name, hot.String())
+		if a.TopologyAssignment == nil {
+			continue
+		}
+		internal := utiltas.InternalFrom(a.TopologyAssignment)
+		domains := make([]string, 0, len(internal.Domains))
+		for _, d := range internal.Domains {
+			domains = append(domains, fmt.Sprintf("%s:%d", strings.Join(d.Values, "/"), d.Count))
+		}
+		sort.Strings(domains)
+		assignments = append(assignments, fmt.Sprintf("%s=%s", a.Name, strings.Join(domains, ",")))
+	}
+	sort.Strings(assignments)
+	return true, msg, strings.Join(assignments, ";")
+}
