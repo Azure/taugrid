@@ -4,17 +4,33 @@
 package stack
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/yaml"
 )
+
+func conformanceArtifactDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(".", ".conformance-artifacts-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	absolute, err := filepath.Abs(dir)
+	require.NoError(t, err)
+	return absolute
+}
 
 func conformanceFixture(t *testing.T, name string) map[string]interface{} {
 	t.Helper()
@@ -134,6 +150,112 @@ func TestConformanceWorkloadPriority(t *testing.T) {
 					}
 				})
 			}
+		})
+	}
+}
+
+func TestConformanceDeadlines(t *testing.T) {
+	for _, raw := range []string{"0", "-1m", "91m", "nonsense"} {
+		_, err := boundedDuration(raw, 30*time.Minute, 90*time.Minute)
+		require.Error(t, err, raw)
+	}
+	d, err := boundedDuration("", 30*time.Minute, 90*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Minute, d)
+	d, err = boundedDuration("45m", 30*time.Minute, 90*time.Minute)
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Minute, d)
+}
+
+func TestConformanceGoTestTimeoutInterface(t *testing.T) {
+	for _, tc := range []struct {
+		name, completion, admission, capture, goTimeout string
+		ok                                              bool
+	}{
+		{"default", "", "", "", "", true},
+		{"longUnfunded", "180", "", "", "", false},
+		{"longFunded", "180", "", "", "305m", true},
+		{"shortFunded", "60", "", "", "185m", true},
+		{"compound", "", "", "", "4h5m", true},
+		{"fractional", "", "", "", "+245.5m", true},
+		{"maximum", "180", "", "", "365m", true},
+		{"aboveMaximum", "", "", "", "366m", false},
+		{"zero", "", "", "", "0", false},
+		{"negative", "", "", "", "-245m", false},
+		{"missingUnit", "", "", "", "245", false},
+		{"admissionUnfunded", "", "90m", "", "", false},
+		{"admissionFunded", "", "1h30m", "", "305m", true},
+		{"captureUnfunded", "", "", "30m", "", false},
+		{"captureFunded", "", "", "30m", "260m", true},
+		{"invalid", "", "0", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("FINEWEB_RAYJOB_TIMEOUT_MINUTES", tc.completion)
+			t.Setenv("CONFORMANCE_ADMISSION_TIMEOUT", tc.admission)
+			t.Setenv("FINEWEB_CHECKPOINT_CAPTURE_TIMEOUT", tc.capture)
+			t.Setenv("CONFORMANCE_GO_TEST_TIMEOUT", tc.goTimeout)
+			budget, err := conformanceExecutionBudget(true)
+			cmd := exec.Command("python3", "-B", "harness/conformance_contract.py", "budget", "fineweb")
+			out, shellErr := cmd.CombinedOutput()
+			if !tc.ok {
+				require.Error(t, err)
+				require.Error(t, shellErr, "%s", out)
+				return
+			}
+			require.NoError(t, err)
+			require.NoError(t, shellErr, "%s", out)
+			expected := tc.goTimeout
+			if expected == "" {
+				expected = "245m"
+			}
+			timeout, err := time.ParseDuration(expected)
+			require.NoError(t, err)
+			require.Equal(t, timeout+5*time.Minute, budget)
+			require.Equal(t, expected+"\n", string(out))
+		})
+	}
+}
+
+func TestFineWebCleanupOwnership(t *testing.T) {
+	for _, owner := range []string{"", "test", "caller"} {
+		t.Run("owner="+owner, func(t *testing.T) {
+			t.Setenv("FINEWEB_CLEANUP_OWNER", owner)
+			for _, fixture := range []string{"fineweb-rayjob-16xh200-ib.yaml", "nanogpt-rayjob-large-gpu.yaml"} {
+				cleaned := false
+				t.Run(fixture, func(t *testing.T) {
+					registerRayJobCleanup(t, fixture, func() { cleaned = true })
+				})
+				require.Equal(t, owner != "caller" || fixture != "fineweb-rayjob-16xh200-ib.yaml", cleaned)
+			}
+		})
+	}
+	t.Setenv("FINEWEB_CLEANUP_OWNER", "typo")
+	_, err := fineWebCallerOwnsCleanup()
+	require.Error(t, err)
+}
+
+func TestConformanceOwnedClusterAndDeadline(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "ray.io/v1", "kind": "RayJob",
+		"metadata": map[string]interface{}{"name": "owned-job", "namespace": "shared"},
+		"status":   map[string]interface{}{"rayClusterName": "owned-cluster"},
+	}}
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
+	name, err := conformanceRayCluster(context.Background(), client, "shared", "owned-job")
+	require.NoError(t, err)
+	require.Equal(t, "owned-cluster", name)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = conformanceRayCluster(ctx, client, "shared", "missing-job")
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestConformancePythonContracts(t *testing.T) {
+	for _, path := range []string{"harness/conformance_contract_test.py"} {
+		t.Run(path, func(t *testing.T) {
+			cmd := exec.Command("python3", "-B", path)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
 		})
 	}
 }

@@ -124,6 +124,8 @@ func NewTestContext(t *testing.T, ctx context.Context) *TestContext {
 		if !t.Failed() || managerWorkloadOnly() {
 			return
 		}
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.ctx)).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpKueueAdmissionDiagnostics("kueue-system")
 		tc.DumpControllerLogs("kuberay-system", "app.kubernetes.io/name=kuberay-operator", 100)
 	})
@@ -149,6 +151,17 @@ func (tc *TestContext) DynamicClient() dynamic.Interface {
 
 func (tc *TestContext) Ctx() context.Context {
 	return tc.ctx
+}
+
+func (tc *TestContext) WithContext(ctx context.Context) *TestContext {
+	copy := *tc
+	copy.ctx = ctx
+	return &copy
+}
+
+func (tc *TestContext) WithTimeout(timeout time.Duration) (*TestContext, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(tc.ctx, timeout)
+	return tc.WithContext(ctx), cancel
 }
 
 func (tc *TestContext) Bundle() *bundle.Writer {

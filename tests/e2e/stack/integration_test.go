@@ -71,13 +71,20 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) int {
+	if os.Getenv("E2E_GPU") == "1" && (os.Getenv("E2E_LARGE_GPU") == "1" || os.Getenv("E2E_FINEWEB") == "1") {
+		if _, err := conformanceExecutionBudget(os.Getenv("E2E_FINEWEB") == "1"); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid conformance execution budget: %v\n", err)
+			return 1
+		}
+	}
 	kubeClient, dynamicClient, err := e2e.BuildClients()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to build K8s clients: %v\n", err)
 		return 1
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	if largeGPUUsesManagerWorkloadAccess() && !stackUsesArgoCDQueue() {
 		fmt.Fprintln(os.Stderr, "manager workload access requires the pre-provisioned ArgoCD stack namespace and queue")
 		return 1
@@ -117,7 +124,9 @@ func runTests(m *testing.M) int {
 	defer results.FlushAll()
 	code := m.Run()
 	if !usesArgoCDQueue && !preserveKueueRecords {
-		if err := e2e.DeleteFixtureWithClientAndWait(ctx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), fixtureCleanupTimeout)
+		defer cancel()
+		if err := e2e.DeleteFixtureWithClientAndWait(cleanupCtx, dynamicClient, "stack-kueue-resources.yaml", fixtureCleanupTimeout); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to clean up stack Kueue resources: %v\n", err)
 			code = 1
 		}
@@ -152,9 +161,6 @@ func stackNamespaceForRun() string {
 
 func stackQueueForRun() string {
 	if queue := strings.TrimSpace(os.Getenv("E2E_STACK_QUEUE")); queue != "" {
-		return queue
-	}
-	if queue := strings.TrimSpace(os.Getenv("E2E_STACK_LARGE_GPU_QUEUE")); queue != "" {
 		return queue
 	}
 	if stackUsesArgoCDQueue() {
@@ -202,6 +208,8 @@ func TestInferenceRayJob(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 
 	tc.OnFailure(func() {
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpCRState(stackNamespace, e2e.RayJobGVR, rayJobName)
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		tc.DumpPods(stackNamespace, "")
@@ -214,11 +222,13 @@ func TestInferenceRayJob(t *testing.T) {
 
 	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobName, 30*time.Second)
 	require.NoError(t, err, "Kueue should admit the inference RayJob workload")
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobName)
+	require.NoError(t, err)
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, 3*time.Minute)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/cluster="+cluster+",ray.io/node-type=head", 1, 3*time.Minute)
 	require.NoError(t, err, "Ray head should be running and ready")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", 2, 3*time.Minute)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/cluster="+cluster+",ray.io/node-type=worker", 2, 3*time.Minute)
 	require.NoError(t, err, "Both Ray workers should be running and ready")
 
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobName, "SUCCEEDED", 8*time.Minute)
@@ -240,6 +250,8 @@ func TestInferenceRayJobGPU(t *testing.T) {
 	recordOutcomeWithWorkflowSuffix(t, tc)
 
 	tc.OnFailure(func() {
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpCRState(stackNamespace, e2e.RayJobGVR, rayJobNameGPU)
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		tc.DumpPods(stackNamespace, "")
@@ -251,15 +263,21 @@ func TestInferenceRayJobGPU(t *testing.T) {
 	requireGPUNodeKubeletProxyReachable(t, tc)
 	applyRayJobFixture(t, tc, "inference-rayjob-gpu.yaml", rayJobNameGPU)
 
-	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameGPU, 30*time.Second)
+	admissionTimeout, err := boundedDuration(os.Getenv("CONFORMANCE_ADMISSION_TIMEOUT"), 30*time.Second, 90*time.Minute)
+	require.NoError(t, err)
+	_, err = tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameGPU, admissionTimeout)
 	require.NoError(t, err, "Kueue should admit the GPU inference RayJob workload")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, gpuPodReadyTimeout)
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameGPU)
+	require.NoError(t, err)
+	headSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster)
+	workerSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=worker", cluster)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, headSelector, 1, gpuPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running and ready")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", 1, gpuPodReadyTimeout)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, 1, gpuPodReadyTimeout)
 	require.NoError(t, err, "GPU Ray worker should be running and ready")
-	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
+	requirePodsOnSelectedNodes(t, tc, workerSelector, os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"GPU inference worker should run on the selected GPU node")
 
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameGPU, "SUCCEEDED", gpuRayJobTimeout)
@@ -283,6 +301,8 @@ func TestTrainingRayJobGPU(t *testing.T) {
 	recordOutcomeWithWorkflowSuffix(t, tc)
 
 	tc.OnFailure(func() {
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpCRState(stackNamespace, e2e.RayJobGVR, rayJobNameTrainGPU)
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		tc.DumpPods(stackNamespace, "")
@@ -294,15 +314,21 @@ func TestTrainingRayJobGPU(t *testing.T) {
 	requireGPUNodeKubeletProxyReachable(t, tc)
 	applyRayJobFixture(t, tc, "training-rayjob-gpu.yaml", rayJobNameTrainGPU)
 
-	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameTrainGPU, 30*time.Second)
+	admissionTimeout, err := boundedDuration(os.Getenv("CONFORMANCE_ADMISSION_TIMEOUT"), 30*time.Second, 90*time.Minute)
+	require.NoError(t, err)
+	_, err = tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameTrainGPU, admissionTimeout)
 	require.NoError(t, err, "Kueue should admit the GPU training RayJob workload")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, gpuPodReadyTimeout)
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameTrainGPU)
+	require.NoError(t, err)
+	headSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster)
+	workerSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=worker", cluster)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, headSelector, 1, gpuPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", 1, gpuPodReadyTimeout)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, 1, gpuPodReadyTimeout)
 	require.NoError(t, err, "GPU training worker should be running")
-	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
+	requirePodsOnSelectedNodes(t, tc, workerSelector, os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"GPU training worker should run on the selected GPU node")
 
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameTrainGPU, "SUCCEEDED", gpuRayJobTimeout)
@@ -327,21 +353,21 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 
 	workers := envInt(t, "NANOGPT_TRAIN_WORKERS", defaultNanoGPTTrainWorkers)
 	steps := envInt(t, "NANOGPT_TRAIN_STEPS", defaultNanoGPTTrainSteps)
+	require.Positive(t, workers, "nanoGPT conformance must request a positive worker count")
+	require.Positive(t, steps, "nanoGPT conformance must train for a positive step count")
+	admissionTimeout, err := boundedDuration(os.Getenv("CONFORMANCE_ADMISSION_TIMEOUT"), 30*time.Minute, 90*time.Minute)
+	require.NoError(t, err)
 
 	managerWorkloadAccess := largeGPUUsesManagerWorkloadAccess()
 	if managerWorkloadAccess && os.Getenv("AI_RUNTIME_E2E_MANAGER_WORKLOAD_ONLY") != "1" {
 		t.Fatal("manager workload mode requires AI_RUNTIME_E2E_MANAGER_WORKLOAD_ONLY=1 before constructing Kubernetes clients")
 	}
-	tc := e2e.NewTestContext(t, context.Background())
+	tc := e2e.NewTestContext(t, conformanceContext(t, false))
 	recordOutcomeWithWorkflowSuffix(t, tc)
 
-	if os.Getenv("NANOGPT_SKIP_IF_BUSY") == "1" && !managerWorkloadAccess {
-		if available := availableGPUsOnSelectedNodes(t, tc); available < workers {
-			t.Skipf("NANOGPT_SKIP_IF_BUSY=1 and only %d/%d GPUs available on the selected GPU nodes; skipping (cluster busy)", available, workers)
-		}
-	}
-
 	tc.OnFailure(func() {
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		if managerWorkloadAccess {
 			return
@@ -357,12 +383,13 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	}
 	applyRayJobFixture(t, tc, "nanogpt-rayjob-large-gpu.yaml", rayJobNameNanoGPT)
 
-	admission, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameNanoGPT, 2*time.Minute)
+	admission, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameNanoGPT, admissionTimeout)
 	require.NoError(t, err, "Kueue should admit the 16-GPU nanoGPT RayJob workload")
 
 	if managerWorkloadAccess {
 		err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameNanoGPT, "SUCCEEDED", largeGPURayJobTimeout)
 		require.NoError(t, err, "manager-routed 16-GPU nanoGPT RayJob should mirror SUCCEEDED status")
+		t.Log("MANAGER_STATUS_ONLY: admission and mirrored completion verified; worker placement, CUDA world size and transport are not verified")
 		return
 	}
 
@@ -370,14 +397,18 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 		requireNanoGPTFlavorAssignments(t, admission.Workload, os.Getenv("GPU_NODE_SELECTOR_VALUE"))
 	}
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, largeGPUPodReadyTimeout)
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameNanoGPT)
+	require.NoError(t, err)
+	headSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster)
+	workerSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=worker", cluster)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, headSelector, 1, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running and ready")
-	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=head", envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
+	requirePodsOnSelectedNodes(t, tc, headSelector, envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
 		"nanoGPT Ray head should stay on the selected CPU node pool")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", workers, largeGPUPodReadyTimeout)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, workers, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "all 16 Ray Train GPU workers should be running and ready")
-	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
+	requirePodsOnSelectedNodes(t, tc, workerSelector, os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"nanoGPT Ray Train workers should run on the selected GPU nodes")
 
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameNanoGPT, "SUCCEEDED", largeGPURayJobTimeout)
@@ -481,17 +512,25 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 
 	workers := envInt(t, "FINEWEB_TRAIN_WORKERS", defaultFineWebTrainWorkers)
 	steps := envInt(t, "FINEWEB_TRAIN_STEPS", defaultFineWebTrainSteps)
-
-	tc := e2e.NewTestContext(t, context.Background())
-	recordOutcomeWithWorkflowSuffix(t, tc)
-
-	if os.Getenv("FINEWEB_SKIP_IF_BUSY") == "1" {
-		if available := availableGPUsOnSelectedNodes(t, tc); available < workers {
-			t.Skipf("FINEWEB_SKIP_IF_BUSY=1 and only %d/%d GPUs available on the selected H200 nodes; skipping (cluster busy)", available, workers)
-		}
+	admissionTimeout, err := boundedDuration(os.Getenv("CONFORMANCE_ADMISSION_TIMEOUT"), 30*time.Minute, 90*time.Minute)
+	require.NoError(t, err)
+	_, err = fineWebCallerOwnsCleanup()
+	require.NoError(t, err)
+	rayJobTimeout := largeGPURayJobTimeout
+	if raw := os.Getenv("FINEWEB_RAYJOB_TIMEOUT_MINUTES"); raw != "" {
+		minutes, parseErr := strconv.Atoi(raw)
+		require.NoError(t, parseErr)
+		require.Greater(t, minutes, 0)
+		require.LessOrEqual(t, minutes, 180)
+		rayJobTimeout = time.Duration(minutes) * time.Minute
 	}
 
+	tc := e2e.NewTestContext(t, conformanceContext(t, true))
+	recordOutcomeWithWorkflowSuffix(t, tc)
+
 	tc.OnFailure(func() {
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		tc.DumpPods(stackNamespace, "")
 		tc.DumpEvents(stackNamespace)
@@ -502,13 +541,17 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	requireGPUNodeKubeletProxyReachable(t, tc)
 	applyRayJobFixture(t, tc, "fineweb-rayjob-16xh200-ib.yaml", rayJobNameFineWeb)
 
-	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, 2*time.Minute)
+	_, err = tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, admissionTimeout)
 	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameFineWeb)
+	require.NoError(t, err)
+	headSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster)
+	workerSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=worker", cluster)
 
 	if recoveryNode := strings.TrimSpace(os.Getenv("FINEWEB_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
 		err = tc.RecoverSingleSchedulerBlockedGPUWorker(e2e.SchedulerRecoveryOptions{
 			Namespace:       stackNamespace,
-			WorkerSelector:  "e2e-test=fineweb-16xh200-ib",
+			WorkerSelector:  workerSelector + ",e2e-test=fineweb-16xh200-ib",
 			TargetNode:      recoveryNode,
 			ExpectedWorkers: workers,
 			Timeout:         15 * time.Minute,
@@ -520,22 +563,18 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 		require.NoError(t, err, "recover the single scheduler-blocked FineWeb worker")
 	}
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, largeGPUPodReadyTimeout)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, headSelector, 1, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "Ray head should be running and ready")
-	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=head", envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
+	requirePodsOnSelectedNodes(t, tc, headSelector, envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_KEY", "kubernetes.azure.com/mode"), envOrDefault("RAY_SUBMITTER_NODE_SELECTOR_VALUE", "system"),
 		"FineWeb Ray head should stay on the selected CPU node pool")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", workers, largeGPUPodReadyTimeout)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, workerSelector, workers, largeGPUPodReadyTimeout)
 	require.NoError(t, err, "all 16 FineWeb Ray Train GPU workers should be running and ready")
-	requirePodsOnSelectedNodes(t, tc, "ray.io/node-type=worker", os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
+	requirePodsOnSelectedNodes(t, tc, workerSelector, os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"FineWeb Ray Train workers should run on the selected H200 nodes")
 
-	requireWorkersSplitEvenlyAcrossNodes(t, tc, "e2e-test=fineweb-16xh200-ib", 2, workers/2)
+	requireWorkersSplitEvenlyAcrossNodes(t, tc, workerSelector+",e2e-test=fineweb-16xh200-ib", 2, workers/2)
 
-	rayJobTimeout := largeGPURayJobTimeout
-	if mins := envInt(t, "FINEWEB_RAYJOB_TIMEOUT_MINUTES", 0); mins > 0 {
-		rayJobTimeout = time.Duration(mins) * time.Minute
-	}
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameFineWeb, "SUCCEEDED", rayJobTimeout)
 	require.NoError(t, err, "16-GPU FineWeb IB RayJob should reach SUCCEEDED status")
 
@@ -590,6 +629,8 @@ func requireFirstCheckpointPersisted(t *testing.T, logs string) {
 
 func requireWorkersSplitEvenlyAcrossNodes(t *testing.T, tc *e2e.TestContext, podSelector string, wantNodes, perNode int) {
 	t.Helper()
+	tc, cancel := tc.WithTimeout(time.Minute)
+	defer cancel()
 	pods, err := tc.KubeClient().CoreV1().Pods(stackNamespace).List(tc.Ctx(), metav1.ListOptions{
 		LabelSelector: podSelector,
 	})
@@ -672,6 +713,8 @@ func availableGPUsOnSelectedNodes(t *testing.T, tc *e2e.TestContext) int {
 
 func requireGPUNodeKubeletProxyReachable(t *testing.T, tc *e2e.TestContext) {
 	t.Helper()
+	tc, cancel := tc.WithTimeout(time.Minute)
+	defer cancel()
 
 	key := os.Getenv("GPU_NODE_SELECTOR_KEY")
 	value := os.Getenv("GPU_NODE_SELECTOR_VALUE")
@@ -715,37 +758,19 @@ func applyRayJobFixture(t *testing.T, tc *e2e.TestContext, fixture, rayJobName s
 	if stackUsesArgoCDQueue() {
 		deleteRayJobFixtureAndWait(t, tc, fixture, rayJobName)
 	}
-	if os.Getenv("E2E_PRESERVE_KUEUE_RECORDS") == "1" && fixture == "nanogpt-rayjob-large-gpu.yaml" {
-		require.NoError(t, e2e.ApplyFixtureWithClient(tc.Ctx(), tc.DynamicClient(), fixture))
-		return
-	}
-	require.NoError(t, e2e.ApplyFixtureWithClient(tc.Ctx(), tc.DynamicClient(), fixture))
-	t.Cleanup(func() {
+	registerRayJobCleanup(t, fixture, func() {
 		deleteRayJobFixtureAndWait(t, tc, fixture, rayJobName)
 	})
+	tc, cancel := tc.WithTimeout(time.Minute)
+	defer cancel()
+	require.NoError(t, e2e.ApplyFixtureWithClient(tc.Ctx(), tc.DynamicClient(), fixture))
 }
 
 func deleteRayJobFixtureAndWait(t *testing.T, tc *e2e.TestContext, fixture, rayJobName string) {
 	t.Helper()
-	var rayClusterNames []string
-	if !largeGPUUsesManagerWorkloadAccess() {
-		var err error
-		rayClusterNames, err = rayClusterNamesForRayJob(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobName)
-		require.NoError(t, err, "discover RayClusters owned by fixed RayJob before deletion")
-	}
-	require.NoError(t, e2e.DeleteFixtureWithClient(tc.Ctx(), tc.DynamicClient(), fixture), "delete RayJob fixture")
-	require.NoError(t, tc.WaitForRayJobDeleted(stackNamespace, rayJobName, 3*time.Minute),
-		"named RayJob should be absent before applying its fixed-name fixture")
-	if largeGPUUsesManagerWorkloadAccess() {
-		require.Equal(t, "nanogpt-rayjob-large-gpu.yaml", fixture, "manager workload access is only supported for the fixed nanoGPT RayJob fixture")
-		return
-	}
-	require.NoError(t, tc.WaitForNoPodsByLabel(stackNamespace, fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName), 3*time.Minute),
-		"stale RayJob cleanup should release its submitter pods before applying")
-	for _, rayClusterName := range rayClusterNames {
-		require.NoError(t, tc.WaitForNoPodsByLabel(stackNamespace, fmt.Sprintf("ray.io/cluster=%s", rayClusterName), 3*time.Minute),
-			"stale RayJob cleanup should release Ray pods for cluster %s before applying", rayClusterName)
-	}
+	require.NoError(t, cleanupOwnedConformanceRayJob(tc.KubeClient(), tc.DynamicClient(),
+		stackNamespace, rayJobName, largeGPUUsesManagerWorkloadAccess(), 5*time.Minute, time.Second),
+		"delete named conformance RayJob and wait for owned resource release")
 }
 
 func rayClusterNamesForRayJob(ctx context.Context, dynamicClient dynamic.Interface, namespace, rayJobName string) ([]string, error) {
@@ -782,6 +807,8 @@ func rayClusterNamesForRayJob(ctx context.Context, dynamicClient dynamic.Interfa
 
 func requirePodsOnSelectedNodes(t *testing.T, tc *e2e.TestContext, podSelector, nodeSelectorKey, nodeSelectorValue, message string) {
 	t.Helper()
+	tc, cancel := tc.WithTimeout(time.Minute)
+	defer cancel()
 	require.NotEmpty(t, nodeSelectorKey, "node selector key must be configured")
 	require.NotEmpty(t, nodeSelectorValue, "node selector value must be configured")
 
@@ -823,6 +850,8 @@ func TestTrainingRayJob(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 
 	tc.OnFailure(func() {
+		tc, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
 		tc.DumpCRState(stackNamespace, e2e.RayJobGVR, rayJobNameTrain)
 		tc.DumpCRList(stackNamespace, e2e.WorkloadGVR)
 		tc.DumpPods(stackNamespace, "")
@@ -835,11 +864,13 @@ func TestTrainingRayJob(t *testing.T) {
 
 	_, err := tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameTrain, 30*time.Second)
 	require.NoError(t, err, "Kueue should admit the training RayJob workload")
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameTrain)
+	require.NoError(t, err)
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=head", 1, 3*time.Minute)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/cluster="+cluster+",ray.io/node-type=head", 1, 3*time.Minute)
 	require.NoError(t, err, "Ray head should be running and ready")
 
-	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/node-type=worker", 2, 3*time.Minute)
+	err = tc.WaitForRunningPodsByLabel(stackNamespace, "ray.io/cluster="+cluster+",ray.io/node-type=worker", 2, 3*time.Minute)
 	require.NoError(t, err, "Both Ray workers should be running and ready")
 
 	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameTrain, "SUCCEEDED", 8*time.Minute)
