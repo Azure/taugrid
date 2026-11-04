@@ -524,24 +524,11 @@ resolve_target_config() {
 }
 
 ensure_managed_flavor_labels() {
-  local instance_type series nodes
+  local instance_type series
   instance_type="$(require_env GPU_INSTANCE_TYPE)"
   series="$(require_env GPU_SERIES)"
-  nodes="$(platform_kubectl get nodes \
-    -l "node.kubernetes.io/instance-type=${instance_type}" \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
-  [ -n "$nodes" ] || fail "No nodes found for GPU instance type ${instance_type}"
-
-  while IFS= read -r node; do
-    [ -n "$node" ] || continue
-    platform_kubectl label node "$node" \
-      "kueue.azure.com/gpu-series=${series}" \
-      --overwrite >/dev/null
-  done <<<"$nodes"
-
-  platform_kubectl get nodes \
-    -l "node.kubernetes.io/instance-type=${instance_type},kueue.azure.com/gpu-series=${series}" \
-    -o name
+  platform_kubectl --request-timeout=30s get nodes -o json |
+    python3 "${SCRIPT_DIR}/conformance_contract.py" gpu-labels "$instance_type" "$series"
 }
 
 validate_dataset() {
@@ -657,49 +644,23 @@ assert_capacity() {
     fail "REQUIRED_GPUS must be a positive integer"
   fi
 
-  echo "Asserting at least ${required_gpus} available GPUs on Ready schedulable nodes matching ${selector}"
-  local nodes_json ready_nodes ready_count node_names_json allocatable_gpu requested_gpu available_gpu
-  nodes_json="$(platform_kubectl get nodes -l "$selector" -o json)"
+  echo "Asserting configured GPU capacity on Ready schedulable nodes matching ${selector}"
+  local nodes_json
+  nodes_json="$(platform_kubectl --request-timeout=30s get nodes -l "$selector" -o json)"
+  printf '%s\n' "$nodes_json" |
+    python3 "${SCRIPT_DIR}/conformance_contract.py" capacity large "$required_gpus" "${NANOGPT_TRAIN_WORKERS:-16}"
   echo "$nodes_json" | jq -r '.items[]? | [.metadata.name, (.spec.unschedulable // false), ([.status.conditions[]? | select(.type=="Ready") | .status] | first // "Unknown"), (.status.allocatable["nvidia.com/gpu"] // "0")] | @tsv'
-
-  ready_nodes="$(echo "$nodes_json" | jq -r '.items[]? | select((.spec.unschedulable // false) == false) | select(any(.status.conditions[]?; .type=="Ready" and .status=="True")) | select(((.status.allocatable["nvidia.com/gpu"] // "0") | tonumber) > 0) | .metadata.name')"
-  ready_count="$(printf '%s\n' "$ready_nodes" | sed '/^$/d' | wc -l | tr -d ' ')"
-  if [ "$ready_count" -eq 0 ]; then
-    echo "::error::No Ready schedulable GPU nodes with allocatable nvidia.com/gpu found for ${selector}" >&2
-    platform_kubectl describe nodes -l "$selector" || true
-    exit 1
-  fi
-
-  node_names_json="$(printf '%s\n' "$ready_nodes" | sed '/^$/d' | jq -R . | jq -s .)"
-  allocatable_gpu="$(echo "$nodes_json" | jq '[.items[]? | select((.spec.unschedulable // false) == false) | select(any(.status.conditions[]?; .type=="Ready" and .status=="True")) | select(((.status.allocatable["nvidia.com/gpu"] // "0") | tonumber) > 0) | (.status.allocatable["nvidia.com/gpu"] | tonumber)] | add // 0')"
-  requested_gpu="$(platform_kubectl get pods -A -o json | jq --argjson nodes "$node_names_json" '[.items[]? | select((.status.phase != "Succeeded") and (.status.phase != "Failed")) | select(.spec.nodeName as $node | ($nodes | index($node))) | (([.spec.initContainers[]?.resources.requests["nvidia.com/gpu"]? // "0" | tonumber] | max // 0) as $init | ([.spec.containers[]?.resources.requests["nvidia.com/gpu"]? // "0" | tonumber] | add // 0) as $containers | [$init, $containers] | max)] | add // 0')"
-  available_gpu=$((allocatable_gpu - requested_gpu))
-
-  echo "Ready GPU nodes=${ready_count} allocatable_gpu=${allocatable_gpu} requested_gpu=${requested_gpu} available_gpu=${available_gpu}"
-  if [ "$available_gpu" -lt "$required_gpus" ]; then
-    if [ "$requested_gpu" -gt 0 ]; then
-      write_optional_output "should_run" "false"
-      echo "::notice::Skipping large GPU conformance for ${MATRIX_TARGET:-target}: only ${available_gpu}/${required_gpus} GPUs are available on selected nodes because existing GPU pods are consuming capacity."
-      platform_kubectl get pods -A -o wide | grep -F -f <(printf '%s\n' "$ready_nodes") || true
-      return 0
-    fi
-
-    echo "::error::Need ${required_gpus} available GPUs for ${MATRIX_TARGET:-target}, found ${available_gpu}. Selected nodes do not have enough Ready schedulable GPU capacity." >&2
-    platform_kubectl get pods -A -o wide | grep -F -f <(printf '%s\n' "$ready_nodes") || true
-    exit 1
-  fi
   write_optional_output "should_run" "true"
 }
 
 resolve_ray_image() {
-  if [ -n "${RAY_NANOGPT_IMAGE:-}" ]; then
-    write_output "image" "$RAY_NANOGPT_IMAGE"
-    local ray_version
-    ray_version="$(sed -nE 's/.*:.*ray([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' <<<"$RAY_NANOGPT_IMAGE" | head -n1)"
-    if [ -n "$ray_version" ]; then
-      write_output "version" "$ray_version"
-    fi
-    echo "Using RAY_NANOGPT_IMAGE override"
+  local override="${RAY_E2E_IMAGE:-${RAY_NANOGPT_IMAGE:-}}"
+  if [ -n "$override" ]; then
+    local override_version
+    override_version="$(python3 "${SCRIPT_DIR}/conformance_contract.py" ray-image "$override" "${RAY_E2E_VERSION:-}")" || return 1
+    write_output "image" "$override"
+    write_output "version" "$override_version"
+    echo "Using Ray image override"
     return 0
   fi
 
@@ -721,10 +682,10 @@ resolve_ray_image() {
 
 delete_nanogpt_rayjob() {
   local namespace
-  assert_workload_access_contract
+  assert_workload_execution_contract
   namespace="$(resolved_workload_namespace)" || return 1
-  workload_kubectl delete rayjob "$LARGE_GPU_RAYJOB_NAME" -n "$namespace" \
-    --ignore-not-found --wait --timeout=5m --cascade=foreground
+  workload_kubectl --request-timeout=30s delete rayjob "$LARGE_GPU_RAYJOB_NAME" -n "$namespace" \
+    --ignore-not-found --wait=true --timeout=4m --cascade=foreground
   echo "Deleted stale nanoGPT RayJob ${LARGE_GPU_RAYJOB_NAME} from shared namespace ${namespace}"
 }
 
@@ -732,10 +693,12 @@ reset_namespace() {
   delete_nanogpt_rayjob
 }
 
-run_conformance() {
-  local namespace manager_workload_only
+run_conformance() (
+  local namespace manager_workload_only go_timeout
+  go_timeout="$(python3 "${SCRIPT_DIR}/conformance_contract.py" budget large)" || return 1
   assert_workload_execution_contract
   namespace="$(resolved_workload_namespace)" || return 1
+  trap delete_nanogpt_rayjob EXIT
   manager_workload_only=0
   if [ "$LARGE_GPU_WORKLOAD_ACCESS_MODE" = "manager" ]; then
     manager_workload_only=1
@@ -750,9 +713,10 @@ run_conformance() {
     AI_RUNTIME_E2E_KUBE_CONTEXT="$(workload_context)" \
     AI_RUNTIME_E2E_MANAGER_WORKLOAD_ONLY="$manager_workload_only" \
     TEST_NAMESPACE="$namespace" \
-    go test -v -timeout 120m -count=1 \
-    -run '^TestNanoGPTRayTrainLargeGPU$' ./stack/
-}
+    go test -json -timeout "$go_timeout" -count=1 \
+    -run '^TestNanoGPTRayTrainLargeGPU$' ./stack/ |
+    python3 "${SCRIPT_DIR}/conformance_contract.py" results TestNanoGPTRayTrainLargeGPU
+)
 
 collect_diagnostics() {
   local selector="${GPU_SELECTOR_EXPR:-}"
@@ -820,21 +784,7 @@ collect_diagnostics() {
 }
 
 cleanup_namespace() {
-  local namespace
-  if ! (assert_workload_access_contract >/dev/null 2>&1); then
-    warn "Final nanoGPT cleanup could not validate the workload access contract; leaving ${LARGE_GPU_RAYJOB_NAME} for the next fail-hard pre-run reset."
-    return 0
-  fi
-  if ! namespace="$(resolved_workload_namespace 2>/dev/null)"; then
-    warn "Final nanoGPT cleanup could not resolve the shared workload namespace; leaving ${LARGE_GPU_RAYJOB_NAME} for the next fail-hard pre-run reset."
-    return 0
-  fi
-  if ! workload_kubectl delete rayjob "$LARGE_GPU_RAYJOB_NAME" -n "$namespace" \
-    --ignore-not-found --wait=false; then
-    warn "Final nanoGPT cleanup could not request deletion of RayJob ${namespace}/${LARGE_GPU_RAYJOB_NAME}; leaving it for the next fail-hard pre-run reset."
-    return 0
-  fi
-  echo "Requested best-effort final cleanup of nanoGPT RayJob ${namespace}/${LARGE_GPU_RAYJOB_NAME}"
+  delete_nanogpt_rayjob
 }
 
 usage() {
@@ -866,6 +816,10 @@ Shared workload queue contract:
   E2E_STACK_LARGE_GPU_QUEUE=jobqueue
 EOF
 }
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 command="${1:-}"
 case "$command" in

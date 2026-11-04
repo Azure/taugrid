@@ -277,18 +277,6 @@ workload_kubectl() {
   kubectl --kubeconfig "$(workload_kubeconfig)" --context "$(workload_context)" "$@"
 }
 
-count_available_gpus() {
-  local selector="$1"
-  local nodes_json node_names_json allocatable_gpu requested_gpu
-  nodes_json="$(platform_kubectl get nodes -l "$selector" -o json)"
-
-  node_names_json="$(echo "$nodes_json" | jq -c '[.items[]? | select((.spec.unschedulable // false) == false) | select(any(.status.conditions[]?; .type=="Ready" and .status=="True")) | select(((.status.allocatable["nvidia.com/gpu"] // "0") | tonumber) > 0) | .metadata.name]')"
-  allocatable_gpu="$(echo "$nodes_json" | jq '[.items[]? | select((.spec.unschedulable // false) == false) | select(any(.status.conditions[]?; .type=="Ready" and .status=="True")) | select(((.status.allocatable["nvidia.com/gpu"] // "0") | tonumber) > 0) | (.status.allocatable["nvidia.com/gpu"] | tonumber)] | add // 0')"
-  requested_gpu="$(platform_kubectl get pods -A -o json | jq --argjson nodes "$node_names_json" '[.items[]? | select((.status.phase != "Succeeded") and (.status.phase != "Failed")) | select(.spec.nodeName as $node | ($nodes | index($node))) | (([.spec.initContainers[]?.resources.requests["nvidia.com/gpu"]? // "0" | tonumber] | max // 0) as $init | ([.spec.containers[]?.resources.requests["nvidia.com/gpu"]? // "0" | tonumber] | add // 0) as $containers | [$init, $containers] | max)] | add // 0')"
-
-  echo $((allocatable_gpu - requested_gpu))
-}
-
 resolve_target_config() {
   local event_name should_run gpu_selector submitter_selector rg cluster
   event_name="${GITHUB_EVENT_NAME:-${EVENT_NAME:-}}"
@@ -334,31 +322,9 @@ resolve_target_config() {
 ensure_managed_flavor_labels() {
   local instance_type="${GPU_INSTANCE_TYPE:-Standard_ND96isr_H200_v5}"
   local series="${GPU_SERIES:-nd-h200-v5}"
-  local nodes node matching_nodes node_count matching_count
-
-  nodes="$(platform_kubectl get nodes \
-    -l "node.kubernetes.io/instance-type=${instance_type}" \
-    -o name)"
-  [ -n "$nodes" ] ||
-    fail "No nodes found for managed GPU series ${series} with instance type ${instance_type}"
-
-  if [ "$(require_platform_prep_mode)" = "direct-platform" ]; then
-    while IFS= read -r node; do
-      [ -n "$node" ] || continue
-      platform_kubectl label "$node" \
-        "kueue.azure.com/gpu-series=${series}" \
-        --overwrite >/dev/null
-    done <<<"$nodes"
-  fi
-
-  matching_nodes="$(platform_kubectl get nodes \
-    -l "node.kubernetes.io/instance-type=${instance_type},kueue.azure.com/gpu-series=${series}" \
-    -o name)"
-  node_count="$(printf '%s\n' "$nodes" | awk 'NF { count++ } END { print count+0 }')"
-  matching_count="$(printf '%s\n' "$matching_nodes" | awk 'NF { count++ } END { print count+0 }')"
-  [ "$matching_count" -eq "$node_count" ] ||
-    fail "Managed ResourceFlavor label ${series} covers ${matching_count}/${node_count} ${instance_type} nodes; every node in the immutable instance-type pool must match"
-  printf '%s\n' "$matching_nodes"
+  require_platform_prep_mode >/dev/null
+  platform_kubectl --request-timeout=30s get nodes -o json |
+    python3 "${SCRIPT_DIR}/conformance_contract.py" gpu-labels "$instance_type" "$series"
 }
 
 resolve_fineweb_from_registry() {
@@ -553,28 +519,23 @@ delete_fineweb_rayjob() {
   local namespace
   assert_workload_access_contract
   namespace="$(resolved_workload_namespace)" || return 1
-  workload_kubectl delete rayjob "$FINEWEB_RAYJOB_NAME" -n "$namespace" \
-    --ignore-not-found --wait --timeout=5m --cascade=foreground
+  workload_kubectl --request-timeout=30s delete rayjob "$FINEWEB_RAYJOB_NAME" -n "$namespace" \
+    --ignore-not-found --wait=true --timeout=4m --cascade=foreground
   echo "Deleted stale FineWeb RayJob ${FINEWEB_RAYJOB_NAME} from shared namespace ${namespace}"
 }
 
-skip_if_busy() {
-  local selector available
+assert_capacity() {
+  local selector
   assert_platform_access_contract
-  delete_fineweb_rayjob
   selector="$(require_env GPU_SELECTOR_EXPR)"
 
-  available="$(count_available_gpus "$selector")"
-  echo "Available GPUs on ${selector}: ${available} (need ${REQUIRED_GPUS})"
+  platform_kubectl --request-timeout=30s get nodes -l "$selector" -o json |
+    python3 "${SCRIPT_DIR}/conformance_contract.py" capacity fineweb "$REQUIRED_GPUS" "${FINEWEB_TRAIN_WORKERS:-16}"
+  write_optional_output "should_run" "true"
+}
 
-  if [ "$available" -lt "$REQUIRED_GPUS" ]; then
-    write_output "should_run" "false"
-    echo "::notice::Skipping FineWeb IB conformance: only ${available}/${REQUIRED_GPUS} GPUs available on the H200 nodes (cluster busy). This is a graceful no-op, not a failure."
-    return 0
-  fi
-
-  write_output "should_run" "true"
-  echo "Cluster idle enough: ${available} GPUs available; proceeding."
+skip_if_busy() {
+  assert_capacity
 }
 
 export_ib_node_selector() {
@@ -594,10 +555,10 @@ export_ib_node_selector() {
 }
 
 enable_ib() {
+  assert_platform_mutation_allowed
   [ -x "$IB_SCRIPT" ] || [ -f "$IB_SCRIPT" ] || fail "InfiniBand enablement script not found at ${IB_SCRIPT}"
   local ctx
   assert_platform_access_contract
-  assert_platform_mutation_allowed
   ctx="$(platform_context)"
   export_ib_node_selector
   echo "Enabling InfiniBand on context=${ctx} (node selector ${GPU_NODE_SELECTOR_KEY:-<default>}=${GPU_NODE_SELECTOR_VALUE:-<default>})"
@@ -627,14 +588,13 @@ assert_rdma_advertised() {
 }
 
 resolve_ray_image() {
-  if [ -n "${RAY_FINEWEB_IMAGE:-}" ]; then
-    write_output "image" "$RAY_FINEWEB_IMAGE"
-    local ray_version
-    ray_version="$(sed -nE 's/.*:.*ray([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' <<<"$RAY_FINEWEB_IMAGE" | head -n1)"
-    if [ -n "$ray_version" ]; then
-      write_output "version" "$ray_version"
-    fi
-    echo "Using RAY_FINEWEB_IMAGE override"
+  local override="${RAY_E2E_IMAGE:-${RAY_FINEWEB_IMAGE:-}}"
+  if [ -n "$override" ]; then
+    local override_version
+    override_version="$(python3 "${SCRIPT_DIR}/conformance_contract.py" ray-image "$override" "${RAY_E2E_VERSION:-}")" || return 1
+    write_output "image" "$override"
+    write_output "version" "$override_version"
+    echo "Using Ray image override"
     return 0
   fi
 
@@ -656,15 +616,28 @@ reset_namespace() {
   delete_fineweb_rayjob
 }
 
-run_conformance() {
-  local namespace
+run_conformance() (
+  local namespace go_timeout
+  go_timeout="$(python3 "${SCRIPT_DIR}/conformance_contract.py" budget fineweb)" || return 1
   assert_workload_access_contract
   namespace="$(resolved_workload_namespace)" || return 1
+  case "${FINEWEB_CLEANUP_OWNER:-test}" in
+    test)
+      trap delete_fineweb_rayjob EXIT
+      ;;
+    caller)
+      echo "Caller owns FineWeb cleanup after artifact publication, including failure or cancellation."
+      ;;
+    *)
+      fail "FINEWEB_CLEANUP_OWNER must be test or caller"
+      ;;
+  esac
   cd "${REPO_ROOT}/tests/e2e"
   echo "target=flex-h200-ib namespace=${namespace} gpu_selector=${GPU_NODE_SELECTOR_KEY:-}=${GPU_NODE_SELECTOR_VALUE:-} submitter_selector=${RAY_SUBMITTER_NODE_SELECTOR_KEY:-}=${RAY_SUBMITTER_NODE_SELECTOR_VALUE:-} workers=${FINEWEB_TRAIN_WORKERS:-16} steps=${FINEWEB_TRAIN_STEPS:-60}"
-  KUBECONFIG="$(workload_kubeconfig)" AI_RUNTIME_E2E_KUBE_CONTEXT="$(workload_context)" TEST_NAMESPACE="$namespace" go test -v -timeout 150m -count=1 \
-    -run '^TestFineWebRayTrain16xH200IB$' ./stack/
-}
+  KUBECONFIG="$(workload_kubeconfig)" AI_RUNTIME_E2E_KUBE_CONTEXT="$(workload_context)" TEST_NAMESPACE="$namespace" go test -json -timeout "$go_timeout" -count=1 \
+    -run '^TestFineWebRayTrain16xH200IB$' ./stack/ |
+    python3 "${SCRIPT_DIR}/conformance_contract.py" results TestFineWebRayTrain16xH200IB
+)
 
 collect_diagnostics() {
   local selector="${GPU_SELECTOR_EXPR:-}"
@@ -740,7 +713,8 @@ Commands:
   resolve-target-config
   ensure-managed-flavor-labels
   validate-dataset
-  skip-if-busy
+  assert-capacity
+  skip-if-busy (compatibility alias for assert-capacity)
   enable-ib
   assert-rdma-advertised
   resolve-ray-image
@@ -764,6 +738,10 @@ Shared workload queue contract (live FineWeb path):
 EOF
 }
 
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
 command="${1:-}"
 case "$command" in
   resolve-target-config)
@@ -775,8 +753,8 @@ case "$command" in
   validate-dataset)
     validate_dataset
     ;;
-  skip-if-busy)
-    skip_if_busy
+  assert-capacity|skip-if-busy)
+    assert_capacity
     ;;
   enable-ib)
     enable_ib
