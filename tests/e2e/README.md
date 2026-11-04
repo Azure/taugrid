@@ -316,9 +316,10 @@ The six CPU inference/training, GPU inference/training, nanoGPT, and FineWeb
 fixtures use `HTTPMode` without submitter Pod templates. Runtime evidence comes
 from the head's named `ray-driver-log-offload` container, including CUDA and
 loss/progress markers where applicable. Placement and flavor assertions cover
-the head and workers, not nonexistent submitter Pods. The nanoGPT scaling config
-omits the V1-only `trainer_resources` argument: the default Ray 2.58 runtime uses
-Train V2, which rejects that argument and already reserves no coordinator CPUs.
+the head and workers, not nonexistent submitter Pods. The nanoGPT and FineWeb
+scaling configs omit the V1-only `trainer_resources` argument: the default Ray
+2.58 runtime uses Train V2, which rejects that argument and already reserves no
+coordinator CPUs.
 
 With the default 250-minute execution-step budget, Go receives 245 minutes and
 execution API requests share a 230-minute context. The remaining time reserves

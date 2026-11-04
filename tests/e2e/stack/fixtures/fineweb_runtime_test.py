@@ -15,6 +15,8 @@ import unittest
 from unittest.mock import Mock, patch
 import uuid
 
+from nanogpt_runtime_test import TrainV2ScalingConfig
+
 
 def workload_functions(filename="fineweb_ray_train.py", selected=None):
     source = Path(__file__).with_name(filename).read_text()
@@ -137,25 +139,34 @@ class RuntimeTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "readback mismatch"):
                     ns["verify_checkpoint_state"](expected, actual)
 
-    def test_nanogpt_sizing_and_zero_cpu_coordinator(self):
-        for env, dimensions in [({}, (4, 4, 256)), (
-            {"NANOGPT_N_LAYER": "8", "NANOGPT_N_HEAD": "8", "NANOGPT_N_EMBD": "512"},
+    def test_fineweb_sizing_and_train_v2_construction(self):
+        for env, dimensions in [({}, (32, 16, 2048)), (
+            {"FINEWEB_N_LAYER": "8", "FINEWEB_N_HEAD": "8", "FINEWEB_N_EMBD": "512"},
             (8, 8, 512),
         )]:
             with self.subTest(env=env):
-                ns = workload_functions("nanogpt_ray_train.py", {"main", "env_int", "final_metrics_from_result"})
-                scaling = Mock()
+                ns = workload_functions(selected={"main", "env_int", "final_metrics_from_result", "effective_vocab_size"})
+                scaling = Mock(side_effect=TrainV2ScalingConfig)
                 trainer = Mock()
-                trainer.return_value.fit.return_value.metrics = {"step": 2000, "world_size": 16, "loss": 1.0}
+                trainer.return_value.fit.return_value.metrics = {"step": 60, "world_size": 16, "loss": 1.0}
                 ray = Mock()
                 ray.cluster_resources.return_value = {"GPU": 16}
                 ns.update(ray=ray, TorchTrainer=trainer, ScalingConfig=scaling, RunConfig=Mock(),
-                          train_loop=Mock(), parse_dataset_contract=lambda: (["shard"], ["digest"], [100]))
-                with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
+                          train_loop=Mock(), DEFAULT_FINEWEB_VOCAB_SIZE=65536,
+                          parse_dataset_contract=lambda: (["shard"], ["digest"], [100]))
+                output = io.StringIO()
+                with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(output):
                     ns["main"]()
                 config = trainer.call_args.kwargs["train_loop_config"]
                 self.assertEqual(tuple(config[k] for k in ("n_layer", "n_head", "n_embd")), dimensions)
-                scaling.assert_called_once_with(num_workers=16, use_gpu=True, trainer_resources={"CPU": 0})
+                scaling.assert_called_once_with(num_workers=16, use_gpu=True)
+                self.assertEqual(config["num_workers"], 16)
+                self.assertEqual(config["vocab_size"], 65536)
+                self.assertEqual(trainer.call_args.kwargs["scaling_config"],
+                                 TrainV2ScalingConfig(num_workers=16, use_gpu=True))
+                trainer.assert_called_once()
+                trainer.return_value.fit.assert_called_once_with()
+                self.assertIn("FINEWEB_RAY_TRAIN_SUCCESS", output.getvalue())
 
 
 if __name__ == "__main__":

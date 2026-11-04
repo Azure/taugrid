@@ -564,7 +564,7 @@ def main() -> None:
             "learning_rate": 3e-4,
             "seed": 1337,
         },
-        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True, trainer_resources={"CPU": 0}),
+        scaling_config=ScalingConfig(num_workers=workers, use_gpu=True),
         run_config=RunConfig(name="fineweb-ray-train-16xh200-ib"),
     )
     result = trainer.fit()
