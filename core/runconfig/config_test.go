@@ -1238,6 +1238,7 @@ var pathScopedStatuses = map[string]FieldStatus{
 	"runtime.env_kv":             statusWorkflowOnly,
 	"runtime.working_dir":        statusDirectOnly,
 	"storage.publish":            statusDirectOnly,
+	"storage.hot_size":           statusDirectOnly,
 	"policy.clear_node_selector": statusDirectOnly,
 }
 

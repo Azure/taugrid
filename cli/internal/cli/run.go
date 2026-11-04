@@ -294,6 +294,9 @@ func resolveManagedRunTarget(o unresolvedRunOptions, name string) (resolvedRunTa
 	if o.outputPublish != "" {
 		return nil, fmt.Errorf("storage.publish is not supported for managed workflow configs")
 	}
+	if o.hotSize != "" {
+		return nil, fmt.Errorf("storage.hot_size is not supported for managed workflow configs")
+	}
 	if name != "" && !o.nameFromConfig {
 		return nil, fmt.Errorf("managed workflow configs take the run name from the config file; remove positional NAME")
 	}

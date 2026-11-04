@@ -228,6 +228,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 			OutputDir:          outputDir,
 			ArtifactPublish:    artifactPublication,
 			CheckpointArtifact: o.checkpointArtifact,
+			HotSize:            o.hotSize,
 			MetricsOffload:     metricsRuntime,
 			Resources: rayjobrender.Resources{
 				CPURequest:    o.cpuRequest,

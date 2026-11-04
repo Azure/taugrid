@@ -137,6 +137,7 @@ type runDirectStorage struct {
 	output                string
 	outputPublish         string
 	checkpointArtifact    string
+	hotSize               string
 	artifactPublicationID string
 }
 

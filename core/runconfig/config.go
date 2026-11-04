@@ -70,6 +70,7 @@ type managedConfigProjection struct {
 		Output      string       `yaml:"output"`
 		Publish     string       `yaml:"publish"`
 		ImageAssets []ImageAsset `yaml:"image_assets"`
+		HotSize     string       `yaml:"hot_size"`
 	} `yaml:"storage"`
 }
 
@@ -294,6 +295,7 @@ type Storage struct {
 	ImageAssets []ImageAsset `yaml:"image_assets"`
 
 	Checkpoint string `yaml:"checkpoint"`
+	HotSize    string `yaml:"hot_size"`
 }
 
 type ImageAsset struct {
@@ -493,6 +495,7 @@ func (p managedConfigProjection) config() Config {
 			Output:      p.Storage.Output,
 			Publish:     p.Storage.Publish,
 			ImageAssets: append([]ImageAsset{}, p.Storage.ImageAssets...),
+			HotSize:     p.Storage.HotSize,
 		},
 		Profiler:   p.Profiler,
 		Metrics:    p.Metrics,
@@ -558,6 +561,9 @@ func (s Storage) Validate() error {
 		return err
 	}
 	if err := s.ValidateImageAssets(); err != nil {
+		return err
+	}
+	if err := s.ValidateHotSize(); err != nil {
 		return err
 	}
 	switch s.Publish {
@@ -667,6 +673,20 @@ func imageAssetPathsOverlap(a, b string) bool {
 func validateImageAssetPath(field, value string) error {
 	if value == "" || !strings.HasPrefix(value, "/") || value == "/" || path.Clean(value) != value {
 		return fmt.Errorf("%s must be a clean absolute path below /", field)
+	}
+	return nil
+}
+
+func (s Storage) ValidateHotSize() error {
+	if s.HotSize == "" {
+		return nil
+	}
+	quantity, err := resource.ParseQuantity(s.HotSize)
+	if err != nil {
+		return fmt.Errorf("storage.hot_size %q is not a valid Kubernetes resource quantity", s.HotSize)
+	}
+	if quantity.Sign() <= 0 {
+		return fmt.Errorf("storage.hot_size must be > 0, got %q", s.HotSize)
 	}
 	return nil
 }

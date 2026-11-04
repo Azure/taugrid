@@ -229,6 +229,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		OutputDir:               outputDir,
 		ArtifactPublish:         artifactPublication,
 		CheckpointArtifact:      o.checkpointArtifact,
+		HotSize:                 o.hotSize,
 		TTLSecondsAfterFinished: o.ttlSecondsAfterFinished,
 		Annotations:             annotations,
 	}
