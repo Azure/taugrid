@@ -15,7 +15,7 @@ readonly CHARTS=(
 )
 
 usage() {
-  echo "usage: $0 package <output-directory> | publish <package-directory>" >&2
+  echo "usage: $0 package <output-directory> | publish <package-directory> | verify-images <chart-package>" >&2
   exit 2
 }
 
@@ -23,6 +23,33 @@ chart_field() {
   local chart="$1"
   local field="$2"
   helm show chart "$chart" | yq -r ".${field}"
+}
+
+verify_chart_images() {
+  local archive="$1"
+  local rendered images image
+
+  rendered=$(helm template image-preflight "$archive" --include-crds) || return 1
+  images=$(printf '%s\n' "$rendered" |
+    yq -N -r 'select(.kind != "CustomResourceDefinition") |
+      .. | select(kind == "map") |
+      (.containers, .initContainers, .ephemeralContainers) |
+      select(kind == "seq") | .[] | .image |
+      select(. == null or . == "") = "null"' |
+    sort -u) || return 1
+
+  while IFS= read -r image; do
+    [[ -n "$image" ]] || continue
+    if [[ "$image" == "null" || "$image" == -* || "$image" == *[[:space:]]* ]]; then
+      echo "Invalid required image in ${archive}: ${image}" >&2
+      return 1
+    fi
+    echo "Verifying published image ${image} required by ${archive}"
+    if ! docker buildx imagetools inspect "$image" >/dev/null; then
+      echo "Required image is not available: ${image} (chart ${archive}). Publish the image and complete public registry syndication before publishing charts." >&2
+      return 1
+    fi
+  done <<<"$images"
 }
 
 package_charts() {
@@ -53,8 +80,7 @@ package_charts() {
 
 repository_tags() {
   local repository="$1"
-  local error_file
-  error_file=$(mktemp)
+  local error_file="$2"
 
   if az acr repository show-tags \
     --name "$ACR_NAME" \
@@ -75,13 +101,11 @@ repository_tags() {
 }
 
 cleanup_work_root() {
-  local work_root="$1"
-  rm -rf "$work_root"
+  rm -rf "$PUBLISH_WORK_ROOT"
 }
 
 publish_charts() {
   local package_dir="$1"
-  local work_root
   local registry_logged_in=false
 
   if [[ -z "$ACR_NAME" ]]; then
@@ -89,8 +113,14 @@ publish_charts() {
     return 2
   fi
 
-  work_root=$(mktemp -d)
-  trap "cleanup_work_root $(printf '%q' "$work_root")" EXIT
+  readonly PUBLISH_WORK_ROOT="${package_dir}/.publish-helm-charts-${BASHPID:-$$}"
+  mkdir "$PUBLISH_WORK_ROOT"
+  trap cleanup_work_root EXIT
+
+  local archives=()
+  local chart_names=()
+  local chart_versions=()
+  local repositories=()
 
   for chart in "${CHARTS[@]}"; do
     local chart_name
@@ -104,7 +134,7 @@ publish_charts() {
     archive="${package_dir}/${chart_name}-${chart_version}.tgz"
     repository="${REPOSITORY_NAME}/helm/${chart_name}"
 
-    tags=$(repository_tags "$repository")
+    tags=$(repository_tags "$repository" "${PUBLISH_WORK_ROOT}/registry-error")
     if grep -Fxq "$chart_version" <<<"$tags"; then
       echo "Chart ${chart_name}:${chart_version} already exists in the publish registry; skipping."
       continue
@@ -114,6 +144,23 @@ publish_charts() {
       echo "Expected chart package not found: ${archive}" >&2
       return 1
     fi
+
+    archives+=("$archive")
+    chart_names+=("$chart_name")
+    chart_versions+=("$chart_version")
+    repositories+=("$repository")
+  done
+
+  local index
+  for archive in "${archives[@]}"; do
+    verify_chart_images "$archive"
+  done
+
+  for index in "${!archives[@]}"; do
+    archive="${archives[$index]}"
+    chart_name="${chart_names[$index]}"
+    chart_version="${chart_versions[$index]}"
+    repository="${repositories[$index]}"
 
     if [[ "$registry_logged_in" == false ]]; then
       az acr login --name "$ACR_NAME"
@@ -135,11 +182,11 @@ publish_charts() {
       return 1
     fi
 
-    mkdir -p "${work_root}/${chart_name}-verified"
+    mkdir -p "${PUBLISH_WORK_ROOT}/${chart_name}-verified"
     helm pull \
       "oci://${ACR_NAME}.azurecr.io/${repository}" \
       --version "$chart_version" \
-      --destination "${work_root}/${chart_name}-verified"
+      --destination "${PUBLISH_WORK_ROOT}/${chart_name}-verified"
     echo "Published and verified ${chart_name}:${chart_version} at ${digest}"
   done
 }
@@ -152,6 +199,9 @@ case "$1" in
     ;;
   publish)
     publish_charts "$2"
+    ;;
+  verify-images)
+    verify_chart_images "$2"
     ;;
   *)
     usage

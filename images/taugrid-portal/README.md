@@ -55,6 +55,29 @@ render `/bin/sh -lc` for this image.
 5. Keep `:latest` as a workflow convenience tag only. Do not use it for rollout
    manifests or test-cluster installs.
 
+The privileged Helm publisher runs `scripts/ci/publish-helm-charts.sh publish`
+only after packaging. Before any chart push, it renders every candidate archive
+with its default values and verifies all rendered container, init-container, and
+sidecar image references against their consumer registries using Docker Buildx.
+This includes enabled dependencies and Helm hooks, not just first-party images.
+Images must be available from MCR, not merely the backing ACR. A missing image,
+registry error, or render failure blocks publication; packaging alone and local
+image build checks do not prove release image availability.
+
+Maintainers can run the same read-only check on a packaged chart:
+
+```bash
+scripts/ci/publish-helm-charts.sh verify-images path/to/taugrid-0.4.8.tgz
+```
+
+For the missing `taugrid-portal:0.4.8` release, an authorized release operator must
+verify that the matching release image exists in the configured backing
+repository (build and publish it from the matching release source if absent),
+complete MCR syndication, and verify
+`mcr.microsoft.com/aks/ai-runtime/taugrid-portal:0.4.8`. This requires backing ACR
+push and MCR publication permissions; changing chart values or publishing a
+different version under this tag is not a repair.
+
 ## Migration note
 
 Do not fall back to the pre-split `tau` image. Release charts use the matching
