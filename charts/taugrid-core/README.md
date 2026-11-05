@@ -63,7 +63,7 @@ This chart deliberately does not vendor or wrap upstream OSS charts.
 Each one has its own opinionated values surface (taints, MIG profiles,
 time-slicing, federated identity, cloud creds) we don't want to flatten
 through a single values file. See the
-[Getting started on Kubernetes guide](../../site/content/en/docs/platform-admin-guide/installation-guides/kubernetes.md) for the
+[Getting started on Kubernetes guide](https://azure.github.io/taugrid/docs/platform-admin-guide/kubernetes/) for the
 recommended OSS install order + pinned versions.
 
 It also no longer installs the old cost oracle, PrometheusRule, or Grafana
@@ -107,7 +107,7 @@ recorder, or their shared namespaced resources.
 
 ```bash
 # Assumes Kueue + KubeRay are installed and GPU nodes expose nvidia.com/gpu.
-# See site/content/en/docs/platform-admin-guide/installation-guides/kubernetes.md.
+# See https://azure.github.io/taugrid/docs/platform-admin-guide/kubernetes/
 helm upgrade --install taugrid-core ./taugrid-core --kube-context my-cluster \
   --namespace tau-system --create-namespace
 ```
