@@ -145,6 +145,51 @@ def test_timed_passes_through_without_stellar_run(monkeypatch, no_active_run):
     with datasets.timed(source) as wrapped:
         assert list(wrapped) == [1, 2, 3]
 
+class _ClosableSource:
+    def __init__(self) -> None:
+        self.closed = False
+        self.iterator = self._items()
+
+    def _items(self):
+        try:
+            yield from range(3)
+        finally:
+            self.closed = True
+
+def test_timed_close_closes_source_iterator(clock):
+    source = _ClosableSource()
+    sink = _RecordingSink()
+
+    with datasets.timed(source.iterator, log=sink) as batches:
+        for item in batches:
+            if item == 1:
+                break
+        assert not source.closed
+
+    assert source.closed
+    assert [step for _, step in sink.calls] == [0, 1]
+
+def test_timed_pass_through_close_closes_source_iterator(no_active_run):
+    source = _ClosableSource()
+
+    with datasets.timed(source.iterator) as batches:
+        assert next(batches) == 0
+
+    assert source.closed
+
+def test_timed_close_closes_source_when_final_row_fails(clock):
+    source = _ClosableSource()
+
+    def failing_sink(metrics, step: int) -> None:
+        raise RuntimeError("sink unavailable")
+
+    batches = datasets.timed(source.iterator, log=failing_sink)
+    assert next(batches) == 0
+
+    with pytest.raises(RuntimeError, match="sink unavailable"):
+        batches.close()
+    assert source.closed
+
 def test_timed_empty_iterable_logs_nothing(clock):
     sink = _RecordingSink()
 

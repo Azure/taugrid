@@ -67,31 +67,36 @@ def timed(
     ``tau.stellar`` run. With neither, the iterable passes through untimed.
 
     The final row is written when the iterable is exhausted or the returned
-    iterator is closed. A ``for`` loop that breaks does not close it, so use
+    iterator is closed. Closing it also closes the source iterator when it has
+    a ``close()`` method, releasing loader workers, files, or streams. A
+    ``for`` loop that breaks does not close it, so use
     ``with timed(...) as batches:`` or call ``close()`` after an early exit.
     """
 
     if not name:
         raise ValueError("timed name is required")
+    source = iter(iterable)
     sink = log if log is not None else _active_run_sink()
     if sink is None:
-        return TimedIterator(iter(iterable))
-    timed_iterator = _timed(iter(iterable), name, sink, int(start_step))
-    return TimedIterator(timed_iterator, timed_iterator.close)
+        return TimedIterator(source)
+    return TimedIterator(_timed(source, name, sink, int(start_step)), source)
 
 class TimedIterator(Iterator[_T]):
-    """Iterator returned by :func:`timed`; closing it writes the final row."""
+    """Iterator returned by :func:`timed`; closing it writes the final row and closes the source."""
 
-    def __init__(self, iterator: Iterator[_T], close: Callable[[], None] | None = None) -> None:
+    def __init__(self, iterator: Iterator[_T], source: Iterator[_T] | None = None) -> None:
         self._iterator = iterator
-        self._close = close
+        self._source = source
 
     def __next__(self) -> _T:
         return next(self._iterator)
 
     def close(self) -> None:
-        if self._close is not None:
-            self._close()
+        try:
+            _close(self._iterator)
+        finally:
+            if self._source is not None:
+                _close(self._source)
 
     def __enter__(self) -> TimedIterator[_T]:
         return self
@@ -106,6 +111,11 @@ def _active_run_sink() -> _MetricsSink | None:
         return None
     run = stellar.active_run()
     return None if run is None else run.log
+
+def _close(iterator: object) -> None:
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
 
 def _timed(iterator: Iterator[_T], name: str, sink: _MetricsSink, step: int) -> Iterator[_T]:
     wait_key = f"{name}/wait_seconds"

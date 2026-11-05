@@ -381,9 +381,12 @@ changes the `data/` prefix, `start_step` sets the first step number, and
 `log=callable` sends `(metrics, step)` somewhere other than the active run.
 Without `log` or an active `stellar.init(...)` run, items pass through
 untimed. A row is written when the next batch arrives. The last row is written
-when the iterable is exhausted or the iterator is closed. A `for` loop that
-breaks early does not close the iterator, so use `with datasets.timed(...)` as
-above or call `close()` on the returned iterator after the loop.
+when the iterable is exhausted or the iterator is closed. Closing also closes
+the source iterator if it has a `close()` method, so loader workers, open files,
+and streaming generators are released on an early exit, with or without an
+active run. A `for` loop that breaks early does not close the iterator, so use
+`with datasets.timed(...)` as above or call `close()` on the returned iterator
+after the loop.
 
 The wait covers everything the iterable does to produce a batch, such as
 reading, decoding, collation, and device transfer, so it is batch-preparation
