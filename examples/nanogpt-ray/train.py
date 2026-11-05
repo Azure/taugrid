@@ -203,9 +203,19 @@ def log_jsonl(sink: Path | AsyncJSONLLogger | None, row: dict) -> None:
         return
     append_jsonl(sink, row)
 
-def history_metrics_sink(rows: list[dict]) -> Callable[[Mapping[str, float], int], None]:
-    def log(metrics: Mapping[str, float], step: int) -> None:
-        rows.append({"_step": step, "_timestamp": time.time(), **metrics})
+def history_metrics_sink(rows: list[dict], grad_accum: int) -> Callable[[Mapping[str, float], int], None]:
+    pending: dict[str, float] = {}
+    micro_steps = 0
+
+    def log(metrics: Mapping[str, float], micro_step: int) -> None:
+        nonlocal micro_steps
+        for key, value in metrics.items():
+            pending[key] = pending.get(key, 0.0) + float(value)
+        micro_steps += 1
+        if micro_steps == grad_accum or "data/epoch_seconds" in metrics:
+            rows.append({"_step": micro_step // grad_accum, "_timestamp": time.time(), **pending})
+            pending.clear()
+            micro_steps = 0
 
     return log
 
@@ -502,8 +512,7 @@ def sample_batch(
 
 def train_batches(
     tokens: torch.Tensor | np.ndarray | np.memmap,
-    steps: int,
-    grad_accum: int,
+    count: int,
     batch_size: int,
     block_size: int,
     device: torch.device,
@@ -511,12 +520,9 @@ def train_batches(
     token_start: int,
     token_stop: int,
     vocab_size: int,
-) -> Iterator[list[tuple[torch.Tensor, torch.Tensor]]]:
-    for _ in range(steps):
-        yield [
-            sample_batch(tokens, batch_size, block_size, device, token_start=token_start, token_stop=token_stop, vocab_size=vocab_size)
-            for _ in range(grad_accum)
-        ]
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    for _ in range(count):
+        yield sample_batch(tokens, batch_size, block_size, device, token_start=token_start, token_stop=token_stop, vocab_size=vocab_size)
 
 def eval_batch(
     tokens: torch.Tensor | np.ndarray | np.memmap,
@@ -782,25 +788,28 @@ def train_worker(config: dict) -> dict:
     stopped_at_step = None
     target_eval_hits = 0
     data_rows: list[dict] = []
-    batches = train_batches(
-        tokens,
-        steps,
-        grad_accum,
-        batch_size,
-        gpt_cfg.block_size,
-        device,
-        token_start=train_start,
-        token_stop=train_stop,
-        vocab_size=gpt_cfg.vocab_size,
+    batches = timed(
+        train_batches(
+            tokens,
+            steps * grad_accum,
+            batch_size,
+            gpt_cfg.block_size,
+            device,
+            token_start=train_start,
+            token_stop=train_stop,
+            vocab_size=gpt_cfg.vocab_size,
+        ),
+        name="data",
+        log=history_metrics_sink(data_rows, grad_accum) if rank == 0 else None,
     )
-    timed_batches = timed(batches, name="data", log=history_metrics_sink(data_rows) if rank == 0 else None)
-    for step, micro_batches in enumerate(timed_batches):
+    for step in range(steps):
         lr = learning_rate(step, steps, float(config["lr"]), float(config["min_lr"]), int(config["warmup_steps"]), float(config["cooldown_frac"]))
         for group in optimizer.param_groups:
             group["lr"] = lr
         optimizer.zero_grad(set_to_none=True)
         losses = []
-        for x, y in micro_batches:
+        for _ in range(grad_accum):
+            x, y = next(batches)
             with maybe_autocast(device, bool(config["use_bf16"])):
                 _, loss = model(x, y)
             assert loss is not None
@@ -871,9 +880,7 @@ def train_worker(config: dict) -> dict:
             if should_stop_at_target(config, best_val, device):
                 stopped_at_step = step
                 break
-    close_batches = getattr(timed_batches, "close", None)
-    if close_batches is not None:
-        close_batches()
+    batches.close()
     if data_rows:
         with history_path.open("a", encoding="utf-8") as handle:
             write_pending_rows(handle, data_rows)

@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-import tau
 from tau import datasets, stellar
 
 class _FakeClock:
@@ -46,7 +49,7 @@ def test_timed_logs_wait_and_step_seconds_per_step(clock):
     sink = _RecordingSink()
 
     seen = []
-    for item in tau.datasets.timed(_loader(clock, [0.5, 0.25, 0.125]), log=sink, start_step=10):
+    for item in datasets.timed(_loader(clock, [0.5, 0.25, 0.125]), log=sink, start_step=10):
         seen.append(item)
         clock.advance(1.0)
 
@@ -76,21 +79,48 @@ def test_timed_namespaces_metrics_by_name(clock):
         0,
     )]
 
-def test_timed_logs_final_step_when_loop_breaks(clock):
+_BROKEN_AT_SECOND_ITEM = {
+    "data/wait_seconds": 0.5,
+    "data/step_seconds": 2.5,
+    "data/epoch_wait_seconds": 1.0,
+    "data/epoch_seconds": 5.0,
+}
+
+def test_timed_context_manager_logs_final_step_when_loop_breaks(clock):
     sink = _RecordingSink()
 
-    for item in datasets.timed(_loader(clock, [0.5, 0.5, 0.5]), log=sink):
+    with datasets.timed(_loader(clock, [0.5, 0.5, 0.5]), log=sink) as batches:
+        for item in batches:
+            clock.advance(2.0)
+            if item == 1:
+                break
+
+    assert [step for _, step in sink.calls] == [0, 1]
+    assert sink.calls[1][0] == pytest.approx(_BROKEN_AT_SECOND_ITEM)
+
+def test_timed_retained_iterator_logs_final_step_on_close(clock):
+    sink = _RecordingSink()
+    batches = datasets.timed(_loader(clock, [0.5, 0.5, 0.5]), log=sink)
+
+    for item in batches:
         clock.advance(2.0)
         if item == 1:
             break
 
+    assert [step for _, step in sink.calls] == [0]
+    batches.close()
     assert [step for _, step in sink.calls] == [0, 1]
-    assert sink.calls[1][0] == pytest.approx({
-        "data/wait_seconds": 0.5,
-        "data/step_seconds": 2.5,
-        "data/epoch_wait_seconds": 1.0,
-        "data/epoch_seconds": 5.0,
-    })
+    assert sink.calls[1][0] == pytest.approx(_BROKEN_AT_SECOND_ITEM)
+    batches.close()
+    assert len(sink.calls) == 2
+
+def test_timed_retained_iterator_resumes_after_break(clock):
+    sink = _RecordingSink()
+    batches = datasets.timed(_loader(clock, [0.5, 0.5, 0.5]), log=sink)
+
+    assert next(batches) == 0
+    assert list(batches) == [1, 2]
+    assert [step for _, step in sink.calls] == [0, 1, 2]
 
 def test_timed_writes_to_active_stellar_run(tmp_path, no_active_run):
     run = stellar.init(project="nanogpt", run="data-wait", dir=tmp_path / "runs")
@@ -112,10 +142,8 @@ def test_timed_passes_through_without_stellar_run(monkeypatch, no_active_run):
     monkeypatch.setattr(datasets, "perf_counter", fail_clock)
     source = iter([1, 2, 3])
 
-    wrapped = datasets.timed(source)
-
-    assert wrapped is source
-    assert list(wrapped) == [1, 2, 3]
+    with datasets.timed(source) as wrapped:
+        assert list(wrapped) == [1, 2, 3]
 
 def test_timed_empty_iterable_logs_nothing(clock):
     sink = _RecordingSink()
@@ -146,3 +174,21 @@ def test_stellar_active_run_tracks_init_and_finish(tmp_path, no_active_run):
     assert stellar.active_run() is run
     stellar.finish()
     assert stellar.active_run() is None
+
+def test_timed_imports_without_stellar_module(tmp_path):
+    shim = tmp_path / "tau"
+    shim.mkdir()
+    shutil.copy(Path(datasets.__file__), shim / "datasets.py")
+    (shim / "__init__.py").write_text("from . import datasets as datasets\n", encoding="utf-8")
+    code = f"""
+import sys
+sys.path.insert(0, {str(tmp_path)!r})
+import tau
+with tau.datasets.timed([1, 2]) as batches:
+    print(list(batches))
+"""
+
+    res = subprocess.run([sys.executable, "-S", "-c", code], capture_output=True, text=True, check=False)
+
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == "[1, 2]"

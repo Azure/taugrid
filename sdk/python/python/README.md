@@ -362,14 +362,14 @@ Wrap a training loop's data iterable in `tau.datasets.timed` to record how long
 each step waits for its next batch:
 
 ```python
-import tau
-from tau import stellar
+from tau import datasets, stellar
 
 stellar.init(project="nanogpt", run="baseline")
 for epoch in range(epochs):
     offset = epoch * len(loader)
-    for step, batch in enumerate(tau.datasets.timed(loader, start_step=offset), start=offset):
-        stellar.log({"train/loss": train_step(batch)}, step=step)
+    with datasets.timed(loader, start_step=offset) as batches:
+        for step, batch in enumerate(batches, start=offset):
+            stellar.log({"train/loss": train_step(batch)}, step=step)
 stellar.finish()
 ```
 
@@ -379,10 +379,16 @@ requesting the next, so it includes the wait). The last step of each pass also
 logs `data/epoch_wait_seconds` and `data/epoch_seconds`. `name="val_data"`
 changes the `data/` prefix, `start_step` sets the first step number, and
 `log=callable` sends `(metrics, step)` somewhere other than the active run.
-Without `log` or an active `stellar.init(...)` run, `timed` returns the plain
-iterator and adds no timing overhead. A row is written when the next batch
-arrives; the last row is written when the iterable is exhausted or the loop
-breaks.
+Without `log` or an active `stellar.init(...)` run, items pass through
+untimed. A row is written when the next batch arrives. The last row is written
+when the iterable is exhausted or the iterator is closed. A `for` loop that
+breaks early does not close the iterator, so use `with datasets.timed(...)` as
+above or call `close()` on the returned iterator after the loop.
+
+The wait covers everything the iterable does to produce a batch, such as
+reading, decoding, collation, and device transfer, so it is batch-preparation
+time rather than storage time alone. In distributed training, each rank times
+only its own iterator.
 
 ### PyTorch Lightning migration from W&B
 

@@ -74,7 +74,7 @@ def main() -> None:
         "parameter_count": metrics.get("parameter_count"),
         "history_rows": len(history),
         "train_history_rows": len(train_history),
-        "data_wait_seconds": sum(float(row["data/wait_seconds"]) for row in data_rows) if data_rows else None,
+        "rank0_batch_wait_seconds": sum(float(row["data/wait_seconds"]) for row in data_rows) if data_rows else None,
         "first_train_loss": first.get("train/loss"),
         "last_train_loss": last.get("train/loss"),
         "best_val_loss": metrics.get("best_val_loss"),

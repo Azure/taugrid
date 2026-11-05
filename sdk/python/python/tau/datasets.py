@@ -10,8 +10,6 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from time import perf_counter
 from typing import TypeVar
 
-from tau import stellar
-
 _T = TypeVar("_T")
 
 _MetricsSink = Callable[[Mapping[str, float], int], object]
@@ -55,7 +53,7 @@ def timed(
     *,
     log: _MetricsSink | None = None,
     start_step: int = 0,
-) -> Iterator[_T]:
+) -> TimedIterator[_T]:
     """Iterate ``iterable`` and log per-step data-loading time to Stellar.
 
     Each item is one step. For step ``n`` the wrapper logs
@@ -67,17 +65,47 @@ def timed(
 
     Metrics go to ``log(metrics, step)`` when given, otherwise to the active
     ``tau.stellar`` run. With neither, the iterable passes through untimed.
+
+    The final row is written when the iterable is exhausted or the returned
+    iterator is closed. A ``for`` loop that breaks does not close it, so use
+    ``with timed(...) as batches:`` or call ``close()`` after an early exit.
     """
 
     if not name:
         raise ValueError("timed name is required")
-    sink = log
+    sink = log if log is not None else _active_run_sink()
     if sink is None:
-        run = stellar.active_run()
-        if run is None:
-            return iter(iterable)
-        sink = run.log
-    return _timed(iter(iterable), name, sink, int(start_step))
+        return TimedIterator(iter(iterable))
+    timed_iterator = _timed(iter(iterable), name, sink, int(start_step))
+    return TimedIterator(timed_iterator, timed_iterator.close)
+
+class TimedIterator(Iterator[_T]):
+    """Iterator returned by :func:`timed`; closing it writes the final row."""
+
+    def __init__(self, iterator: Iterator[_T], close: Callable[[], None] | None = None) -> None:
+        self._iterator = iterator
+        self._close = close
+
+    def __next__(self) -> _T:
+        return next(self._iterator)
+
+    def close(self) -> None:
+        if self._close is not None:
+            self._close()
+
+    def __enter__(self) -> TimedIterator[_T]:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+def _active_run_sink() -> _MetricsSink | None:
+    try:
+        from tau import stellar
+    except ImportError:
+        return None
+    run = stellar.active_run()
+    return None if run is None else run.log
 
 def _timed(iterator: Iterator[_T], name: str, sink: _MetricsSink, step: int) -> Iterator[_T]:
     wait_key = f"{name}/wait_seconds"
@@ -129,4 +157,4 @@ def _log_final_step(
         step,
     )
 
-__all__ = ["dataset_file_reference", "timed"]
+__all__ = ["TimedIterator", "dataset_file_reference", "timed"]
