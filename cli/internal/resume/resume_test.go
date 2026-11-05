@@ -116,6 +116,36 @@ func TestClassifyFailure_Preempted_Event(t *testing.T) {
 	}
 }
 
+func TestClassifyFailure_PreemptorEventIsNotVictimEvidence(t *testing.T) {
+	snap := status.Snapshot{
+		JobFound: true,
+		JobConditions: []status.Condition{
+			{Type: "Failed", Status: "True"},
+		},
+		Events: []status.Event{
+			{Reason: "PreemptedWorkload", Message: "Preempted workload ray/victim"},
+		},
+	}
+	if got := ClassifyFailure(snap); got != ReasonUnknown {
+		t.Errorf("got %v, want Unknown", got)
+	}
+}
+
+func TestClassifyFailure_PreemptedWorkloadCondition(t *testing.T) {
+	snap := status.Snapshot{
+		JobFound: true,
+		JobConditions: []status.Condition{
+			{Type: "Failed", Status: "True"},
+		},
+		Workloads: []status.Workload{
+			{Preemption: "Preempted"},
+		},
+	}
+	if got := ClassifyFailure(snap); got != ReasonPreempted {
+		t.Errorf("got %v, want Preempted", got)
+	}
+}
+
 func TestClassifyFailure_Evicted(t *testing.T) {
 	snap := status.Snapshot{
 		JobFound: true,
