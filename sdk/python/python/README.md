@@ -213,7 +213,7 @@ Pinned installs and troubleshooting:
 
 Public API: `tau.train`, `tau.eval`, `tau.serve`, `tau.config`,
 `tau.secret_from_env`, `tau.secret_from_file`, `tau.secret_ref`,
-`tau.pvc_mount`, `tau.dataset_file_reference`,
+`tau.pvc_mount`, `tau.dataset_file_reference`, `tau.datasets.timed`,
 `tau.read_jsonl_objects`, `tau.load_staged_module`,
 `tau.load_staged_function`, `tau.call_staged_function`, `tau.stellar`.
 
@@ -355,6 +355,43 @@ Logging is local-first and needs no CLI at all. Only `sync=True` shells out, and
 it uses the `taugrid-portal` binary — Stellar ships separately from `tau`.
 Install it with `make install-taugrid-portal`, or point at one explicitly with
 `TAUGRID_PORTAL_BINARY=/path/to/taugrid-portal` (or `stellar.init(tau_binary=...)`).
+
+### Data-loading wait
+
+Wrap a training loop's data iterable in `tau.datasets.timed` to record how long
+each step waits for its next batch:
+
+```python
+from tau import datasets, stellar
+
+stellar.init(project="nanogpt", run="baseline")
+for epoch in range(epochs):
+    offset = epoch * len(loader)
+    with datasets.timed(loader, start_step=offset) as batches:
+        for step, batch in enumerate(batches, start=offset):
+            stellar.log({"train/loss": train_step(batch)}, step=step)
+stellar.finish()
+```
+
+Each item is one step. The wrapper logs `data/wait_seconds` (time blocked
+fetching the batch) and `data/step_seconds` (time from requesting this batch to
+requesting the next, so it includes the wait). The last step of each pass also
+logs `data/epoch_wait_seconds` and `data/epoch_seconds`. `name="val_data"`
+changes the `data/` prefix, `start_step` sets the first step number, and
+`log=callable` sends `(metrics, step)` somewhere other than the active run.
+Without `log` or an active `stellar.init(...)` run, items pass through
+untimed. A row is written when the next batch arrives. The last row is written
+when the iterable is exhausted or the iterator is closed. Closing also closes
+the source iterator if it has a `close()` method, so loader workers, open files,
+and streaming generators are released on an early exit, with or without an
+active run. A `for` loop that breaks early does not close the iterator, so use
+`with datasets.timed(...)` as above or call `close()` on the returned iterator
+after the loop.
+
+The wait covers everything the iterable does to produce a batch, such as
+reading, decoding, collation, and device transfer, so it is batch-preparation
+time rather than storage time alone. In distributed training, each rank times
+only its own iterator.
 
 ### PyTorch Lightning migration from W&B
 

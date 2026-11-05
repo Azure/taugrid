@@ -22,15 +22,21 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import nullcontext, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+try:
+    from tau.datasets import timed
+except ModuleNotFoundError:
+    def timed(iterable: Iterable, name: str = "data", *, log: Callable | None = None, start_step: int = 0) -> Iterator:
+        return iter(iterable)
 
 @dataclass
 class GPTConfig:
@@ -196,6 +202,27 @@ def log_jsonl(sink: Path | AsyncJSONLLogger | None, row: dict) -> None:
         sink.log(row)
         return
     append_jsonl(sink, row)
+
+def history_metrics_sink(rows: list[dict], grad_accum: int) -> Callable[[Mapping[str, float], int], None]:
+    pending: dict[str, float] = {}
+    micro_steps = 0
+
+    def log(metrics: Mapping[str, float], micro_step: int) -> None:
+        nonlocal micro_steps
+        for key, value in metrics.items():
+            pending[key] = pending.get(key, 0.0) + float(value)
+        micro_steps += 1
+        if micro_steps == grad_accum or "data/epoch_seconds" in metrics:
+            rows.append({"_step": micro_step // grad_accum, "_timestamp": time.time(), **pending})
+            pending.clear()
+            micro_steps = 0
+
+    return log
+
+def write_pending_rows(handle, rows: list[dict]) -> None:
+    for row in rows:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+    rows.clear()
 
 def initialize_history(config: dict) -> Path:
     history_path = Path(config["out_dir"]) / "stellar" / "history.jsonl"
@@ -483,6 +510,20 @@ def sample_batch(
     y = torch.stack([token_window(tokens, token_start + int(i) + 1, token_start + int(i) + 1 + block_size) for i in starts]).to(device) % vocab_size
     return x, y
 
+def train_batches(
+    tokens: torch.Tensor | np.ndarray | np.memmap,
+    count: int,
+    batch_size: int,
+    block_size: int,
+    device: torch.device,
+    *,
+    token_start: int,
+    token_stop: int,
+    vocab_size: int,
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    for _ in range(count):
+        yield sample_batch(tokens, batch_size, block_size, device, token_start=token_start, token_stop=token_stop, vocab_size=vocab_size)
+
 def eval_batch(
     tokens: torch.Tensor | np.ndarray | np.memmap,
     batch_size: int,
@@ -746,6 +787,21 @@ def train_worker(config: dict) -> dict:
     tokens_per_step = batch_size * gpt_cfg.block_size * grad_accum * world
     stopped_at_step = None
     target_eval_hits = 0
+    data_rows: list[dict] = []
+    batches = timed(
+        train_batches(
+            tokens,
+            steps * grad_accum,
+            batch_size,
+            gpt_cfg.block_size,
+            device,
+            token_start=train_start,
+            token_stop=train_stop,
+            vocab_size=gpt_cfg.vocab_size,
+        ),
+        name="data",
+        log=history_metrics_sink(data_rows, grad_accum) if rank == 0 else None,
+    )
     for step in range(steps):
         lr = learning_rate(step, steps, float(config["lr"]), float(config["min_lr"]), int(config["warmup_steps"]), float(config["cooldown_frac"]))
         for group in optimizer.param_groups:
@@ -753,7 +809,7 @@ def train_worker(config: dict) -> dict:
         optimizer.zero_grad(set_to_none=True)
         losses = []
         for _ in range(grad_accum):
-            x, y = sample_batch(tokens, batch_size, gpt_cfg.block_size, device, token_start=train_start, token_stop=train_stop, vocab_size=gpt_cfg.vocab_size)
+            x, y = next(batches)
             with maybe_autocast(device, bool(config["use_bf16"])):
                 _, loss = model(x, y)
             assert loss is not None
@@ -814,6 +870,7 @@ def train_worker(config: dict) -> dict:
                     row["val/eval_batches"] = int(config["eval_batches"])
                     row["val/eval_mode_stride"] = 1 if config["eval_mode"] == "stride" else 0
                 with history_path.open("a", encoding="utf-8") as handle:
+                    write_pending_rows(handle, data_rows)
                     handle.write(json.dumps(row, sort_keys=True) + "\n")
             if ray_train is not None:
                 report = {"train_loss": final_train}
@@ -823,6 +880,10 @@ def train_worker(config: dict) -> dict:
             if should_stop_at_target(config, best_val, device):
                 stopped_at_step = step
                 break
+    batches.close()
+    if data_rows:
+        with history_path.open("a", encoding="utf-8") as handle:
+            write_pending_rows(handle, data_rows)
 
     if rank == 0:
         hellaswag_accuracy = estimate_hellaswag(model, hellaswag_examples, device, use_bf16=bool(config["use_bf16"]))
