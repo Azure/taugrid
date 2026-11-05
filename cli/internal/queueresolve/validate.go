@@ -34,6 +34,7 @@ type ValidationOptions struct {
 	NodeSelector            map[string]string
 	PodTolerations          [][]kueueapi.Toleration
 	GPUCount                int
+	CPURequest              bool
 	GPUResourceName         string
 }
 
@@ -61,6 +62,7 @@ type validationTarget struct {
 	NodeSelector            map[string]string
 	PodTolerations          [][]kueueapi.Toleration
 	GPUCount                int
+	CPURequest              bool
 	GPUResourceName         string
 }
 
@@ -107,6 +109,9 @@ func ValidateSelection(ctx context.Context, r RawRunner, opts ValidationOptions)
 		}
 	}
 	if err := validateOptionalTopologyLabels("ClusterQueue", target.ClusterQueue, cq.Metadata.Labels, target); err != nil {
+		return report, err
+	}
+	if err := validateCPUQueueTopologyIntent(ctx, r, cq, target); err != nil {
 		return report, err
 	}
 
@@ -291,6 +296,7 @@ func (o ValidationOptions) resolve() validationTarget {
 		NodeSelector:            o.NodeSelector,
 		PodTolerations:          o.PodTolerations,
 		GPUCount:                o.GPUCount,
+		CPURequest:              o.CPURequest,
 		GPUResourceName:         strings.TrimSpace(o.GPUResourceName),
 	}
 	if target.Namespace == "" {
@@ -620,6 +626,68 @@ func validateQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.C
 	return fmt.Errorf(
 		"GPU request has no policy.topology, but compatible ResourceFlavors in ClusterQueue %q use TopologyAwareScheduling (%s); choose unconstrained, same-host, same-accelerator-domain, same-network-domain, or same-site",
 		target.ClusterQueue, strings.Join(names, ", "))
+}
+
+func validateCPUQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueapi.ClusterQueue, target validationTarget) error {
+	if !target.CPURequest || target.GPUCount > 0 || !target.TopologyRequest {
+		return nil
+	}
+	flavorNames := resourceFlavorNames(cq, "cpu")
+	if target.ResourceFlavor != "" {
+		flavorNames = []string{target.ResourceFlavor}
+	}
+	if len(flavorNames) == 0 {
+		return nil
+	}
+	var topologyFlavors []string
+	var unreadable []string
+	for _, name := range flavorNames {
+		rf, err := getResourceFlavor(ctx, r, name)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%s)", name, err))
+			continue
+		}
+		if strings.TrimSpace(rf.Spec.TopologyName) != "" {
+			topologyFlavors = append(topologyFlavors, name)
+		}
+	}
+	if len(unreadable) > 0 {
+		return fmt.Errorf(
+			"cannot verify CPU policy.topology compatibility with ClusterQueue %q because ResourceFlavor capabilities could not be read: %s",
+			target.ClusterQueue,
+			strings.Join(unreadable, ", "),
+		)
+	}
+	if len(topologyFlavors) > 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"CPU workload sets policy.topology, but CPU ResourceFlavors in ClusterQueue %q do not support TopologyAwareScheduling; use a topology-capable CPU flavor or omit independent/unconstrained topology for this queue",
+		target.ClusterQueue,
+	)
+}
+
+func resourceFlavorNames(cq kueueapi.ClusterQueue, resourceName string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, group := range cq.Spec.ResourceGroups {
+		for _, flavor := range group.Flavors {
+			if seen[flavor.Name] {
+				continue
+			}
+			for _, resource := range flavor.Resources {
+				if resource.Name != resourceName ||
+					resource.NominalQuota.Int64()+resource.BorrowingLimit.Int64() <= 0 {
+					continue
+				}
+				seen[flavor.Name] = true
+				names = append(names, flavor.Name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func compatibleGPUFlavorNames(cq kueueapi.ClusterQueue, target validationTarget) []string {
