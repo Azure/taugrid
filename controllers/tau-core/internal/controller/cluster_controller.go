@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/taugrid/controllers/tau-core/internal/labelkeys"
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -71,6 +72,7 @@ type topologyReconcileState struct {
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=resourceflavors,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=kueue.x-k8s.io,resources=topologies,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=scheduling.k8s.io,resources=priorityclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses;csistoragecapacities,verbs=get;list;watch
 
 func (r *TauClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var cluster tauv1alpha1.TauCluster
@@ -133,7 +135,28 @@ func (r *TauClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(newQueueObject(topologyGVK), handler.EnqueueRequestsFromMapFunc(enqueueTauClusterForProfileDependency)).
 		Watches(newQueueObject(workloadPriorityClassGVK), handler.EnqueueRequestsFromMapFunc(enqueueTauClusterForProfileDependency)).
 		Watches(&schedulingv1.PriorityClass{}, handler.EnqueueRequestsFromMapFunc(enqueueTauClusterForProfileDependency)).
+		Watches(&storagev1.StorageClass{}, handler.EnqueueRequestsFromMapFunc(enqueueTauClusterForProfileDependency)).
+		Watches(
+			&storagev1.CSIStorageCapacity{},
+			handler.EnqueueRequestsFromMapFunc(enqueueTauClusterForProfileDependency),
+			builder.WithPredicates(storageCapacityCoveragePredicate()),
+		).
 		Complete(r)
+}
+
+func storageCapacityCoveragePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(update event.UpdateEvent) bool {
+			oldCapacity, oldOK := update.ObjectOld.(*storagev1.CSIStorageCapacity)
+			newCapacity, newOK := update.ObjectNew.(*storagev1.CSIStorageCapacity)
+			if !oldOK || !newOK {
+				return true
+			}
+			return oldCapacity.StorageClassName != newCapacity.StorageClassName ||
+				!apiequality.Semantic.DeepEqual(oldCapacity.NodeTopology, newCapacity.NodeTopology) ||
+				hasStorageCapacity(oldCapacity) != hasStorageCapacity(newCapacity)
+		},
+	}
 }
 
 func enqueueTauClusterForNode(context.Context, client.Object) []reconcile.Request {

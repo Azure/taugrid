@@ -269,6 +269,9 @@
           },
           "priorities": {
             "$ref": "#/definitions/profilePriorities"
+          },
+          "hotVolume": {
+            "$ref": "#/definitions/profileHotVolume"
           }
         }
       },
@@ -299,6 +302,30 @@
           }
         }
       },
+    "profileHotVolume": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "storageClassName",
+        "defaultSize",
+        "maxSize"
+      ],
+      "properties": {
+        "storageClassName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "defaultSize": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maxSize": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "profilePriorities": {
       "type": "object",
       "additionalProperties": false,

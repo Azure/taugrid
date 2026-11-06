@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/yaml"
@@ -38,6 +39,7 @@ const (
 	ConditionResourceFlavorsReady = "ResourceFlavorsReady"
 	ConditionTopologiesReady      = "TopologiesReady"
 	ConditionPriorityClassesReady = "PriorityClassesReady"
+	ConditionHotVolumeReady       = "HotVolumeReady"
 
 	ProfileSnapshotAPIVersion = "tau.azure.com/v1alpha1"
 	ProfileSnapshotKind       = "TauWorkloadProfileSnapshot"
@@ -64,6 +66,17 @@ type WorkloadProfile struct {
 	// +kubebuilder:validation:Enum=singleCluster;multiKueue
 	ExecutionTarget ExecutionTarget   `json:"executionTarget,omitempty" yaml:"executionTarget,omitempty"`
 	Priorities      ProfilePriorities `json:"priorities" yaml:"priorities"`
+	HotVolume       *HotVolume        `json:"hotVolume,omitempty" yaml:"hotVolume,omitempty"`
+}
+
+type HotVolume struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	StorageClassName string `json:"storageClassName" yaml:"storageClassName"`
+	// +kubebuilder:validation:MinLength=1
+	DefaultSize string `json:"defaultSize" yaml:"defaultSize"`
+	// +kubebuilder:validation:MinLength=1
+	MaxSize string `json:"maxSize" yaml:"maxSize"`
 }
 
 type ProfileApplicability struct {
@@ -152,6 +165,13 @@ func NormalizeWorkloadProfile(in WorkloadProfile) WorkloadProfile {
 	}
 	out.Priorities.WorkloadPriorityClassName = normalizeName(in.Priorities.WorkloadPriorityClassName)
 	out.Priorities.PodPriorityClassName = normalizeName(in.Priorities.PodPriorityClassName)
+	if in.HotVolume != nil {
+		out.HotVolume = &HotVolume{
+			StorageClassName: normalizeName(in.HotVolume.StorageClassName),
+			DefaultSize:      normalizeQuantity(in.HotVolume.DefaultSize),
+			MaxSize:          normalizeQuantity(in.HotVolume.MaxSize),
+		}
+	}
 	return out
 }
 
@@ -220,6 +240,9 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 			p.ExecutionTarget,
 		)
 	}
+	if err := validateHotVolume(p.HotVolume); err != nil {
+		return err
+	}
 	priorities := p.Priorities
 	if priorities.DisableDefaultPriorities {
 		if priorities.WorkloadPriorityClassName != "" || priorities.PodPriorityClassName != "" {
@@ -234,6 +257,41 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 		return err
 	}
 	return validateDNSName("priorities.podPriorityClassName", priorities.PodPriorityClassName)
+}
+
+func validateHotVolume(hot *HotVolume) error {
+	if hot == nil {
+		return nil
+	}
+	if err := validateDNSName("hotVolume.storageClassName", hot.StorageClassName); err != nil {
+		return err
+	}
+	defaultSize, err := positiveQuantity("hotVolume.defaultSize", hot.DefaultSize)
+	if err != nil {
+		return err
+	}
+	maxSize, err := positiveQuantity("hotVolume.maxSize", hot.MaxSize)
+	if err != nil {
+		return err
+	}
+	if defaultSize.Cmp(maxSize) > 0 {
+		return fmt.Errorf("hotVolume.defaultSize %s must not exceed hotVolume.maxSize %s", hot.DefaultSize, hot.MaxSize)
+	}
+	return nil
+}
+
+func positiveQuantity(field, value string) (resource.Quantity, error) {
+	if value == "" {
+		return resource.Quantity{}, fmt.Errorf("%s is required", field)
+	}
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return resource.Quantity{}, fmt.Errorf("%s %q is not a valid Kubernetes resource quantity", field, value)
+	}
+	if quantity.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("%s must be > 0, got %q", field, value)
+	}
+	return quantity, nil
 }
 
 func NormalizeAndValidateWorkloadProfile(in WorkloadProfile) (WorkloadProfile, error) {
@@ -555,6 +613,15 @@ func normalizeName(value string) string {
 	return strings.Trim(strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "_", "-"), " ", "-"), ".")
 }
 
+func normalizeQuantity(value string) string {
+	value = strings.TrimSpace(value)
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return value
+	}
+	return quantity.String()
+}
+
 func normalizeLabel(value string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "_", "-"), " ", "-")
 }
@@ -582,6 +649,10 @@ func (in *WorkloadProfile) DeepCopyInto(out *WorkloadProfile) {
 	out.Applicability.Teams = append([]string(nil), in.Applicability.Teams...)
 	out.Applicability.Lanes = append([]string(nil), in.Applicability.Lanes...)
 	out.Applicability.Namespaces = append([]string(nil), in.Applicability.Namespaces...)
+	if in.HotVolume != nil {
+		hot := *in.HotVolume
+		out.HotVolume = &hot
+	}
 }
 
 func (in *ResolvedWorkloadProfile) DeepCopyInto(out *ResolvedWorkloadProfile) {
