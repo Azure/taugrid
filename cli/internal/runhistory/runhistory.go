@@ -716,7 +716,7 @@ func baseRecord(metadata Metadata, cluster, defaultWorkspaceID, defaultResultSco
 		ResultPVC:          text(annotations[experiment.AnnotationResultPVC]),
 		ArtifactURI:        uri(annotations[experiment.AnnotationArtifactURI]),
 		CheckpointURI:      uri(annotations[experiment.AnnotationCheckpointURI]),
-		ControllerVersion:  text(annotations[workloadmeta.AnnotationControllerVerion]),
+		ControllerVersion:  first(annotations[workloadmeta.AnnotationTauVersion], annotations[workloadmeta.AnnotationControllerVerion]),
 		ExperimentTracking: tracking,
 		ExperimentSource:   source,
 	}
