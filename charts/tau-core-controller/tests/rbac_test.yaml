@@ -40,6 +40,20 @@ tests:
             resources: ["rayjobs", "rayservices"]
             verbs: ["create", "get", "list", "watch", "delete", "patch", "update"]
 
+  - it: grants workspace researchers ResourceFlavor reads for queue preflight
+    documentSelector:
+      path: metadata.name
+      value: tau-clusterqueue-reader-v1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kueue.x-k8s.io"]
+            resources: ["resourceflavors"]
+            verbs: ["get"]
+
   - it: grants the controller create-only mutation access to Kueue Topologies
     asserts:
       - contains:
