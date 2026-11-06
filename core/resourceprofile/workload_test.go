@@ -275,3 +275,81 @@ func testResolvedProfile(name string) ResolvedWorkloadProfile {
 		PodPriorityClasses:      []string{"tau-default"},
 	}
 }
+
+func TestWorkloadProfileHotVolume(t *testing.T) {
+	p := testWorkloadProfile()
+	p.HotVolume = &HotVolume{StorageClassName: " Tau-Hot ", DefaultSize: " 1024Gi ", MaxSize: "2Ti"}
+	got, err := NormalizeAndValidateWorkloadProfile(p)
+	if err != nil {
+		t.Fatalf("NormalizeAndValidateWorkloadProfile() error = %v", err)
+	}
+	want := HotVolume{StorageClassName: "tau-hot", DefaultSize: "1Ti", MaxSize: "2Ti"}
+	if got.HotVolume == nil || *got.HotVolume != want {
+		t.Fatalf("hotVolume = %#v, want %#v", got.HotVolume, want)
+	}
+	if p.HotVolume.StorageClassName != " Tau-Hot " {
+		t.Fatalf("normalization mutated input: %#v", p.HotVolume)
+	}
+
+	var copied WorkloadProfile
+	got.DeepCopyInto(&copied)
+	copied.HotVolume.MaxSize = "4Ti"
+	if got.HotVolume.MaxSize != "2Ti" {
+		t.Fatal("DeepCopyInto shared the hotVolume pointer")
+	}
+
+	valid := got
+	tests := []struct {
+		name    string
+		mutate  func(*HotVolume)
+		wantErr string
+	}{
+		{"missing storage class", func(h *HotVolume) { h.StorageClassName = "" }, "storageClassName"},
+		{"invalid storage class", func(h *HotVolume) { h.StorageClassName = "tau..hot" }, "storageClassName"},
+		{"missing default", func(h *HotVolume) { h.DefaultSize = "" }, "defaultSize is required"},
+		{"invalid default", func(h *HotVolume) { h.DefaultSize = "lots" }, "defaultSize"},
+		{"zero max", func(h *HotVolume) { h.MaxSize = "0" }, "maxSize must be > 0"},
+		{"negative default", func(h *HotVolume) { h.DefaultSize = "-1Gi" }, "defaultSize must be > 0"},
+		{"default above max", func(h *HotVolume) { h.DefaultSize = "3Ti" }, "must not exceed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := valid
+			hot := *valid.HotVolume
+			tt.mutate(&hot)
+			p.HotVolume = &hot
+			if err := ValidateWorkloadProfile(p); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateWorkloadProfile() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+
+	unnormalized := valid
+	unnormalized.HotVolume = &HotVolume{StorageClassName: "tau-hot", DefaultSize: "1024Gi", MaxSize: "2Ti"}
+	if err := ValidateWorkloadProfile(unnormalized); err == nil {
+		t.Fatal("ValidateWorkloadProfile() accepted a non-canonical size")
+	}
+}
+
+func TestProfileSetHashOmitsUnsetHotVolume(t *testing.T) {
+	profile := testResolvedProfile("research-1gpu")
+	encoded, err := json.Marshal(profile.WorkloadProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "hotVolume") {
+		t.Fatalf("unset hotVolume serialized: %s", encoded)
+	}
+	before, err := ProfileSetHash([]ResolvedWorkloadProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.HotVolume = &HotVolume{StorageClassName: "tau-hot", DefaultSize: "1Ti", MaxSize: "2Ti"}
+	after, err := ProfileSetHash([]ResolvedWorkloadProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("hash did not change when hotVolume was set")
+	}
+}

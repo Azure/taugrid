@@ -12,10 +12,13 @@ import (
 
 	tauv1alpha1 "github.com/Azure/taugrid/controllers/tau-core/api/v1alpha1"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -108,8 +111,13 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 			condition(profile.ConditionTopologiesReady, metav1.ConditionUnknown, "ValidationSkipped", message, generation),
 			condition(profile.ConditionPriorityClassesReady, metav1.ConditionUnknown, "ValidationSkipped", message, generation),
 			condition(profile.ConditionExecutionReady, metav1.ConditionUnknown, "ValidationSkipped", message, generation),
-			condition(profile.ConditionReady, metav1.ConditionFalse, "InvalidWorkloadProfile", message, generation),
 		}
+		if normalized.HotVolume != nil {
+			resolved.Conditions = append(resolved.Conditions,
+				condition(profile.ConditionHotVolumeReady, metav1.ConditionUnknown, "ValidationSkipped", message, generation))
+		}
+		resolved.Conditions = append(resolved.Conditions,
+			condition(profile.ConditionReady, metav1.ConditionFalse, "InvalidWorkloadProfile", message, generation))
 		return resolved, nil
 	}
 
@@ -222,6 +230,7 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 	flavorsOK := clusterQueueOK
 	flavorIssues := make([]string, 0)
 	topologyNames := make(map[string]struct{})
+	flavorNodeLabels := make(map[string]map[string]string)
 	for _, name := range sortedSet(flavorNames) {
 		flavor := newQueueObject(resourceFlavorGVK)
 		if err := r.Get(ctx, client.ObjectKey{Name: name}, flavor); err != nil {
@@ -244,6 +253,13 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 		if topologyName != "" {
 			topologyNames[topologyName] = struct{}{}
 		}
+		nodeLabels, _, err := unstructured.NestedStringMap(flavor.Object, "spec", "nodeLabels")
+		if err != nil {
+			flavorsOK = false
+			flavorIssues = append(flavorIssues, fmt.Sprintf("ResourceFlavor %s has malformed nodeLabels: %v", name, err))
+			continue
+		}
+		flavorNodeLabels[name] = nodeLabels
 	}
 	resolved.Conditions = append(resolved.Conditions, observationCondition(
 		profile.ConditionResourceFlavorsReady,
@@ -322,7 +338,15 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 		generation,
 	))
 
-	ready := localOK && clusterQueueOK && flavorsOK && topologiesOK && prioritiesOK &&
+	hotVolumeOK := true
+	if normalized.HotVolume != nil {
+		hotCondition, err := r.observeHotVolume(ctx, normalized.HotVolume, flavorsOK, flavorNodeLabels, generation)
+		observationErr = errors.Join(observationErr, err)
+		hotVolumeOK = hotCondition.Status == metav1.ConditionTrue
+		resolved.Conditions = append(resolved.Conditions, hotCondition)
+	}
+
+	ready := localOK && clusterQueueOK && flavorsOK && topologiesOK && prioritiesOK && hotVolumeOK &&
 		executionCondition.Status == metav1.ConditionTrue
 	readyMessage := "all workload profile dependencies are ready"
 	if !ready {
@@ -580,6 +604,88 @@ func previousResolvedProfile(profiles []profile.ResolvedWorkloadProfile, name st
 		}
 	}
 	return nil
+}
+
+func (r *TauClusterReconciler) observeHotVolume(
+	ctx context.Context,
+	hot *profile.HotVolume,
+	flavorsOK bool,
+	flavorNodeLabels map[string]map[string]string,
+	generation int64,
+) (metav1.Condition, error) {
+	notReady := func(message string) metav1.Condition {
+		return condition(profile.ConditionHotVolumeReady, metav1.ConditionFalse, "HotVolumeNotReady", message, generation)
+	}
+	var storageClass storagev1.StorageClass
+	if err := r.Get(ctx, client.ObjectKey{Name: hot.StorageClassName}, &storageClass); err != nil {
+		if apierrors.IsNotFound(err) {
+			return notReady(fmt.Sprintf("StorageClass %s does not exist", hot.StorageClassName)), nil
+		}
+		return notReady(fmt.Sprintf("cannot read StorageClass %s: %v", hot.StorageClassName, err)),
+			fmt.Errorf("read StorageClass %s: %w", hot.StorageClassName, err)
+	}
+	if storageClass.VolumeBindingMode == nil || *storageClass.VolumeBindingMode != storagev1.VolumeBindingWaitForFirstConsumer {
+		return notReady(fmt.Sprintf("StorageClass %s must use volumeBindingMode %s",
+			hot.StorageClassName, storagev1.VolumeBindingWaitForFirstConsumer)), nil
+	}
+	if !flavorsOK {
+		return notReady("hot volume nodes cannot be resolved until ResourceFlavors are ready"), nil
+	}
+
+	var nodes corev1.NodeList
+	if err := r.List(ctx, &nodes); err != nil {
+		return notReady(fmt.Sprintf("cannot list nodes: %v", err)), fmt.Errorf("list nodes: %w", err)
+	}
+	selectors := make([]labels.Selector, 0, len(flavorNodeLabels))
+	for _, nodeLabels := range flavorNodeLabels {
+		selectors = append(selectors, labels.SelectorFromSet(nodeLabels))
+	}
+	var poolNodes []*corev1.Node
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		for _, selector := range selectors {
+			if selector.Matches(labels.Set(node.Labels)) {
+				poolNodes = append(poolNodes, node)
+				break
+			}
+		}
+	}
+	if len(poolNodes) == 0 {
+		return notReady("no nodes match the nodeLabels of the profile's ResourceFlavors"), nil
+	}
+
+	var capacities storagev1.CSIStorageCapacityList
+	if err := r.List(ctx, &capacities); err != nil {
+		return notReady(fmt.Sprintf("cannot list CSIStorageCapacities: %v", err)), fmt.Errorf("list CSIStorageCapacities: %w", err)
+	}
+	topologies := make([]labels.Selector, 0)
+	for i := range capacities.Items {
+		capacity := &capacities.Items[i]
+		if capacity.StorageClassName != hot.StorageClassName || capacity.NodeTopology == nil {
+			continue
+		}
+		selector, err := metav1.LabelSelectorAsSelector(capacity.NodeTopology)
+		if err != nil {
+			continue
+		}
+		topologies = append(topologies, selector)
+	}
+	covered := 0
+	for _, node := range poolNodes {
+		for _, topology := range topologies {
+			if topology.Matches(labels.Set(node.Labels)) {
+				covered++
+				break
+			}
+		}
+	}
+	if covered == 0 {
+		return notReady(fmt.Sprintf("no CSIStorageCapacity for StorageClass %s covers any of %d profile nodes",
+			hot.StorageClassName, len(poolNodes))), nil
+	}
+	return condition(profile.ConditionHotVolumeReady, metav1.ConditionTrue, "HotVolumeReady",
+		fmt.Sprintf("StorageClass %s reports capacity on %d of %d profile nodes", hot.StorageClassName, covered, len(poolNodes)),
+		generation), nil
 }
 
 func observationCondition(

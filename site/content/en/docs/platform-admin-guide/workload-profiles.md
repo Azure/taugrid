@@ -102,6 +102,42 @@ AKS-managed Azure CSI addons; follow TauGrid's customer setup path for a
 compatible deployment-managed driver as described in
 [the AKS storage boundary](../aks-setup/#aks-storage-drivers-and-flex-nodes).
 
+## Node-local hot volumes
+
+A profile can declare a node-local NVMe scratch volume with `hotVolume`:
+
+```yaml
+    - name: research.training.8x
+      # ...
+      hotVolume:
+        storageClassName: tau-hot
+        defaultSize: 1Ti
+        maxSize: 2Ti
+```
+
+`storageClassName` names a StorageClass whose CSI driver publishes
+`CSIStorageCapacity`. Because the StorageClass uses
+`volumeBindingMode: WaitForFirstConsumer`, kube-scheduler places each pod on a
+node with enough free local capacity. Kueue doesn't account for hot storage.
+Both sizes are Kubernetes quantities, and `defaultSize` can't exceed `maxSize`.
+The controller publishes sizes in canonical form, so `1024Gi` appears as `1Ti`.
+Choose `maxSize` so it fits: it must not exceed a node's usable NVMe divided
+by the number of hot-volume pods that node runs at once.
+
+A profile with `hotVolume` gets a `HotVolumeReady` condition, and the profile
+is `Ready` only when that condition is `True`. The condition is `False` in
+these cases:
+
+- the StorageClass doesn't exist;
+- the StorageClass doesn't use `WaitForFirstConsumer`;
+- no node matches the `nodeLabels` of the profile's ResourceFlavors;
+- no `CSIStorageCapacity` for the StorageClass covers any of those nodes.
+
+The condition message reports how many profile nodes have capacity objects.
+The condition doesn't check the fit rule, and it doesn't replace the
+`CSINode` registration and mount canary checks described above. Profiles
+without `hotVolume` don't get the condition.
+
 ## Connected and offline rendering
 
 A normal run, server dry-run, or apply reads the connected cluster:
