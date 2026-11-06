@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1-azurelinux3.0@sha256:9af70997416d1deb69c2457146d56c74caf22c3a96ab66466647d4677ec5391f AS builder
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1-azurelinux3.0@sha256:908923acd55956318e0a606479812e03ef4eda736370ba9f9b759d140d8b355a AS builder
 
 ENV GOTOOLCHAIN=go1.27.3 \
     MS_GOTOOLCHAIN_ALLOW_NON_LOCAL=1
