@@ -44,6 +44,13 @@ curl -fsS http://127.0.0.1:18080/healthz
 
 The installation validation should include `PASS Portal`, the rollout should complete, the Service should be `ClusterIP`, and the health request should succeed. A default install can open `/portal` and Kubernetes-backed run details, but the capability table above remains the acceptance boundary.
 
+To omit Portal, set `taugrid-core.portal.enabled: false` in the complete
+platform values file, or pass `--set taugrid-core.portal.enabled=false`
+alongside that file. The umbrella chart does not use `portal.enabled` or
+`components.portal.enabled`. Installation readiness skips Portal when the
+resolved Helm release values disable it; the plan lists chart defaults before
+Helm overrides, not the resolved component selection.
+
 ## Confirm release capability before enabling ADX boards
 
 Use a published TauGrid release whose chart and images include native Kusto Portal support. Confirm the template contract for the exact release you use. The matching `taugrid-core` chart must accept `portal.runHistory.enabled` with `portal.kusto.endpoint` and no `portal.kusto.queryCommand`, and it must derive the `azure.workload.identity/use: "true"` Pod label from the Portal ServiceAccount's `azure.workload.identity/client-id` annotation.

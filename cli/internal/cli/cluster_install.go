@@ -76,7 +76,7 @@ The platform pre-provisions and owns that claim, its StorageClass, CSI setup,
 cloud storage, access policy, and lifecycle outside TauGrid.`,
 		Example: `  tau cluster install
   tau cluster install --dry-run
-  tau cluster install --namespace tau-system --set portal.enabled=false --wait`,
+  tau cluster install --namespace tau-system --set taugrid-core.portal.enabled=false --wait`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := validateClusterInstallSpec(spec); err != nil {
 				return err
@@ -199,9 +199,9 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Helm wait:  %s
   Rollback:   %s
   Tau CRDs:   update from the selected chart before an existing-release upgrade; not rolled back by Helm
-  Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal
+  Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal (before Helm overrides)
   Opt-in:     Stellar, lifecycle recorder, image prewarm
-  Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
+  Validation: Kubernetes >=1.30 and enabled components ready; disabled components skipped
 
 `, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
 }

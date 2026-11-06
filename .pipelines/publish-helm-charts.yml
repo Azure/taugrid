@@ -31,6 +31,13 @@ stages:
 
           - bash: |
               set -euo pipefail
+              helm version --short
+              yq --version
+              docker buildx version
+            displayName: Check chart and image verification tools
+
+          - bash: |
+              set -euo pipefail
               scripts/ci/publish-helm-charts.sh package \
                 "$(Build.ArtifactStagingDirectory)/helm"
             displayName: Validate and package charts
