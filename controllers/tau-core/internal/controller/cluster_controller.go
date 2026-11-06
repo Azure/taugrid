@@ -139,12 +139,12 @@ func (r *TauClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&storagev1.CSIStorageCapacity{},
 			handler.EnqueueRequestsFromMapFunc(enqueueTauClusterForProfileDependency),
-			builder.WithPredicates(storageCapacityTopologyPredicate()),
+			builder.WithPredicates(storageCapacityCoveragePredicate()),
 		).
 		Complete(r)
 }
 
-func storageCapacityTopologyPredicate() predicate.Predicate {
+func storageCapacityCoveragePredicate() predicate.Predicate {
 	return predicate.Funcs{
 		UpdateFunc: func(update event.UpdateEvent) bool {
 			oldCapacity, oldOK := update.ObjectOld.(*storagev1.CSIStorageCapacity)
@@ -153,7 +153,8 @@ func storageCapacityTopologyPredicate() predicate.Predicate {
 				return true
 			}
 			return oldCapacity.StorageClassName != newCapacity.StorageClassName ||
-				!apiequality.Semantic.DeepEqual(oldCapacity.NodeTopology, newCapacity.NodeTopology)
+				!apiequality.Semantic.DeepEqual(oldCapacity.NodeTopology, newCapacity.NodeTopology) ||
+				hasStorageCapacity(oldCapacity) != hasStorageCapacity(newCapacity)
 		},
 	}
 }

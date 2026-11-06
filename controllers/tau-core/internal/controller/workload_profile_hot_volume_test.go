@@ -33,7 +33,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 		{
 			name:    "covered pool node",
 			status:  metav1.ConditionTrue,
-			message: "StorageClass tau-hot reports capacity on 1 of 2 profile nodes",
+			message: "StorageClass tau-hot reports free capacity on 1 of 2 profile nodes",
 		},
 		{
 			name: "missing StorageClass",
@@ -67,7 +67,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
 			},
 			status:  metav1.ConditionFalse,
-			message: "no CSIStorageCapacity for StorageClass tau-hot covers any of 2 profile nodes",
+			message: "no CSIStorageCapacity for StorageClass tau-hot reports free capacity on any of 2 profile nodes",
 		},
 		{
 			name: "capacity without node topology",
@@ -77,7 +77,37 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
 			},
 			status:  metav1.ConditionFalse,
-			message: "covers any of 2 profile nodes",
+			message: "reports free capacity on any of 2 profile nodes",
+		},
+		{
+			name: "zero capacity on a pool node",
+			mutate: func(objects []client.Object) []client.Object {
+				capacity := testHotStorageCapacity("gpu-2", "gpu-2")
+				capacity.Capacity = resource.NewQuantity(0, resource.BinarySI)
+				return append(objects, capacity)
+			},
+			status:  metav1.ConditionTrue,
+			message: "reports free capacity on 1 of 2 profile nodes",
+		},
+		{
+			name: "only zero capacity",
+			mutate: func(objects []client.Object) []client.Object {
+				capacity := testHotStorageCapacity("gpu-1", "gpu-1")
+				capacity.Capacity = resource.NewQuantity(0, resource.BinarySI)
+				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
+			},
+			status:  metav1.ConditionFalse,
+			message: "reports free capacity on any of 2 profile nodes",
+		},
+		{
+			name: "capacity unset",
+			mutate: func(objects []client.Object) []client.Object {
+				capacity := testHotStorageCapacity("gpu-1", "gpu-1")
+				capacity.Capacity = nil
+				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
+			},
+			status:  metav1.ConditionFalse,
+			message: "reports free capacity on any of 2 profile nodes",
 		},
 		{
 			name: "capacity only outside the pool",
@@ -85,7 +115,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), testHotStorageCapacity("cpu-1", "cpu-1"))
 			},
 			status:  metav1.ConditionFalse,
-			message: "covers any of 2 profile nodes",
+			message: "reports free capacity on any of 2 profile nodes",
 		},
 		{
 			name: "no pool nodes",
@@ -164,8 +194,8 @@ func TestInvalidHotVolumeProfileSkipsHotVolumeObservation(t *testing.T) {
 	assertCondition(t, conditions, profile.ConditionReady, metav1.ConditionFalse)
 }
 
-func TestStorageCapacityTopologyPredicateIgnoresCapacityOnlyUpdates(t *testing.T) {
-	predicate := storageCapacityTopologyPredicate()
+func TestStorageCapacityCoveragePredicateIgnoresCapacityOnlyUpdates(t *testing.T) {
+	predicate := storageCapacityCoveragePredicate()
 	old := testHotStorageCapacity("gpu-1", "gpu-1")
 	if !predicate.Create(event.CreateEvent{Object: old}) || !predicate.Delete(event.DeleteEvent{Object: old}) {
 		t.Fatal("create and delete events must enqueue")
@@ -174,6 +204,19 @@ func TestStorageCapacityTopologyPredicateIgnoresCapacityOnlyUpdates(t *testing.T
 	capacityOnly.Capacity = resource.NewQuantity(1, resource.BinarySI)
 	if predicate.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: capacityOnly}) {
 		t.Fatal("capacity-only update enqueued")
+	}
+	exhausted := old.DeepCopy()
+	exhausted.Capacity = resource.NewQuantity(0, resource.BinarySI)
+	if !predicate.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: exhausted}) {
+		t.Fatal("capacity exhaustion did not enqueue")
+	}
+	if !predicate.Update(event.UpdateEvent{ObjectOld: exhausted, ObjectNew: old}) {
+		t.Fatal("capacity recovery did not enqueue")
+	}
+	unset := old.DeepCopy()
+	unset.Capacity = nil
+	if predicate.Update(event.UpdateEvent{ObjectOld: exhausted, ObjectNew: unset}) {
+		t.Fatal("zero to unset capacity enqueued")
 	}
 	moved := testHotStorageCapacity("gpu-1", "gpu-2")
 	if !predicate.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: moved}) {

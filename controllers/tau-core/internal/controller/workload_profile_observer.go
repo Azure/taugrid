@@ -661,7 +661,7 @@ func (r *TauClusterReconciler) observeHotVolume(
 	topologies := make([]labels.Selector, 0)
 	for i := range capacities.Items {
 		capacity := &capacities.Items[i]
-		if capacity.StorageClassName != hot.StorageClassName || capacity.NodeTopology == nil {
+		if capacity.StorageClassName != hot.StorageClassName || capacity.NodeTopology == nil || !hasStorageCapacity(capacity) {
 			continue
 		}
 		selector, err := metav1.LabelSelectorAsSelector(capacity.NodeTopology)
@@ -680,12 +680,16 @@ func (r *TauClusterReconciler) observeHotVolume(
 		}
 	}
 	if covered == 0 {
-		return notReady(fmt.Sprintf("no CSIStorageCapacity for StorageClass %s covers any of %d profile nodes",
+		return notReady(fmt.Sprintf("no CSIStorageCapacity for StorageClass %s reports free capacity on any of %d profile nodes",
 			hot.StorageClassName, len(poolNodes))), nil
 	}
 	return condition(profile.ConditionHotVolumeReady, metav1.ConditionTrue, "HotVolumeReady",
-		fmt.Sprintf("StorageClass %s reports capacity on %d of %d profile nodes", hot.StorageClassName, covered, len(poolNodes)),
+		fmt.Sprintf("StorageClass %s reports free capacity on %d of %d profile nodes", hot.StorageClassName, covered, len(poolNodes)),
 		generation), nil
+}
+
+func hasStorageCapacity(capacity *storagev1.CSIStorageCapacity) bool {
+	return capacity.Capacity != nil && capacity.Capacity.Sign() > 0
 }
 
 func observationCondition(

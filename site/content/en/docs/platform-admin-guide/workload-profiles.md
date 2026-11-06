@@ -131,10 +131,15 @@ these cases:
 - the StorageClass doesn't exist;
 - the StorageClass doesn't use `WaitForFirstConsumer`;
 - no node matches the `nodeLabels` of the profile's ResourceFlavors;
-- no `CSIStorageCapacity` for the StorageClass covers any of those nodes.
+- no `CSIStorageCapacity` for the StorageClass reports free capacity on any of
+  those nodes.
 
-The condition message reports how many profile nodes have capacity objects.
-The condition doesn't check the fit rule, and it doesn't replace the
+A node counts only when a matching `CSIStorageCapacity` object reports
+capacity greater than zero. Some drivers publish zero-capacity objects for
+nodes without local disks, and those nodes don't count. Capacity is free
+space, so the condition also turns `False` while every profile node's local
+disks are full. The condition message reports how many profile nodes have free
+capacity. The condition doesn't check the fit rule, and it doesn't replace the
 `CSINode` registration and mount canary checks described above. Profiles
 without `hotVolume` don't get the condition.
 
