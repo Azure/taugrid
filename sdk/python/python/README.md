@@ -213,8 +213,8 @@ Pinned installs and troubleshooting:
 
 Public API: `tau.train`, `tau.eval`, `tau.serve`, `tau.config`,
 `tau.secret_from_env`, `tau.secret_from_file`, `tau.secret_ref`,
-`tau.pvc_mount`, `tau.dataset_file_reference`, `tau.datasets.timed`,
-`tau.read_jsonl_objects`, `tau.load_staged_module`,
+`tau.pvc_mount`, `tau.dataset_file_reference`, `tau.datasets.stage`,
+`tau.datasets.timed`, `tau.read_jsonl_objects`, `tau.load_staged_module`,
 `tau.load_staged_function`, `tau.call_staged_function`, `tau.stellar`.
 
 ## Dataset and staged-script helpers
@@ -392,6 +392,50 @@ The wait covers everything the iterable does to produce a batch, such as
 reading, decoding, collation, and device transfer, so it is batch-preparation
 time rather than storage time alone. In distributed training, each rank times
 only its own iterator.
+
+### Staging datasets to the hot volume
+
+`tau.datasets.stage` copies a dataset's files onto the pod's local hot volume
+before training reads them. It consumes the environment printed by
+`tau data dataset ref NAME@VERSION -o env`: comma-separated
+`${PREFIX}_URIS` and `${PREFIX}_SHA256S` (`--env-prefix`, default
+`FINEWEB_DATASET`).
+
+```python
+from tau import datasets, stellar
+
+stellar.init(project="nanogpt", run="baseline")
+root = datasets.stage("fineweb-edu-sample-10bt@v1", env_prefix="FINEWEB_DATASET")
+shards = sorted(root.rglob("*.bin"))
+```
+
+Files land in `$TAU_DATASETS_DIR/<name>/<version>`, falling back to
+`$TAU_HOT_DIR/datasets` and then `/mnt/datasets`, and keep their paths relative
+to the sources' common directory. `dest=` picks another directory. The ref only
+names the directory; it is not resolved against the dataset registry. Pass
+`uris=[...]` and `sha256s=[...]` instead of the environment to stage an explicit
+list, and `sizes=[...]` when byte counts are known. Sources can be `file://`,
+`https://`, or `http://` URIs or local paths.
+
+Up to `max_workers` files (default 8) download in parallel, and transient
+network errors are retried `retries` times (default 3) with backoff. Each file
+is written under a temporary name, hashed while it streams, and renamed into
+place only when its SHA-256 matches, so an interrupted or corrupt download never
+appears under its final name. Files already present with the right hash are
+kept without reading the source. When sizes are known from `sizes=`, local
+sources, or `Content-Length`, free space is checked before writing; a full or
+over-quota volume raises `tau.datasets.StageError` naming `storage.hot_size`,
+the `tau.yaml` field that sizes the hot volume. A hash mismatch also raises
+`StageError` and names the file.
+
+With the default `per="node"`, only local rank 0 (from `LOCAL_RANK`, or the Ray
+Train context) downloads, so each node fetches each file once. The other local
+ranks wait up to `timeout` seconds (default 3600) for rank 0's completion marker
+and raise `StageError` if rank 0 fails. A marker left by a different file list
+is ignored. `per="none"` stages in every calling process without coordination.
+The downloading process logs `data/stage_seconds`, `data/stage_bytes` (bytes
+downloaded), and `data/stage_skipped_bytes` (bytes already present) to the
+active Stellar run, or to `log=callable`.
 
 ### PyTorch Lightning migration from W&B
 

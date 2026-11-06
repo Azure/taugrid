@@ -1,18 +1,42 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Dataset helpers for Tau workloads: portable file references and data-loading timing."""
+"""Dataset helpers for Tau workloads: portable file references, hot-volume staging, and data-loading timing."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
+import contextlib
+import errno
+import hashlib
+import http.client
+import json
+import os
+import random
+import shutil
+import sys
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from time import perf_counter
-from typing import TypeVar
+from time import monotonic, perf_counter, sleep, time
+from typing import BinaryIO, NamedTuple, TypeVar
 
 _T = TypeVar("_T")
 
 _MetricsSink = Callable[[Mapping[str, float], int], object]
+
+_DEFAULT_ENV_PREFIX = "FINEWEB_DATASET"
+_STAGE_MARKER = ".tau-stage.json"
+_PARTIAL_SUFFIX = ".tau-partial"
+_CHUNK_BYTES = 8 * 1024 * 1024
+_REQUEST_TIMEOUT_SECONDS = 120.0
+_RETRY_BACKOFF_SECONDS = 1.0
+_POLL_SECONDS = 1.0
+_SPACE_ERRNOS = frozenset(code for code in (errno.ENOSPC, getattr(errno, "EDQUOT", None)) if code is not None)
 
 def dataset_file_reference(root: str | Path, raw_path: str, *, field_name: str = "path") -> tuple[str, Path]:
     """Return a portable dataset-relative path and resolved local path.
@@ -104,6 +128,107 @@ class TimedIterator(Iterator[_T]):
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+class StageError(RuntimeError):
+    """Raised when :func:`stage` cannot fetch, verify, store, or wait for a dataset."""
+
+def stage(
+    ref: str | None = None,
+    *,
+    env_prefix: str | None = None,
+    uris: Sequence[str] | None = None,
+    sha256s: Sequence[str] | None = None,
+    sizes: Sequence[int] | None = None,
+    name: str | None = None,
+    version: str | None = None,
+    dest: str | os.PathLike[str] | None = None,
+    per: str = "node",
+    local_rank: int | None = None,
+    max_workers: int = 8,
+    retries: int = 3,
+    timeout: float = 3600.0,
+    log: _MetricsSink | None = None,
+) -> Path:
+    """Download and verify a dataset's files onto the pod's hot volume.
+
+    Sources default to the ``tau data dataset ref -o env`` contract:
+    comma-separated ``{env_prefix}_URIS`` and ``{env_prefix}_SHA256S``, with
+    ``env_prefix`` defaulting to the CLI's ``FINEWEB_DATASET``. Pass ``uris=``
+    and ``sha256s=`` to stage an explicit list instead, and ``sizes=`` when
+    byte counts are known. Sources may be ``file://``, ``https://``, or
+    ``http://`` URIs or local paths. Files keep their paths relative to the
+    sources' common directory.
+
+    Files land in ``dest``, which defaults to
+    ``$TAU_DATASETS_DIR/<name>/<version>`` (falling back to
+    ``$TAU_HOT_DIR/datasets`` and then ``/mnt/datasets``). ``ref`` is a
+    ``NAME@VERSION`` string naming that directory; it is not resolved against
+    the dataset registry. The staged directory is returned.
+
+    Up to ``max_workers`` files download in parallel, each retried up to
+    ``retries`` times with backoff on transient network errors. Every file is
+    written under a temporary name, hashed while it streams, and renamed into
+    place only when its SHA-256 matches, so a partial or corrupt download never
+    appears under its final name. Files already present with the expected hash
+    are kept without reading the source. When sizes are known from ``sizes=``,
+    local sources, or ``Content-Length``, free space is checked before writing.
+    A hash mismatch, a full or over-quota volume, or an exhausted retry budget
+    raises :class:`StageError`.
+
+    With ``per="node"`` only local rank 0 downloads. The rank comes from
+    ``local_rank``, else ``LOCAL_RANK``, else the Ray Train context, else 0.
+    Other local ranks wait up to ``timeout`` seconds for rank 0's completion
+    marker in ``dest`` and raise :class:`StageError` if rank 0 reports a
+    failure. A marker written for a different file list is ignored.
+    ``per="none"`` stages in every calling process without coordination.
+
+    The downloading process logs ``data/stage_seconds``, ``data/stage_bytes``
+    (bytes downloaded), and ``data/stage_skipped_bytes`` (bytes already
+    present) to ``log(metrics, 0)`` when given, otherwise to the active
+    ``tau.stellar`` run.
+    """
+
+    if per not in ("node", "none"):
+        raise ValueError(f"per must be 'node' or 'none', got {per!r}")
+    if max_workers < 1:
+        raise ValueError(f"max_workers must be at least 1, got {max_workers}")
+    if retries < 0:
+        raise ValueError(f"retries must be non-negative, got {retries}")
+    name, version = _stage_identity(ref, name, version)
+    uri_list, sha_list = _stage_sources(env_prefix, uris, sha256s)
+    size_list = _stage_sizes(sizes, len(uri_list))
+    root = Path(dest).expanduser() if dest is not None else _stage_dest(name, version)
+    files = _stage_plan(root, uri_list, sha_list, size_list)
+    label = f"{name}@{version}" if name and version else str(root)
+    manifest = _manifest_digest(files)
+    marker = root / _STAGE_MARKER
+    coordinated = per == "node"
+    if coordinated and _resolve_local_rank(local_rank) != 0:
+        _wait_for_stage(marker, manifest, label, timeout)
+        return root
+
+    started = perf_counter()
+    try:
+        _prepare_stage_dir(root, marker, coordinated)
+        downloaded, skipped = _stage_all(root, files, label, max_workers, retries)
+    except BaseException as exc:
+        if coordinated:
+            with contextlib.suppress(OSError):
+                _write_marker(marker, manifest, "failed", str(exc) or type(exc).__name__)
+        raise
+    if coordinated:
+        _write_marker(marker, manifest, "complete")
+    sink = log if log is not None else _active_run_sink()
+    if sink is not None:
+        sink(
+            {
+                "data/stage_seconds": perf_counter() - started,
+                "data/stage_bytes": downloaded,
+                "data/stage_skipped_bytes": skipped,
+            },
+            0,
+        )
+    return root
+
 def _active_run_sink() -> _MetricsSink | None:
     try:
         from tau import stellar
@@ -167,4 +292,328 @@ def _log_final_step(
         step,
     )
 
-__all__ = ["TimedIterator", "dataset_file_reference", "timed"]
+class _Cancelled(Exception):
+    pass
+
+class _StageFile(NamedTuple):
+    uri: str
+    sha256: str
+    relpath: str
+    target: Path
+    size: int | None
+
+def _stage_identity(ref: str | None, name: str | None, version: str | None) -> tuple[str | None, str | None]:
+    if ref is not None:
+        ref_name, separator, ref_version = str(ref).strip().partition("@")
+        if not separator or not ref_name or not ref_version:
+            raise ValueError(f"dataset ref must be NAME@VERSION: {ref!r}")
+        if (name is not None and name != ref_name) or (version is not None and version != ref_version):
+            raise ValueError(f"dataset ref {ref!r} conflicts with name={name!r} version={version!r}")
+        name, version = ref_name, ref_version
+    for field_name, value in (("name", name), ("version", version)):
+        if value is not None and (value in ("", ".", "..") or "/" in value or "\\" in value):
+            raise ValueError(f"dataset {field_name} must be a single path component: {value!r}")
+    return name, version
+
+def _stage_sources(
+    env_prefix: str | None,
+    uris: Sequence[str] | None,
+    sha256s: Sequence[str] | None,
+) -> tuple[list[str], list[str]]:
+    if uris is not None:
+        if env_prefix is not None:
+            raise ValueError("pass either uris= or env_prefix=, not both")
+        if sha256s is None:
+            raise ValueError("sha256s= is required with uris=")
+        uri_label, sha_label = "uris", "sha256s"
+        uri_list = [str(uri).strip() for uri in uris]
+        sha_list = [str(sha).strip() for sha in sha256s]
+    else:
+        if sha256s is not None:
+            raise ValueError("sha256s= requires uris=")
+        prefix = env_prefix or _DEFAULT_ENV_PREFIX
+        uri_label, sha_label = f"{prefix}_URIS", f"{prefix}_SHA256S"
+        uri_list = _csv_env(uri_label)
+        sha_list = _csv_env(sha_label)
+    if not uri_list:
+        raise ValueError(f"{uri_label} lists no files to stage")
+    if not all(uri_list):
+        raise ValueError(f"{uri_label} contains an empty entry")
+    if len(sha_list) != len(uri_list):
+        raise ValueError(f"{sha_label} has {len(sha_list)} entries but {uri_label} has {len(uri_list)}")
+    return uri_list, [_normalize_sha256(sha, sha_label) for sha in sha_list]
+
+def _csv_env(name: str) -> list[str]:
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+
+def _normalize_sha256(value: str, label: str) -> str:
+    digest = value.lower().removeprefix("sha256:")
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        raise ValueError(f"{label} entry is not a SHA-256 hex digest: {value!r}")
+    return digest
+
+def _stage_sizes(sizes: Sequence[int] | None, count: int) -> list[int | None]:
+    if sizes is None:
+        return [None] * count
+    size_list: list[int | None] = [int(size) for size in sizes]
+    if len(size_list) != count:
+        raise ValueError(f"sizes has {len(size_list)} entries but there are {count} files")
+    if any(size is not None and size < 0 for size in size_list):
+        raise ValueError("sizes must be non-negative")
+    return size_list
+
+def _stage_dest(name: str | None, version: str | None) -> Path:
+    if not name or not version:
+        raise ValueError("stage needs ref='NAME@VERSION', name= and version=, or an explicit dest=")
+    return _datasets_root() / name / version
+
+def _datasets_root() -> Path:
+    datasets_dir = os.environ.get("TAU_DATASETS_DIR", "").strip()
+    if datasets_dir:
+        return Path(datasets_dir)
+    hot_dir = os.environ.get("TAU_HOT_DIR", "").strip()
+    if hot_dir:
+        return Path(hot_dir) / "datasets"
+    return Path("/mnt/datasets")
+
+def _stage_plan(root: Path, uris: list[str], sha256s: list[str], sizes: list[int | None]) -> list[_StageFile]:
+    keys = [_source_key(uri) for uri in uris]
+    common = len(os.path.commonprefix([key[:-1] for key in keys]))
+    files: list[_StageFile] = []
+    seen: set[str] = set()
+    for uri, sha256, size, key in zip(uris, sha256s, sizes, keys):
+        parts = key[common:]
+        relpath = "/".join(parts)
+        if relpath in seen:
+            raise ValueError(f"more than one source stages to {relpath!r}")
+        seen.add(relpath)
+        known_size = size if size is not None else _local_size(uri)
+        files.append(_StageFile(uri, sha256, relpath, root.joinpath(*parts), known_size))
+    return files
+
+def _source_key(uri: str) -> tuple[str, ...]:
+    parsed = urllib.parse.urlsplit(uri)
+    scheme = parsed.scheme.lower()
+    if scheme in ("http", "https"):
+        origin = f"{scheme}://{parsed.netloc.lower()}"
+        segments = urllib.parse.unquote(parsed.path).split("/")
+    elif scheme in ("", "file"):
+        origin = "file://"
+        segments = _local_source(uri).replace("\\", "/").split("/")
+    else:
+        raise ValueError(f"unsupported dataset source {_safe_uri(uri)}: use file://, https://, or a local path")
+    segments = [segment for segment in segments if segment not in ("", ".")]
+    if not segments or ".." in segments:
+        raise ValueError(f"dataset source must name a file without '..': {_safe_uri(uri)}")
+    return (origin, *segments)
+
+def _local_source(uri: str) -> str:
+    parsed = urllib.parse.urlsplit(uri)
+    if parsed.scheme.lower() != "file":
+        return uri
+    if parsed.netloc not in ("", "localhost"):
+        raise ValueError(f"file URI must be absolute (file:///path): {uri}")
+    return urllib.request.url2pathname(parsed.path)
+
+def _local_size(uri: str) -> int | None:
+    if urllib.parse.urlsplit(uri).scheme.lower() in ("http", "https"):
+        return None
+    try:
+        return os.stat(_local_source(uri)).st_size
+    except OSError:
+        return None
+
+def _safe_uri(uri: str) -> str:
+    parsed = urllib.parse.urlsplit(uri)
+    netloc = parsed.netloc.rpartition("@")[2]
+    return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+
+def _manifest_digest(files: list[_StageFile]) -> str:
+    entries = sorted([file.relpath, file.sha256] for file in files)
+    return hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+def _resolve_local_rank(local_rank: int | None) -> int:
+    if local_rank is not None:
+        return int(local_rank)
+    value = os.environ.get("LOCAL_RANK", "").strip()
+    if value:
+        try:
+            return int(value)
+        except ValueError:
+            raise ValueError(f"LOCAL_RANK must be an integer, got {value!r}") from None
+    ray_train = sys.modules.get("ray.train")
+    if ray_train is not None:
+        try:
+            return int(ray_train.get_context().get_local_rank())
+        except Exception:
+            pass
+    return 0
+
+def _wait_for_stage(marker: Path, manifest: str, label: str, timeout: float) -> None:
+    waiting_since = time()
+    deadline = monotonic() + timeout
+    while True:
+        record = _read_marker(marker)
+        if record is not None and record.get("manifest") == manifest:
+            status = record.get("status")
+            if status == "complete":
+                return
+            if status == "failed" and _marker_time(record) >= waiting_since:
+                raise StageError(f"local rank 0 failed to stage {label}: {record.get('error', 'unknown error')}")
+        if monotonic() >= deadline:
+            raise StageError(
+                f"timed out after {timeout:g}s waiting for local rank 0 to stage {label} into {marker.parent}"
+            )
+        sleep(_POLL_SECONDS)
+
+def _read_marker(marker: Path) -> dict[str, object] | None:
+    try:
+        record = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+def _marker_time(record: Mapping[str, object]) -> float:
+    value = record.get("written_at")
+    return float(value) if isinstance(value, (int, float)) else 0.0
+
+def _write_marker(marker: Path, manifest: str, status: str, error: str | None = None) -> None:
+    record: dict[str, object] = {"manifest": manifest, "status": status, "written_at": time(), "pid": os.getpid()}
+    if error is not None:
+        record["error"] = error[:2000]
+    pending = marker.with_name(f"{marker.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        pending.write_text(json.dumps(record), encoding="utf-8")
+        os.replace(pending, marker)
+    finally:
+        pending.unlink(missing_ok=True)
+
+def _prepare_stage_dir(root: Path, marker: Path, coordinated: bool) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    if not coordinated:
+        return
+    marker.unlink(missing_ok=True)
+    for partial in root.rglob(f"*{_PARTIAL_SUFFIX}"):
+        partial.unlink(missing_ok=True)
+
+def _stage_all(root: Path, files: list[_StageFile], label: str, max_workers: int, retries: int) -> tuple[int, int]:
+    stop = threading.Event()
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(files)), thread_name_prefix="tau-stage") as pool:
+        try:
+            present = _run_all(pool, stop, [lambda file=file: _staged_size(file, stop) for file in files])
+            pending = [file for file, size in zip(files, present) if size is None]
+            _check_space(root, sum(file.size or 0 for file in pending), label)
+            downloaded = _run_all(pool, stop, [lambda file=file: _fetch(file, label, retries, stop) for file in pending])
+        except BaseException:
+            stop.set()
+            raise
+    return sum(downloaded), sum(size for size in present if size is not None)
+
+def _run_all(pool: ThreadPoolExecutor, stop: threading.Event, calls: list[Callable[[], _T]]) -> list[_T]:
+    futures = [pool.submit(call) for call in calls]
+    done, _ = wait(futures, return_when=FIRST_EXCEPTION)
+    failure = _first_failure(futures, done)
+    if failure is not None:
+        stop.set()
+        for future in futures:
+            future.cancel()
+        raise failure
+    return [future.result() for future in futures]
+
+def _first_failure(futures: list[Future[_T]], done: set[Future[_T]]) -> BaseException | None:
+    errors = [future.exception() for future in futures if future in done and not future.cancelled()]
+    failures = [error for error in errors if error is not None]
+    real = [error for error in failures if not isinstance(error, _Cancelled)]
+    return (real or failures or [None])[0]
+
+def _staged_size(file: _StageFile, stop: threading.Event) -> int | None:
+    if not file.target.is_file():
+        return None
+    size = file.target.stat().st_size
+    if file.size is not None and size != file.size:
+        return None
+    digest = hashlib.sha256()
+    with file.target.open("rb") as handle:
+        while chunk := handle.read(_CHUNK_BYTES):
+            if stop.is_set():
+                raise _Cancelled
+            digest.update(chunk)
+    return size if digest.hexdigest() == file.sha256 else None
+
+def _check_space(directory: Path, needed: int, what: str) -> None:
+    if needed <= 0:
+        return
+    free = shutil.disk_usage(directory).free
+    if needed > free:
+        raise StageError(
+            f"not enough space to stage {what}: {needed} bytes needed, {free} free under {directory}; "
+            "raise storage.hot_size in tau.yaml or free space on the hot volume"
+        )
+
+def _fetch(file: _StageFile, label: str, retries: int, stop: threading.Event) -> int:
+    attempt = 0
+    while True:
+        try:
+            return _download(file, stop)
+        except (StageError, _Cancelled):
+            raise
+        except Exception as exc:
+            if attempt >= retries or not _is_transient(exc):
+                raise StageError(
+                    f"failed to stage {file.relpath} of {label} from {_safe_uri(file.uri)} "
+                    f"after {attempt + 1} attempt(s): {exc}"
+                ) from exc
+            attempt += 1
+            if stop.wait(_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1) * (1 + random.random())):
+                raise _Cancelled from exc
+
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 425, 429) or exc.code >= 500
+    return isinstance(exc, (ConnectionError, TimeoutError, http.client.HTTPException, urllib.error.URLError))
+
+def _download(file: _StageFile, stop: threading.Event) -> int:
+    file.target.parent.mkdir(parents=True, exist_ok=True)
+    partial = file.target.with_name(f".{file.target.name}.{uuid.uuid4().hex}{_PARTIAL_SUFFIX}")
+    digest = hashlib.sha256()
+    written = 0
+    try:
+        with _open_source(file.uri) as source, partial.open("wb") as out:
+            length = _content_length(source)
+            if file.size is None and length is not None:
+                _check_space(file.target.parent, length, file.relpath)
+            while chunk := source.read(_CHUNK_BYTES):
+                if stop.is_set():
+                    raise _Cancelled
+                digest.update(chunk)
+                out.write(chunk)
+                written += len(chunk)
+        actual = digest.hexdigest()
+        if actual != file.sha256:
+            raise StageError(
+                f"sha256 mismatch for {file.relpath} from {_safe_uri(file.uri)}: "
+                f"expected {file.sha256}, got {actual}"
+            )
+        os.replace(partial, file.target)
+    except OSError as exc:
+        if exc.errno in _SPACE_ERRNOS:
+            raise StageError(
+                f"no space left writing {file.relpath} under {file.target.parent} ({os.strerror(exc.errno)}); "
+                "raise storage.hot_size in tau.yaml or free space on the hot volume"
+            ) from exc
+        raise
+    finally:
+        partial.unlink(missing_ok=True)
+    return written
+
+def _open_source(uri: str) -> BinaryIO:
+    if urllib.parse.urlsplit(uri).scheme.lower() in ("http", "https"):
+        return urllib.request.urlopen(uri, timeout=_REQUEST_TIMEOUT_SECONDS)
+    return open(_local_source(uri), "rb")
+
+def _content_length(source: object) -> int | None:
+    headers = getattr(source, "headers", None)
+    value = headers.get("Content-Length") if headers is not None else None
+    return int(value) if value is not None and str(value).isdigit() else None
+
+__all__ = ["StageError", "TimedIterator", "dataset_file_reference", "stage", "timed"]
