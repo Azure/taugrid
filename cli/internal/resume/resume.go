@@ -71,9 +71,13 @@ func ClassifyFailure(snap status.Snapshot) FailureReason {
 			}
 		}
 	}
+	for _, workload := range snap.Workloads {
+		if strings.TrimSpace(workload.Preemption) != "" {
+			return ReasonPreempted
+		}
+	}
 	for _, ev := range snap.Events {
-		reason := strings.ToLower(ev.Reason)
-		if reason == "preempted" || strings.Contains(reason, "preempt") {
+		if strings.EqualFold(ev.Reason, "Preempted") {
 			return ReasonPreempted
 		}
 	}
