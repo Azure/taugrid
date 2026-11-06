@@ -165,6 +165,41 @@ func TestRetryLoop_RetryableFailureThenSuccess(t *testing.T) {
 	}
 }
 
+func TestPollForTerminalPreservesDeletedOOMPodEvidence(t *testing.T) {
+	calls := 0
+	fetch := func() (status.Snapshot, error) {
+		calls++
+		if calls == 1 {
+			return status.Snapshot{
+				RayJob: status.RayJob{
+					Found:               true,
+					JobDeploymentStatus: "Running",
+				},
+				Pods: []status.Pod{
+					{Name: "worker", UID: "worker-uid", Phase: "Failed", OOMKilled: true},
+				},
+			}, nil
+		}
+		return status.Snapshot{
+			RayJob: status.RayJob{
+				Found:               true,
+				JobDeploymentStatus: "Failed",
+			},
+		}, nil
+	}
+
+	snap, terminal, err := pollForTerminalWithFetch(context.Background(), fetch, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal != terminalFailed {
+		t.Fatalf("terminal=%v, want failed", terminal)
+	}
+	if got := resume.ClassifyFailure(snap); got != resume.ReasonOOMKilled {
+		t.Fatalf("failure reason=%v, want OOMKilled", got)
+	}
+}
+
 func TestRetryLoop_RejectsNotReadyReplacementBeforeDeletingFailedWorkload(t *testing.T) {
 	var buf bytes.Buffer
 	opts := baseRetryOpts()
