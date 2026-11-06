@@ -543,6 +543,88 @@ policy:
 	}
 }
 
+func TestValidateResumeCleanupPermissionsChecksEveryExistingNamedWorkload(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "ray", "auth", "can-i", "delete", "rayjobs.ray.io/resume-job"): "yes\n",
+			fakeRawKey("-n", "ray", "auth", "can-i", "delete", "jobs.batch/resume-job"):     "no\n",
+		},
+		errors: map[string]error{},
+	}
+	err := validateResumeCleanupPermissions(
+		context.Background(),
+		runner,
+		"ray",
+		"resume-job",
+		status.Snapshot{
+			JobFound: true,
+			RayJob:   status.RayJob{Found: true},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "jobs.batch/resume-job") ||
+		!strings.Contains(err.Error(), "no workload was deleted") {
+		t.Fatalf("expected named Job permission failure before cleanup, got %v", err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("permission checks=%v, want RayJob and Job", runner.calls)
+	}
+}
+
+func TestResumeDoesNotDeleteWhenNamedCleanupPermissionIsMissing(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: resume-job\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	deleteCalls := 0
+	executeCalls := 0
+	zeroGPUs := 0
+	targetOptions := defaultRunDispatchOptions()
+	targetOptions.engine = "job"
+	targetOptions.jobGPUs = &zeroGPUs
+	err := runResumeCommand(
+		command,
+		"resume-job",
+		resumeRouting{
+			ConfigPath:    config,
+			KubeContext:   "test-context",
+			Namespace:     "ray",
+			TargetOptions: targetOptions,
+		},
+		"",
+		"",
+		false,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot("resume-job")
+				snapshot.Events = []status.Event{{Reason: "Evicted"}}
+				return snapshot, nil
+			},
+			validateTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				return nil
+			},
+			validatePermissions: func(context.Context, string, string, string, status.Snapshot) error {
+				return errors.New("missing named delete permission")
+			},
+			deleteOld: func(context.Context, string, string, string, io.Writer) error {
+				deleteCalls++
+				return nil
+			},
+			executeTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				executeCalls++
+				return nil
+			},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "validating cleanup permissions") {
+		t.Fatalf("expected cleanup permission error, got %v", err)
+	}
+	if deleteCalls != 0 || executeCalls != 0 {
+		t.Fatalf("permission failure made delete=%d execute=%d calls", deleteCalls, executeCalls)
+	}
+}
+
 func TestResumeDoesNotDeleteWhenWorkspaceNamespaceChanged(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "tau.yaml")
 	writeRunRoutingFile(t, config, "name: resume-job\n")
