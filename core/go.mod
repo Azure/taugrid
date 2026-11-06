@@ -3,7 +3,7 @@ module github.com/Azure/taugrid/core
 go 1.27.2
 
 require (
-	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
+	github.com/Azure/azure-kusto-go/azkustodata v1.2.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/distribution/reference v0.6.0
 	golang.org/x/sys v0.49.0

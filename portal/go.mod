@@ -21,7 +21,7 @@ require (
 )
 
 require (
-	github.com/Azure/azure-kusto-go/azkustodata v1.2.2 // indirect
+	github.com/Azure/azure-kusto-go/azkustodata v1.2.3 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/internal v0.1.0 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.8.0 // indirect
