@@ -260,6 +260,7 @@ type renderedQueueContract struct {
 	QueueName       string
 	GPUClass        string
 	GPUCount        int
+	CPURequest      bool
 	GPUResourceName string
 	NodeSelector    map[string]string
 	PodTolerations  [][]kueueapi.Toleration
@@ -306,6 +307,7 @@ func inspectRenderedQueue(ctx context.Context, r kubeRawRunner, namespace string
 		NodeSelector:            nodeSelector,
 		PodTolerations:          contract.PodTolerations,
 		GPUCount:                contract.GPUCount,
+		CPURequest:              contract.CPURequest,
 		GPUResourceName:         gpuResourceName,
 		TopologyRequest:         contract.TopologyRequest,
 		TopologyName:            policy.TopologyName,
@@ -365,6 +367,9 @@ func renderedQueueContractFromManifest(manifest []byte) (renderedQueueContract, 
 		}
 		if renderedGPUObjectsRequestTopology(obj) {
 			out.TopologyRequest = true
+		}
+		if renderedObjectsRequestCPU(obj) {
+			out.CPURequest = true
 		}
 		resourceNames := map[string]struct{}{}
 		collectRenderedGPUResourceNames(obj, resourceNames)
@@ -429,7 +434,7 @@ func renderedGPUObjectsRequestTopology(value any) bool {
 
 func renderedPodTemplateRequestsTopology(value map[string]any) bool {
 	spec, ok := value["spec"].(map[string]any)
-	if !ok || collectRenderedDirectPodGPUCount(spec) == 0 {
+	if !ok || !renderedDirectPodRequestsCompute(spec) {
 		return false
 	}
 	metadata, _ := value["metadata"].(map[string]any)
@@ -441,6 +446,57 @@ func renderedPodTemplateRequestsTopology(value map[string]any) bool {
 	} {
 		if renderedTopologyAnnotationSet(annotations[key]) {
 			return true
+		}
+	}
+	return false
+}
+
+func renderedDirectPodRequestsCompute(spec map[string]any) bool {
+	return collectRenderedDirectPodGPUCount(spec) > 0 ||
+		renderedResourceRequested(spec["containers"], "cpu") ||
+		renderedResourceRequested(spec["initContainers"], "cpu")
+}
+
+func renderedObjectsRequestCPU(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		if spec, ok := typed["spec"].(map[string]any); ok &&
+			(renderedResourceRequested(spec["containers"], "cpu") ||
+				renderedResourceRequested(spec["initContainers"], "cpu")) {
+			return true
+		}
+		for _, child := range typed {
+			if renderedObjectsRequestCPU(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if renderedObjectsRequestCPU(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func renderedResourceRequested(value any, resourceName string) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == resourceName && strings.TrimSpace(fmt.Sprint(child)) != "" &&
+				strings.TrimSpace(fmt.Sprint(child)) != "0" {
+				return true
+			}
+			if renderedResourceRequested(child, resourceName) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if renderedResourceRequested(child, resourceName) {
+				return true
+			}
 		}
 	}
 	return false

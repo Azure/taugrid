@@ -279,6 +279,70 @@ spec:
 	}
 }
 
+func TestValidateRenderedQueueRejectsCPUTopologyOnTopologyFreeFlavor(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "cpu-queue", "-o", "json"): `{"metadata":{"name":"cpu-queue"},"spec":{"clusterQueue":"cpu-cq"}}`,
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "cpu-cq", "-o", "json"):                     `{"metadata":{"name":"cpu-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"cpu","resources":[{"name":"cpu","nominalQuota":"100"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "cpu", "-o", "json"):                      `{"metadata":{"name":"cpu"},"spec":{}}`,
+		},
+		errors: map[string]error{},
+	}
+	manifest := []byte(`apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: cpu-queue
+spec:
+  template:
+    metadata:
+      annotations:
+        kueue.x-k8s.io/podset-unconstrained-topology: "true"
+    spec:
+      containers:
+      - resources:
+          requests:
+            cpu: "1"
+`)
+
+	err := validateRenderedQueue(context.Background(), runner, "workspace", manifest, jobrender.Options{}, queueValidationPolicy{})
+	if err == nil || !strings.Contains(err.Error(), "CPU workload sets policy.topology") ||
+		!strings.Contains(err.Error(), "do not support TopologyAwareScheduling") {
+		t.Fatalf("expected actionable CPU topology mismatch, got %v", err)
+	}
+}
+
+func TestValidateRenderedQueueAcceptsCPUTopologyOnTASFlavor(t *testing.T) {
+	runner := &fakeRawRunner{
+		outputs: map[string]string{
+			fakeRawKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "cpu-queue", "-o", "json"): `{"metadata":{"name":"cpu-queue"},"spec":{"clusterQueue":"cpu-cq"}}`,
+			fakeRawKey("get", "clusterqueue.kueue.x-k8s.io", "cpu-cq", "-o", "json"):                     `{"metadata":{"name":"cpu-cq"},"spec":{"resourceGroups":[{"flavors":[{"name":"cpu-tas","resources":[{"name":"cpu","nominalQuota":"100"}]}]}]}}`,
+			fakeRawKey("get", "resourceflavor.kueue.x-k8s.io", "cpu-tas", "-o", "json"):                  `{"metadata":{"name":"cpu-tas"},"spec":{"topologyName":"default-node-topology"}}`,
+		},
+		errors: map[string]error{},
+	}
+	manifest := []byte(`apiVersion: batch/v1
+kind: Job
+metadata:
+  labels:
+    kueue.x-k8s.io/queue-name: cpu-queue
+spec:
+  template:
+    metadata:
+      annotations:
+        kueue.x-k8s.io/podset-unconstrained-topology: "true"
+    spec:
+      containers:
+      - resources:
+          requests:
+            cpu: "1"
+`)
+
+	if err := validateRenderedQueue(context.Background(), runner, "workspace", manifest, jobrender.Options{}, queueValidationPolicy{}); err != nil {
+		t.Fatalf("CPU topology-capable flavor rejected: %v", err)
+	}
+}
+
 func TestRenderedQueueContractIgnoresTopologyOutsideGPUPodTemplate(t *testing.T) {
 	manifest := []byte(`apiVersion: ray.io/v1
 kind: RayJob
