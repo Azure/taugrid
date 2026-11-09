@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
-	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.2
+	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3
 	github.com/Azure/taugrid/core v0.0.0
 	github.com/golang/snappy v1.0.0
 	github.com/parquet-go/parquet-go v0.32.0
