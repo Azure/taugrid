@@ -123,7 +123,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return omitHotVolumeObject(omitHotVolumeObject(objects, "node/gpu-1"), "node/gpu-2")
 			},
 			status:  metav1.ConditionFalse,
-			message: "no nodes match the nodeLabels of the profile's ResourceFlavors",
+			message: "no nodes satisfy the resource groups of the profile's ClusterQueues",
 		},
 		{
 			name: "missing ResourceFlavor",
@@ -155,6 +155,72 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 			assertCondition(t, conditions, profile.ConditionReady, test.status)
 		})
 	}
+}
+
+func TestWorkloadProfileHotVolumeRespectsResourceGroups(t *testing.T) {
+	waitForFirstConsumer := storagev1.VolumeBindingWaitForFirstConsumer
+	tests := []struct {
+		name          string
+		gpusPerWorker int32
+		capacityNode  string
+		status        metav1.ConditionStatus
+		message       string
+	}{
+		{"GPU profile with capacity only on a CPU node", 1, "cpu-1", metav1.ConditionFalse, "reports free capacity on any of 1 profile nodes"},
+		{"GPU profile with capacity on a GPU node", 1, "gpu-1", metav1.ConditionTrue, "reports free capacity on 1 of 1 profile nodes"},
+		{"CPU profile skips the GPU group", 0, "cpu-1", metav1.ConditionTrue, "reports free capacity on 1 of 2 profile nodes"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			objects := hotVolumeProfileDependencies(&waitForFirstConsumer)
+			for _, omit := range []string{"clusterqueue/research-cq", "csistoragecapacity/hot-gpu-1", "node/gpu-2"} {
+				objects = omitHotVolumeObject(objects, omit)
+			}
+			queue := testObservedClusterQueue("research-cq", nil, true)
+			queue.Object["spec"] = map[string]any{"resourceGroups": []any{
+				map[string]any{"coveredResources": []any{"cpu", "memory"}, "flavors": []any{map[string]any{"name": "default"}}},
+				map[string]any{"coveredResources": []any{nvidiaGPUResourceName}, "flavors": []any{map[string]any{"name": "h200"}}},
+			}}
+			objects = append(objects, queue, testResourceFlavor("default", ""), testHotStorageCapacity(test.capacityNode, test.capacityNode))
+			workloadProfile := testHotVolumeProfile()
+			workloadProfile.GPUsPerWorker = test.gpusPerWorker
+			cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{workloadProfile})
+			reconciler := &TauClusterReconciler{Client: fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objects...).Build()}
+
+			state, err := reconciler.observeWorkloadProfiles(context.Background(), cluster)
+			if err != nil {
+				t.Fatalf("observeWorkloadProfiles() error = %v", err)
+			}
+			conditions := state.status.Profiles[0].Conditions
+			hot := findCondition(conditions, profile.ConditionHotVolumeReady)
+			if hot == nil || hot.Status != test.status || !strings.Contains(hot.Message, test.message) {
+				t.Fatalf("HotVolumeReady = %#v, want %s containing %q", hot, test.status, test.message)
+			}
+			assertCondition(t, conditions, profile.ConditionReady, test.status)
+		})
+	}
+}
+
+func TestMultiKueueHotVolumeProfileIsInvalid(t *testing.T) {
+	waitForFirstConsumer := storagev1.VolumeBindingWaitForFirstConsumer
+	workloadProfile := testHotVolumeProfile()
+	workloadProfile.ExecutionTarget = profile.ExecutionTargetMultiKueue
+	cluster := testProfileCluster(tauv1alpha1.ClusterManagementModeObserve, []profile.WorkloadProfile{workloadProfile})
+	reconciler := &TauClusterReconciler{Client: fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(hotVolumeProfileDependencies(&waitForFirstConsumer)...).
+		Build()}
+
+	state, err := reconciler.observeWorkloadProfiles(context.Background(), cluster)
+	if err != nil {
+		t.Fatalf("observeWorkloadProfiles() error = %v", err)
+	}
+	conditions := state.status.Profiles[0].Conditions
+	hot := findCondition(conditions, profile.ConditionHotVolumeReady)
+	if hot == nil || hot.Status != metav1.ConditionUnknown || !strings.Contains(hot.Message, "not supported with executionTarget") {
+		t.Fatalf("HotVolumeReady = %#v, want Unknown multiKueue rejection", hot)
+	}
+	assertCondition(t, conditions, profile.ConditionReady, metav1.ConditionFalse)
 }
 
 func TestWorkloadProfileWithoutHotVolumeOmitsCondition(t *testing.T) {

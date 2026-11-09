@@ -324,6 +324,12 @@ func TestWorkloadProfileHotVolume(t *testing.T) {
 		})
 	}
 
+	remote := valid
+	remote.ExecutionTarget = ExecutionTargetMultiKueue
+	if err := ValidateWorkloadProfile(remote); err == nil || !strings.Contains(err.Error(), "not supported with executionTarget") {
+		t.Fatalf("ValidateWorkloadProfile() error = %v, want multiKueue rejection", err)
+	}
+
 	unnormalized := valid
 	unnormalized.HotVolume = &HotVolume{StorageClassName: "tau-hot", DefaultSize: "1024Gi", MaxSize: "2Ti"}
 	if err := ValidateWorkloadProfile(unnormalized); err == nil {

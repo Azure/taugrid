@@ -169,6 +169,7 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 	clusterQueueOK := localOK
 	clusterQueueIssues := make([]string, 0)
 	flavorNames := make(map[string]struct{})
+	clusterQueueGroups := make(map[string][]clusterQueueResourceGroup, len(clusterQueueNames))
 	executionObservations := make([]clusterQueueExecutionObservation, 0, len(clusterQueueNames))
 	for _, name := range sortedSet(clusterQueueNames) {
 		clusterQueue := newQueueObject(clusterQueueGVK)
@@ -198,14 +199,17 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 			clusterQueueOK = false
 			clusterQueueIssues = append(clusterQueueIssues, fmt.Sprintf("ClusterQueue %s is inactive%s", name, detail))
 		}
-		names, err := clusterQueueFlavorNames(clusterQueue)
+		groups, err := clusterQueueResourceGroups(clusterQueue)
 		if err != nil {
 			clusterQueueOK = false
 			clusterQueueIssues = append(clusterQueueIssues, fmt.Sprintf("ClusterQueue %s has malformed resource flavors: %v", name, err))
 			continue
 		}
-		for _, flavorName := range names {
-			flavorNames[flavorName] = struct{}{}
+		clusterQueueGroups[name] = groups
+		for _, group := range groups {
+			for _, flavorName := range group.flavors {
+				flavorNames[flavorName] = struct{}{}
+			}
 		}
 	}
 	resolved.Conditions = append(resolved.Conditions, observationCondition(
@@ -340,7 +344,7 @@ func (r *TauClusterReconciler) observeWorkloadProfile(
 
 	hotVolumeOK := true
 	if normalized.HotVolume != nil {
-		hotCondition, err := r.observeHotVolume(ctx, normalized.HotVolume, flavorsOK, flavorNodeLabels, generation)
+		hotCondition, err := r.observeHotVolume(ctx, normalized, flavorsOK, clusterQueueGroups, flavorNodeLabels, generation)
 		observationErr = errors.Join(observationErr, err)
 		hotVolumeOK = hotCondition.Status == metav1.ConditionTrue
 		resolved.Conditions = append(resolved.Conditions, hotCondition)
@@ -608,11 +612,13 @@ func previousResolvedProfile(profiles []profile.ResolvedWorkloadProfile, name st
 
 func (r *TauClusterReconciler) observeHotVolume(
 	ctx context.Context,
-	hot *profile.HotVolume,
+	workloadProfile profile.WorkloadProfile,
 	flavorsOK bool,
+	clusterQueueGroups map[string][]clusterQueueResourceGroup,
 	flavorNodeLabels map[string]map[string]string,
 	generation int64,
 ) (metav1.Condition, error) {
+	hot := workloadProfile.HotVolume
 	notReady := func(message string) metav1.Condition {
 		return condition(profile.ConditionHotVolumeReady, metav1.ConditionFalse, "HotVolumeNotReady", message, generation)
 	}
@@ -636,22 +642,33 @@ func (r *TauClusterReconciler) observeHotVolume(
 	if err := r.List(ctx, &nodes); err != nil {
 		return notReady(fmt.Sprintf("cannot list nodes: %v", err)), fmt.Errorf("list nodes: %w", err)
 	}
-	selectors := make([]labels.Selector, 0, len(flavorNodeLabels))
-	for _, nodeLabels := range flavorNodeLabels {
-		selectors = append(selectors, labels.SelectorFromSet(nodeLabels))
+	eligibility := make([][][]labels.Selector, 0, len(clusterQueueGroups))
+	for _, groups := range clusterQueueGroups {
+		required := make([][]labels.Selector, 0, len(groups))
+		for _, group := range groups {
+			if !resourceGroupRequired(group, workloadProfile.GPUsPerWorker) {
+				continue
+			}
+			alternatives := make([]labels.Selector, 0, len(group.flavors))
+			for _, flavor := range group.flavors {
+				alternatives = append(alternatives, labels.SelectorFromSet(flavorNodeLabels[flavor]))
+			}
+			required = append(required, alternatives)
+		}
+		eligibility = append(eligibility, required)
 	}
 	var poolNodes []*corev1.Node
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		for _, selector := range selectors {
-			if selector.Matches(labels.Set(node.Labels)) {
+		for _, required := range eligibility {
+			if nodeSatisfiesResourceGroups(labels.Set(node.Labels), required) {
 				poolNodes = append(poolNodes, node)
 				break
 			}
 		}
 	}
 	if len(poolNodes) == 0 {
-		return notReady("no nodes match the nodeLabels of the profile's ResourceFlavors"), nil
+		return notReady("no nodes satisfy the resource groups of the profile's ClusterQueues"), nil
 	}
 
 	var capacities storagev1.CSIStorageCapacityList
@@ -686,6 +703,34 @@ func (r *TauClusterReconciler) observeHotVolume(
 	return condition(profile.ConditionHotVolumeReady, metav1.ConditionTrue, "HotVolumeReady",
 		fmt.Sprintf("StorageClass %s reports free capacity on %d of %d profile nodes", hot.StorageClassName, covered, len(poolNodes)),
 		generation), nil
+}
+
+func resourceGroupRequired(group clusterQueueResourceGroup, gpusPerWorker int32) bool {
+	if gpusPerWorker > 0 || len(group.coveredResources) == 0 {
+		return true
+	}
+	for _, resourceName := range group.coveredResources {
+		if resourceName != nvidiaGPUResourceName && resourceName != torchrunHostSlotResource {
+			return true
+		}
+	}
+	return false
+}
+
+func nodeSatisfiesResourceGroups(nodeLabels labels.Set, required [][]labels.Selector) bool {
+	for _, alternatives := range required {
+		matched := false
+		for _, selector := range alternatives {
+			if selector.Matches(nodeLabels) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func hasStorageCapacity(capacity *storagev1.CSIStorageCapacity) bool {
@@ -730,7 +775,12 @@ func optionalNestedString(obj *unstructured.Unstructured, fields ...string) (str
 	return strings.TrimSpace(value), nil
 }
 
-func clusterQueueFlavorNames(clusterQueue *unstructured.Unstructured) ([]string, error) {
+type clusterQueueResourceGroup struct {
+	coveredResources []string
+	flavors          []string
+}
+
+func clusterQueueResourceGroups(clusterQueue *unstructured.Unstructured) ([]clusterQueueResourceGroup, error) {
 	resourceGroups, found, err := unstructured.NestedSlice(clusterQueue.Object, "spec", "resourceGroups")
 	if err != nil {
 		return nil, err
@@ -738,17 +788,23 @@ func clusterQueueFlavorNames(clusterQueue *unstructured.Unstructured) ([]string,
 	if !found {
 		return nil, nil
 	}
-	names := make(map[string]struct{})
+	groups := make([]clusterQueueResourceGroup, 0, len(resourceGroups))
 	for groupIndex, rawGroup := range resourceGroups {
 		group, ok := rawGroup.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("spec.resourceGroups[%d] must be an object", groupIndex)
 		}
+		coveredResources, _, err := unstructured.NestedStringSlice(group, "coveredResources")
+		if err != nil {
+			return nil, err
+		}
+		parsed := clusterQueueResourceGroup{coveredResources: coveredResources}
 		rawFlavors, found, err := unstructured.NestedSlice(group, "flavors")
 		if err != nil {
 			return nil, err
 		}
 		if !found {
+			groups = append(groups, parsed)
 			continue
 		}
 		for flavorIndex, rawFlavor := range rawFlavors {
@@ -763,10 +819,11 @@ func clusterQueueFlavorNames(clusterQueue *unstructured.Unstructured) ([]string,
 			if !found || strings.TrimSpace(name) == "" {
 				return nil, fmt.Errorf("spec.resourceGroups[%d].flavors[%d].name is required", groupIndex, flavorIndex)
 			}
-			names[strings.TrimSpace(name)] = struct{}{}
+			parsed.flavors = append(parsed.flavors, strings.TrimSpace(name))
 		}
+		groups = append(groups, parsed)
 	}
-	return sortedSet(names), nil
+	return groups, nil
 }
 
 func clusterQueueAdmissionCheckNames(clusterQueue *unstructured.Unstructured) ([]string, error) {

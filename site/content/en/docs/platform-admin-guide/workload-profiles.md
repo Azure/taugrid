@@ -122,7 +122,9 @@ node with enough free local capacity. Kueue doesn't account for hot storage.
 Both sizes are Kubernetes quantities, and `defaultSize` can't exceed `maxSize`.
 The controller publishes sizes in canonical form, so `1024Gi` appears as `1Ti`.
 Choose `maxSize` so it fits: it must not exceed a node's usable NVMe divided
-by the number of hot-volume pods that node runs at once.
+by the number of hot-volume pods that node runs at once. A `multiKueue`
+profile can't declare `hotVolume`, because the controller observes storage on
+the manager cluster rather than on the workers.
 
 A profile with `hotVolume` gets a `HotVolumeReady` condition, and the profile
 is `Ready` only when that condition is `True`. The condition is `False` in
@@ -130,12 +132,15 @@ these cases:
 
 - the StorageClass doesn't exist;
 - the StorageClass doesn't use `WaitForFirstConsumer`;
-- no node matches the `nodeLabels` of the profile's ResourceFlavors;
+- no node is eligible for the profile's ClusterQueues;
 - no `CSIStorageCapacity` for the StorageClass reports free capacity on any of
   those nodes.
 
-A node counts only when a matching `CSIStorageCapacity` object reports
-capacity greater than zero. Some drivers publish zero-capacity objects for
+A node is eligible for a ClusterQueue when, in every resource group the
+profile requests from, at least one flavor's `nodeLabels` match the node. A
+GPU-only resource group applies only when `gpusPerWorker` is greater than
+zero. An eligible node counts only when a matching `CSIStorageCapacity` object
+reports capacity greater than zero. Some drivers publish zero-capacity objects for
 nodes without local disks, and those nodes don't count. Capacity is free
 space, so the condition also turns `False` while every profile node's local
 disks are full. The condition message reports how many profile nodes have free

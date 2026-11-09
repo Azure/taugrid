@@ -240,6 +240,9 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 			p.ExecutionTarget,
 		)
 	}
+	if p.HotVolume != nil && p.ExecutionTarget == ExecutionTargetMultiKueue {
+		return fmt.Errorf("hotVolume is not supported with executionTarget %q", ExecutionTargetMultiKueue)
+	}
 	if err := validateHotVolume(p.HotVolume); err != nil {
 		return err
 	}
