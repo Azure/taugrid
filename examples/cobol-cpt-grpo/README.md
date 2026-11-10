@@ -178,10 +178,11 @@ configs:
 
 The CPU stages use `python:3.11.17-bookworm` pinned by digest, from Docker
 Hub. It includes `git`, `curl`, `unzip`, and `file`, which the collect
-scripts need. The training image is based on the upstream
-`vllm/vllm-openai:v0.28.0` image from Docker Hub, pinned by digest. Both are
-exceptions to the MCR base-image preference; mirror them into your registry
-if your platform requires it.
+scripts need. The training image is based on the MCR-hosted
+`mcr.microsoft.com/microsoft.aks.investigator/vllm-openai:v0.28.0` image,
+pinned by its multi-architecture manifest digest. That manifest is the exact
+MCR mirror of the upstream vLLM 0.28.0 release and preserves its Python 3.12,
+CUDA 13, vLLM runtime setup, and precompiled and JIT kernel assets.
 
 `06-grpo/tau.yaml` enables the Stellar metrics offload sidecar for
 `metrics-history-attempt-0/*.jsonl`. Provide the collector image and ADX
