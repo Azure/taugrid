@@ -3,8 +3,8 @@ module github.com/Azure/taugrid/tests/e2e
 go 1.27.2
 
 require (
-	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
-	github.com/Azure/azure-kusto-go/azkustoingest v1.2.2
+	github.com/Azure/azure-kusto-go/azkustodata v1.2.3
+	github.com/Azure/azure-kusto-go/azkustoingest v1.2.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/stretchr/testify v1.12.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -48,7 +48,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
