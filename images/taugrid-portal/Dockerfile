@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM --platform=$BUILDPLATFORM docker.io/library/node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS frontend
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/azurelinux/base/nodejs:24.22@sha256:700f81898b1a66c186a9a64a3fd20f61942e1d8335887e78ce4b7a562e0b7ff8 AS frontend
 
 WORKDIR /app/portal/frontend
 COPY portal/frontend/package.json portal/frontend/package-lock.json portal/frontend/.npmrc ./
