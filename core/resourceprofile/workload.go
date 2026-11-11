@@ -283,6 +283,24 @@ func validateHotVolume(hot *HotVolume) error {
 	return nil
 }
 
+func (h HotVolume) ClaimSize(requested string) (string, error) {
+	if requested == "" {
+		return h.DefaultSize, nil
+	}
+	size, err := positiveQuantity("storage.hot_size", requested)
+	if err != nil {
+		return "", err
+	}
+	maxSize, err := positiveQuantity("hotVolume.maxSize", h.MaxSize)
+	if err != nil {
+		return "", err
+	}
+	if size.Cmp(maxSize) > 0 {
+		return "", fmt.Errorf("storage.hot_size %s exceeds the profile's hotVolume.maxSize %s", requested, h.MaxSize)
+	}
+	return requested, nil
+}
+
 func positiveQuantity(field, value string) (resource.Quantity, error) {
 	if value == "" {
 		return resource.Quantity{}, fmt.Errorf("%s is required", field)
@@ -463,6 +481,11 @@ func (p ResolvedWorkloadProfile) RenderProfile(namespace, team, lane string) (Pr
 	if !containsOrGlobal(normalized.Applicability.Lanes, lane) {
 		return Profile{}, fmt.Errorf("profile %q does not apply to lane %q", normalized.Name, lane)
 	}
+	var hotVolume *HotVolume
+	if normalized.HotVolume != nil {
+		hot := *normalized.HotVolume
+		hotVolume = &hot
+	}
 	queue := normalized.DefaultLocalQueue
 	for _, ref := range normalized.LocalQueues {
 		if ref.Namespace == namespace {
@@ -484,6 +507,7 @@ func (p ResolvedWorkloadProfile) RenderProfile(namespace, team, lane string) (Pr
 			DisableDefaultPriorities:  normalized.Priorities.DisableDefaultPriorities,
 		},
 		Resources: Resources{GPU: GPUContract{Count: int(normalized.GPUsPerWorker)}},
+		HotVolume: hotVolume,
 	}, nil
 }
 

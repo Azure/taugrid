@@ -144,7 +144,7 @@ Read [Workload profiles](workload-profiles.md) before resolving placement.
 | `storage.volumes`, `mounts` | Extra direct Job volumes/mounts; RayJobs reject them |
 | `storage.image_assets` | Direct Job only: `{name, image, source_path, mount_path}` entries copy digest-pinned image directories to read-only main-container mounts |
 | `storage.publish` | Direct `staged` publication exposes pod-local `TAU_OUTPUT_STAGING_DIR`, verifies closed files into durable output, and writes a completion marker |
-| `storage.hot_size` | Direct only: Kubernetes quantity (e.g. `500Gi`) that becomes the `sizeLimit` of the pod-local `/mnt` scratch volume; direct Jobs mount `/mnt` and set `TAU_HOT_DIR` whenever it is set, even without `/data` |
+| `storage.hot_size` | Direct only: Kubernetes quantity (e.g. `500Gi`) that sizes the pod-local `/mnt` scratch volume: the `emptyDir` `sizeLimit`, or the claim size when the workload profile declares `hotVolume` (must not exceed its `maxSize`); direct Jobs mount `/mnt` and set `TAU_HOT_DIR` whenever it is set, even without `/data` |
 
 On a direct Job, `storage.data_pvc` cannot be combined with
 `storage.volumes`; use a consistent volume/mount layout rather than both

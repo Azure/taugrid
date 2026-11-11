@@ -240,6 +240,54 @@ func TestResolvedWorkloadProfileRenderProfile(t *testing.T) {
 	}
 }
 
+func TestRenderProfileCarriesHotVolume(t *testing.T) {
+	resolved := testResolvedProfile("research-1gpu")
+	render, err := resolved.RenderProfile("alpha", "research", "training")
+	if err != nil || render.HotVolume != nil {
+		t.Fatalf("RenderProfile() hotVolume = %#v, %v; want nil", render.HotVolume, err)
+	}
+	resolved.HotVolume = &HotVolume{StorageClassName: "tau-hot", DefaultSize: "1Ti", MaxSize: "2Ti"}
+	render, err = resolved.RenderProfile("alpha", "research", "training")
+	if err != nil {
+		t.Fatalf("RenderProfile() error = %v", err)
+	}
+	if render.HotVolume == nil || *render.HotVolume != *resolved.HotVolume {
+		t.Fatalf("RenderProfile() hotVolume = %#v, want %#v", render.HotVolume, resolved.HotVolume)
+	}
+	render.HotVolume.MaxSize = "4Ti"
+	if resolved.HotVolume.MaxSize != "2Ti" {
+		t.Fatal("RenderProfile() shared the hotVolume pointer")
+	}
+}
+
+func TestHotVolumeClaimSize(t *testing.T) {
+	hot := HotVolume{StorageClassName: "tau-hot", DefaultSize: "1Ti", MaxSize: "2Ti"}
+	tests := []struct {
+		requested string
+		want      string
+		wantErr   string
+	}{
+		{requested: "", want: "1Ti"},
+		{requested: "500Gi", want: "500Gi"},
+		{requested: "2048Gi", want: "2048Gi"},
+		{requested: "3Ti", wantErr: "exceeds the profile's hotVolume.maxSize 2Ti"},
+		{requested: "lots", wantErr: "not a valid Kubernetes resource quantity"},
+		{requested: "0", wantErr: "must be > 0"},
+	}
+	for _, tt := range tests {
+		got, err := hot.ClaimSize(tt.requested)
+		if tt.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ClaimSize(%q) error = %v, want containing %q", tt.requested, err, tt.wantErr)
+			}
+			continue
+		}
+		if err != nil || got != tt.want {
+			t.Fatalf("ClaimSize(%q) = %q, %v; want %q", tt.requested, got, err, tt.want)
+		}
+	}
+}
+
 func testWorkloadProfile() WorkloadProfile {
 	return WorkloadProfile{
 		Name: "research-1gpu",

@@ -122,7 +122,13 @@ node with enough free local capacity. Kueue doesn't account for hot storage.
 Both sizes are Kubernetes quantities, and `defaultSize` can't exceed `maxSize`.
 The controller publishes sizes in canonical form, so `1024Gi` appears as `1Ti`.
 Choose `maxSize` so it fits: it must not exceed a node's usable NVMe divided
-by the number of hot-volume pods that node runs at once. A `multiKueue`
+by the number of hot-volume pods that node runs at once.
+
+Runs that use the profile get `/mnt` from this StorageClass on every direct Job
+pod and every Ray worker. Each pod gets its own claim of the run's
+`storage.hot_size`, or `defaultSize` when the run doesn't set one, and the
+claim is deleted with the pod. The Ray head keeps an `emptyDir`. TauGrid
+rejects a run whose `hot_size` exceeds `maxSize`. A `multiKueue`
 profile can't declare `hotVolume`, because the controller observes storage on
 the manager cluster rather than on the workers.
 

@@ -124,9 +124,11 @@ type Options struct {
 }
 
 type Volume struct {
-	Name      string
-	PVC       string
-	SizeLimit string
+	Name             string
+	PVC              string
+	SizeLimit        string
+	StorageClassName string
+	ClaimSize        string
 }
 
 type VolumeMount struct {
@@ -190,7 +192,11 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		return nil, err
 	}
 
-	storagePlan, err := buildStoragePlan(o)
+	hot, err := hotVolume(p, o)
+	if err != nil {
+		return nil, err
+	}
+	storagePlan, err := buildStoragePlan(o, hot)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +209,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if storagePlan.HasDurableData {
 		env = mergeEnv(storage.RuntimeEnv(), env)
 		cmd = wrapCommandWithStoragePreflight(cmd)
-	} else if o.HotSize != "" {
+	} else if o.HotSize != "" || hot.StorageClassName != "" {
 		env = mergeEnv(map[string]string{"TAU_HOT_DIR": storage.HotRoot}, env)
 	}
 
@@ -777,6 +783,10 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 				})
 				continue
 			}
+			if v.StorageClassName != "" {
+				volumes = append(volumes, storage.EphemeralVolume(v.Name, v.StorageClassName, v.ClaimSize))
+				continue
+			}
 			emptyDir := map[string]any{}
 			if v.SizeLimit != "" {
 				emptyDir["sizeLimit"] = v.SizeLimit
@@ -1152,7 +1162,18 @@ func copyResourceQuantities(existing any) map[string]any {
 	return out
 }
 
-func buildStoragePlan(o Options) (storagePlan, error) {
+func hotVolume(p profile.Profile, o Options) (Volume, error) {
+	if p.HotVolume == nil {
+		return Volume{Name: "tau-hot", SizeLimit: o.HotSize}, nil
+	}
+	size, err := p.HotVolume.ClaimSize(o.HotSize)
+	if err != nil {
+		return Volume{}, err
+	}
+	return Volume{Name: "tau-hot", StorageClassName: p.HotVolume.StorageClassName, ClaimSize: size}, nil
+}
+
+func buildStoragePlan(o Options, hot Volume) (storagePlan, error) {
 	var plan storagePlan
 	if o.PVCMount != "" {
 		plan.removeMountPath(storage.DurableRoot)
@@ -1186,9 +1207,9 @@ func buildStoragePlan(o Options) (storagePlan, error) {
 	if o.HotSize != "" && plan.hasMountPath(storage.HotRoot) {
 		return storagePlan{}, fmt.Errorf("storage.hot_size sizes the Tau-managed %s volume; remove the custom mount at %s", storage.HotRoot, storage.HotRoot)
 	}
-	if (plan.HasDurableData || o.HotSize != "") && !plan.hasMountPath(storage.HotRoot) {
+	if (plan.HasDurableData || o.HotSize != "" || hot.StorageClassName != "") && !plan.hasMountPath(storage.HotRoot) {
 		if err := plan.addVolumeMount(
-			Volume{Name: "tau-hot", SizeLimit: o.HotSize},
+			hot,
 			VolumeMount{Name: "tau-hot", MountPath: storage.HotRoot},
 		); err != nil {
 			return storagePlan{}, err

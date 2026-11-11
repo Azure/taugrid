@@ -53,6 +53,16 @@ needed, omit `storage.data_pvc`. TauGrid still provides the pod-local `/mnt`
 `emptyDir` scratch path through `TAU_HOT_DIR`; its contents disappear with the
 pod.
 
+When the selected workload profile declares `hotVolume`, `/mnt` on each direct
+Job pod and each Ray worker is a node-local volume from the profile's
+StorageClass instead of an `emptyDir`. It is a generic ephemeral volume of
+`storage.hot_size`, or of the profile's `defaultSize` when `hot_size` is unset,
+and it is deleted with the pod. A direct Job then mounts `/mnt` even without
+`storage.data_pvc`. TauGrid rejects a `hot_size` above the profile's `maxSize`.
+The Ray head keeps an `emptyDir`, because it requests no GPUs and can run on
+system nodes. A custom mount at `/mnt` replaces the hot volume. Managed
+workflow configs keep the `emptyDir`.
+
 ## Jobs without workload profiles
 
 When `TauCluster.spec.queues.shareTeamQuotas` is enabled, or
