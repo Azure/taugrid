@@ -144,12 +144,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version: "1.27.3-1"
+          go-version: "1.27.4-1"
           go-download-base-url: https://aka.ms/golang/release/latest
           cache: false
 
       - name: Verify Microsoft Go toolchain
-        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.3-1-microsoft"
+        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.4-1-microsoft"
 
       - name: Test Go release modules
         run: |
@@ -187,12 +187,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version: "1.27.3-1"
+          go-version: "1.27.4-1"
           go-download-base-url: https://aka.ms/golang/release/latest
           cache: false
 
       - name: Verify Microsoft Go toolchain
-        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.3-1-microsoft"
+        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.4-1-microsoft"
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0

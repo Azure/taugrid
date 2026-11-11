@@ -12,7 +12,7 @@ COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/Azure/taugrid/core/version
 GODEBUG_LDFLAG := -X=runtime.godebugDefault=ms_tlsmldsacert=0
-MICROSOFT_GO_TOOLSET := go1.27.3-1-microsoft
+MICROSOFT_GO_TOOLSET := go1.27.4-1-microsoft
 LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) -X $(VERSION_PKG).Commit=$(COMMIT) -X $(VERSION_PKG).Date=$(DATE) $(GODEBUG_LDFLAG)
 BUILD_FLAGS := -trimpath -mod=readonly -buildvcs=false
 
