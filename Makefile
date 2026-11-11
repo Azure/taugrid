@@ -104,6 +104,7 @@ build:
 
 test:
 	bash scripts/ci/tests/required-gates-contract_test.sh
+	bash scripts/ci/tests/validation-concurrency-contract_test.sh
 	bash scripts/ci/tests/dependency-sources-contract_test.sh
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh

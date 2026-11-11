@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: taugrid-validation-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: taugrid-validation-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -40,6 +40,9 @@ jobs:
 
       - name: Validate required gate contracts
         run: bash scripts/ci/tests/required-gates-contract_test.sh
+
+      - name: Validate workflow concurrency contracts
+        run: bash scripts/ci/tests/validation-concurrency-contract_test.sh
 
       - name: Validate dependency source contracts
         run: bash scripts/ci/tests/dependency-sources-contract_test.sh
