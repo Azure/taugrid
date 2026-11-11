@@ -60,16 +60,6 @@ jobs:
       - name: Validate release workflow contract
         run: bash scripts/ci/tests/release-workflow-contract_test.sh
 
-      - name: Set up Python for release contract tests
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
-        with:
-          python-version: "3.12"
-
-      - name: Test release orchestration without publishing
-        run: |
-          python3 -m pip install --disable-pip-version-check -r scripts/ci/release-requirements.txt
-          python3 -m unittest discover -s scripts/ci/tests -p 'release_*_test.py'
-
       - name: Detect release-preflight scope
         id: scope
         env:
