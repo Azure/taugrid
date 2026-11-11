@@ -550,6 +550,9 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
 		}
 	}
+	if !isHead && o.hotClaimSize != "" {
+		storage.ApplyEphemeralFSGroup(pod)
+	}
 	if o.SecurityMode == runconfig.SecurityModeRestricted {
 		group := int64(65532)
 		if err := podsecurity.ApplyRestricted(pod, &group); err != nil {

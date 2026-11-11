@@ -785,6 +785,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			}
 			if v.StorageClassName != "" {
 				volumes = append(volumes, storage.EphemeralVolume(v.Name, v.StorageClassName, v.ClaimSize))
+				storage.ApplyEphemeralFSGroup(pod)
 				continue
 			}
 			emptyDir := map[string]any{}

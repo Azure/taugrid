@@ -128,7 +128,10 @@ Runs that use the profile get `/mnt` from this StorageClass on every direct Job
 pod and every Ray worker. Each pod gets its own claim of the run's
 `storage.hot_size`, or `defaultSize` when the run doesn't set one, and the
 claim is deleted with the pod. The Ray head keeps an `emptyDir`. TauGrid
-rejects a run whose `hot_size` exceeds `maxSize`. A `multiKueue`
+rejects a run whose `hot_size` exceeds `maxSize`. Pods with a hot claim set
+`fsGroup: 65532` so non-root workloads can write to it. Kubernetes also applies
+that group to other volumes whose CSI driver supports `fsGroup`, such as a
+`ReadWriteOnce` disk mounted at `/data`. A `multiKueue`
 profile can't declare `hotVolume`, because the controller observes storage on
 the manager cluster rather than on the workers.
 

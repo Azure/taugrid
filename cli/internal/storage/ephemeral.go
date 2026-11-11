@@ -19,3 +19,17 @@ func EphemeralVolume(name, storageClassName, size string) map[string]any {
 		},
 	}
 }
+
+const EphemeralFSGroup int64 = 65532
+
+func ApplyEphemeralFSGroup(pod map[string]any) {
+	context, _ := pod["securityContext"].(map[string]any)
+	if context == nil {
+		context = map[string]any{}
+	}
+	if _, exists := context["fsGroup"]; !exists {
+		context["fsGroup"] = EphemeralFSGroup
+		context["fsGroupChangePolicy"] = "OnRootMismatch"
+	}
+	pod["securityContext"] = context
+}

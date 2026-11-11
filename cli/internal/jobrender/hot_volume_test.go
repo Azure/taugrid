@@ -4,11 +4,13 @@
 package jobrender
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 )
 
 func hotVolumeProfile() profile.Profile {
@@ -41,6 +43,15 @@ func ephemeralClaimSpec(t *testing.T, pod map[string]any) map[string]any {
 		t.Fatalf("tau-hot is not an ephemeral volume: %+v", hot)
 	}
 	return ephemeral["volumeClaimTemplate"].(map[string]any)["spec"].(map[string]any)
+}
+
+func podFSGroup(pod map[string]any) (string, string) {
+	context, _ := pod["securityContext"].(map[string]any)
+	if context == nil || context["fsGroup"] == nil {
+		return "", ""
+	}
+	policy, _ := context["fsGroupChangePolicy"].(string)
+	return fmt.Sprint(context["fsGroup"]), policy
 }
 
 func TestRender_HotVolumeProfileRendersEphemeralClaim(t *testing.T) {
@@ -78,7 +89,25 @@ func TestRender_HotVolumeProfileRendersEphemeralClaim(t *testing.T) {
 			if got, ok := containerEnv(pod, "TAU_HOT_DIR"); !ok || got != "/mnt" {
 				t.Fatalf("TAU_HOT_DIR = %q (set=%v), want /mnt", got, ok)
 			}
+			if group, policy := podFSGroup(pod); group != "65532" || policy != "OnRootMismatch" {
+				t.Fatalf("pod fsGroup = %q (%q), want 65532 with OnRootMismatch", group, policy)
+			}
 		})
+	}
+}
+
+func TestRender_HotVolumeProfileKeepsFSGroupInRestrictedMode(t *testing.T) {
+	pod := renderedHotVolumePod(t, Options{
+		Name:         "hot",
+		Namespace:    "tau",
+		Command:      []string{"python", "train.py"},
+		SecurityMode: runconfig.SecurityModeRestricted,
+	})
+	if group, policy := podFSGroup(pod); group != "65532" || policy != "OnRootMismatch" {
+		t.Fatalf("pod fsGroup = %q (%q), want 65532 with OnRootMismatch", group, policy)
+	}
+	if pod["securityContext"].(map[string]any)["runAsNonRoot"] != true {
+		t.Fatalf("restricted pod securityContext = %+v, want runAsNonRoot", pod["securityContext"])
 	}
 }
 
@@ -107,5 +136,8 @@ func TestRender_HotVolumeProfileKeepsCustomMntMount(t *testing.T) {
 	}
 	if got := containerMountPath(pod, "scratch"); got != "/mnt" {
 		t.Fatalf("scratch mountPath = %q, want /mnt", got)
+	}
+	if group, _ := podFSGroup(pod); group != "" {
+		t.Fatalf("pod fsGroup = %q without a hot claim, want unset", group)
 	}
 }

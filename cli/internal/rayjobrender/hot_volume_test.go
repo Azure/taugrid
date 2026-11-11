@@ -4,11 +4,13 @@
 package rayjobrender
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/runconfig"
 )
 
 func hotVolumeOptions(gpusPerWorker int) Options {
@@ -28,6 +30,15 @@ func tauHotVolume(t *testing.T, role string, pod map[string]any) map[string]any 
 	}
 	t.Fatalf("%s pod has no tau-hot volume: %+v", role, pod["volumes"])
 	return nil
+}
+
+func podFSGroup(pod map[string]any) (string, string) {
+	context, _ := pod["securityContext"].(map[string]any)
+	if context == nil || context["fsGroup"] == nil {
+		return "", ""
+	}
+	policy, _ := context["fsGroupChangePolicy"].(string)
+	return fmt.Sprint(context["fsGroup"]), policy
 }
 
 func TestRenderHotVolumeProfileGivesWorkersEphemeralClaims(t *testing.T) {
@@ -53,6 +64,9 @@ func TestRenderHotVolumeProfileGivesWorkersEphemeralClaims(t *testing.T) {
 					if !ok || hot["ephemeral"] != nil || emptyDir["sizeLimit"] != tt.wantHeadLimit {
 						t.Fatalf("head tau-hot = %+v, want emptyDir with sizeLimit %v", hot, tt.wantHeadLimit)
 					}
+					if group, _ := podFSGroup(pod); group != "" {
+						t.Fatalf("head fsGroup = %q, want unset", group)
+					}
 					continue
 				}
 				if _, ok := hot["emptyDir"]; ok {
@@ -71,8 +85,24 @@ func TestRenderHotVolumeProfileGivesWorkersEphemeralClaims(t *testing.T) {
 				if !reflect.DeepEqual(spec, want) {
 					t.Fatalf("%s tau-hot claim spec = %+v, want %+v", role, spec, want)
 				}
+				if group, policy := podFSGroup(pod); group != "65532" || policy != "OnRootMismatch" {
+					t.Fatalf("%s fsGroup = %q (%q), want 65532 with OnRootMismatch", role, group, policy)
+				}
 			}
 		})
+	}
+}
+
+func TestRenderHotVolumeProfileKeepsWorkerFSGroupInRestrictedMode(t *testing.T) {
+	o := hotVolumeOptions(1)
+	o.SecurityMode = runconfig.SecurityModeRestricted
+	for role, pod := range rayPodSpecs(t, renderWithArchive(t, o)) {
+		if role == "head" {
+			continue
+		}
+		if group, policy := podFSGroup(pod); group != "65532" || policy != "OnRootMismatch" {
+			t.Fatalf("%s fsGroup = %q (%q), want 65532 with OnRootMismatch", role, group, policy)
+		}
 	}
 }
 
