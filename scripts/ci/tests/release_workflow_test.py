@@ -61,11 +61,15 @@ class ReleaseWorkflowTrustTests(unittest.TestCase):
             ["git", "-C", str(directory), *arguments], text=True,
             stderr=subprocess.DEVNULL).strip()
 
-    def validate(self, tag="v1.2.3", control=None, ref="refs/heads/main", status="404"):
+    def validate(self, tag="v1.2.3", control=None, ref_type="tag", ref_name=None, status="404"):
+        ref_name = ref_name or tag
+        ref_prefix = "tags" if ref_type == "tag" else "heads"
         environment = dict(
             os.environ, PATH=str(self.binary) + ":" + os.environ["PATH"],
             DISPATCH_TAG=tag, RELEASE_TAG=tag, GITHUB_SHA=control or self.trusted,
-            GITHUB_REF=ref, GITHUB_OUTPUT=str(self.output), GITHUB_STEP_SUMMARY=str(self.summary),
+            GITHUB_REF=f"refs/{ref_prefix}/{ref_name}", GITHUB_REF_TYPE=ref_type,
+            GITHUB_REF_NAME=ref_name, GH_TOKEN="fixture-token",
+            GITHUB_OUTPUT=str(self.output), GITHUB_STEP_SUMMARY=str(self.summary),
             RUNNER_TEMP=str(self.directory), GITHUB_API_URL="https://example.invalid",
             GITHUB_REPOSITORY="example/project", FIXTURE_RELEASE_STATUS=status)
         return subprocess.run(["bash", "-c", self.script], cwd=self.checkout, env=environment,
@@ -81,40 +85,54 @@ class ReleaseWorkflowTrustTests(unittest.TestCase):
         result = self.validate()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.output.read_text().splitlines(), [
-            f"source_sha={self.trusted}",
             "tag_object=" + self.git(self.origin, "rev-parse", "refs/tags/v1.2.3")])
         self.assertIn(self.trusted, self.summary.read_text())
 
     def test_annotated_off_main_tag_is_rejected(self):
-        self.assert_rejected(self.validate(tag="v1.2.4"), "which is not on main")
+        self.assert_rejected(
+            self.validate(tag="v1.2.4", control=self.unreviewed),
+            "which is not on main")
 
     def test_lightweight_main_tag_is_rejected(self):
         self.assert_rejected(self.validate(tag="v1.2.5"), "must be an annotated tag")
 
-    def test_unreviewed_orchestration_revision_is_rejected(self):
-        self.assert_rejected(self.validate(control=self.unreviewed),
-                             "Orchestration revision is not on main")
+    def test_dispatch_revision_must_match_tag(self):
+        self.assert_rejected(
+            self.validate(tag="v1.2.4"),
+            "not the workflow source")
 
-    def test_non_main_dispatch_is_rejected(self):
-        self.assert_rejected(self.validate(ref="refs/heads/unreviewed"),
-                             "Dispatch reviewed release orchestration from main")
+    def test_non_tag_dispatch_is_rejected(self):
+        self.assert_rejected(
+            self.validate(ref_type="branch", ref_name="main"),
+            "Dispatch from the release tag")
+
+    def test_tag_input_must_match_dispatch_ref(self):
+        self.assert_rejected(
+            self.validate(ref_name="v1.2.4"),
+            "tag input must match the dispatch ref")
 
     def test_unknown_release_read_is_rejected_before_outputs(self):
         self.assert_rejected(self.validate(status="403"),
                              "cannot verify whether GitHub Release v1.2.3 exists (HTTP 403)")
 
-    def test_payload_execution_requires_successful_validation_and_no_checkout_credentials(self):
+    def test_executable_checkouts_use_the_trusted_workflow_revision(self):
         consumers = set()
+        self.assertNotIn("coordinated-artifacts", WORKFLOW["jobs"])
+        self.assertNotIn("source_sha", WORKFLOW["jobs"]["validate"]["outputs"])
         for name, job in WORKFLOW["jobs"].items():
             for step in job.get("steps", []):
                 if step.get("uses", "").startswith("actions/checkout@"):
                     self.assertIs(step["with"].get("persist-credentials"), False, name)
-                    if step["with"].get("ref") == "${{ needs.validate.outputs.source_sha }}":
-                        consumers.add(name)
+                    reference = step["with"].get("ref")
+                    self.assertEqual(reference, "${{ github.sha }}", name)
+                    self.assertNotIn("needs.", reference)
+                    self.assertNotIn("inputs.", reference)
+                    consumers.add(name)
+                    if name != "validate":
                         needs = job.get("needs", [])
                         self.assertIn("validate", [needs] if isinstance(needs, str) else needs)
                         self.assertNotIn("if", job, "payload consumers must not bypass failed validation")
-        self.assertEqual(consumers, {"gates", "build", "coordinated-artifacts", "publish", "smoke"})
+        self.assertEqual(consumers, {"validate", "gates", "build", "publish"})
         for name in ("validate-windows-assets", "smoke-windows"):
             needs = WORKFLOW["jobs"][name]["needs"]
             self.assertIn("build" if name == "validate-windows-assets" else "publish",

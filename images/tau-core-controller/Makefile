@@ -7,8 +7,6 @@ TAG   ?= latest
 ACR_REGISTRY ?= aksairuntime.azurecr.io
 IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 PLATFORMS ?= linux/amd64,linux/arm64
-VERSION ?= $(TAG)
-COMMIT ?= $(shell git rev-parse HEAD)
 
 SRC := ../../controllers/tau-core
 CONTEXT := ../..
@@ -38,8 +36,6 @@ clean:
 
 docker-build:
 	docker buildx build \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg COMMIT=$(COMMIT) \
 		--platform $(PLATFORMS) \
 		--tag $(IMG) \
 		--file Dockerfile \
@@ -47,8 +43,6 @@ docker-build:
 
 docker-push:
 	docker buildx build \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg COMMIT=$(COMMIT) \
 		--platform $(PLATFORMS) \
 		--tag $(IMG) \
 		--file Dockerfile \

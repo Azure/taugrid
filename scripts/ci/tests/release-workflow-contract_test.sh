@@ -55,14 +55,17 @@ grep -Fq "RELEASE_TAG: \${{ inputs.tag }}" "${WORKFLOW}" ||
   fail "release tag must use the required dispatch input"
 grep -Fq "group: release-tau-\${{ inputs.tag }}" "${WORKFLOW}" ||
   fail "release concurrency must be scoped to the dispatch tag"
-grep -Fq 'if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then' "${WORKFLOW}" ||
-  fail "trusted orchestration must dispatch from main independently of the payload tag"
-grep -Fq 'source_sha=$commit' "${WORKFLOW}" ||
-  fail "the annotated product tag must produce an immutable payload revision"
-grep -Fq 'ref: ${{ needs.validate.outputs.source_sha }}' "${WORKFLOW}" ||
-  fail "product builds must check out the immutable payload revision"
-if grep -Fq 'RELEASE_SOURCE_REF:' "${WORKFLOW}"; then
-  fail "the payload revision must not be coupled to the workflow revision"
+grep -Fq 'if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then' "${WORKFLOW}" ||
+  fail "normal releases must dispatch from an existing tag ref"
+grep -Fq 'if [[ "$DISPATCH_TAG" != "$GITHUB_REF_NAME" ]]; then' "${WORKFLOW}" ||
+  fail "the tag input must match the immutable dispatch ref"
+grep -Fq 'source_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"' "${WORKFLOW}" ||
+  fail "release validation must resolve the trusted workflow source"
+grep -Fq 'if [[ "$commit" != "$source_commit" ]]; then' "${WORKFLOW}" ||
+  fail "the annotated tag and workflow source must be the same commit"
+if grep -Fq 'source_sha' "${WORKFLOW}" ||
+   grep -Eq 'ref:.*\$\{\{ (needs|inputs)\.' "${WORKFLOW}"; then
+  fail "executable checkouts must not use tag-derived job outputs or manual inputs"
 fi
 if grep -Fq 'GITHUB_EVENT_NAME' "${WORKFLOW}"; then
   fail "release behavior must not retain a tag-push event path"
@@ -73,35 +76,12 @@ fi
 validate_block="$(job_block validate)"
 build_block="$(job_block build)"
 publish_block="$(job_block publish)"
-coordinated_block="$(job_block coordinated-artifacts)"
-grep -Fq '      - coordinated-artifacts' <<<"${publish_block}" ||
-  fail "GitHub publication must depend on approved image and chart builds"
-grep -Fq 'environment: release-publication' <<<"${coordinated_block}" ||
-  fail "publisher orchestration must use the protected release environment"
-grep -Fq 'Verify installed release environment protections' <<<"${coordinated_block}" ||
-  fail "a named environment alone must not count as installed approval checks"
-grep -Fq 'id-token: write' <<<"${coordinated_block}" ||
-  fail "publisher authentication must use short-lived workload federation"
-grep -Fq 'release-tools/scripts/ci/release_backend.py' <<<"${coordinated_block}" ||
-  fail "publisher control scripts must come from trusted orchestration, not payload"
 grep -Fq 'EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}' <<<"${publish_block}" ||
-  fail "publication must preserve the annotated tag object as well as payload commit"
-if grep -Fq 'vars.RELEASE_BACKEND' <<<"${coordinated_block}"; then
-  fail "private publisher bindings must be masked environment configuration"
+  fail "publication must preserve the annotated tag object as well as the source commit"
+if grep -Fq 'coordinated-artifacts:' "${WORKFLOW}" ||
+   grep -Fq 'RELEASE_BACKEND_' "${WORKFLOW}"; then
+  fail "the GitHub Release workflow must not contain the unprovisioned publisher path"
 fi
-grep -Fq 'secrets.RELEASE_BACKEND_RESUME_RUN' <<<"${coordinated_block}" ||
-  fail "private resume identifiers must not be public dispatch inputs"
-controller_build="$(
-  make --no-print-directory -n -C "${REPO_ROOT}/images/tau-core-controller" \
-    docker-build docker-push VERSION=1.2.3 COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-)"
-test "$(grep -Fc -- '--build-arg COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' <<<"${controller_build}")" -eq 2 ||
-  fail "controller build and push must consume the exact product revision"
-test "$(grep -Fc -- '--build-arg VERSION=1.2.3' <<<"${controller_build}")" -eq 2 ||
-  fail "controller build and push must consume the coordinated version"
-grep -Fq 'org.opencontainers.image.revision="${COMMIT}"' \
-  "${REPO_ROOT}/images/tau-core-controller/Dockerfile" ||
-  fail "controller images must carry public source provenance"
 if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
   fail "read-only validation must not call the write-authorized generate-notes endpoint"
 fi

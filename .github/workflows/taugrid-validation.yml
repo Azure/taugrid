@@ -60,11 +60,6 @@ jobs:
       - name: Validate release workflow contract
         run: bash scripts/ci/tests/release-workflow-contract_test.sh
 
-      - name: Set up Helm for release contract tests
-        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
-        with:
-          version: v3.20.0
-
       - name: Set up Python for release contract tests
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
