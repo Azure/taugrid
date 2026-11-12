@@ -17,7 +17,7 @@ fail() {
 [[ ! -e "${REPO_ROOT}/.github/workflows/release-tau.yaml" ]] ||
   fail "GitHub must not remain the release orchestrator"
 [[ ! -e "${REPO_ROOT}/scripts/ci/release_backend.py" ]] ||
-  fail "GitHub-to-ADO queue identity code must be removed"
+  fail "repository-to-publisher queue identity code must be removed"
 grep -Fq -- '- name: sourceRef' "$PIPELINE" ||
   fail "chart publisher must require an exact source SHA for releases"
 grep -Fq -- '- name: sourceTag' "$PIPELINE" ||
@@ -43,7 +43,7 @@ grep -Fq 'TAUGRID_SOURCE_ROOT:' "$PIPELINE" ||
 grep -Fq 'persistCredentials: false' "$PIPELINE" ||
   fail "release checkouts must not persist repository credentials"
 if grep -Eq 'RELEASE_(TENANT|CLIENT|OIDC|PUBLISHERS_CONFIG)|id-token: write' "$PIPELINE"; then
-  fail "chart publication must not retain the GitHub-to-ADO identity"
+  fail "chart publication must not retain the repository-to-publisher identity"
 fi
 grep -Fq 'version="0.0.0-preflight"' "${VALIDATION_WORKFLOW}" ||
   fail "release validation must use a release-neutral synthetic version"
