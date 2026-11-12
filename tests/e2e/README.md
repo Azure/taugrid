@@ -417,14 +417,23 @@ requires an externally managed topology-aware flavor and quota; the checked-in
 overlay deliberately does not publish the environment-specific DGX selector.
 
 Create the pipeline in the AKS AI Runtime Azure DevOps project from
-`.pipelines/taugrid-flex-nightly.yml`. It uses the existing
-`aks ai runtime - prod` Azure service connection. The selected Ray image must
+`.pipelines/taugrid-flex-nightly.yml`. Configure `azureServiceConnection` in
+the pipeline definition to reference an authorized service connection with
+access to the target subscription and cluster. The YAML deliberately has no
+service-connection default. Each cluster task explicitly selects
+`AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID` before obtaining credentials and fails
+without attempting cluster access if the variable is missing or unresolved,
+or if subscription selection fails. Diagnostic directories are initialized
+in a separate step before authentication so failure artifacts can still publish.
+The selected Ray image must
 include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
 require `linux/arm64` because DGX Spark is arm64.
 Configure:
 
 | Name | Secret | Purpose |
 |------|--------|---------|
+| `azureServiceConnection` | no | Pipeline-definition variable naming the authorized service connection; required with no YAML default |
+| `AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID` | no | Target subscription explicitly selected before cluster credential retrieval; must be accessible to the service connection |
 | `AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP`, `AKS_AI_RUNTIME_FLEX_CLUSTER_NAME` | no | Persistent Flex target |
 | `AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE` | no | Environment-specific authoritative site-label values for the default targets |
 | `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE` | no | Environment-specific DGX selector and site; required only when `includeDGXSpark=true` |

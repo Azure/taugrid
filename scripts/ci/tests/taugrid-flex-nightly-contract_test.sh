@@ -39,6 +39,124 @@ grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
   fail "pipeline must run on the approved 1ES AKS AI Runtime pool"
 grep -Fq "azureSubscription: \$(azureServiceConnection)" "$PIPELINE" ||
   fail "pipeline must use the approved Azure DevOps service connection"
+python3 - "$PIPELINE" <<'PY'
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import textwrap
+
+pipeline = Path(sys.argv[1]).read_text()
+jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
+targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    binary = root / "bin"
+    binary.mkdir()
+    for command in ("az", "kubelogin"):
+        stub = binary / command
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f'printf "%s\\n" "{command} $*" >>"$AUTH_CALLS"\n'
+            'test -d "$EXPECTED_ARTIFACT_DIR"\n'
+            'if [[ "$*" == "$FAIL_COMMAND" ]]; then exit 41; fi\n'
+        )
+        stub.chmod(0o755)
+
+    for job in jobs:
+        name = job.splitlines()[0]
+        if name not in targets:
+            continue
+        assert "azureSubscription: $(azureServiceConnection)" in job, name
+        assert "FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)" in job, name
+        initialization = re.search(
+            r"      - bash: \|\n(.*?)        displayName: Initialize nightly diagnostics\n",
+            job,
+            re.DOTALL,
+        )
+        assert initialization, f"{name}: diagnostics must initialize outside AzureCLI login"
+        assert initialization.end() < job.index("      - task: AzureCLI@2"), name
+        inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
+        assert inline, name
+        authentication = textwrap.dedent(inline.group(1)).splitlines(keepends=True)
+        end = next(i for i, line in enumerate(authentication) if "kubelogin convert-kubeconfig" in line)
+        authentication = "".join(authentication[:end + 1])
+
+        for scenario, subscription, failure, expected, status in (
+            ("success", "test-subscription", "", 3, 0),
+            ("missing", None, "", 0, 1),
+            ("empty", "", "", 0, 1),
+            ("unexpanded", "$(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)", "", 0, 1),
+            ("selection-failure", "test-subscription", "account set --subscription test-subscription", 1, 41),
+            ("credential-failure", "test-subscription", None, 2, 41),
+            ("conversion-failure", "test-subscription", None, 3, 41),
+        ):
+            directory = root / name / scenario
+            directory.mkdir(parents=True)
+            artifact = directory / "artifacts"
+            calls = directory / "calls"
+            calls.touch()
+            kubeconfig = directory / "agent" / "flex-kubeconfig"
+            credential_command = (
+                "aks get-credentials --resource-group test-resource-group --name test-cluster "
+                f"--file {kubeconfig} --overwrite-existing"
+            )
+            conversion_command = f"convert-kubeconfig --kubeconfig {kubeconfig} --login azurecli"
+            if scenario == "credential-failure":
+                failure = credential_command
+            elif scenario == "conversion-failure":
+                failure = conversion_command
+            environment = dict(os.environ)
+            environment.pop("FLEX_NIGHTLY_SUBSCRIPTION_ID", None)
+            environment.update(
+                PATH=f"{binary}:{os.environ['PATH']}",
+                AUTH_CALLS=str(calls),
+                EXPECTED_ARTIFACT_DIR=str(artifact / targets[name]),
+                FAIL_COMMAND=failure,
+                FLEX_NIGHTLY_RESOURCE_GROUP="test-resource-group",
+                FLEX_NIGHTLY_CLUSTER_NAME="test-cluster",
+            )
+            if subscription is not None:
+                environment["FLEX_NIGHTLY_SUBSCRIPTION_ID"] = subscription
+
+            def expand(script):
+                return script.replace("$(Build.ArtifactStagingDirectory)", str(artifact)).replace(
+                    "$(Agent.TempDirectory)", str(directory / "agent")
+                )
+
+            subprocess.run(
+                ["bash", "-c", expand(textwrap.dedent(initialization.group(1)))],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert (artifact / targets[name]).is_dir(), f"{name}: missing diagnostics before login"
+            result = subprocess.run(
+                ["bash", "-c", expand(authentication)],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == status, (name, scenario, result.returncode, result.stderr)
+            actual = calls.read_text().splitlines()
+            ordered = [
+                "az account set --subscription test-subscription",
+                f"az {credential_command}",
+                f"kubelogin {conversion_command}",
+            ]
+            assert actual == ordered[:expected], (name, scenario, actual)
+            if expected == 0:
+                assert "FLEX_NIGHTLY_SUBSCRIPTION_ID" in result.stderr, (name, scenario)
+
+assert not re.search(r"^\s*- name: azureServiceConnection\s*$", pipeline, re.MULTILINE), (
+    "service connection must be configured outside public source"
+)
+PY
 grep -Fq "value: shared-cluster-controllers" "$PIPELINE" ||
   fail "pipeline must explicitly use the safe shared-controller mode"
 grep -Fq "taugrid-flex-nightly-preflight.sh cluster" "$PIPELINE" ||

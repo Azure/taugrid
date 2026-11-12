@@ -33,8 +33,6 @@ pool:
   name: 1es-aks-ai-runtime-ado-eastus2
 
 variables:
-  - name: azureServiceConnection
-    value: aks ai runtime - prod
   - name: GOFLAGS
     value: -mod=readonly
   - name: GOTOOLCHAIN
@@ -59,6 +57,11 @@ jobs:
     steps:
       - checkout: self
 
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(Build.ArtifactStagingDirectory)/preflight"
+        displayName: Initialize nightly diagnostics
+
       - bash: scripts/ci/tests/taugrid-flex-nightly-contract_test.sh
         displayName: Validate nightly pipeline contract
 
@@ -73,6 +76,13 @@ jobs:
           scriptLocation: inlineScript
           inlineScript: |
             set -euo pipefail
+
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
 
             tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
             mkdir -p "${tools_dir}"
@@ -114,6 +124,7 @@ jobs:
             export FLEX_NIGHTLY_CONTRACT_FILE="${artifact_dir}/hardware-matrix.json"
             scripts/ci/taugrid-flex-nightly-preflight.sh cluster
         env:
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_DEPLOY_MODE: $(FLEX_NIGHTLY_DEPLOY_MODE)
           FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
@@ -141,6 +152,11 @@ jobs:
     steps:
       - checkout: self
 
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(Build.ArtifactStagingDirectory)/hardware-matrix/diagnostics"
+        displayName: Initialize nightly diagnostics
+
       - task: GoTool@0
         displayName: Use Microsoft Go 1.27.4-1
         inputs:
@@ -161,6 +177,13 @@ jobs:
           scriptLocation: inlineScript
           inlineScript: |
             set -euo pipefail
+
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
 
             tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
             mkdir -p "${tools_dir}"
@@ -436,6 +459,7 @@ jobs:
             exit "${matrix_rc}"
         env:
           PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
           FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
@@ -463,6 +487,11 @@ jobs:
     steps:
       - checkout: self
 
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(Build.ArtifactStagingDirectory)"
+        displayName: Initialize nightly diagnostics
+
       - task: GoTool@0
         displayName: Use Microsoft Go 1.27.4-1
         inputs:
@@ -477,6 +506,13 @@ jobs:
           scriptLocation: inlineScript
           inlineScript: |
             set -euo pipefail
+
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
 
             tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
             mkdir -p "${tools_dir}"
@@ -545,6 +581,7 @@ jobs:
             go test -v -count=1 -timeout 75m \
               -run '^TestFineWebRayTrain16xH200IB$' ./stack/
         env:
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
