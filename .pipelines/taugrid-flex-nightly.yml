@@ -103,7 +103,15 @@ jobs:
 
             artifact_dir="$(Build.ArtifactStagingDirectory)/preflight"
             mkdir -p "${artifact_dir}"
-            image_platforms="$(docker manifest inspect "${RAY_E2E_IMAGE}" |
+            inspection_image="${RAY_E2E_IMAGE}"
+            if [[ "${inspection_image}" == *@* ]]; then
+              image_repository="${inspection_image%@*}"
+              if [[ "${image_repository##*/}" == *:* ]]; then
+                image_repository="${image_repository%:*}"
+              fi
+              inspection_image="${image_repository}@${inspection_image##*@}"
+            fi
+            image_platforms="$(docker manifest inspect "${inspection_image}" |
               jq -r 'if .manifests then [.manifests[].platform | (.os + "/" + .architecture)] | unique[] else (.os + "/" + .architecture) end')"
             if [[ "${RAY_E2E_IMAGE}" =~ ray([0-9]+\.[0-9]+\.[0-9]+) ]]; then
               ray_version="${BASH_REMATCH[1]}"

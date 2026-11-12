@@ -428,6 +428,9 @@ in a separate step before authentication so failure artifacts can still publish.
 The selected Ray image must
 include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
 require `linux/arm64` because DGX Spark is arm64.
+For a `tag@digest` image, preflight inspects `repository@digest` so a moved tag
+cannot redirect manifest inspection. Version checks and workloads retain the
+original image reference and immutable digest.
 Configure:
 
 | Name | Secret | Purpose |

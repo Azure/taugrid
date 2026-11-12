@@ -153,6 +153,61 @@ with tempfile.TemporaryDirectory() as temporary:
             if expected == 0:
                 assert "FLEX_NIGHTLY_SUBSCRIPTION_ID" in result.stderr, (name, scenario)
 
+    preflight = next(job for job in jobs if job.startswith("preflight\n"))
+    inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)
+    script = textwrap.dedent(inline.group(1))
+    start = script.index('artifact_dir=')
+    version_check = script.index('if [[ "${RAY_E2E_IMAGE}" =~ ray')
+    end = script.index('export FLEX_NIGHTLY_CONTRACT_FILE=')
+    inspection = script[start:version_check]
+    validation = script[start:end]
+    docker = binary / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        '[[ "$*" == "manifest inspect ${EXPECTED_IMAGE}" ]] || exit 42\n'
+        'if [[ "${MANIFEST_FAILURE:-false}" == "true" ]]; then exit 43; fi\n'
+        """printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'\n"""
+    )
+    docker.chmod(0o755)
+    digest = "sha256:" + "a" * 64
+    tag = "py3.12-ray2.58.0-cuda13.0"
+    for repository in ("registry.example.com/team/ray", "registry.example.com:5000/team/ray", "ray"):
+        for reference, expected in (
+            (f"{repository}:{tag}@{digest}", f"{repository}@{digest}"),
+            (f"{repository}@{digest}", f"{repository}@{digest}"),
+            (f"{repository}:{tag}", f"{repository}:{tag}"),
+        ):
+            environment = dict(os.environ)
+            environment.update(
+                PATH=f"{binary}:{os.environ['PATH']}",
+                RAY_E2E_IMAGE=reference,
+                EXPECTED_IMAGE=expected,
+                INCLUDE_DGX="true",
+                MANIFEST_FAILURE="false",
+            )
+            expanded = inspection.replace("$(Build.ArtifactStagingDirectory)", str(root / "image-artifacts"))
+            result = subprocess.run(
+                ["bash", "-c", 'set -euo pipefail\n' + expanded + 'printf "%s\\n" "$RAY_E2E_IMAGE" "$image_platforms"'],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (reference, result.returncode, result.stderr)
+            assert result.stdout.splitlines() == [reference, "linux/amd64", "linux/arm64"], reference
+            if reference == f"{repository}:{tag}@{digest}":
+                expanded = validation.replace("$(Build.ArtifactStagingDirectory)", str(root / "image-artifacts"))
+                for failure, status in (("false", 0), ("true", 43)):
+                    environment["MANIFEST_FAILURE"] = failure
+                    result = subprocess.run(
+                        ["bash", "-c", 'set -euo pipefail\n' + expanded],
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    assert result.returncode == status, (reference, failure, result.stderr)
+                assert (root / "image-artifacts/preflight/ray-version.txt").read_text() == "2.58.0\n"
+
 assert not re.search(r"^\s*- name: azureServiceConnection\s*$", pipeline, re.MULTILINE), (
     "service connection must be configured outside public source"
 )
