@@ -172,6 +172,10 @@ func validateManagedWorkflowTopologyIntent(m *manifest.Manifest, o jobrender.Opt
 		if workloadKind != manifest.WorkloadKindRayJobEval {
 			return fmt.Errorf("workload profile uses lane=eval, but workload kind is %q; eval lane is only valid for --workload-kind=rayjob-eval", workloadKind)
 		}
+	case "cpu":
+		if workloadKind != manifest.WorkloadKindRayJob || m.Compute.GPUs != 0 {
+			return fmt.Errorf("workload profile uses lane=cpu, but workload kind is %q with compute.gpus=%d; cpu lane is only valid for CPU-only --workload-kind=rayjob", workloadKind, m.Compute.GPUs)
+		}
 	default:
 		return fmt.Errorf("finetune training cannot use lane %q; select a training, elastic, large-memory, or eval workload profile", o.Lane)
 	}
