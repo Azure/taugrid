@@ -429,7 +429,7 @@ func (c contract) validate(profileName string) error {
 		return fmt.Errorf("profile %q topology: team %q is not a valid k8s label value", profileName, c.team)
 	}
 	if c.lane != "" {
-		if err := validEnum("lane", c.lane, "eval", "training", "large-memory", "elastic"); err != nil {
+		if err := validEnum("lane", c.lane, "eval", "training", "large-memory", "elastic", "cpu"); err != nil {
 			return fmt.Errorf("profile %q topology: %w", profileName, err)
 		}
 	}

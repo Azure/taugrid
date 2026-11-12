@@ -290,6 +290,23 @@ func TestBuild_OverridesRouteTeamLaneQueue(t *testing.T) {
 	}
 }
 
+func TestBuild_CPULaneHasNoDefaultPriorities(t *testing.T) {
+	plan, err := Build(profile.Profile{Name: "azure.workspace.cpu"}, Options{Lane: "cpu", Mode: "fixed", Placement: "unconstrained"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Labels[workloadPriorityLabel] != "" || plan.PodPriorityClassName != "" {
+		t.Fatalf("cpu lane priorities = %q/%q, want none", plan.Labels[workloadPriorityLabel], plan.PodPriorityClassName)
+	}
+}
+
+func TestBuild_RejectsUnknownLane(t *testing.T) {
+	_, err := Build(profile.Profile{Name: "adhoc"}, Options{Lane: "batch"})
+	if err == nil || !strings.Contains(err.Error(), "lane") {
+		t.Fatalf("expected unknown lane error, got %v", err)
+	}
+}
+
 func TestBuild_DeniesH200Elastic(t *testing.T) {
 	_, err := Build(topologyProfile(), Options{
 		Team:            "research",
