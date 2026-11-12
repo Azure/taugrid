@@ -5,31 +5,14 @@ metadata:
   namespace: {{STACK_NAMESPACE}}
   labels:
     kueue.x-k8s.io/queue-name: {{STACK_QUEUE}}
+    {{NANOGPT_PRIORITY_LABEL}}
   annotations:
     tau.azure.com/payload-digest: "{{INFERENCE_SCRIPT_PAYLOAD_DIGEST}}"
 spec:
   entrypoint: python /script/inference_job.py
+  submissionMode: HTTPMode
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
-  submitterPodTemplate:
-    spec:
-      restartPolicy: Never
-      nodeSelector:
-        {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
-      tolerations:
-      - key: CriticalAddonsOnly
-        operator: Exists
-        effect: NoSchedule
-      containers:
-      - name: ray-job-submitter
-        image: {{RAY_IMAGE}}
-        resources:
-          requests:
-            cpu: "500m"
-            memory: "200Mi"
-          limits:
-            cpu: "1"
-            memory: "1Gi"
   runtimeEnvYAML: |
     pip:
       packages:

@@ -79,10 +79,18 @@ jobs:
           helm version --short
         displayName: Verify E2E prerequisites
 
+      - bash: |
+          set -euo pipefail
+          docker system df
+          docker system prune --all --force
+          df -h /
+        displayName: Reclaim container storage
+
       - bash: make -C cli test-kind-e2e
         displayName: Run Tau CLI Kind E2E
         env:
           TAU_KIND_DELETE_CLUSTER: "1"
+          TAU_KIND_CLEAN_HOST_STORAGE: "1"
 
       - bash: kind delete cluster --name tau-kind || true
         displayName: Clean up Kind cluster

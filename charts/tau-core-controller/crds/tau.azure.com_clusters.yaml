@@ -207,6 +207,23 @@ spec:
                       format: int32
                       minimum: 0
                       type: integer
+                    hotVolume:
+                      properties:
+                        defaultSize:
+                          minLength: 1
+                          type: string
+                        maxSize:
+                          minLength: 1
+                          type: string
+                        storageClassName:
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - defaultSize
+                      - maxSize
+                      - storageClassName
+                      type: object
                     mode:
                       enum:
                       - fixed
@@ -528,6 +545,23 @@ spec:
                           format: int32
                           minimum: 0
                           type: integer
+                        hotVolume:
+                          properties:
+                            defaultSize:
+                              minLength: 1
+                              type: string
+                            maxSize:
+                              minLength: 1
+                              type: string
+                            storageClassName:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                          required:
+                          - defaultSize
+                          - maxSize
+                          - storageClassName
+                          type: object
                         localQueues:
                           items:
                             properties:

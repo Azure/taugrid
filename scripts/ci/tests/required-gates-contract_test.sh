@@ -210,6 +210,7 @@ charts/taugrid/values.yaml|kubernetes
 charts/taugrid-core/values.yaml|kubernetes
 examples/job.yaml|kubernetes
 scripts/ci/vendor-taugrid-dependencies.sh|kubernetes
+scripts/lib/kind.sh|kubernetes
 .github/workflows/taugrid-image-validation.yml|image
 .github/workflows/taugrid-docs-validation.yml|docs
 .github/workflows/taugrid-kubernetes-validation.yml|kubernetes

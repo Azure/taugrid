@@ -198,18 +198,34 @@ const (
 )
 
 func pollForTerminal(ctx context.Context, r *kube.Runner, ns, name string) (status.Snapshot, terminalState, error) {
+	return pollForTerminalWithFetch(ctx, func() (status.Snapshot, error) {
+		return status.Fetch(ctx, r, ns, name)
+	}, retryPollInterval)
+}
+
+func pollForTerminalWithFetch(
+	ctx context.Context,
+	fetch func() (status.Snapshot, error),
+	interval time.Duration,
+) (status.Snapshot, terminalState, error) {
+	var observedPods []status.Pod
+	var observedEvents []status.Event
 	for {
-		snap, err := status.Fetch(ctx, r, ns, name)
+		snap, err := fetch()
 		if err != nil {
 			return status.Snapshot{}, 0, fmt.Errorf("fetching status for retry watch: %w", err)
 		}
+		observedPods = mergeRetryPods(observedPods, snap.Pods)
+		observedEvents = mergeRetryEvents(observedEvents, snap.Events)
 		if status.WorkloadSucceeded(snap) {
 			return snap, terminalSuccess, nil
 		}
 		if status.WorkloadFailed(snap) {
+			snap.Pods = observedPods
+			snap.Events = observedEvents
 			return snap, terminalFailed, nil
 		}
-		timer := time.NewTimer(retryPollInterval)
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -217,6 +233,49 @@ func pollForTerminal(ctx context.Context, r *kube.Runner, ns, name string) (stat
 		case <-timer.C:
 		}
 	}
+}
+
+func mergeRetryPods(existing, current []status.Pod) []status.Pod {
+	byKey := make(map[string]status.Pod, len(existing)+len(current))
+	order := make([]string, 0, len(existing)+len(current))
+	for _, pod := range append(existing, current...) {
+		key := pod.UID
+		if key == "" {
+			key = pod.Name
+		}
+		if key == "" {
+			continue
+		}
+		if _, ok := byKey[key]; !ok {
+			order = append(order, key)
+		}
+		byKey[key] = pod
+	}
+	out := make([]status.Pod, 0, len(order))
+	for _, key := range order {
+		out = append(out, byKey[key])
+	}
+	return out
+}
+
+func mergeRetryEvents(existing, current []status.Event) []status.Event {
+	seen := make(map[string]bool, len(existing)+len(current))
+	out := make([]status.Event, 0, len(existing)+len(current))
+	for _, event := range append(existing, current...) {
+		key := strings.Join([]string{
+			event.InvolvedKind,
+			event.InvolvedName,
+			event.Reason,
+			event.Message,
+			event.FirstSeen.String(),
+		}, "\x00")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, event)
+	}
+	return out
 }
 
 func retryOnMatch(retryOn []string, reason resume.FailureReason) bool {

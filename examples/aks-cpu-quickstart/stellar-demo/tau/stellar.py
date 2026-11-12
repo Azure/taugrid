@@ -516,6 +516,9 @@ def finish(*, sync: bool = False) -> None:
     _current().finish(sync=sync)
     _ACTIVE_RUN = None
 
+def active_run() -> Run | None:
+    return _ACTIVE_RUN
+
 def _current() -> Run:
     if _ACTIVE_RUN is None:
         raise RuntimeError("call tau.stellar.init(...) before logging")
@@ -748,4 +751,4 @@ def _checkpoint_paths(checkpoint_callback: Any) -> list[tuple[str, Path]]:
         paths.append((label, path))
     return paths
 
-__all__ = ["Html", "Image", "Run", "StellarLogger", "Table", "finish", "init", "log", "log_artifact", "use_artifact"]
+__all__ = ["Html", "Image", "Run", "StellarLogger", "Table", "active_run", "finish", "init", "log", "log_artifact", "use_artifact"]

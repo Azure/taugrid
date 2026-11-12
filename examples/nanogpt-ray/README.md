@@ -91,6 +91,33 @@ taugrid-portal experiment import jsonl \
   --group ray-smoke
 ```
 
+### Rank-0 batch-preparation time
+
+When the Tau Python SDK is importable, rank 0 wraps its training micro-batches
+in `tau.datasets.timed` and adds a `data/wait_seconds` and `data/step_seconds`
+row to `stellar/history.jsonl` for every optimizer step, summed over the
+step's gradient-accumulation micro-batches. The last step also records
+`data/epoch_wait_seconds` and `data/epoch_seconds` for the whole run. After
+import, these metrics appear on the run's experiment page beside `train/*` and
+`val/*`.
+
+`data/wait_seconds` is the time rank 0 spends producing its micro-batches:
+random window sampling, token slicing, tensor construction, and the
+host-to-device copy. It is not storage-read time alone, and other ranks are
+not recorded, so a slow rank does not show up here.
+
+The workload image does not include the SDK. To record these metrics on a
+cluster, add the SDK to `runtime.pip` in your `tau.yaml`, pinned to a release
+tag or commit:
+
+```yaml
+runtime:
+  pip:
+    - "tau @ git+https://github.com/Azure/taugrid@<tag-or-commit>#subdirectory=sdk/python/python"
+```
+
+Without the SDK the script trains the same way and skips these rows.
+
 ## Scale knobs
 
 Edit your `tau.yaml` rather than adding `tau run` flags:

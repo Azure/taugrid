@@ -16,8 +16,8 @@ Wraps the resources we wrote and want to ship as one helm release:
 3. **Image prewarm** — DaemonSet that pulls Tau's default GPU workload image on
    every GPU node so the first job on a fresh node skips the cold pull. It only
    helps when researchers submit without overriding `runtime.image`; workloads
-   that build their own image want a peer-to-peer mirror instead (see Spegel in
-   [`../INSTALL.md`](../INSTALL.md)).
+   that build their own image want a peer-to-peer mirror instead (see
+   [Peer-to-peer image distribution](#peer-to-peer-image-distribution)).
 4. **Resource flavors** — optional static glue for clusters that want the chart to own those objects.
 5. **Tau run lifecycle recorder** — optional, metadata-only projection of
    Jobs, RayJobs, and Kueue Workloads into ADX. It is disabled by default and
@@ -62,12 +62,39 @@ are not modified.
 This chart deliberately does not vendor or wrap upstream OSS charts.
 Each one has its own opinionated values surface (taints, MIG profiles,
 time-slicing, federated identity, cloud creds) we don't want to flatten
-through a single values file. See [`../INSTALL.md`](../INSTALL.md) for
-the recommended OSS install order + pinned versions.
+through a single values file. See the
+[Getting started on Kubernetes guide](https://azure.github.io/taugrid/docs/platform-admin-guide/kubernetes/) for the
+recommended OSS install order + pinned versions.
 
 It also no longer installs the old cost oracle, PrometheusRule, or Grafana
 dashboard. Those resources belonged to the removed `tau cost`/pricing surface,
 not to the current vNext deploy contract.
+
+### Peer-to-peer image distribution
+
+**Decision:** to speed up large image pulls, such as the Ray image, across GPU
+nodes, TauGrid plans to use [Gantry](https://github.com/Azure/unbounded/tree/main/deploy/gantry),
+the peer-to-peer OCI mirror from the open-source
+[unbounded](https://github.com/Azure/unbounded) project, instead of Spegel.
+Prewarm remains the fast path for Tau's default image.
+
+- **One hook for every node type.** Gantry plugs into containerd through
+  `/etc/containerd/certs.d/<registry>/hosts.toml`. AKS nodes and AKS Flex
+  workers both set containerd's `config_path` to `/etc/containerd/certs.d`.
+- **Cold pulls are deduplicated.** Lease-based chairs and rendezvous hashing on
+  the digest select a small set of nodes to pull each layer from the registry;
+  the other nodes fetch it from peers. Spegel only serves content that some node
+  already has, so a fleet-wide first pull still reaches the registry from every
+  node.
+- **No shared registry secret.** Authorization is requester-mediated: Gantry
+  relays the registry's 401 challenge to containerd, which answers with the
+  node's kubelet or credential-provider credentials.
+- **Registry fallback.** Tag requests return 503 and requests for unconfigured
+  registries return 404, so containerd falls back to the registry directly.
+
+Gantry will ship in a follow-up as an opt-in component of the `taugrid`
+umbrella chart (`components.gantry.enabled`, default `false`); this chart will
+not install it.
 
 ## Install
 
@@ -80,7 +107,7 @@ recorder, or their shared namespaced resources.
 
 ```bash
 # Assumes Kueue + KubeRay are installed and GPU nodes expose nvidia.com/gpu.
-# See ../INSTALL.md.
+# See https://azure.github.io/taugrid/docs/platform-admin-guide/kubernetes/
 helm upgrade --install taugrid-core ./taugrid-core --kube-context my-cluster \
   --namespace tau-system --create-namespace
 ```

@@ -9,27 +9,9 @@ metadata:
     tau.azure.com/payload-digest: "{{FINEWEB_SCRIPT_PAYLOAD_DIGEST}}"
 spec:
   entrypoint: python /script/fineweb_ray_train.py
+  submissionMode: HTTPMode
   shutdownAfterJobFinishes: true
   ttlSecondsAfterFinished: 600
-  submitterPodTemplate:
-    spec:
-      restartPolicy: Never
-      nodeSelector:
-        {{RAY_SUBMITTER_NODE_SELECTOR_KEY}}: {{RAY_SUBMITTER_NODE_SELECTOR_VALUE}}
-      tolerations:
-      - key: CriticalAddonsOnly
-        operator: Exists
-        effect: NoSchedule
-      containers:
-      - name: ray-job-submitter
-        image: {{RAY_IMAGE}}
-        resources:
-          requests:
-            cpu: "1"
-            memory: "2Gi"
-          limits:
-            cpu: "2"
-            memory: "4Gi"
   runtimeEnvYAML: |
     pip:
       packages:
@@ -156,7 +138,7 @@ spec:
                   fieldPath: metadata.name
             resources:
               requests:
-                cpu: "2"
+                cpu: "{{FINEWEB_HEAD_CPU_REQUEST}}"
                 memory: "8Gi"
               limits:
                 cpu: "2"
