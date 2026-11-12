@@ -413,7 +413,12 @@ func validateResumeCleanupPermissions(
 			"auth", "can-i", "delete", namedResource,
 		}, nil)
 		if err != nil {
-			return fmt.Errorf("checking permission to delete %s in namespace %s: %w", namedResource, namespace, err)
+			return fmt.Errorf(
+				"checking permission to delete %s in namespace %s: %w; no workload was deleted",
+				namedResource,
+				namespace,
+				err,
+			)
 		}
 		if strings.TrimSpace(out) != "yes" {
 			return fmt.Errorf(

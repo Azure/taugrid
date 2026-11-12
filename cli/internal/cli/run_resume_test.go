@@ -570,6 +570,31 @@ func TestValidateResumeCleanupPermissionsChecksEveryExistingNamedWorkload(t *tes
 	}
 }
 
+func TestValidateResumeCleanupPermissionsReportsSafeFailureWhenAuthorizationCheckErrors(t *testing.T) {
+	key := fakeRawKey("-n", "ray", "auth", "can-i", "delete", "jobs.batch/resume-job")
+	runner := &fakeRawRunner{
+		outputs: map[string]string{},
+		errors: map[string]error{
+			key: errors.New("authorization API unavailable"),
+		},
+	}
+	err := validateResumeCleanupPermissions(
+		context.Background(),
+		runner,
+		"ray",
+		"resume-job",
+		status.Snapshot{JobFound: true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "jobs.batch/resume-job") ||
+		!strings.Contains(err.Error(), "authorization API unavailable") ||
+		!strings.Contains(err.Error(), "no workload was deleted") {
+		t.Fatalf("expected safe named permission-check failure, got %v", err)
+	}
+	if len(runner.calls) != 1 || fakeRawKey(runner.calls[0]...) != key {
+		t.Fatalf("permission checks=%v, want only the existing named Job", runner.calls)
+	}
+}
+
 func TestResumeDoesNotDeleteWhenNamedCleanupPermissionIsMissing(t *testing.T) {
 	config := filepath.Join(t.TempDir(), "tau.yaml")
 	writeRunRoutingFile(t, config, "name: resume-job\n")
