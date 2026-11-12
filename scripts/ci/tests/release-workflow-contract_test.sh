@@ -6,118 +6,45 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
-readonly WORKFLOW="${REPO_ROOT}/.github/workflows/release-tau.yaml"
+readonly PIPELINE="${REPO_ROOT}/.pipelines/publish-helm-charts.yml"
 readonly VALIDATION_WORKFLOW="${REPO_ROOT}/.github/workflows/taugrid-validation.yml"
 
 fail() {
-  echo "release workflow contract test failed: $*" >&2
+  echo "release publisher contract test failed: $*" >&2
   exit 1
 }
 
-job_block() {
-  local job="$1"
-  awk -v job="${job}" '
-    $0 == "  " job ":" {
-      in_job = 1
-    }
-    in_job && $0 ~ /^  [[:alnum:]_-]+:$/ && $0 != "  " job ":" {
-      exit
-    }
-    in_job {
-      print
-    }
-  ' "${WORKFLOW}"
-}
-
-on_block="$(
-  awk '
-    /^on:$/ {
-      in_on = 1
-      next
-    }
-    in_on && /^[^[:space:]#]/ {
-      exit
-    }
-    in_on {
-      print
-    }
-  ' "${WORKFLOW}"
-)"
-
-grep -Eq '^[[:space:]]+workflow_dispatch:$' <<<"${on_block}" ||
-  fail "workflow_dispatch must be the release workflow trigger"
-if grep -Eq '^[[:space:]]+(push|pull_request|schedule):$' <<<"${on_block}"; then
-  fail "release publication must not have an automatic trigger"
+[[ ! -e "${REPO_ROOT}/.github/workflows/release-tau.yaml" ]] ||
+  fail "GitHub must not remain the release orchestrator"
+[[ ! -e "${REPO_ROOT}/scripts/ci/release_backend.py" ]] ||
+  fail "GitHub-to-ADO queue identity code must be removed"
+grep -Fq -- '- name: sourceRef' "$PIPELINE" ||
+  fail "chart publisher must require an exact source SHA for releases"
+grep -Fq -- '- name: sourceTag' "$PIPELINE" ||
+  fail "chart publisher must require the annotated source tag"
+grep -Fq -- '- name: releaseTag' "$PIPELINE" ||
+  fail "chart publisher must require the release version"
+grep -Fq -- '- name: forcePublish' "$PIPELINE" ||
+  fail "chart publisher must reject release overwrite requests"
+grep -Fq 'repository: releaseSource' "$PIPELINE" ||
+  fail "chart publisher must separate protected control from release source"
+grep -Fq "test \"\$force_publish\" = \"False\"" "$PIPELINE" ||
+  fail "release publication must reject forcePublish"
+grep -Fq "test \"\$release_tag\" = \"\${source_tag#v}\"" "$PIPELINE" ||
+  fail "source and release tags must agree"
+grep -Fq "test \"\$BUILD_SOURCEBRANCH\" = refs/heads/main" "$PIPELINE" ||
+  fail "release publisher control must execute from main"
+grep -Fq 'rev-parse origin/main^{commit}' "$PIPELINE" ||
+  fail "release publisher control must use the current protected main revision"
+grep -Fq 'validate_release_source.py' "$PIPELINE" ||
+  fail "release source must be independently validated"
+grep -Fq 'TAUGRID_SOURCE_ROOT:' "$PIPELINE" ||
+  fail "chart packaging must use the separately pinned release source"
+grep -Fq 'persistCredentials: false' "$PIPELINE" ||
+  fail "release checkouts must not persist repository credentials"
+if grep -Eq 'RELEASE_(TENANT|CLIENT|OIDC|PUBLISHERS_CONFIG)|id-token: write' "$PIPELINE"; then
+  fail "chart publication must not retain the GitHub-to-ADO identity"
 fi
-
-grep -Fq "run-name: Release TauGrid \${{ inputs.tag }}" "${WORKFLOW}" ||
-  fail "run name must use the required dispatch tag"
-grep -Fq "RELEASE_TAG: \${{ inputs.tag }}" "${WORKFLOW}" ||
-  fail "release tag must use the required dispatch input"
-grep -Fq "group: release-tau-\${{ inputs.tag }}" "${WORKFLOW}" ||
-  fail "release concurrency must be scoped to the dispatch tag"
-grep -Fq 'if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then' "${WORKFLOW}" ||
-  fail "normal releases must dispatch from an existing tag ref"
-grep -Fq 'if [[ "$DISPATCH_TAG" != "$GITHUB_REF_NAME" ]]; then' "${WORKFLOW}" ||
-  fail "the tag input must match the immutable dispatch ref"
-grep -Fq 'source_commit="$(git rev-parse "$GITHUB_SHA^{commit}")"' "${WORKFLOW}" ||
-  fail "release validation must resolve the trusted workflow source"
-grep -Fq 'if [[ "$commit" != "$source_commit" ]]; then' "${WORKFLOW}" ||
-  fail "the annotated tag and workflow source must be the same commit"
-if grep -Fq 'source_sha' "${WORKFLOW}" ||
-   grep -Eq 'ref:.*\$\{\{ (needs|inputs)\.' "${WORKFLOW}"; then
-  fail "executable checkouts must not use tag-derived job outputs or manual inputs"
-fi
-if grep -Fq 'GITHUB_EVENT_NAME' "${WORKFLOW}"; then
-  fail "release behavior must not retain a tag-push event path"
-fi
-if grep -Fq 'allow_main_release_notes' "${WORKFLOW}"; then
-  fail "published legacy releases must not retain a recovery path"
-fi
-validate_block="$(job_block validate)"
-build_block="$(job_block build)"
-coordinated_block="$(job_block coordinated-artifacts)"
-publish_block="$(job_block publish)"
-grep -Fq 'EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}' <<<"${publish_block}" ||
-  fail "publication must preserve the annotated tag object as well as the source commit"
-grep -Fq 'environment: release-publication' <<<"${coordinated_block}" ||
-  fail "coordinated publication must use the protected release environment"
-grep -Fq 'id-token: write' <<<"${coordinated_block}" ||
-  fail "coordinated publication must use short-lived workload identity"
-grep -Fq 'RELEASE_PUBLISHERS_CONFIG: ${{ secrets.RELEASE_PUBLISHERS_CONFIG }}' \
-  <<<"${coordinated_block}" ||
-  fail "publisher identities must come from protected environment configuration"
-grep -Fq 'SOURCE_SHA: ${{ github.sha }}' <<<"${coordinated_block}" ||
-  fail "publisher source must be the exact workflow revision"
-grep -Fq 'python scripts/ci/release_backend.py' <<<"${coordinated_block}" ||
-  fail "coordinated publication must use the verified publisher client"
-grep -Fq "test \"\$(cat \"\$RUNNER_TEMP/release-branch-policies\")\" = \$'v*\\ttag'" \
-  <<<"${coordinated_block}" ||
-  fail "the protected environment must allow only release tag deployments"
-grep -Fq -- '- coordinated-artifacts' <<<"${publish_block}" ||
-  fail "GitHub Release publication must wait for coordinated artifacts"
-if grep -Eq 'AZURE_DEVOPS_EXT_PAT|client_secret|password.*registry' "${WORKFLOW}"; then
-  fail "release publication must not use long-lived publisher credentials"
-fi
-if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
-  fail "read-only validation must not call the write-authorized generate-notes endpoint"
-fi
-grep -Fq 'if git cat-file -e "$notes_source:$notes_path"; then' <<<"${validate_block}" ||
-  fail "checked-in curated release notes must remain optional"
-grep -Fq 'notes_description="GitHub-generated release notes"' <<<"${validate_block}" ||
-  fail "missing curated notes must fall back to generated release notes"
-grep -Fq 'go-version: "1.27.4-1"' <<<"${build_block}" ||
-  fail "release assets must use Microsoft Go 1.27.4-1"
-grep -Fq 'go-download-base-url: https://aka.ms/golang/release/latest' <<<"${build_block}" ||
-  fail "release assets must use the Microsoft Go download source"
-grep -Fq 'microsoft_toolset_version=go1.27.4-1-microsoft' <<<"${build_block}" ||
-  fail "release assets must verify the Microsoft Go toolset identity"
-grep -Fq 'contents: write' <<<"${publish_block}" ||
-  fail "release publication must retain narrowly scoped contents write permission"
-grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" <<<"${publish_block}" ||
-  fail "release notes must include GitHub-generated change and contributor attribution"
-grep -Fq "cat \"\$generated\"" <<<"${publish_block}" ||
-  fail "generated change and contributor notes must be included in release notes"
 grep -Fq 'version="0.0.0-preflight"' "${VALIDATION_WORKFLOW}" ||
   fail "release validation must use a release-neutral synthetic version"
 if grep -Fq 'charts/taugrid/Chart.yaml has invalid release version' "${VALIDATION_WORKFLOW}" ||
@@ -125,4 +52,4 @@ if grep -Fq 'charts/taugrid/Chart.yaml has invalid release version' "${VALIDATIO
   fail "release validation must not derive a version or require notes from release-neutral source"
 fi
 
-echo "Release workflow contract tests passed"
+echo "Release publisher contract tests passed"

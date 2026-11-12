@@ -1,11 +1,12 @@
 # Releasing Tau
 
 Tau releases use canonical SemVer tags (`vX.Y.Z`). Pushing a tag does not
-publish a release. A maintainer manually dispatches one GitHub Actions workflow
-from the existing tag ref. After approval, that workflow publishes the
+publish a release. A maintainer manually runs one protected Azure DevOps
+pipeline and supplies the existing tag. After approval, that pipeline publishes the
 coordinated images and charts through the existing protected publishers,
 verifies their public contents, and publishes the CLI and SDK GitHub Release
-last. Every executable checkout uses the exact tagged revision.
+last. Release-selected source is data only; orchestration and publisher logic
+always execute from protected control revisions.
 
 ## Distribution contract
 
@@ -22,7 +23,7 @@ macOS 13.0 or newer. Windows amd64 binaries are native PE executables.
 - `LICENSE`
 - `SHA256SUMS`
 
-The Tau Python SDK keeps its own package version. The workflow builds its wheel
+The Tau Python SDK keeps its own package version. The pipeline builds its wheel
 twice from the tagged source revision, compares the outputs, and publishes the
 wheel with the CLI assets.
 
@@ -31,10 +32,10 @@ wheel with the CLI assets.
 1. Choose a reviewed source commit on `main` and record its full SHA. No
    release-specific version edit or release-preparation PR is required.
 2. Optionally include `releases/vX.Y.Z.md` in the tagged commit for curated
-   opening notes. Without it, the workflow generates the release notes.
+   opening notes. Without it, the pipeline generates the release notes.
 3. Build twice from a clean macOS checkout using the exact Go version in
    `go.mod`. Darwin authentication-cache support requires CGO; the release
-   workflow pins an arm64 `macos-15` runner that can also cross-build Darwin
+   pipeline pins an arm64 `macos-15` runner that can also cross-build Darwin
    amd64 and static Linux binaries:
 
    ```bash
@@ -67,30 +68,18 @@ wheel with the CLI assets.
    done < /tmp/tau-release-a/SHA256SUMS
    ```
 
-4. Run the Go and Python gates used by `.github/workflows/release-tau.yaml`.
+4. Run the Go and Python gates used by the protected ADO release pipeline.
 5. Review the candidate manifest, release notes, source SHA, and all gate
    results. Release publication requires explicit human authorization.
 
 ## Protected publication configuration
 
-The `release-publication` environment must have required reviewers and a single
-deployment policy allowing `v*` tags. Its short-lived workload identity must
-have queue and read access only to the approved publication pipelines. Registry
-credentials remain in those publishers and are never stored in GitHub.
-
-The environment provides these secrets:
-
-- `RELEASE_TENANT_ID`
-- `RELEASE_CLIENT_ID`
-- `RELEASE_OIDC_AUDIENCE`
-- `RELEASE_PUBLISHERS_CONFIG`
-
-`RELEASE_PUBLISHERS_CONFIG` contains the protected API URL and exactly five
-publisher entries: the four coordinated images and the chart publisher. Image
-entries include a pipeline ID plus an immutable control commit and branch ref.
-The chart entry includes its pipeline ID. Provision and update this
-configuration through the approved infrastructure owner; do not add personal
-tokens, client secrets, or registry credentials.
+The ADO orchestrator uses its project Build Service identity only to read and
+queue the five approved publisher definitions. The pipeline permissions must be
+definition-scoped. Registry credentials remain inside the existing publishers.
+GitHub release publication uses the protected `taugrid` OAuth service
+connection only through built-in ADO tasks; its token is never exposed to
+scripts.
 
 ## Publish after authorization
 
@@ -99,36 +88,30 @@ charts retain release-neutral metadata, first-party image defaults follow the
 packaged chart `appVersion`, and release binaries derive their default chart
 version from their embedded build version. No version-bump commit or release PR
 is required. A non-empty `cli/releases/vX.Y.Z.md` may provide curated opening
-notes; when absent, the workflow uses GitHub-generated notes.
+notes; when absent, the pipeline uses GitHub-generated notes.
 
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
-   release tags. Pushing the tag does not start **Release TauGrid**.
-2. Dispatch **Release TauGrid** from the same tag ref and supply the matching
-   tag. Use the same command to retry a matching draft:
-
-   ```bash
-   gh workflow run release-tau.yaml \
-     --repo Azure/taugrid \
-     --ref vX.Y.Z \
-     -f tag=vX.Y.Z
-   ```
-3. The read-only validation job verifies that the dispatch ref and input identify
-   the same annotated SemVer tag, that its commit is on `main`, and that no
+   release tags. Pushing the tag does not start publication.
+2. In the `CloudNativeCompute` Azure DevOps project, run the protected
+   **Release TauGrid** pipeline from its default `main` control revision and set
+   `releaseTag` to `vX.Y.Z`.
+3. The read-only validation stage verifies that the input identifies the
+   annotated SemVer tag, that its exact commit is on `main`, and that no
    published GitHub Release exists.
 4. The release gates and reproducible CLI and SDK builds run before publication.
-   The protected publication job then waits for environment approval and uses
-   short-lived workload identity to queue every approved image and chart
-   publisher with the exact source SHA and release version.
-5. Before queueing, the workflow independently verifies any existing public
+   The protected publication stage then waits for approval and uses the
+   short-lived ADO job token to queue every approved image and chart publisher
+   with the exact source SHA, tag, and protected control revision.
+5. Before queueing, the pipeline independently verifies any existing public
    artifact. Exact artifacts are reused, an active matching run is resumed, and
    a terminal failed run may be replaced. A conflicting run, mismatched public
    artifact, unknown state, ambiguous queue result, or unverified publisher
    revision fails closed.
-6. All publisher runs are queued before the workflow waits for terminal results.
-   The workflow then verifies both required image architectures, source revision
+6. All publisher runs are queued before the pipeline waits for terminal results.
+   The pipeline then verifies both required image architectures, source revision
    labels, coordinated chart contents, dependency pins, and public digests.
-7. The workflow appends GitHub-generated change attribution, new-contributor
+7. The pipeline appends GitHub-generated change attribution, new-contributor
    recognition, and the full changelog link to the checked-in curated notes.
    The separate write-authorized publish job runs only after every coordinated
    public artifact has been verified.
@@ -136,14 +119,14 @@ notes; when absent, the workflow uses GitHub-generated notes.
    every GitHub asset digest, and only then publishes the draft. A retry resumes
    a draft only when its metadata, release notes, and assets exactly match the
    rebuilt release. It never overwrites an existing release or asset.
-9. Before publication, a clean GitHub-hosted Windows runner verifies the two
+9. Before publication, a clean Windows agent verifies the two
    Windows executables and the `tau` release version. After publication,
    Ubuntu and macOS runners install the Python SDK wheel and exercise native
    CLI commands, while a Windows runner installs `tau` through `install.ps1`
    and exercises both Windows executables. A failure leaves the immutable
    published release unchanged when it occurs before publication.
 
-Every release uses one manual run from the matching tag ref.
+Every release uses one manual ADO run with the matching tag input.
 
 ## Verify
 

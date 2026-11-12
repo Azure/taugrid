@@ -7,12 +7,16 @@ set -euo pipefail
 readonly ACR_NAME="${ACR_NAME:-}"
 readonly REPOSITORY_NAME="${REPOSITORY_NAME:-public/aks/ai-runtime}"
 readonly SOURCE_BRANCH="${SOURCE_BRANCH:-${BUILD_SOURCEBRANCH:-}}"
+CONTROL_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly CONTROL_ROOT
+SOURCE_ROOT="$(cd -- "${TAUGRID_SOURCE_ROOT:-$CONTROL_ROOT}" && pwd)"
+readonly SOURCE_ROOT
 readonly CHARTS=(
-  charts/tau-core-controller
-  charts/gpu-monitoring
-  charts/taugrid-core
-  charts/adx-mon
-  charts/taugrid
+  tau-core-controller
+  gpu-monitoring
+  taugrid-core
+  adx-mon
+  taugrid
 )
 readonly COORDINATED_CHARTS=(
   tau-core-controller
@@ -29,7 +33,7 @@ usage() {
 chart_field() {
   local chart="$1"
   local field="$2"
-  helm show chart "$chart" | yq -r ".${field}"
+  helm show chart "${SOURCE_ROOT}/charts/${chart}" | yq -r ".${field}"
 }
 
 release_tag() {
@@ -68,30 +72,31 @@ package_charts() {
   helm repo update prometheus-community
 
   if [[ -n "$tag" ]]; then
-    python3 scripts/ci/release_artifacts.py package-charts \
-      --source . \
+    python3 "${CONTROL_ROOT}/scripts/ci/release_artifacts.py" package-charts \
+      --source "$SOURCE_ROOT" \
       --tag "$tag" \
       --output "$output_dir"
   fi
 
   for chart in "${CHARTS[@]}"; do
+    local chart_path="${SOURCE_ROOT}/charts/${chart}"
     local chart_name
     chart_name=$(chart_field "$chart" name)
     if [[ -n "$tag" ]] && is_coordinated_chart "$chart_name"; then
       continue
     fi
-    echo "Validating ${chart}"
-    if [[ "$chart" == "charts/taugrid" ]]; then
-      scripts/ci/vendor-taugrid-dependencies.sh "$chart"
+    echo "Validating ${chart_path}"
+    if [[ "$chart" == "taugrid" ]]; then
+      "${CONTROL_ROOT}/scripts/ci/vendor-taugrid-dependencies.sh" "$chart_path"
     else
-      helm dependency build "$chart"
+      helm dependency build "$chart_path"
     fi
-    helm lint "$chart"
-    if [[ -f "${chart}/tests/scripts_test.sh" ]]; then
-      bash "${chart}/tests/scripts_test.sh"
+    helm lint "$chart_path"
+    if [[ -f "${chart_path}/tests/scripts_test.sh" ]]; then
+      bash "${chart_path}/tests/scripts_test.sh"
     fi
-    helm template test "$chart" > /dev/null
-    helm package "$chart" --destination "$output_dir"
+    helm template test "$chart_path" > /dev/null
+    helm package "$chart_path" --destination "$output_dir"
   done
 }
 

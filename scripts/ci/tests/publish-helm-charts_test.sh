@@ -140,8 +140,9 @@ if [[ "$1 $2 $3" == "acr repository show-tags" ]]; then
       fi
       ;;
     *)
+      source_root="${TAUGRID_SOURCE_ROOT:-$PWD}"
       version=$(awk '$1 == "version:" {gsub(/^"|"$/, "", $2); print $2; exit}' \
-        "charts/${chart_name}/Chart.yaml")
+        "${source_root}/charts/${chart_name}/Chart.yaml")
       ;;
   esac
   if [[ "${FAKE_UNPUBLISHED_CHART:-}" == "$chart_name" ]]; then
@@ -169,9 +170,11 @@ export PATH
 
 run_publish() {
   local source_branch="${1:-refs/heads/main}"
+  local source_root="${2:-$ISOLATED_REPO}"
   (
     cd "$ISOLATED_REPO"
     export SOURCE_BRANCH="$source_branch"
+    export TAUGRID_SOURCE_ROOT="$source_root"
     scripts/ci/publish-helm-charts.sh publish "$PACKAGE_DIR"
   )
 }
@@ -239,5 +242,14 @@ assert_output_contains "$missing_archive_output" \
   "Expected chart package not found: ${PACKAGE_DIR}/taugrid-1.2.3.tgz"
 assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
+
+: >"$COMMAND_LOG"
+release_source="${TEST_ROOT}/release-source"
+cp -R "$ISOLATED_REPO" "$release_source"
+release_source="$(cd "$release_source" && pwd)"
+separate_source_output=$(run_publish refs/heads/main "$release_source")
+assert_output_contains "$separate_source_output" \
+  "Skipping release-neutral coordinated chart taugrid outside a release tag."
+assert_log_contains "helm show chart ${release_source}/charts/taugrid"
 
 echo "publish-helm-charts tests passed"
