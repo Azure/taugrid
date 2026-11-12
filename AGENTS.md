@@ -202,7 +202,7 @@ Package name: `tau`. Researchers write Python; the Go CLI remains the Kubernetes
 
 ## Conventions
 
-- Go toolchain: 1.27.3 (see `.go-version`); modules require Go 1.27.2; Microsoft Go builders and release pipelines use 1.27.3-1
+- Go toolchain: 1.27.4 (see `.go-version`); modules require Go 1.27.2; Microsoft Go builders and release pipelines use 1.27.4-1
 - Shipped Go binaries embed `ms_tlsmldsacert=0` to avoid TLS resets from middleboxes that reject ML-DSA certificate signature advertisements; preserve the `runtime.godebugDefault` linker assignment
 - Linting: staticcheck v0.8.2 for cli/core/portal; golangci-lint v2.14.0 for monitoring modules
 - `staticcheck.conf` at repo root disables specific style checks (ST1000, ST1003, ST1005, ST1016, ST1020-ST1023, S1016) — do not re-enable without fixing all findings

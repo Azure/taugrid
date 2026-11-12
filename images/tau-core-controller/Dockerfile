@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1@sha256:8ce2353285e61b0e8faed1fc668d220aac31838df923d9fc2ca9a17887177a63 AS microsoft-go
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1@sha256:8cbcec825ea146632d907d4e35d3f4914fafcb26b62f0b3eb7b37f33fe9c4e1f AS microsoft-go
 
-ARG MICROSOFT_GO_COMMIT=9f24672a32abfcdd8266343e9ea1f1f1cbe3aaf6
+ARG MICROSOFT_GO_COMMIT=38d00402d139f69e0f5533f297788cd4df60898a
 
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
@@ -19,9 +19,9 @@ RUN git init \
     && git -C go am /tmp/microsoft-go/patches/[0-9][0-9][0-9][0-9]-*.patch \
     && cd go/src \
     && GOROOT_BOOTSTRAP=/usr/local/go ./make.bash \
-    && ../bin/go version | grep -F "go1.27.3"
+    && ../bin/go version | grep -F "go1.27.4"
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1@sha256:8ce2353285e61b0e8faed1fc668d220aac31838df923d9fc2ca9a17887177a63 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1@sha256:8cbcec825ea146632d907d4e35d3f4914fafcb26b62f0b3eb7b37f33fe9c4e1f AS builder
 
 COPY --from=microsoft-go /tmp/microsoft-go/go /usr/local/microsoft-go
 ENV GOROOT=/usr/local/microsoft-go \
