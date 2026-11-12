@@ -91,10 +91,14 @@ func wrapTauGridChartError(chart, version, diagnostics string, err error) error 
 	if err == nil || chart != defaultTauGridChart || !isHelmChartResolutionError(diagnostics, err) {
 		return err
 	}
+	chartVersion := version
+	if chartVersion == "" {
+		chartVersion = "latest published"
+	}
 	return fmt.Errorf(
 		"cannot resolve default TauGrid OCI chart %s version %s; verify that this version is published and Helm can access the registry, or pass --chart <reference-or-local-path>: %w",
 		chart,
-		version,
+		chartVersion,
 		err,
 	)
 }

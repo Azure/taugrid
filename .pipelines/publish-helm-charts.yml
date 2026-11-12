@@ -7,6 +7,8 @@ trigger:
     include:
       - charts/**
       - scripts/ci/publish-helm-charts.sh
+      - scripts/ci/release_artifacts.py
+      - scripts/ci/release-requirements.txt
       - scripts/ci/vendor-taugrid-dependencies.sh
       - .pipelines/publish-helm-charts.yml
 
@@ -29,11 +31,16 @@ stages:
         steps:
           - checkout: self
 
+          - bash: python3 -m pip install --disable-pip-version-check -r scripts/ci/release-requirements.txt
+            displayName: Install release packaging dependencies
+
           - bash: |
               set -euo pipefail
               scripts/ci/publish-helm-charts.sh package \
                 "$(Build.ArtifactStagingDirectory)/helm"
             displayName: Validate and package charts
+            env:
+              SOURCE_BRANCH: $(Build.SourceBranch)
 
           - task: AzureCLI@2
             displayName: Publish and verify charts
@@ -48,3 +55,4 @@ stages:
             env:
               ACR_NAME: $(ACR_NAME)
               REPOSITORY_NAME: $(REPOSITORY_NAME)
+              SOURCE_BRANCH: $(Build.SourceBranch)

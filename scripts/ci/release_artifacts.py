@@ -3,6 +3,7 @@
 # Licensed under the MIT License.
 
 import argparse
+import copy
 import gzip
 import hashlib
 import io
@@ -21,6 +22,8 @@ import yaml
 IMAGES = ("tau", "taugrid-portal", "tau-core-controller", "taugrid-metrics-collector")
 CHARTS = ("tau-core-controller", "taugrid-core", "taugrid")
 PLATFORMS = ("linux/amd64", "linux/arm64")
+SOURCE_CHART_VERSION = "0.0.0-dev"
+SOURCE_APP_VERSION = "dev"
 REGISTRY = "mcr.microsoft.com"
 IMAGE_PREFIX = f"{REGISTRY}/aks/ai-runtime"
 CHART_PREFIX = f"{IMAGE_PREFIX}/helm"
@@ -164,23 +167,32 @@ def archive_files(name, files):
 
 def source_charts(source, tag):
     release_version = version(tag)
-    metadata = {}
+    source_metadata = {}
     for name in CHARTS:
         chart = yaml.safe_load((source / "charts" / name / "Chart.yaml").read_text())
-        require(chart.get("name") == name and chart.get("version") == release_version and
-                chart.get("appVersion") == release_version, f"{name} release version mismatch")
-        metadata[name] = chart
-    dependencies = metadata["taugrid"].get("dependencies", [])
+        require(chart.get("name") == name and
+                chart.get("version") == SOURCE_CHART_VERSION and
+                chart.get("appVersion") == SOURCE_APP_VERSION,
+                f"{name} source metadata must remain release-neutral")
+        source_metadata[name] = chart
+    metadata = copy.deepcopy(source_metadata)
+    for chart in metadata.values():
+        chart["version"] = release_version
+        chart["appVersion"] = release_version
+    dependencies = source_metadata["taugrid"].get("dependencies", [])
     names = [entry["name"] for entry in dependencies]
     require(len(names) == len(set(names)) and set(names) ==
             {"kueue", "kuberay-operator", "gpu-monitoring", *CHARTS[:2]},
             "unsupported coordinated dependency matrix")
-    for entry in dependencies:
+    release_dependencies = metadata["taugrid"]["dependencies"]
+    for entry, release_entry in zip(dependencies, release_dependencies):
         require(entry.get("repository") == f"oci://{CHART_PREFIX}",
                 "dependency must use an exact public chart repository")
         version("v" + str(entry.get("version", "")))
         if entry["name"] in CHARTS:
-            require(entry["version"] == release_version, "coordinated dependency version mismatch")
+            require(entry["version"] == SOURCE_CHART_VERSION,
+                    "coordinated source dependency must remain release-neutral")
+            release_entry["version"] = release_version
     require(not metadata[CHARTS[0]].get("dependencies") and
             not metadata[CHARTS[1]].get("dependencies"), "unexpected standalone chart dependencies")
     return metadata
@@ -200,6 +212,8 @@ def package_charts(source, tag, output, dependencies=None, runtime_values=None):
             chart = work / name
             shutil.copytree(source / "charts" / name, chart,
                             ignore=shutil.ignore_patterns("charts", ".git"))
+            (chart / "Chart.yaml").write_text(
+                yaml.safe_dump(metadata[name], sort_keys=False))
             if name == "taugrid":
                 vendor = chart / "charts"
                 vendor.mkdir()

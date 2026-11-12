@@ -81,12 +81,14 @@ jobs:
 
           notes_path="cli/releases/$TAG.md"
           notes_source="$commit"
-          if ! git cat-file -e "$notes_source:$notes_path"; then
-            echo "$notes_path is required in the tagged commit" >&2
-            exit 1
+          if git cat-file -e "$notes_source:$notes_path"; then
+            git show "$notes_source:$notes_path" > "$RUNNER_TEMP/release-notes.md"
+            test -s "$RUNNER_TEMP/release-notes.md"
+            notes_description="$notes_path"
+          else
+            printf '# TauGrid %s\n' "$TAG" > "$RUNNER_TEMP/release-notes.md"
+            notes_description="GitHub-generated release notes"
           fi
-          git show "$notes_source:$notes_path" > "$RUNNER_TEMP/release-notes.md"
-          test -s "$RUNNER_TEMP/release-notes.md"
 
           status="$(
             curl --silent --show-error --output "$RUNNER_TEMP/existing-release.json" \
@@ -119,7 +121,7 @@ jobs:
             echo "- Tag: \`$TAG\`"
             echo "- Commit: \`$commit\`"
             echo "- Commit date: \`$date\`"
-            echo "- Release notes source: \`$notes_source\`"
+            echo "- Release notes source: \`$notes_description\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload validated release notes

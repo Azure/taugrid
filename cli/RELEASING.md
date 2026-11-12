@@ -94,6 +94,13 @@ tokens, client secrets, or registry credentials.
 
 ## Publish after authorization
 
+The annotated tag is the sole coordinated release version source. The checked-in
+charts retain release-neutral metadata, first-party image defaults follow the
+packaged chart `appVersion`, and release binaries derive their default chart
+version from their embedded build version. No version-bump commit or release PR
+is required. A non-empty `cli/releases/vX.Y.Z.md` may provide curated opening
+notes; when absent, the workflow uses GitHub-generated notes.
+
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
    release tags. Pushing the tag does not start **Release TauGrid**.
@@ -107,8 +114,8 @@ tokens, client secrets, or registry credentials.
      -f tag=vX.Y.Z
    ```
 3. The read-only validation job verifies that the dispatch ref and input identify
-   the same annotated SemVer tag, that its commit is on `main`, that checked-in
-   release notes exist, and that no published GitHub Release exists.
+   the same annotated SemVer tag, that its commit is on `main`, and that no
+   published GitHub Release exists.
 4. The release gates and reproducible CLI and SDK builds run before publication.
    The protected publication job then waits for environment approval and uses
    short-lived workload identity to queue every approved image and chart

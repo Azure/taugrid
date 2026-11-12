@@ -28,11 +28,14 @@ def fixture_source(root):
     for name in artifacts.CHARTS:
         chart = root / "charts" / name
         chart.mkdir(parents=True)
-        metadata = {"apiVersion": "v2", "name": name, "version": "1.2.3",
-                    "appVersion": "1.2.3", "type": "application"}
+        metadata = {"apiVersion": "v2", "name": name,
+                    "version": artifacts.SOURCE_CHART_VERSION,
+                    "appVersion": artifacts.SOURCE_APP_VERSION, "type": "application"}
         if name == "taugrid":
             metadata["dependencies"] = [
-                {"name": dependency, "version": "1.2.3" if dependency in artifacts.CHARTS else "1.0.0",
+                {"name": dependency,
+                 "version": artifacts.SOURCE_CHART_VERSION
+                 if dependency in artifacts.CHARTS else "1.0.0",
                  "repository": f"oci://{artifacts.CHART_PREFIX}"}
                 for dependency in ("kueue", "kuberay-operator", *artifacts.CHARTS[:2], "gpu-monitoring")]
         (chart / "Chart.yaml").write_text(yaml.safe_dump(metadata))
@@ -81,6 +84,27 @@ class ReleaseArtifactTests(unittest.TestCase):
         for tag in ("1.2.3", "v01.2.3", "v1.2.3+build", "v1.2.3-01", "v1.2.3/x"):
             with self.subTest(tag=tag), self.assertRaises(ValueError):
                 artifacts.version(tag)
+
+    def test_release_metadata_is_stamped_from_tag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            fixture_source(source)
+            metadata = artifacts.source_charts(source, "v1.2.3")
+            for name in artifacts.CHARTS:
+                self.assertEqual(metadata[name]["version"], "1.2.3")
+                self.assertEqual(metadata[name]["appVersion"], "1.2.3")
+            dependencies = {
+                entry["name"]: entry["version"]
+                for entry in metadata["taugrid"]["dependencies"]
+            }
+            self.assertEqual(dependencies["tau-core-controller"], "1.2.3")
+            self.assertEqual(dependencies["taugrid-core"], "1.2.3")
+            self.assertEqual(dependencies["kueue"], "1.0.0")
+
+            source_chart = source / "charts" / "taugrid" / "Chart.yaml"
+            self.assertEqual(
+                yaml.safe_load(source_chart.read_text())["version"],
+                artifacts.SOURCE_CHART_VERSION)
 
     def test_archive_is_deterministic(self):
         files = {"Chart.yaml": b"name: chart\n", "templates/x": b"data"}
@@ -202,6 +226,10 @@ class ReleaseArtifactTests(unittest.TestCase):
             for name in artifacts.CHARTS:
                 archive = (first / f"{name}-1.2.3.tgz").read_bytes()
                 self.assertEqual(archive, (second / f"{name}-1.2.3.tgz").read_bytes())
+                packaged = yaml.safe_load(
+                    artifacts.chart_files(archive, name)["Chart.yaml"])
+                self.assertEqual(packaged["version"], "1.2.3")
+                self.assertEqual(packaged["appVersion"], "1.2.3")
                 charts.append({"name": name, "reference": f"{artifacts.CHART_PREFIX}/{name}:1.2.3",
                                "digest": artifacts.digest(name.encode()),
                                "contentSha256": hashlib.sha256(archive).hexdigest()})

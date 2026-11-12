@@ -41,6 +41,10 @@ reachable
 {{- $repository := default "" $image.repository -}}
 {{- $tag := default "" $image.tag -}}
 {{- $digest := default "" $image.digest -}}
+{{- $appVersion := default "" .appVersion -}}
+{{- if and (empty $tag) (empty $digest) $appVersion -}}
+{{- $tag = $appVersion -}}
+{{- end -}}
 {{- if not $repository -}}
 {{- fail (printf "%s.image.repository is required when %s.enabled=true" $component $component) -}}
 {{- end -}}

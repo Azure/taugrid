@@ -101,6 +101,10 @@ fi
 if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
   fail "read-only validation must not call the write-authorized generate-notes endpoint"
 fi
+grep -Fq 'if git cat-file -e "$notes_source:$notes_path"; then' <<<"${validate_block}" ||
+  fail "checked-in curated release notes must remain optional"
+grep -Fq 'notes_description="GitHub-generated release notes"' <<<"${validate_block}" ||
+  fail "missing curated notes must fall back to generated release notes"
 grep -Fq 'go-version: "1.27.4-1"' <<<"${build_block}" ||
   fail "release assets must use Microsoft Go 1.27.4-1"
 grep -Fq 'go-download-base-url: https://aka.ms/golang/release/latest' <<<"${build_block}" ||
@@ -112,6 +116,6 @@ grep -Fq 'contents: write' <<<"${publish_block}" ||
 grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" <<<"${publish_block}" ||
   fail "release notes must include GitHub-generated change and contributor attribution"
 grep -Fq "cat \"\$generated\"" <<<"${publish_block}" ||
-  fail "generated change and contributor notes must be appended to curated notes"
+  fail "generated change and contributor notes must be included in release notes"
 
 echo "Release workflow contract tests passed"
