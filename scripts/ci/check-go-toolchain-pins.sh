@@ -60,11 +60,8 @@ for relative_path in "${TOOLCHAIN_PIN_FILES[@]}"; do
 done
 
 stale_repository_pins="$(
-  git -C "${REPO_ROOT}" grep -nE '(go)?1\.26\.(8|9|10)|1\.27\.(0|1|3)([^0-9]|$)' -- \
-    . \
-    ':(exclude)cli/releases/v0.4.4.md' \
-    ':(exclude)cli/releases/v0.4.6.md' \
-    ':(exclude)cli/releases/v0.4.7.md' || true
+  git -C "${REPO_ROOT}" grep -nE '(go)?1\.26\.(8|9|10)|1\.27\.(0|1)([^0-9]|$)' -- \
+    . ':(exclude)cli/releases/v0.4.4.md' || true
 )"
 [[ -z "${stale_repository_pins}" ]] ||
   fail "repository contains unsupported Go toolchain pins: ${stale_repository_pins}"
