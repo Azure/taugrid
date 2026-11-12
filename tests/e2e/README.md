@@ -426,6 +426,21 @@ selected ClusterQueue. The workspace value must match that queue's
 namespace selector and be authorized to share its allocation. These
 parameters do not create or increase quota, relabel existing namespaces, or
 relax the required topology and hardware checks.
+
+For recurring runs, configure `FLEX_NIGHTLY_WORKSPACE`,
+`FLEX_NIGHTLY_CLUSTER_QUEUE`, `FLEX_NIGHTLY_A100_FLAVOR`, and
+`FLEX_NIGHTLY_H200_FLAVOR` as nonsecret pipeline-definition variables;
+`FLEX_NIGHTLY_DGX_FLAVOR` applies only to the optional target. The parameter
+defaults reference these variables so scheduled runs retain the configured
+routing. An explicit runtime parameter takes precedence, including an explicit
+legacy default value. Missing, empty, or unresolved routing variables retain
+the public defaults above. Template parameters expand before task-time
+variable macros; the shared routing helper resolves any remaining unset values.
+These settings do not change the default `full` profile, enable optional
+targets, or alter the schedule. A candidate branch/manual run does not update
+the scheduled `main` source; recurring runs require the source change to be
+reviewed and landed separately.
+
 Serialize nightly runs; capacity checks are snapshots, not exclusive
 reservations. Existing GPU requests inform shape skips, while admission
 remains subject to shared queue contention and its approved preemption policy.

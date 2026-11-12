@@ -176,6 +176,68 @@ with tempfile.TemporaryDirectory() as temporary:
             overrides["FLEX_NIGHTLY_WORKSPACE"] = "workspace"
         for variable, parameter in overrides.items():
             assert f"{variable}: ${{{{ parameters.{parameter} }}}}" in job, (name, variable)
+        routing_source = 'source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"'
+        assert routing_source in job, name
+        first_use = (
+            "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
+            if name == "preflight" else "kubectl create namespace"
+        )
+        assert job.index(routing_source) < job.index(first_use), name
+        defaults = {
+            "workspace": ("FLEX_NIGHTLY_WORKSPACE", "nightly"),
+            "clusterQueue": ("FLEX_NIGHTLY_CLUSTER_QUEUE", "tau-gpu-cq"),
+            "a100Flavor": ("FLEX_NIGHTLY_A100_FLAVOR", "tau-gpu-a100-80gb-v2"),
+            "h200Flavor": ("FLEX_NIGHTLY_H200_FLAVOR", "tau-gpu-h200-141gb-v2"),
+            "dgxFlavor": ("FLEX_NIGHTLY_DGX_FLAVOR", "tau-gpu-dgx-spark-v2"),
+        }
+        configured = {
+            parameter: f"shared-{parameter.lower()}"
+            for parameter in defaults
+        }
+        explicit = {
+            parameter: default
+            for parameter, (_, default) in defaults.items()
+        }
+        for parameter, (variable, _) in defaults.items():
+            definition = re.search(
+                rf"^  - name: {parameter}\n(.*?)(?=^  - name: |^pool:)",
+                pipeline, re.MULTILINE | re.DOTALL,
+            )
+            assert definition and f"default: $({variable})" in definition.group(1), parameter
+        for scenario, settings, parameters in (
+            ("legacy-defaults", {}, {}),
+            ("scheduled-definition-settings", configured, {}),
+            ("explicit-defaults-win", configured, explicit),
+            ("partial-manual-override", configured, {"h200Flavor": "manual-h200"}),
+            ("empty-definition-settings", {parameter: "" for parameter in defaults}, {}),
+        ):
+            environment = {
+                key: value for key, value in os.environ.items()
+                if not key.startswith("FLEX_NIGHTLY_")
+            }
+            expected = []
+            for variable, parameter in overrides.items():
+                setting, fallback = defaults[parameter]
+                template_default = f"$({setting})"
+                value = parameters.get(parameter, template_default)
+                if value == template_default and parameter in settings:
+                    value = settings[parameter]
+                environment[variable] = value
+                expected.append(
+                    fallback if not value or value == template_default else value
+                )
+            source = routing_source.replace(
+                "$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent)
+            )
+            output = 'printf "%s\\n" ' + " ".join(
+                f'"${variable}"' for variable in overrides
+            )
+            result = subprocess.run(
+                ["bash", "-c", f"set -euo pipefail\n{source}\n{output}"],
+                env=environment, capture_output=True, text=True,
+            )
+            assert result.returncode == 0, (name, scenario, result.stderr)
+            assert result.stdout.splitlines() == expected, (name, scenario, result.stdout, expected)
         if name == "preflight":
             continue
         inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)

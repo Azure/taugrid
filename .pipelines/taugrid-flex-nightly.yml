@@ -31,23 +31,23 @@ parameters:
   - name: workspace
     displayName: Authorized shared workspace
     type: string
-    default: nightly
+    default: $(FLEX_NIGHTLY_WORKSPACE)
   - name: clusterQueue
     displayName: Platform-managed ClusterQueue
     type: string
-    default: tau-gpu-cq
+    default: $(FLEX_NIGHTLY_CLUSTER_QUEUE)
   - name: a100Flavor
     displayName: A100 ResourceFlavor
     type: string
-    default: tau-gpu-a100-80gb-v2
+    default: $(FLEX_NIGHTLY_A100_FLAVOR)
   - name: h200Flavor
     displayName: H200 ResourceFlavor
     type: string
-    default: tau-gpu-h200-141gb-v2
+    default: $(FLEX_NIGHTLY_H200_FLAVOR)
   - name: dgxFlavor
     displayName: DGX Spark ResourceFlavor
     type: string
-    default: tau-gpu-dgx-spark-v2
+    default: $(FLEX_NIGHTLY_DGX_FLAVOR)
 
 pool:
   name: 1es-aks-ai-runtime-ado-eastus2
@@ -120,6 +120,8 @@ jobs:
               --file "${KUBECONFIG}" \
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
             artifact_dir="$(Build.ArtifactStagingDirectory)/preflight"
             mkdir -p "${artifact_dir}"
@@ -235,6 +237,8 @@ jobs:
               --file "${KUBECONFIG}" \
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
             contract="$(Pipeline.Workspace)/taugrid-flex-hardware-contract/hardware-matrix.json"
             test -s "${contract}"
@@ -571,6 +575,8 @@ jobs:
               --file "${KUBECONFIG}" \
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
             namespace="taugrid-nightly-rdma-$(Build.BuildId)-$(System.JobAttempt)"
             cleanup() {
