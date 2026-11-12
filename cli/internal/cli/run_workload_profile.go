@@ -141,21 +141,63 @@ func selectRunWorkloadProfile(
 	if !o.profileNameExplicit && (o.explicitPolicyFields != nil || o.selectedWorkloadProfile != nil) {
 		profileName = ""
 	}
-	selection, err := provider.Select(ctx, profile.SelectionRequest{
+	set, err := provider.ProfileSet(ctx)
+	if err != nil {
+		return o, err
+	}
+	request := profile.SelectionRequest{
 		Name:          profileName,
 		Namespace:     o.namespace,
 		Team:          o.team,
 		Lane:          o.lane,
 		GPUsPerWorker: requestedProfileGPUs(o),
-	})
+	}
+	selection, err := set.Select(request)
 	if err != nil {
-		return o, err
+		cpuRequest, ok := legacyCPULaneRequest(set, request)
+		if !ok {
+			return o, err
+		}
+		cpuSelection, cpuErr := set.Select(cpuRequest)
+		if cpuErr != nil {
+			return o, err
+		}
+		selection = cpuSelection
+		o.lane = cpuRequest.Lane
 	}
 	renderProfile, err := selection.Profile.RenderProfile(o.namespace, o.team, o.lane)
 	if err != nil {
 		return o, fmt.Errorf("convert workload profile %q for rendering: %w", selection.Profile.Name, err)
 	}
 	return applySelectedWorkloadProfile(o, selection, renderProfile)
+}
+
+func legacyCPULaneRequest(
+	set profile.ProfileSet,
+	request profile.SelectionRequest,
+) (profile.SelectionRequest, bool) {
+	if strings.TrimSpace(request.Lane) != "" {
+		return request, false
+	}
+	cpuOnly := request.GPUsPerWorker != nil && *request.GPUsPerWorker == 0
+	if strings.TrimSpace(request.Name) != "" {
+		if request.GPUsPerWorker != nil && !cpuOnly {
+			return request, false
+		}
+	} else {
+		if !cpuOnly {
+			return request, false
+		}
+		for _, candidate := range set.Profiles {
+			if candidate.GPUsPerWorker == 0 &&
+				profile.ValidateReady(candidate, set.Generation) == nil &&
+				profile.ValidateApplicability(candidate, request) == nil {
+				return request, false
+			}
+		}
+	}
+	request.Lane = "cpu"
+	return request, true
 }
 
 func applySelectedWorkloadProfile(
