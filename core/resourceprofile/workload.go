@@ -41,6 +41,8 @@ const (
 	ConditionPriorityClassesReady = "PriorityClassesReady"
 	ConditionHotVolumeReady       = "HotVolumeReady"
 
+	ReasonHotVolumeCapacityUnavailable = "HotVolumeCapacityUnavailable"
+
 	ProfileSnapshotAPIVersion = "tau.azure.com/v1alpha1"
 	ProfileSnapshotKind       = "TauWorkloadProfileSnapshot"
 )

@@ -462,8 +462,10 @@ func runResumeCommand(
 	}
 	applyResumeOverrides(&targetOptions, routing.Namespace, routing.KubeContext, dryRun)
 	productionExecution := hooks.executeTarget == nil && hooks.validateTarget == nil
+	profileInput := targetOptions
+	profileInput.deferHotVolumeCapacity = dryRun == ""
 	if hooks.resolveProfile != nil || productionExecution {
-		targetOptions, err = hooks.profile(cmd.Context(), targetOptions)
+		targetOptions, err = hooks.profile(cmd.Context(), profileInput)
 		if err != nil {
 			return fmt.Errorf("resolving current workload profile for replacement: %w", err)
 		}
@@ -499,6 +501,16 @@ func runResumeCommand(
 		fmt.Fprintf(w, "deleting failed workload %s/%s...\n", routing.Namespace, name)
 		if err := hooks.delete(cmd.Context(), routing.KubeContext, routing.Namespace, name, w); err != nil {
 			return fmt.Errorf("deleting old workload: %w", err)
+		}
+		if hotVolumeCapacityDeferred(targetOptions) {
+			targetOptions, err = awaitHotVolumeCapacity(cmd.Context(), w, hooks.profile, profileInput,
+				hotVolumeCapacityWaitTimeout, hotVolumeCapacityPollInterval)
+			if err != nil {
+				return fmt.Errorf("waiting for hot-volume capacity before submitting the replacement: %w", err)
+			}
+			if err := validateRunDispatchOptions(targetOptions); err != nil {
+				return err
+			}
 		}
 	}
 

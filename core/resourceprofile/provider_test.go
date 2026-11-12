@@ -462,3 +462,77 @@ func readyProviderProfile(name string, generation int64) ResolvedWorkloadProfile
 	}}
 	return profile
 }
+
+func TestProviderDefersOnlyHotVolumeCapacity(t *testing.T) {
+	capacityOnly := func(name string) ResolvedWorkloadProfile {
+		profile := readyProviderProfile(name, 7)
+		profile.Conditions[0].Status = metav1.ConditionFalse
+		profile.Conditions = append(profile.Conditions,
+			metav1.Condition{Type: ConditionExecutionReady, Status: metav1.ConditionTrue, ObservedGeneration: 7, Reason: "Ready"},
+			metav1.Condition{Type: ConditionHotVolumeReady, Status: metav1.ConditionFalse, ObservedGeneration: 7, Reason: ReasonHotVolumeCapacityUnavailable},
+		)
+		return profile
+	}
+	request := SelectionRequest{Name: "hot", Namespace: "alpha", Team: "research", Lane: "training"}
+
+	provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{capacityOnly("hot")}, nil))
+	if _, err := provider.Select(context.Background(), request); err == nil || !strings.Contains(err.Error(), "condition Ready is False") {
+		t.Fatalf("strict Select() error = %v", err)
+	}
+	deferredRequest := request
+	deferredRequest.DeferHotVolumeCapacity = true
+	got, err := provider.Select(context.Background(), deferredRequest)
+	if err != nil || !got.HotVolumeCapacityDeferred || got.Profile.Name != "hot" {
+		t.Fatalf("deferred Select() = %#v, %v", got, err)
+	}
+	unauthorized := deferredRequest
+	unauthorized.Team = "other"
+	if _, err := provider.Select(context.Background(), unauthorized); err == nil || !strings.Contains(err.Error(), "does not authorize team") {
+		t.Fatalf("deferred unauthorized Select() error = %v", err)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		mutate func(*ResolvedWorkloadProfile)
+	}{
+		{"hot volume misconfigured", func(p *ResolvedWorkloadProfile) { p.Conditions[2].Reason = "HotVolumeNotReady" }},
+		{"another dependency false", func(p *ResolvedWorkloadProfile) { p.Conditions[1].Status = metav1.ConditionFalse }},
+		{"stale dependency", func(p *ResolvedWorkloadProfile) { p.Conditions[1].ObservedGeneration = 6 }},
+		{"stale capacity", func(p *ResolvedWorkloadProfile) { p.Conditions[2].ObservedGeneration = 6 }},
+		{"no hot volume condition", func(p *ResolvedWorkloadProfile) { p.Conditions = p.Conditions[:2] }},
+		{"no Ready condition", func(p *ResolvedWorkloadProfile) { p.Conditions = p.Conditions[1:] }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := capacityOnly("hot")
+			tt.mutate(&profile)
+			provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{profile}, nil))
+			if got, err := provider.Select(context.Background(), deferredRequest); err == nil {
+				t.Fatalf("deferred Select() = %#v, want error", got)
+			}
+		})
+	}
+
+	t.Run("implicit selection prefers a ready profile", func(t *testing.T) {
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{capacityOnly("hot"), readyProviderProfile("normal", 7)}, nil))
+		implicit := deferredRequest
+		implicit.Name = ""
+		got, err := provider.Select(context.Background(), implicit)
+		if err != nil || got.Profile.Name != "normal" || got.HotVolumeCapacityDeferred {
+			t.Fatalf("implicit deferred Select() = %#v, %v", got, err)
+		}
+	})
+
+	t.Run("implicit selection defers a unique capacity-only match", func(t *testing.T) {
+		provider := NewClusterProvider(clusterClient(t, 7, []ResolvedWorkloadProfile{capacityOnly("hot")}, nil))
+		implicit := deferredRequest
+		implicit.Name = ""
+		got, err := provider.Select(context.Background(), implicit)
+		if err != nil || got.Profile.Name != "hot" || !got.HotVolumeCapacityDeferred {
+			t.Fatalf("implicit deferred Select() = %#v, %v", got, err)
+		}
+		implicit.DeferHotVolumeCapacity = false
+		if _, err := provider.Select(context.Background(), implicit); err == nil || !strings.Contains(err.Error(), "no ready workload profile") {
+			t.Fatalf("implicit strict Select() error = %v", err)
+		}
+	})
+}

@@ -83,6 +83,11 @@ requires `--force`**, the same opt-in-only-after-you've-changed-something
 reasoning as automatic retry applies here too, just gated by an explicit flag
 instead of a config list.
 
+If the profile has a hot volume and is unready only because no node has free
+hot capacity, resume deletes the old workload first, because its claim may be
+what holds that capacity. It then waits up to 10 minutes for the profile to
+become `Ready` before resubmitting. Automatic retries do the same.
+
 Resume requires a durable checkpoint contract (a `storage` mount under
 `/data`, not node-local scratch). If your workload only ever wrote
 checkpoints to ephemeral storage, there is nothing to resume from: that

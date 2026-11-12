@@ -1462,3 +1462,98 @@ func hashString(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
 }
+
+func TestResumeDeletesFailedWorkloadBeforeWaitingForHotVolumeCapacity(t *testing.T) {
+	root := multiProjectRunRoutingRepo(t)
+	withRunRoutingCWD(t, root)
+	configureRunRoutingProfile(t)
+	writeRunRoutingFile(t, filepath.Join(root, "alpha", "resume.sh"), "#!/bin/sh\necho resume\n")
+	config := filepath.Join(root, "alpha", "experiments", "resume-hot.yaml")
+	writeRunRoutingFile(t, config, `name: resume-job
+engine: job
+entrypoint: ../resume.sh
+compute:
+  gpus: 0
+runtime:
+  image: busybox:1.36
+policy:
+  profile: test-routing
+  workspace: sample
+`)
+	ensurer := &fakeRunConnectionEnsurer{connection: workspaceconnection.ActiveConnection{
+		Workspace:   "sample",
+		ContextName: "catalog-context",
+		Namespace:   "catalog-namespace",
+	}}
+	currentWorkspace := readyWorkspace()
+	currentWorkspace.Spec.Queue = "jobqueue"
+	currentWorkspace.Spec.Target.Namespace = "catalog-namespace"
+	currentWorkspace.Spec.Defaults.OutputRoot = "/data/workspaces/sample"
+	currentWorkspace.Status.Target.ResolvedNamespace = "catalog-namespace"
+	currentWorkspace.Status.Queue.LocalQueue = "tau-ws-sample"
+	currentWorkspace.Status.Queue.ClusterQueue = "legacy-cq"
+	resolvedProfile := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 0, 1, 11)
+	resolvedProfile.Name = "test-routing"
+	resolvedProfile.Applicability.Namespaces = []string{"catalog-namespace"}
+	resolvedProfile.Applicability.Teams = nil
+	resolvedProfile.Applicability.Lanes = nil
+	resolvedProfile.LocalQueues = []profile.ResolvedLocalQueue{{
+		Namespace: "catalog-namespace", Name: "jobqueue", ClusterQueue: "legacy-cq",
+	}}
+	var calls []string
+	profileCalls := 0
+	command := newResumeTestCommand(
+		func(*cobra.Command) runConnectionEnsurer { return ensurer },
+		resumeCommandHooks{
+			fetchStatus: func(_ context.Context, _, _, name string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot(name)
+				snapshot.Events = []status.Event{{Reason: "Evicted"}}
+				return snapshot, nil
+			},
+			fetchWorkspace: func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error) {
+				return currentWorkspace, nil
+			},
+			resolveProfile: func(ctx context.Context, options unresolvedRunOptions) (unresolvedRunOptions, error) {
+				profileCalls++
+				if !options.deferHotVolumeCapacity {
+					t.Fatalf("profile call %d did not defer hot-volume capacity", profileCalls)
+				}
+				resolved, err := selectRunWorkloadProfile(ctx, options, testRunProviderForResolved(t, 11, resolvedProfile))
+				if err != nil {
+					return resolved, err
+				}
+				deferred := profileCalls < 3
+				calls = append(calls, fmt.Sprintf("profile(deferred=%t)", deferred))
+				selected := *resolved.selectedWorkloadProfile
+				selected.Selection.HotVolumeCapacityDeferred = deferred
+				resolved.selectedWorkloadProfile = &selected
+				return resolved, nil
+			},
+			validateTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				calls = append(calls, "validate")
+				return nil
+			},
+			deleteOld: func(context.Context, string, string, string, io.Writer) error {
+				calls = append(calls, "delete")
+				return nil
+			},
+			executeTarget: func(_ *cobra.Command, target resolvedRunTarget, _ string, _ runExperimentMetadata) error {
+				job := resolvedJobRequestForTest(target)
+				if job == nil || job.Options.selectedWorkloadProfile == nil ||
+					job.Options.selectedWorkloadProfile.Selection.HotVolumeCapacityDeferred {
+					t.Fatalf("replacement target was submitted with deferred capacity: %#v", target)
+				}
+				calls = append(calls, "execute")
+				return nil
+			},
+		},
+	)
+	command.SetArgs([]string{"resume", "resume-job", "--project", "alpha", "--config", config})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	want := "profile(deferred=true) validate delete profile(deferred=true) profile(deferred=false) execute"
+	if got := strings.Join(calls, " "); got != want {
+		t.Fatalf("resume calls = %q, want %q", got, want)
+	}
+}

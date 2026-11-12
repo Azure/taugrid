@@ -42,6 +42,7 @@ type runPlacement struct {
 	queue                     string
 	workloadProfileSnapshot   string
 	selectedWorkloadProfile   *selectedWorkloadProfile
+	deferHotVolumeCapacity    bool
 	directJobProfile          *profile.Profile
 	team                      string
 	lane                      string
