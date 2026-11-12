@@ -75,12 +75,28 @@ if grep -Fq 'allow_main_release_notes' "${WORKFLOW}"; then
 fi
 validate_block="$(job_block validate)"
 build_block="$(job_block build)"
+coordinated_block="$(job_block coordinated-artifacts)"
 publish_block="$(job_block publish)"
 grep -Fq 'EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}' <<<"${publish_block}" ||
   fail "publication must preserve the annotated tag object as well as the source commit"
-if grep -Fq 'coordinated-artifacts:' "${WORKFLOW}" ||
-   grep -Fq 'RELEASE_BACKEND_' "${WORKFLOW}"; then
-  fail "the GitHub Release workflow must not contain the unprovisioned publisher path"
+grep -Fq 'environment: release-publication' <<<"${coordinated_block}" ||
+  fail "coordinated publication must use the protected release environment"
+grep -Fq 'id-token: write' <<<"${coordinated_block}" ||
+  fail "coordinated publication must use short-lived workload identity"
+grep -Fq 'RELEASE_PUBLISHERS_CONFIG: ${{ secrets.RELEASE_PUBLISHERS_CONFIG }}' \
+  <<<"${coordinated_block}" ||
+  fail "publisher identities must come from protected environment configuration"
+grep -Fq 'SOURCE_SHA: ${{ github.sha }}' <<<"${coordinated_block}" ||
+  fail "publisher source must be the exact workflow revision"
+grep -Fq 'python scripts/ci/release_backend.py' <<<"${coordinated_block}" ||
+  fail "coordinated publication must use the verified publisher client"
+grep -Fq "test \"\$(cat \"\$RUNNER_TEMP/release-branch-policies\")\" = \$'v*\\ttag'" \
+  <<<"${coordinated_block}" ||
+  fail "the protected environment must allow only release tag deployments"
+grep -Fq -- '- coordinated-artifacts' <<<"${publish_block}" ||
+  fail "GitHub Release publication must wait for coordinated artifacts"
+if grep -Eq 'AZURE_DEVOPS_EXT_PAT|client_secret|password.*registry' "${WORKFLOW}"; then
+  fail "release publication must not use long-lived publisher credentials"
 fi
 if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
   fail "read-only validation must not call the write-authorized generate-notes endpoint"

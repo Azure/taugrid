@@ -108,6 +108,7 @@ test:
 	bash scripts/ci/tests/kind-helpers_test.sh
 	bash scripts/ci/tests/kind-consumers-contract_test.sh
 	bash scripts/ci/tests/image-build-contract_test.sh
+	bash scripts/ci/tests/release-image-provenance-contract_test.sh
 	bash scripts/ci/tests/go-runtime-default-contract_test.sh
 	$(MAKE) -C $(TAU_GO_DIR) test
 	@echo "==> core"

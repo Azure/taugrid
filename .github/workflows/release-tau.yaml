@@ -316,6 +316,81 @@ jobs:
           & (Join-Path $releaseDir "tau-gen-windows-amd64.exe") --help | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "tau-gen Windows help failed" }
 
+  coordinated-artifacts:
+    name: Publish and verify coordinated images and charts
+    needs:
+      - validate
+      - gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    environment: release-publication
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Verify installed release environment protections
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          environment_path="/repos/$GITHUB_REPOSITORY/environments/release-publication"
+          gh api "$environment_path" > "$RUNNER_TEMP/release-environment.json"
+          jq -e '
+            any(.protection_rules[]; .type == "required_reviewers" and (.reviewers | length) > 0) and
+            .deployment_branch_policy.custom_branch_policies == true and
+            .deployment_branch_policy.protected_branches == false
+          ' "$RUNNER_TEMP/release-environment.json" >/dev/null
+          gh api --paginate "$environment_path/deployment-branch-policies?per_page=100" \
+            --jq '.branch_policies[] | [.name, .type] | @tsv' \
+            > "$RUNNER_TEMP/release-branch-policies"
+          test "$(wc -l < "$RUNNER_TEMP/release-branch-policies")" -eq 1
+          test "$(cat "$RUNNER_TEMP/release-branch-policies")" = $'v*\ttag'
+
+      - name: Check out immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
+        with:
+          version: v3.20.0
+
+      - name: Install release verification dependencies
+        run: python -m pip install --disable-pip-version-check -r scripts/ci/release-requirements.txt
+
+      - name: Publish protected artifacts and verify public results
+        env:
+          RELEASE_PUBLISHERS_CONFIG: ${{ secrets.RELEASE_PUBLISHERS_CONFIG }}
+          RELEASE_TENANT_ID: ${{ secrets.RELEASE_TENANT_ID }}
+          RELEASE_CLIENT_ID: ${{ secrets.RELEASE_CLIENT_ID }}
+          RELEASE_OIDC_AUDIENCE: ${{ secrets.RELEASE_OIDC_AUDIENCE }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/ci/release_backend.py \
+            --source . \
+            --source-commit "$SOURCE_SHA" \
+            --tag "$RELEASE_TAG" \
+            --output "$RUNNER_TEMP/release-artifacts.json"
+
+      - name: Upload public artifact evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: tau-public-artifacts-${{ env.RELEASE_TAG }}
+          path: ${{ runner.temp }}/release-artifacts.json
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish immutable GitHub Release
     needs:
@@ -323,6 +398,7 @@ jobs:
       - gates
       - build
       - validate-windows-assets
+      - coordinated-artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: write
