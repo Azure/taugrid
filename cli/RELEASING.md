@@ -115,10 +115,11 @@ notes; when absent, the pipeline uses GitHub-generated notes.
    recognition, and the full changelog link to the checked-in curated notes.
    The separate write-authorized publish job runs only after every coordinated
    public artifact has been verified.
-8. The publish job creates a draft release, uploads the assets once, verifies
-   every GitHub asset digest, and only then publishes the draft. A retry resumes
-   a draft only when its metadata, release notes, and assets exactly match the
-   rebuilt release. It never overwrites an existing release or asset.
+8. The publish job creates or resumes a draft through the protected built-in
+   release task, replaces its asset set from the locally verified release
+   artifact, and publishes the draft without changing those assets. It then
+   downloads the public release and verifies every asset digest. A retry may
+   replace a draft but never overwrites a published release or asset.
 9. Before publication, a clean Windows agent verifies the two
    Windows executables and the `tau` release version. After publication,
    Ubuntu and macOS runners install the Python SDK wheel and exercise native
