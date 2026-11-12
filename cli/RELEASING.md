@@ -28,10 +28,10 @@ wheel with the CLI assets.
 
 ## Prepare
 
-1. Land a release-preparation PR that updates install docs and
-   `releases/vX.Y.Z.md`.
-2. Choose a source commit on `main` and record its full SHA. The commit must
-   contain every feature named in the release notes.
+1. Choose a reviewed source commit on `main` and record its full SHA. No
+   release-specific version edit or release-preparation PR is required.
+2. Optionally include `releases/vX.Y.Z.md` in the tagged commit for curated
+   opening notes. Without it, the workflow generates the release notes.
 3. Build twice from a clean macOS checkout using the exact Go version in
    `go.mod`. Darwin authentication-cache support requires CGO; the release
    workflow pins an arm64 `macos-15` runner that can also cross-build Darwin
@@ -143,8 +143,7 @@ notes; when absent, the workflow uses GitHub-generated notes.
    and exercises both Windows executables. A failure leaves the immutable
    published release unchanged when it occurs before publication.
 
-Every tag must contain its own release notes and use one manual run from the
-matching tag ref.
+Every release uses one manual run from the matching tag ref.
 
 ## Verify
 
