@@ -146,6 +146,24 @@ func TestClassifyFailure_PreemptedWorkloadCondition(t *testing.T) {
 	}
 }
 
+func TestClassifyFailure_OOMTakesPrecedenceOverPreemption(t *testing.T) {
+	snap := status.Snapshot{
+		JobFound: true,
+		JobConditions: []status.Condition{
+			{Type: "Failed", Status: "True"},
+		},
+		Pods: []status.Pod{
+			{Phase: "Failed", OOMKilled: true},
+		},
+		Workloads: []status.Workload{
+			{Preemption: "Preempted"},
+		},
+	}
+	if got := ClassifyFailure(snap); got != ReasonOOMKilled {
+		t.Errorf("got %v, want OOMKilled", got)
+	}
+}
+
 func TestClassifyFailure_Evicted(t *testing.T) {
 	snap := status.Snapshot{
 		JobFound: true,
