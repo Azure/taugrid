@@ -6,9 +6,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly TOOLCHAIN_VERSION="1.27.3"
+readonly TOOLCHAIN_VERSION="1.27.4"
 readonly MODULE_VERSION="1.27.2"
-readonly EXPECTED_MICROSOFT_GO_COMMIT="9f24672a32abfcdd8266343e9ea1f1f1cbe3aaf6"
+readonly EXPECTED_MICROSOFT_GO_COMMIT="38d00402d139f69e0f5533f297788cd4df60898a"
 
 fail() {
   echo "Go toolchain pin check failed: $*" >&2

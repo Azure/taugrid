@@ -7,9 +7,9 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly GODEBUG_LDFLAG="-X=runtime.godebugDefault=ms_tlsmldsacert=0"
-readonly GO_TOOLCHAIN_VERSION="1.27.3"
+readonly GO_TOOLCHAIN_VERSION="1.27.4"
 readonly GO_MODULE_VERSION="1.27.2"
-readonly MICROSOFT_GO_TOOLSET="go1.27.3-1-microsoft"
+readonly MICROSOFT_GO_TOOLSET="go1.27.4-1-microsoft"
 
 readonly -a BUILD_FILES=(
   "cli/Makefile"
@@ -71,7 +71,7 @@ for file in "${BUILD_FILES[@]}"; do
 done
 
 for file in "${MICROSOFT_GO_PIPELINE_FILES[@]}"; do
-  grep -Fq "1.27.3-1" "${REPO_ROOT}/${file}"
+  grep -Fq "1.27.4-1" "${REPO_ROOT}/${file}"
   grep -Fq "goDownloadUrl: https://aka.ms/golang/release/latest" "${REPO_ROOT}/${file}"
 done
 

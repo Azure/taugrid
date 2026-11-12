@@ -58,12 +58,12 @@ jobs:
       - name: Set up Microsoft Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          go-version: "1.27.3-1"
+          go-version: "1.27.4-1"
           go-download-base-url: https://aka.ms/golang/release/latest
           cache: false
 
       - name: Verify Microsoft Go toolchain
-        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.3-1-microsoft"
+        run: go version -m "$(command -v go)" | grep -Fq "microsoft_toolset_version=go1.27.4-1-microsoft"
 
       - name: Validate Go runtime default contract
         run: scripts/ci/tests/go-runtime-default-contract_test.sh
@@ -217,7 +217,7 @@ jobs:
           always() && !cancelled() && steps.sarif.outcome == 'success' &&
           (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26
         with:
           sarif_file: trivy-${{ matrix.image }}-${{ matrix.architecture }}.sarif
           category: trivy-${{ matrix.image }}-${{ matrix.architecture }}
@@ -299,7 +299,7 @@ jobs:
           always() && !cancelled() && steps.sarif.outcome == 'success' &&
           (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26
         with:
           sarif_file: trivy-adx-mon-collector-${{ matrix.architecture }}.sarif
           category: trivy-adx-mon-collector-${{ matrix.architecture }}

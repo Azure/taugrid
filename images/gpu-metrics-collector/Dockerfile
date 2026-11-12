@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1-azurelinux3.0 AS builder
-ENV GOTOOLCHAIN=go1.27.3 \
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1-azurelinux3.0 AS builder
+ENV GOTOOLCHAIN=go1.27.4 \
     MS_GOTOOLCHAIN_ALLOW_NON_LOCAL=1
 ARG TARGETARCH
 RUN tdnf install -y glibc-static && tdnf clean all
