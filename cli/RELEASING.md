@@ -74,12 +74,14 @@ wheel with the CLI assets.
 
 ## Protected publication configuration
 
-The release orchestrator uses its project build identity only to read and
-queue the five approved publisher definitions. The pipeline permissions must be
-definition-scoped. Registry credentials remain inside the existing publishers.
-GitHub release publication uses the protected `taugrid` OAuth service
-connection only through built-in release tasks; its token is never exposed to
-scripts.
+The release orchestrator uses its project build identity to read and queue an
+exact five-definition allowlist. It must not receive repository, service
+connection, registry, or administrative permissions. Every publisher remains a
+separate release boundary and independently requires the immutable annotated
+tag, exact source and control revisions, and `forcePublish=false`. Registry
+credentials remain inside the existing publishers. GitHub release publication
+uses the protected `taugrid` OAuth service connection only through built-in
+release tasks; its token is never exposed to scripts.
 
 ## Publish after authorization
 
@@ -93,8 +95,8 @@ notes; when absent, the pipeline uses GitHub-generated notes.
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
    release tags. Pushing the tag does not start publication.
-2. In the protected release project, run the **Release TauGrid** pipeline from
-   its default `main` control revision and set
+2. In the protected release project, run the **Complete TauGrid Release**
+   pipeline from its default `main` control revision and set
    `releaseTag` to `vX.Y.Z`.
 3. The read-only validation stage verifies that the input identifies the
    annotated SemVer tag, that its exact commit is on `main`, and that no
