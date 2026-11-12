@@ -102,6 +102,13 @@ class ReleaseBackendTests(unittest.TestCase):
         del run["resources"]["repositories"]["self"]["refName"]
         self.assertTrue(self.client.release_run(self.chart, run))
 
+    def test_chart_run_rejects_main_ref_at_release_source(self):
+        run = self.run_fixture(self.chart)
+        run["resources"]["repositories"]["self"]["refName"] = "refs/heads/main"
+        self.assertFalse(self.client.release_run(self.chart, run))
+        with self.assertRaisesRegex(ValueError, "ref mismatch"):
+            self.client.validate_run(self.chart, run, run["id"])
+
     def test_existing_public_artifact_skips_queue(self):
         with patch.object(self.client, "artifact_ready", return_value=True), \
                 patch.object(self.client, "api") as api:

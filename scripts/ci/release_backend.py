@@ -192,8 +192,12 @@ class Backend:
                 "publisher run identity mismatch")
         repositories = run.get("resources", {}).get("repositories", {})
         for name, resource in self.resources(publisher).items():
-            require(repositories.get(name, {}).get("version") == resource["version"],
+            actual = repositories.get(name, {})
+            require(actual.get("version") == resource["version"],
                     f"publisher {name} revision mismatch")
+            if "refName" in actual:
+                require(actual["refName"] == resource["refName"],
+                        f"publisher {name} ref mismatch")
         expected = self.parameters(publisher)
         actual = run.get("templateParameters") or {}
         require(actual == expected, "publisher parameter mismatch")
@@ -205,8 +209,9 @@ class Backend:
             return False
         if publisher["kind"] == "charts":
             repository = run.get("resources", {}).get("repositories", {}).get("self", {})
-            return (repository.get("refName") == f"refs/tags/{self.tag}" or
-                    repository.get("version") == self.source_commit)
+            if "refName" in repository:
+                return repository["refName"] == f"refs/tags/{self.tag}"
+            return repository.get("version") == self.source_commit
         return (run.get("templateParameters") or {}).get("releaseTag") == self.release_version
 
     def recent_runs(self, publisher):
