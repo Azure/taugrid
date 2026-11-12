@@ -7,6 +7,7 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly WORKFLOW="${REPO_ROOT}/.github/workflows/release-tau.yaml"
+readonly VALIDATION_WORKFLOW="${REPO_ROOT}/.github/workflows/taugrid-validation.yml"
 
 fail() {
   echo "release workflow contract test failed: $*" >&2
@@ -117,5 +118,11 @@ grep -Fq "\"/repos/\$GITHUB_REPOSITORY/releases/generate-notes\"" <<<"${publish_
   fail "release notes must include GitHub-generated change and contributor attribution"
 grep -Fq "cat \"\$generated\"" <<<"${publish_block}" ||
   fail "generated change and contributor notes must be included in release notes"
+grep -Fq 'version="0.0.0-preflight"' "${VALIDATION_WORKFLOW}" ||
+  fail "release validation must use a release-neutral synthetic version"
+if grep -Fq 'charts/taugrid/Chart.yaml has invalid release version' "${VALIDATION_WORKFLOW}" ||
+   grep -Eq 'cli/releases/v.*required for release preflight' "${VALIDATION_WORKFLOW}"; then
+  fail "release validation must not derive a version or require notes from release-neutral source"
+fi
 
 echo "Release workflow contract tests passed"
