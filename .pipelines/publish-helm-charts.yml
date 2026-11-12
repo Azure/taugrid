@@ -77,10 +77,10 @@ stages:
           - bash: |
               set -euo pipefail
 
-              source_tag="${{ parameters.sourceTag }}"
-              release_tag="${{ parameters.releaseTag }}"
-              source_ref="${{ parameters.sourceRef }}"
-              force_publish="${{ parameters.forcePublish }}"
+              source_tag="${SOURCE_TAG:-}"
+              release_tag="${RELEASE_TAG:-}"
+              source_ref="${SOURCE_REF:-}"
+              force_publish="${FORCE_PUBLISH:-}"
               if [[ -z "$source_tag" && -z "$release_tag" && -z "$source_ref" ]]; then
                 test "$BUILD_SOURCEBRANCH" = refs/heads/main
                 exit 0
@@ -92,31 +92,36 @@ stages:
               test "$force_publish" = "False"
               test "$release_tag" = "${source_tag#v}"
               test "$BUILD_SOURCEBRANCH" = refs/heads/main
-              git -C "$(Build.SourcesDirectory)/control" fetch --force origin \
+              git -C "$(Pipeline.Workspace)/s/control" fetch --force origin \
                 +refs/heads/main:refs/remotes/origin/main
-              control_commit="$(git -C "$(Build.SourcesDirectory)/control" rev-parse HEAD^{commit})"
+              control_commit="$(git -C "$(Pipeline.Workspace)/s/control" rev-parse HEAD^{commit})"
               test "$control_commit" = "$BUILD_SOURCEVERSION"
               test "$control_commit" = \
-                "$(git -C "$(Build.SourcesDirectory)/control" rev-parse origin/main^{commit})"
-              python3 "$(Build.SourcesDirectory)/control/scripts/ci/validate_release_source.py" \
-                --source "$(Build.SourcesDirectory)/release" \
+                "$(git -C "$(Pipeline.Workspace)/s/control" rev-parse origin/main^{commit})"
+              python3 "$(Pipeline.Workspace)/s/control/scripts/ci/validate_release_source.py" \
+                --source "$(Pipeline.Workspace)/s/release" \
                 --tag "$source_tag" \
                 --source-commit "$source_ref"
             displayName: Validate protected control and release source
+            env:
+              SOURCE_REF: ${{ parameters.sourceRef }}
+              SOURCE_TAG: ${{ parameters.sourceTag }}
+              RELEASE_TAG: ${{ parameters.releaseTag }}
+              FORCE_PUBLISH: ${{ parameters.forcePublish }}
 
-          - bash: python3 -m pip install --disable-pip-version-check -r "$(Build.SourcesDirectory)/control/scripts/ci/release-requirements.txt"
+          - bash: python3 -m pip install --disable-pip-version-check -r "$(Pipeline.Workspace)/s/control/scripts/ci/release-requirements.txt"
             displayName: Install release packaging dependencies
 
           - bash: |
               set -euo pipefail
-              "$(Build.SourcesDirectory)/control/scripts/ci/publish-helm-charts.sh" package \
+              "$(Pipeline.Workspace)/s/control/scripts/ci/publish-helm-charts.sh" package \
                 "$(Build.ArtifactStagingDirectory)/helm"
             displayName: Validate and package charts
-            workingDirectory: $(Build.SourcesDirectory)/$(TAUGRID_SOURCE_DIR)
+            workingDirectory: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)
             env:
               SOURCE_BRANCH: $(Build.SourceBranch)
               RELEASE_TAG: ${{ parameters.sourceTag }}
-              TAUGRID_SOURCE_ROOT: $(Build.SourcesDirectory)/$(TAUGRID_SOURCE_DIR)
+              TAUGRID_SOURCE_ROOT: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)
 
           - task: AzureCLI@2
             displayName: Publish and verify charts
@@ -124,14 +129,14 @@ stages:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
               scriptLocation: inlineScript
-              workingDirectory: $(Build.SourcesDirectory)/$(TAUGRID_SOURCE_DIR)
+              workingDirectory: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)
               inlineScript: |
                 set -euo pipefail
-                "$(Build.SourcesDirectory)/control/scripts/ci/publish-helm-charts.sh" publish \
+                "$(Pipeline.Workspace)/s/control/scripts/ci/publish-helm-charts.sh" publish \
                   "$(Build.ArtifactStagingDirectory)/helm"
             env:
               ACR_NAME: $(ACR_NAME)
               REPOSITORY_NAME: $(REPOSITORY_NAME)
               SOURCE_BRANCH: $(Build.SourceBranch)
               RELEASE_TAG: ${{ parameters.sourceTag }}
-              TAUGRID_SOURCE_ROOT: $(Build.SourcesDirectory)/$(TAUGRID_SOURCE_DIR)
+              TAUGRID_SOURCE_ROOT: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)

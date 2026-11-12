@@ -28,6 +28,52 @@ grep -Fq -- '- name: forcePublish' "$PIPELINE" ||
   fail "chart publisher must reject release overwrite requests"
 grep -Fq 'repository: releaseSource' "$PIPELINE" ||
   fail "chart publisher must separate protected control from release source"
+grep -Fq 'source_tag="${SOURCE_TAG:-}"' "$PIPELINE" ||
+  fail "sourceTag must enter the validation script through the task environment"
+grep -Fq 'release_tag="${RELEASE_TAG:-}"' "$PIPELINE" ||
+  fail "releaseTag must enter the validation script through the task environment"
+grep -Fq 'source_ref="${SOURCE_REF:-}"' "$PIPELINE" ||
+  fail "sourceRef must enter the validation script through the task environment"
+grep -Fq 'force_publish="${FORCE_PUBLISH:-}"' "$PIPELINE" ||
+  fail "forcePublish must enter the validation script through the task environment"
+if grep -Eq '^[[:space:]]+(source_tag|release_tag|source_ref|force_publish)="\$\{\{ parameters\.' \
+  "$PIPELINE"; then
+  fail "release parameters must not be embedded in Bash source"
+fi
+if awk '
+  /^[[:space:]]*(- )?bash: \|[[:space:]]*$/ ||
+  /^[[:space:]]*inlineScript: \|[[:space:]]*$/ {
+    in_block = 1
+    content_indent = -1
+    next
+  }
+  in_block {
+    if ($0 ~ /^[[:space:]]*$/) {
+      print
+      next
+    }
+    line_indent = match($0, /[^ ]/) - 1
+    if (content_indent < 0) {
+      content_indent = line_indent
+    }
+    if (line_indent < content_indent) {
+      in_block = 0
+      next
+    }
+    print
+  }
+' "$PIPELINE" |
+  grep -Eq '\$\{\{ parameters\.(sourceRef|sourceTag|releaseTag|forcePublish) \}\}'; then
+  fail "release parameters must not appear in generated shell source"
+fi
+grep -Fq 'SOURCE_REF: ${{ parameters.sourceRef }}' "$PIPELINE" ||
+  fail "sourceRef task environment binding is required"
+grep -Fq 'SOURCE_TAG: ${{ parameters.sourceTag }}' "$PIPELINE" ||
+  fail "sourceTag task environment binding is required"
+grep -Fq 'RELEASE_TAG: ${{ parameters.releaseTag }}' "$PIPELINE" ||
+  fail "releaseTag task environment binding is required"
+grep -Fq 'FORCE_PUBLISH: ${{ parameters.forcePublish }}' "$PIPELINE" ||
+  fail "forcePublish task environment binding is required"
 grep -Fq "test \"\$force_publish\" = \"False\"" "$PIPELINE" ||
   fail "release publication must reject forcePublish"
 grep -Fq "test \"\$release_tag\" = \"\${source_tag#v}\"" "$PIPELINE" ||
@@ -40,6 +86,14 @@ grep -Fq 'validate_release_source.py' "$PIPELINE" ||
   fail "release source must be independently validated"
 grep -Fq 'TAUGRID_SOURCE_ROOT:' "$PIPELINE" ||
   fail "chart packaging must use the separately pinned release source"
+if grep -Fq '$(Build.SourcesDirectory)/control' "$PIPELINE" ||
+   grep -Fq '$(Build.SourcesDirectory)/release' "$PIPELINE"; then
+  fail "multi-checkout paths must not depend on Build.SourcesDirectory"
+fi
+grep -Fq '$(Pipeline.Workspace)/s/control' "$PIPELINE" ||
+  fail "protected control paths must use the stable pipeline workspace root"
+grep -Fq '$(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)' "$PIPELINE" ||
+  fail "control and release working directories must use the stable pipeline workspace root"
 grep -Fq 'persistCredentials: false' "$PIPELINE" ||
   fail "release checkouts must not persist repository credentials"
 if grep -Eq 'RELEASE_(TENANT|CLIENT|OIDC|PUBLISHERS_CONFIG)|id-token: write' "$PIPELINE"; then
