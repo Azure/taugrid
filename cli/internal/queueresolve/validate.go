@@ -653,7 +653,7 @@ func validateCPUQueueTopologyIntent(ctx context.Context, r RawRunner, cq kueueap
 	}
 	if len(unreadable) > 0 {
 		return fmt.Errorf(
-			"cannot verify CPU policy.topology compatibility with ClusterQueue %q because ResourceFlavor capabilities could not be read: %s",
+			"cannot verify CPU policy.topology compatibility with ClusterQueue %q because ResourceFlavor capabilities could not be read: %s; grant read access to ResourceFlavors or ask the platform owner to inspect the queue",
 			target.ClusterQueue,
 			strings.Join(unreadable, ", "),
 		)
