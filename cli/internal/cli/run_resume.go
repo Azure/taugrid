@@ -311,12 +311,13 @@ func isRayJobRunning(snap status.Snapshot) bool {
 }
 
 type resumeCommandHooks struct {
-	fetchStatus    func(context.Context, string, string, string) (status.Snapshot, error)
-	fetchWorkspace func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error)
-	validateTarget func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
-	deleteOld      func(context.Context, string, string, string, io.Writer) error
-	executeTarget  func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
-	resolveProfile func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error)
+	fetchStatus         func(context.Context, string, string, string) (status.Snapshot, error)
+	fetchWorkspace      func(*cobra.Command, string, string, string) (tauworkspace.Workspace, error)
+	validateTarget      func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
+	validatePermissions func(context.Context, string, string, string, status.Snapshot) error
+	deleteOld           func(context.Context, string, string, string, io.Writer) error
+	executeTarget       func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error
+	resolveProfile      func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error)
 }
 
 func (h resumeCommandHooks) fetch(
@@ -376,6 +377,58 @@ func (h resumeCommandHooks) validate(
 		return h.validateTarget(parent, target, captureCommand, experiment)
 	}
 	return executeRunTarget(parent, target, captureCommand, experiment)
+}
+
+func (h resumeCommandHooks) permissions(
+	ctx context.Context,
+	kubeContext, namespace, name string,
+	snapshot status.Snapshot,
+) error {
+	if h.validatePermissions != nil {
+		return h.validatePermissions(ctx, kubeContext, namespace, name, snapshot)
+	}
+	if h.deleteOld != nil {
+		return nil
+	}
+	return validateResumeCleanupPermissions(ctx, kube.New(kubeContext), namespace, name, snapshot)
+}
+
+func validateResumeCleanupPermissions(
+	ctx context.Context,
+	r kubeRawRunner,
+	namespace, name string,
+	snapshot status.Snapshot,
+) error {
+	resources := make([]string, 0, 2)
+	if snapshot.RayJob.Found {
+		resources = append(resources, "rayjobs.ray.io")
+	}
+	if snapshot.JobFound {
+		resources = append(resources, "jobs.batch")
+	}
+	for _, resource := range resources {
+		namedResource := resource + "/" + name
+		out, err := r.Raw(ctx, []string{
+			"-n", namespace,
+			"auth", "can-i", "delete", namedResource,
+		}, nil)
+		if err != nil {
+			return fmt.Errorf(
+				"checking permission to delete %s in namespace %s: %w; no workload was deleted",
+				namedResource,
+				namespace,
+				err,
+			)
+		}
+		if strings.TrimSpace(out) != "yes" {
+			return fmt.Errorf(
+				"resume requires permission to delete %s in namespace %s before cleanup; no workload was deleted",
+				namedResource,
+				namespace,
+			)
+		}
+	}
+	return nil
 }
 
 func (h resumeCommandHooks) profile(
@@ -496,6 +549,9 @@ func runResumeCommand(
 		preflightParent.SetErr(io.Discard)
 		if err := hooks.validate(preflightParent, preflightTarget, captureCommand, targetOptions.experiment); err != nil {
 			return fmt.Errorf("validating replacement workload before deleting old workload: %w", err)
+		}
+		if err := hooks.permissions(cmd.Context(), routing.KubeContext, routing.Namespace, name, snap); err != nil {
+			return fmt.Errorf("validating cleanup permissions before deleting old workload: %w", err)
 		}
 
 		fmt.Fprintf(w, "deleting failed workload %s/%s...\n", routing.Namespace, name)
