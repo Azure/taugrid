@@ -28,6 +28,26 @@ parameters:
     displayName: Include DGX Spark targets
     type: boolean
     default: false
+  - name: workspace
+    displayName: Authorized shared workspace
+    type: string
+    default: nightly
+  - name: clusterQueue
+    displayName: Platform-managed ClusterQueue
+    type: string
+    default: tau-gpu-cq
+  - name: a100Flavor
+    displayName: A100 ResourceFlavor
+    type: string
+    default: tau-gpu-a100-80gb-v2
+  - name: h200Flavor
+    displayName: H200 ResourceFlavor
+    type: string
+    default: tau-gpu-h200-141gb-v2
+  - name: dgxFlavor
+    displayName: DGX Spark ResourceFlavor
+    type: string
+    default: tau-gpu-dgx-spark-v2
 
 pool:
   name: 1es-aks-ai-runtime-ado-eastus2
@@ -133,6 +153,12 @@ jobs:
             scripts/ci/taugrid-flex-nightly-preflight.sh cluster
         env:
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
+          FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
+          FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}
+          FLEX_NIGHTLY_DGX_FLAVOR: ${{ parameters.dgxFlavor }}
+          FLEX_NIGHTLY_A100_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_H200_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_DGX_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
           FLEX_NIGHTLY_DEPLOY_MODE: $(FLEX_NIGHTLY_DEPLOY_MODE)
           FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
@@ -284,7 +310,7 @@ jobs:
 
             kubectl create namespace "${namespace}"
             kubectl label namespace "${namespace}" \
-              tau.azure.com/workspace=nightly \
+              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
               tau.azure.com/gpu-queue=enabled \
               "tau.azure.com/e2e-run=$(Build.BuildId)-$(System.JobAttempt)"
 
@@ -467,6 +493,13 @@ jobs:
             exit "${matrix_rc}"
         env:
           PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
+          FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
+          FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}
+          FLEX_NIGHTLY_DGX_FLAVOR: ${{ parameters.dgxFlavor }}
+          FLEX_NIGHTLY_A100_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_H200_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_DGX_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
@@ -552,7 +585,9 @@ jobs:
             trap cleanup EXIT
 
             kubectl create namespace "${namespace}"
-            kubectl label namespace "${namespace}" tau.azure.com/gpu-queue=enabled
+            kubectl label namespace "${namespace}" \
+              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
+              tau.azure.com/gpu-queue=enabled
             cat <<EOF | kubectl apply -f -
             apiVersion: kueue.x-k8s.io/v1beta2
             kind: LocalQueue
@@ -560,7 +595,7 @@ jobs:
               name: h200
               namespace: ${namespace}
             spec:
-              clusterQueue: tau-gpu-cq
+              clusterQueue: ${FLEX_NIGHTLY_CLUSTER_QUEUE}
             EOF
 
             cd "$(Build.SourcesDirectory)/tests/e2e"
@@ -589,6 +624,8 @@ jobs:
             go test -v -count=1 -timeout 75m \
               -run '^TestFineWebRayTrain16xH200IB$' ./stack/
         env:
+          FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
+          FLEX_NIGHTLY_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)

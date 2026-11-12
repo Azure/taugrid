@@ -153,6 +153,72 @@ with tempfile.TemporaryDirectory() as temporary:
             if expected == 0:
                 assert "FLEX_NIGHTLY_SUBSCRIPTION_ID" in result.stderr, (name, scenario)
 
+    kubectl = binary / "kubectl"
+    kubectl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf "%s\\n" "$*" >>"$ROUTING_CALLS"\n'
+        'if [[ "$1" == "apply" ]]; then cat >>"$ROUTING_MANIFESTS"; fi\n'
+    )
+    kubectl.chmod(0o755)
+    for job in jobs:
+        name = job.splitlines()[0]
+        if name not in targets:
+            continue
+        overrides = {}
+        if name != "h200_rdma":
+            for target in ("A100", "H200", "DGX"):
+                overrides[f"FLEX_NIGHTLY_{target}_FLAVOR"] = f"{target.lower()}Flavor"
+                overrides[f"FLEX_NIGHTLY_{target}_CLUSTER_QUEUE"] = "clusterQueue"
+        else:
+            overrides["FLEX_NIGHTLY_CLUSTER_QUEUE"] = "clusterQueue"
+        if name != "preflight":
+            overrides["FLEX_NIGHTLY_WORKSPACE"] = "workspace"
+        for variable, parameter in overrides.items():
+            assert f"{variable}: ${{{{ parameters.{parameter} }}}}" in job, (name, variable)
+        if name == "preflight":
+            continue
+        inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
+        script = textwrap.dedent(inline.group(1))
+        routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
+        routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
+        for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
+            directory = root / name / workspace
+            directory.mkdir()
+            calls = directory / "routing-calls"
+            manifests = directory / "routing-manifests"
+            contract = directory / "contract.json"
+            contract.write_text(
+                '{"targets":['
+                f'{{"name":"a100","status":"available","cluster_queue":"{queue}"}},'
+                f'{{"name":"h200","status":"available","cluster_queue":"{queue}"}}'
+                ']}'
+            )
+            environment = dict(os.environ)
+            environment.update(
+                PATH=f"{binary}:{os.environ['PATH']}",
+                ROUTING_CALLS=str(calls),
+                ROUTING_MANIFESTS=str(manifests),
+                FLEX_NIGHTLY_WORKSPACE=workspace,
+                FLEX_NIGHTLY_CLUSTER_QUEUE=queue,
+                TEST_CONTRACT=str(contract),
+            )
+            result = subprocess.run(
+                ["bash", "-c", 'set -euo pipefail\nnamespace=taugrid-nightly-test\ncontract="$TEST_CONTRACT"\n' + routing],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (name, workspace, result.stderr)
+            actual = calls.read_text().splitlines()
+            assert actual[0] == "create namespace taugrid-nightly-test", (name, actual)
+            assert actual[1].startswith("label namespace taugrid-nightly-test "), (name, actual)
+            assert f"tau.azure.com/workspace={workspace}" in actual[1].split(), (name, actual)
+            assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
+            expected_queues = 2 if name == "hardware_matrix" else 1
+            assert actual[2:] == ["apply -f -"] * expected_queues, (name, actual)
+            assert manifests.read_text().count(f"clusterQueue: {queue}\n") == expected_queues, name
+
     preflight = next(job for job in jobs if job.startswith("preflight\n"))
     inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)
     script = textwrap.dedent(inline.group(1))
@@ -337,18 +403,18 @@ JSON
   *"get resourceflavor tau-gpu-dgx-spark-v2 -o json"*)
     printf '%s\n' '{"spec":{"topologyName":"taugrid-gpu-topology"}}'
     ;;
-  *"get resourceflavor tau-gpu-a100-80gb-v2 -o json"*)
+  *"get resourceflavor tau-gpu-a100-80gb-v2 -o json"*|*"get resourceflavor test-a100-flavor -o json"*)
     printf '%s\n' '{"spec":{"topologyName":"taugrid-gpu-topology"}}'
     ;;
-  *"get resourceflavor tau-gpu-h200-141gb-v2 -o json"*)
+  *"get resourceflavor tau-gpu-h200-141gb-v2 -o json"*|*"get resourceflavor test-h200-flavor -o json"*)
     if [[ "${FAKE_STALE_H200:-0}" == "1" ]]; then
       printf '%s\n' '{"spec":{"topologyName":"default-node-topology"}}'
     else
       printf '%s\n' '{"spec":{"topologyName":"taugrid-gpu-topology"}}'
     fi
     ;;
-  *"get clusterqueue tau-gpu-cq -o json"*)
-    printf '%s\n' '{"spec":{"resourceGroups":[{"flavors":[{"name":"tau-gpu-dgx-spark-v2"},{"name":"tau-gpu-h200-141gb-v2"},{"name":"tau-gpu-a100-80gb-v2"}]}]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
+  *"get clusterqueue tau-gpu-cq -o json"*|*"get clusterqueue test-shared-queue -o json"*)
+    printf '%s\n' '{"spec":{"resourceGroups":[{"flavors":[{"name":"tau-gpu-dgx-spark-v2"},{"name":"tau-gpu-h200-141gb-v2"},{"name":"tau-gpu-a100-80gb-v2"},{"name":"test-a100-flavor"},{"name":"test-h200-flavor"}]}]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
     ;;
   *"get crd "*)
     printf '%s\n' '{}'
@@ -389,6 +455,19 @@ jq -e '
   and .rdma_target.rdma_nodes == 2
 ' "$FLEX_NIGHTLY_CONTRACT_FILE" >/dev/null ||
   fail "preflight contract does not preserve the hardware matrix inventory"
+
+FLEX_NIGHTLY_INCLUDE_DGX=false \
+FLEX_NIGHTLY_A100_FLAVOR=test-a100-flavor \
+FLEX_NIGHTLY_H200_FLAVOR=test-h200-flavor \
+FLEX_NIGHTLY_A100_CLUSTER_QUEUE=test-shared-queue \
+FLEX_NIGHTLY_H200_CLUSTER_QUEUE=test-shared-queue \
+FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/shared-contract.json" \
+  "$PREFLIGHT" cluster
+jq -e '
+  (.targets[] | select(.name == "a100") | .flavor == "test-a100-flavor" and .cluster_queue == "test-shared-queue")
+  and (.targets[] | select(.name == "h200") | .flavor == "test-h200-flavor" and .cluster_queue == "test-shared-queue")
+' "${fake_bin}/shared-contract.json" >/dev/null ||
+  fail "preflight must retain configured shared flavors and queue"
 
 if FAKE_STALE_H200=1 "$PREFLIGHT" cluster >/dev/null 2>&1; then
   fail "preflight must reject GPU flavors that are not wired to taugrid-gpu-topology"

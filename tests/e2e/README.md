@@ -416,6 +416,21 @@ hostname-only topology and intentionally fail preflight. DGX opt-in additionally
 requires an externally managed topology-aware flavor and quota; the checked-in
 overlay deliberately does not publish the environment-specific DGX selector.
 
+For an existing equivalent platform-managed allocation, set the pipeline
+parameters `workspace`, `clusterQueue`, `a100Flavor`, and `h200Flavor`
+explicitly; `dgxFlavor` applies only when DGX Spark is enabled. Defaults retain
+the nightly workspace and shared v2 queue contract above. Both the hardware
+matrix and optional RDMA job label only their newly created run namespaces
+with the selected workspace identity and route their LocalQueues to the
+selected ClusterQueue. The workspace value must match that queue's
+namespace selector and be authorized to share its allocation. These
+parameters do not create or increase quota, relabel existing namespaces, or
+relax the required topology and hardware checks.
+Serialize nightly runs; capacity checks are snapshots, not exclusive
+reservations. Existing GPU requests inform shape skips, while admission
+remains subject to shared queue contention and its approved preemption policy.
+The harness cleans up only its own run namespace.
+
 Create the pipeline in the AKS AI Runtime Azure DevOps project from
 `.pipelines/taugrid-flex-nightly.yml`. Configure `azureServiceConnection` in
 the pipeline definition to reference an authorized service connection with
