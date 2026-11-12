@@ -2,7 +2,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-import copy
 import contextlib
 import io
 import json
@@ -111,8 +110,7 @@ class ReleaseBackendTests(unittest.TestCase):
 
     def test_active_exact_run_is_resumed(self):
         run = self.run_fixture(self.image, state="inProgress", result=None)
-        with patch.object(self.client, "artifact_ready",
-                          side_effect=backend.ArtifactNotFound("missing")), \
+        with patch.object(self.client, "artifact_ready", return_value=False), \
                 patch.object(self.client, "exact_runs", return_value=[run]), \
                 patch.object(self.client, "api") as api:
             self.assertEqual(self.client.queue_or_resume(self.image), run["id"])
@@ -121,14 +119,12 @@ class ReleaseBackendTests(unittest.TestCase):
     def test_failed_run_can_be_replaced_but_succeeded_missing_artifact_cannot(self):
         failed = self.run_fixture(self.image, result="failed")
         queued = {"id": 21}
-        with patch.object(self.client, "artifact_ready",
-                          side_effect=backend.ArtifactNotFound("missing")), \
+        with patch.object(self.client, "artifact_ready", return_value=False), \
                 patch.object(self.client, "exact_runs", return_value=[failed]), \
                 patch.object(self.client, "api", return_value=queued):
             self.assertEqual(self.client.queue_or_resume(self.image), 21)
         succeeded = self.run_fixture(self.image)
-        with patch.object(self.client, "artifact_ready",
-                          side_effect=backend.ArtifactNotFound("missing")), \
+        with patch.object(self.client, "artifact_ready", return_value=False), \
                 patch.object(self.client, "exact_runs", return_value=[succeeded]), \
                 patch.object(self.client, "api") as api:
             with self.assertRaisesRegex(ValueError, "succeeded"):
@@ -137,15 +133,13 @@ class ReleaseBackendTests(unittest.TestCase):
 
     def test_uncertain_queue_recovers_only_one_new_exact_run(self):
         recovered = self.run_fixture(self.image, run_id=21, state="inProgress", result=None)
-        with patch.object(self.client, "artifact_ready",
-                          side_effect=backend.ArtifactNotFound("missing")), \
+        with patch.object(self.client, "artifact_ready", return_value=False), \
                 patch.object(self.client, "exact_runs",
                              side_effect=[[], [recovered]]), \
                 patch.object(self.client, "api", side_effect=ValueError("uncertain")):
             self.assertEqual(self.client.queue_or_resume(self.image), 21)
         for runs in ([], [recovered, dict(recovered, id=22)]):
-            with patch.object(self.client, "artifact_ready",
-                              side_effect=backend.ArtifactNotFound("missing")), \
+            with patch.object(self.client, "artifact_ready", return_value=False), \
                     patch.object(self.client, "exact_runs",
                                  side_effect=[[], runs]), \
                     patch.object(self.client, "api", side_effect=ValueError("uncertain")):

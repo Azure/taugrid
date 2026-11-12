@@ -237,8 +237,11 @@ class Backend:
 
     def artifact_ready(self, publisher):
         if publisher["kind"] == "image":
-            collect_image(publisher["name"], self.source_commit, self.release_version)
-            return True
+            try:
+                collect_image(publisher["name"], self.source_commit, self.release_version)
+                return True
+            except ArtifactNotFound:
+                return False
         missing = False
         for name in CHARTS:
             try:
@@ -248,11 +251,8 @@ class Backend:
         return not missing
 
     def queue_or_resume(self, publisher):
-        try:
-            if self.artifact_ready(publisher):
-                return None
-        except ArtifactNotFound:
-            pass
+        if self.artifact_ready(publisher):
+            return None
         exact = self.exact_runs(publisher)
         active = [run for run in exact if run["state"] == "inProgress"]
         succeeded = [run for run in exact if run["state"] == "completed" and
@@ -301,11 +301,8 @@ class Backend:
         remaining = dict(self.publishers)
         while remaining:
             for name, publisher in list(remaining.items()):
-                try:
-                    if self.artifact_ready(publisher):
-                        del remaining[name]
-                except ArtifactNotFound:
-                    pass
+                if self.artifact_ready(publisher):
+                    del remaining[name]
             if remaining:
                 require(time.monotonic() < deadline,
                         "publisher succeeded but public artifact propagation timed out")
