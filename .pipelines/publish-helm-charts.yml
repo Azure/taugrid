@@ -112,6 +112,7 @@ stages:
               "$(Build.SourcesDirectory)/control/scripts/ci/publish-helm-charts.sh" package \
                 "$(Build.ArtifactStagingDirectory)/helm"
             displayName: Validate and package charts
+            workingDirectory: $(Build.SourcesDirectory)/$(TAUGRID_SOURCE_DIR)
             env:
               SOURCE_BRANCH: $(Build.SourceBranch)
               RELEASE_TAG: ${{ parameters.sourceTag }}
@@ -123,6 +124,7 @@ stages:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
               scriptLocation: inlineScript
+              workingDirectory: $(Build.SourcesDirectory)/$(TAUGRID_SOURCE_DIR)
               inlineScript: |
                 set -euo pipefail
                 "$(Build.SourcesDirectory)/control/scripts/ci/publish-helm-charts.sh" publish \
