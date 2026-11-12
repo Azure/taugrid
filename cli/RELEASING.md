@@ -1,8 +1,8 @@
 # Releasing Tau
 
 Tau releases use canonical SemVer tags (`vX.Y.Z`). Pushing a tag does not
-publish a release. A maintainer manually runs one protected Azure DevOps
-pipeline and supplies the existing tag. After approval, that pipeline publishes the
+publish a release. A maintainer manually runs one protected release pipeline
+and supplies the existing tag. After approval, that pipeline publishes the
 coordinated images and charts through the existing protected publishers,
 verifies their public contents, and publishes the CLI and SDK GitHub Release
 last. Release-selected source is data only; orchestration and publisher logic
@@ -68,17 +68,17 @@ wheel with the CLI assets.
    done < /tmp/tau-release-a/SHA256SUMS
    ```
 
-4. Run the Go and Python gates used by the protected ADO release pipeline.
+4. Run the Go and Python gates used by the protected release pipeline.
 5. Review the candidate manifest, release notes, source SHA, and all gate
    results. Release publication requires explicit human authorization.
 
 ## Protected publication configuration
 
-The ADO orchestrator uses its project Build Service identity only to read and
+The release orchestrator uses its project build identity only to read and
 queue the five approved publisher definitions. The pipeline permissions must be
 definition-scoped. Registry credentials remain inside the existing publishers.
 GitHub release publication uses the protected `taugrid` OAuth service
-connection only through built-in ADO tasks; its token is never exposed to
+connection only through built-in release tasks; its token is never exposed to
 scripts.
 
 ## Publish after authorization
@@ -93,15 +93,15 @@ notes; when absent, the pipeline uses GitHub-generated notes.
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
    release tags. Pushing the tag does not start publication.
-2. In the `CloudNativeCompute` Azure DevOps project, run the protected
-   **Release TauGrid** pipeline from its default `main` control revision and set
+2. In the protected release project, run the **Release TauGrid** pipeline from
+   its default `main` control revision and set
    `releaseTag` to `vX.Y.Z`.
 3. The read-only validation stage verifies that the input identifies the
    annotated SemVer tag, that its exact commit is on `main`, and that no
    published GitHub Release exists.
 4. The release gates and reproducible CLI and SDK builds run before publication.
    The protected publication stage then waits for approval and uses the
-   short-lived ADO job token to queue every approved image and chart publisher
+   short-lived job token to queue every approved image and chart publisher
    with the exact source SHA, tag, and protected control revision.
 5. Before queueing, the pipeline independently verifies any existing public
    artifact. Exact artifacts are reused, an active matching run is resumed, and
@@ -126,7 +126,7 @@ notes; when absent, the pipeline uses GitHub-generated notes.
    and exercises both Windows executables. A failure leaves the immutable
    published release unchanged when it occurs before publication.
 
-Every release uses one manual ADO run with the matching tag input.
+Every release uses one manual protected pipeline run with the matching tag input.
 
 ## Verify
 
