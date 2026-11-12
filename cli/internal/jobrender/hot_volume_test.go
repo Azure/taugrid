@@ -141,3 +141,42 @@ func TestRender_HotVolumeProfileKeepsCustomMntMount(t *testing.T) {
 		t.Fatalf("pod fsGroup = %q without a hot claim, want unset", group)
 	}
 }
+
+func TestRender_HotVolumeJobUsesShortTTL(t *testing.T) {
+	custom := Options{
+		Volumes:      []Volume{{Name: "scratch", PVC: "scratch-pvc"}},
+		VolumeMounts: []VolumeMount{{Name: "scratch", MountPath: "/mnt"}},
+	}
+	tests := []struct {
+		name     string
+		profile  profile.Profile
+		ttl      int64
+		explicit bool
+		base     Options
+		want     string
+	}{
+		{name: "hot claim without ttl", profile: hotVolumeProfile(), want: "600"},
+		{name: "hot claim with workspace default", profile: hotVolumeProfile(), ttl: 86400, want: "600"},
+		{name: "hot claim with explicit ttl", profile: hotVolumeProfile(), ttl: 3600, explicit: true, want: "3600"},
+		{name: "custom /mnt keeps default", profile: hotVolumeProfile(), base: custom, want: "28800"},
+		{name: "no hot volume keeps default", profile: trainProfile(), want: "28800"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := tt.base
+			o.Name = "hot"
+			o.Namespace = "tau"
+			o.Command = []string{"python", "train.py"}
+			o.TTLSecondsAfterFinished = tt.ttl
+			o.TTLExplicit = tt.explicit
+			out, err := Render(tt.profile, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := parseYAML(t, out)["spec"].(map[string]any)
+			if got := fmt.Sprint(spec["ttlSecondsAfterFinished"]); got != tt.want {
+				t.Fatalf("ttlSecondsAfterFinished = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}

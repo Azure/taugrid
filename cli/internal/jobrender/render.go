@@ -34,6 +34,8 @@ const (
 	c10dPort = 29500
 
 	HeadlessSuffix = "-headless"
+
+	HotVolumeTTLSecondsAfterFinished int64 = 600
 )
 
 type Options struct {
@@ -79,6 +81,8 @@ type Options struct {
 	ActiveDeadlineSeconds int64
 
 	TTLSecondsAfterFinished int64
+
+	TTLExplicit bool
 
 	PVCMount string
 
@@ -771,6 +775,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
+	hotClaim := false
 	if len(storagePlan.Volumes) > 0 {
 		volumes := make([]any, 0, len(storagePlan.Volumes))
 		for _, v := range storagePlan.Volumes {
@@ -786,6 +791,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			if v.StorageClassName != "" {
 				volumes = append(volumes, storage.EphemeralVolume(v.Name, v.StorageClassName, v.ClaimSize))
 				storage.ApplyEphemeralFSGroup(pod)
+				hotClaim = true
 				continue
 			}
 			emptyDir := map[string]any{}
@@ -926,6 +932,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	if o.TTLSecondsAfterFinished > 0 {
 		jobSpec["ttlSecondsAfterFinished"] = o.TTLSecondsAfterFinished
+	}
+	if hotClaim && !o.TTLExplicit {
+		jobSpec["ttlSecondsAfterFinished"] = HotVolumeTTLSecondsAfterFinished
 	}
 	if o.Nodes > 1 {
 		jobSpec["completionMode"] = "Indexed"

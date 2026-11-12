@@ -131,7 +131,9 @@ claim is deleted with the pod. The Ray head keeps an `emptyDir`. TauGrid
 rejects a run whose `hot_size` exceeds `maxSize`. Pods with a hot claim set
 `fsGroup: 65532` so non-root workloads can write to it. Kubernetes also applies
 that group to other volumes whose CSI driver supports `fsGroup`, such as a
-`ReadWriteOnce` disk mounted at `/data`. A `multiKueue`
+`ReadWriteOnce` disk mounted at `/data`. A claim is released only when its
+pod is deleted, so direct Jobs with a hot claim keep finished pods for 600
+seconds unless the run sets `run.ttl_seconds_after_finished`. A `multiKueue`
 profile can't declare `hotVolume`, because the controller observes storage on
 the manager cluster rather than on the workers.
 

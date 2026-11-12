@@ -65,6 +65,12 @@ an `emptyDir`, because it requests no GPUs and can run on system nodes. A
 custom mount at `/mnt` replaces the hot volume. Managed workflow configs don't
 use the hot volume.
 
+A claim is released only when its pod is deleted, and Kueue doesn't account for
+hot storage. So a direct Job with a hot claim keeps its finished pods for 600
+seconds instead of the workspace or built-in retention, and its pod logs go
+with them. Set `run.ttl_seconds_after_finished` to keep them longer; the claims
+then hold their node-local capacity for that whole period.
+
 ## Jobs without workload profiles
 
 When `TauCluster.spec.queues.shareTeamQuotas` is enabled, or
@@ -179,8 +185,9 @@ printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 
 `run.ttl_seconds_after_finished` is an optional retention period from 1 through
 2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
-`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default. The
-TTL starts only after every regular container has finished running.
+`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default, or
+600 seconds for a Job with a hot-volume claim. The TTL starts only after every
+regular container has finished running.
 
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
 before workload creation. TauGrid's generated embedded-payload environment entries

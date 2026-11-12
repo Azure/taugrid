@@ -38,7 +38,7 @@ runtime dependencies work. Follow with client rendering, using an explicit
 | `run.working_dir` | RayJob only: local project directory packaged for Ray, relative to the config; entrypoint must be inside it |
 | `run.working_dir_excludes` | Additional archive exclusions; do not package datasets, credentials, caches, or large checkpoints |
 | `runtime.working_dir` | Direct Job only: absolute **container** working directory, not source delivery; incompatible with `run.source` and `run.working_dir` |
-| `run.ttl_seconds_after_finished` | Direct Job only: 1–2147483647 seconds; explicit run value overrides workspace retention, otherwise the built-in fallback is 28800 seconds |
+| `run.ttl_seconds_after_finished` | Direct Job only: 1–2147483647 seconds; explicit run value overrides workspace retention, otherwise the built-in fallback is 28800 seconds, or 600 seconds when the Job has a hot-volume claim |
 
 Nested `run.name`, `run.engine`, `run.entrypoint`, `run.script`, and
 `run.image` also exist; avoid conflicting top-level/nested values.

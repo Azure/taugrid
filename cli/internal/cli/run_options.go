@@ -229,6 +229,7 @@ type runExecutionInput struct {
 	nodes                   int
 	nodesExplicit           bool
 	ttlSecondsAfterFinished int64
+	ttlExplicit             bool
 	configs                 map[string]any
 	smokePairs              int
 	upstreamCheckpoint      string
