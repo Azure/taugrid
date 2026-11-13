@@ -459,6 +459,11 @@ service-connection default. Each cluster task explicitly selects
 without attempting cluster access if the variable is missing or unresolved,
 or if subscription selection fails. Diagnostic directories are initialized
 in a separate step before authentication so failure artifacts can still publish.
+After collecting all target inventories, preflight saves `hardware-matrix.json`
+before checking node readiness, RDMA capacity, and controller availability.
+Failed checks still fail the job and prevent workloads from starting; the
+published snapshot and nightly report retain the collected failure details.
+The presence of a hardware snapshot is not proof of successful qualification.
 The selected Ray image must
 include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
 require `linux/arm64` because DGX Spark is arm64.

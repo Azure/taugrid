@@ -445,7 +445,8 @@ JSON
 JSON
     ;;
   *"get nodes -l kueue.azure.com/gpu-series=nd-h200-v5 -o json"*)
-    cat <<'JSON'
+    cat <<'JSON' | jq --arg ready "${FAKE_H200_READY:-True}" \
+      '(.items[1].status.conditions[] | select(.type == "Ready") | .status) = $ready'
 {"items":[{"metadata":{"name":"h200-a","labels":{"tau.azure.com/site":"site-h200","tau.azure.com/network-domain":"h200-a","tau.azure.com/accelerator-domain":"h200-a"}},"spec":{"taints":[{"key":"nvidia.com/gpu","value":"present","effect":"NoSchedule"}]},"status":{"nodeInfo":{"architecture":"amd64","operatingSystem":"linux","containerRuntimeVersion":"containerd://2.0.4"},"conditions":[{"type":"Ready","status":"True"},{"type":"MemoryPressure","status":"False"},{"type":"DiskPressure","status":"False"},{"type":"PIDPressure","status":"False"}],"allocatable":{"nvidia.com/gpu":"8","rdma/rdma_shared_device_a":"1"}}},{"metadata":{"name":"h200-b","labels":{"tau.azure.com/site":"site-h200","tau.azure.com/network-domain":"h200-b","tau.azure.com/accelerator-domain":"h200-b"}},"spec":{"taints":[{"key":"nvidia.com/gpu","value":"present","effect":"NoSchedule"}]},"status":{"nodeInfo":{"architecture":"amd64","operatingSystem":"linux","containerRuntimeVersion":"containerd://2.0.4"},"conditions":[{"type":"Ready","status":"True"},{"type":"MemoryPressure","status":"False"},{"type":"DiskPressure","status":"False"},{"type":"PIDPressure","status":"False"}],"allocatable":{"nvidia.com/gpu":"8","rdma/rdma_shared_device_a":"1"}}}]}
 JSON
     ;;
@@ -535,10 +536,36 @@ jq -e '
 ' "${fake_bin}/shared-contract.json" >/dev/null ||
   fail "preflight must retain configured shared flavors and queue"
 
-if FAKE_STALE_H200=1 "$PREFLIGHT" cluster >/dev/null 2>&1; then
+mkdir -p "${fake_bin}/unready"
+if FAKE_H200_READY=Unknown \
+  FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/unready/hardware-matrix.json" \
+  "$PREFLIGHT" cluster >"${fake_bin}/unready-preflight.log" 2>&1; then
+  fail "preflight must reject an H200 node whose Ready condition is Unknown"
+fi
+[ -s "${fake_bin}/unready/hardware-matrix.json" ] ||
+  fail "failed preflight must preserve the collected hardware inventory"
+jq -e '
+  .targets[] | select(.name == "h200")
+  | .status == "misconfigured"
+    and .ready_nodes == 1
+    and (.capability_ready | not)
+    and .capability_violations == ["h200-b: Ready is not True"]
+    and .topology_ready and .queue_active and .queue_has_flavor
+' "${fake_bin}/unready/hardware-matrix.json" >/dev/null ||
+  fail "failed preflight must preserve the node readiness violation"
+PREFLIGHT_JOB_RESULT=Failed MATRIX_JOB_RESULT=Skipped \
+  "$REPORTER" "${fake_bin}/unready" "${fake_bin}/unready-report.md"
+grep -Fq '| Preflight job | **FAIL** |' "${fake_bin}/unready-report.md" &&
+  grep -Fq '| h200 | **misconfigured** | 1 |' "${fake_bin}/unready-report.md" &&
+  grep -Fq 'h200-b: Ready is not True' "${fake_bin}/unready-report.md" ||
+  fail "nightly report must show the failed readiness gate and collected inventory"
+
+if FAKE_STALE_H200=1 FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/stale-topology.json" \
+  "$PREFLIGHT" cluster >/dev/null 2>&1; then
   fail "preflight must reject GPU flavors that are not wired to taugrid-gpu-topology"
 fi
-if FAKE_STALE_LEASE=1 "$PREFLIGHT" cluster >/dev/null 2>&1; then
+if FAKE_STALE_LEASE=1 FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/stale-lease.json" \
+  "$PREFLIGHT" cluster >/dev/null 2>&1; then
   fail "preflight must reject stale Flex node leases"
 fi
 
