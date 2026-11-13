@@ -51,6 +51,21 @@ func TestKustomizeResearcherRoleGrantsRayServicePermissions(t *testing.T) {
 	t.Fatalf("researcher role must grant RayService lifecycle permissions: %#v", role.Rules)
 }
 
+func TestKustomizeClusterQueueReaderRoleGrantsResourceFlavorRead(t *testing.T) {
+	role := kustomizeClusterRole(t, clusterQueueReaderRoleName)
+	want := rbacv1.PolicyRule{
+		APIGroups: []string{"kueue.x-k8s.io"},
+		Resources: []string{"resourceflavors"},
+		Verbs:     []string{"get"},
+	}
+	for _, rule := range role.Rules {
+		if reflect.DeepEqual(rule, want) {
+			return
+		}
+	}
+	t.Fatalf("ClusterQueue reader role must grant ResourceFlavor reads for queue preflight: %#v", role.Rules)
+}
+
 func TestKustomizeControllerRoleMatchesTopologyAndGPUFlavorPermissions(t *testing.T) {
 	role := kustomizeClusterRole(t, "tau-core-controller")
 	for _, want := range []rbacv1.PolicyRule{
