@@ -7,16 +7,50 @@ trigger:
     include:
       - charts/**
       - scripts/ci/publish-helm-charts.sh
+      - scripts/ci/release_artifacts.py
+      - scripts/ci/release-requirements.txt
+      - scripts/ci/validate_release_source.py
       - scripts/ci/vendor-taugrid-dependencies.sh
       - .pipelines/publish-helm-charts.yml
 
 pr: none
+
+parameters:
+  - name: sourceRef
+    displayName: Exact TauGrid release source SHA
+    type: string
+    default: ""
+  - name: sourceTag
+    displayName: Existing annotated TauGrid source tag
+    type: string
+    default: ""
+  - name: releaseTag
+    displayName: TauGrid release version
+    type: string
+    default: ""
+  - name: forcePublish
+    displayName: Replace an existing mutable publication
+    type: boolean
+    default: false
+
+resources:
+  repositories:
+    - repository: releaseSource
+      type: github
+      endpoint: taugrid
+      name: Azure/taugrid
+      ref: refs/heads/main
 
 variables:
   - name: REPOSITORY_NAME
     value: public/aks/ai-runtime
   - name: azureServiceConnection
     value: aks ai runtime - prod
+  - name: TAUGRID_SOURCE_DIR
+    ${{ if eq(parameters.sourceTag, '') }}:
+      value: control
+    ${{ else }}:
+      value: release
 
 stages:
   - stage: PublishHelmCharts
@@ -28,12 +62,66 @@ stages:
           name: 1es-aks-ai-runtime-ado-eastus2
         steps:
           - checkout: self
+            path: s/control
+            fetchDepth: 1
+            fetchTags: false
+            persistCredentials: false
+
+          - ${{ if ne(parameters.sourceTag, '') }}:
+              - checkout: releaseSource
+                path: s/release
+                fetchDepth: 0
+                fetchTags: true
+                persistCredentials: false
 
           - bash: |
               set -euo pipefail
-              scripts/ci/publish-helm-charts.sh package \
+
+              source_tag="${SOURCE_TAG:-}"
+              release_tag="${RELEASE_TAG:-}"
+              source_ref="${SOURCE_REF:-}"
+              force_publish="${FORCE_PUBLISH:-}"
+              if [[ -z "$source_tag" && -z "$release_tag" && -z "$source_ref" ]]; then
+                test "$BUILD_SOURCEBRANCH" = refs/heads/main
+                exit 0
+              fi
+              if [[ -z "$source_tag" || -z "$release_tag" || -z "$source_ref" ]]; then
+                echo "sourceRef, sourceTag, and releaseTag must be supplied together" >&2
+                exit 1
+              fi
+              test "$force_publish" = "False"
+              test "$release_tag" = "${source_tag#v}"
+              test "$BUILD_SOURCEBRANCH" = refs/heads/main
+              git -C "$(Pipeline.Workspace)/s/control" fetch --force origin \
+                +refs/heads/main:refs/remotes/origin/main
+              control_commit="$(git -C "$(Pipeline.Workspace)/s/control" rev-parse HEAD^{commit})"
+              test "$control_commit" = "$BUILD_SOURCEVERSION"
+              test "$control_commit" = \
+                "$(git -C "$(Pipeline.Workspace)/s/control" rev-parse origin/main^{commit})"
+              python3 "$(Pipeline.Workspace)/s/control/scripts/ci/validate_release_source.py" \
+                --source "$(Pipeline.Workspace)/s/release" \
+                --tag "$source_tag" \
+                --source-commit "$source_ref"
+            displayName: Validate protected control and release source
+            env:
+              SOURCE_REF: ${{ parameters.sourceRef }}
+              SOURCE_TAG: ${{ parameters.sourceTag }}
+              RELEASE_TAG: ${{ parameters.releaseTag }}
+              FORCE_PUBLISH: ${{ parameters.forcePublish }}
+
+          - bash: python3 -m pip install --disable-pip-version-check -r "$(Pipeline.Workspace)/s/control/scripts/ci/release-requirements.txt"
+            displayName: Install release packaging dependencies
+
+          - bash: |
+              set -euo pipefail
+              "$(Pipeline.Workspace)/s/control/scripts/ci/publish-helm-charts.sh" package \
                 "$(Build.ArtifactStagingDirectory)/helm"
             displayName: Validate and package charts
+            workingDirectory: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)
+            env:
+              SOURCE_BRANCH: $(Build.SourceBranch)
+              RELEASE_TAG: ${{ parameters.sourceTag }}
+              TAUGRID_SOURCE_ROOT: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)
 
           - task: AzureCLI@2
             displayName: Publish and verify charts
@@ -41,10 +129,14 @@ stages:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
               scriptLocation: inlineScript
+              workingDirectory: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)
               inlineScript: |
                 set -euo pipefail
-                scripts/ci/publish-helm-charts.sh publish \
+                "$(Pipeline.Workspace)/s/control/scripts/ci/publish-helm-charts.sh" publish \
                   "$(Build.ArtifactStagingDirectory)/helm"
             env:
               ACR_NAME: $(ACR_NAME)
               REPOSITORY_NAME: $(REPOSITORY_NAME)
+              SOURCE_BRANCH: $(Build.SourceBranch)
+              RELEASE_TAG: ${{ parameters.sourceTag }}
+              TAUGRID_SOURCE_ROOT: $(Pipeline.Workspace)/s/$(TAUGRID_SOURCE_DIR)

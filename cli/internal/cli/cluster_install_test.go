@@ -42,7 +42,6 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 	want := []string{
 		"upgrade", "--install", defaultTauGridRelease, defaultTauGridChart,
 		"--namespace", defaultTauGridNamespace,
-		"--version", defaultTauGridChartVersion,
 		"--timeout", "15m",
 		"--reset-values",
 		"--kube-context", "aks-dev",
@@ -323,7 +322,6 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 	want := []string{
 		"template", defaultTauGridRelease, defaultTauGridChart,
 		"--namespace", defaultTauGridNamespace,
-		"--version", defaultTauGridChartVersion,
 		"--include-crds",
 		"--kube-context", "aks-dev",
 		"--dependency-update",
@@ -477,7 +475,7 @@ func TestClusterInstallSurfacesHelmFailure(t *testing.T) {
 	}
 	for _, want := range []string{
 		defaultTauGridChart,
-		defaultTauGridChartVersion,
+		"latest published",
 		"verify that this version is published",
 		"--chart <reference-or-local-path>",
 	} {
@@ -675,13 +673,30 @@ func TestDefaultChartVersionMatchesChartYAML(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &chart); err != nil {
 		t.Fatalf("parse Chart.yaml: %v", err)
 	}
-	if chart.Version != defaultTauGridChartVersion {
-		t.Fatalf("defaultTauGridChartVersion is %q but charts/taugrid/Chart.yaml is %q; bump the constant with the chart",
-			defaultTauGridChartVersion, chart.Version)
+	if chart.Version != "0.0.0-dev" {
+		t.Fatalf("charts/taugrid/Chart.yaml version is %q, want release-neutral source version",
+			chart.Version)
+	}
+	if defaultTauGridChartVersion != "" {
+		t.Fatalf("development CLI default chart version is %q, want latest published", defaultTauGridChartVersion)
 	}
 }
 
-func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
+func TestChartVersionFromBuild(t *testing.T) {
+	for buildVersion, want := range map[string]string{
+		"":            "",
+		"dev":         "",
+		"v1.2.3":      "1.2.3",
+		"1.2.3":       "1.2.3",
+		"v1.2.3-rc.1": "1.2.3-rc.1",
+	} {
+		if got := chartVersionFromBuild(buildVersion); got != want {
+			t.Errorf("chartVersionFromBuild(%q) = %q, want %q", buildVersion, got, want)
+		}
+	}
+}
+
+func TestTauGridSourceVersionsStayReleaseNeutral(t *testing.T) {
 	type chartMetadata struct {
 		Version      string `yaml:"version"`
 		AppVersion   string `yaml:"appVersion"`
@@ -710,14 +725,15 @@ func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 
 	var umbrella chartMetadata
 	loadYAML("../../../charts/taugrid/Chart.yaml", &umbrella)
-	releaseVersion := umbrella.Version
-	assertVersion("taugrid appVersion", umbrella.AppVersion, releaseVersion)
+	sourceVersion := umbrella.Version
+	assertVersion("taugrid chart version", sourceVersion, "0.0.0-dev")
+	assertVersion("taugrid appVersion", umbrella.AppVersion, "dev")
 
 	for _, chartName := range []string{"tau-core-controller", "taugrid-core"} {
 		var child chartMetadata
 		loadYAML("../../../charts/"+chartName+"/Chart.yaml", &child)
-		assertVersion(chartName+" chart version", child.Version, releaseVersion)
-		assertVersion(chartName+" appVersion", child.AppVersion, releaseVersion)
+		assertVersion(chartName+" chart version", child.Version, sourceVersion)
+		assertVersion(chartName+" appVersion", child.AppVersion, "dev")
 
 		var dependencyVersion string
 		for _, dependency := range umbrella.Dependencies {
@@ -726,7 +742,7 @@ func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 				break
 			}
 		}
-		assertVersion("taugrid dependency "+chartName, dependencyVersion, releaseVersion)
+		assertVersion("taugrid dependency "+chartName, dependencyVersion, sourceVersion)
 	}
 
 	type taggedImage struct {
@@ -736,7 +752,7 @@ func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 		Image taggedImage `yaml:"image"`
 	}
 	loadYAML("../../../charts/tau-core-controller/values.yaml", &controllerValues)
-	assertVersion("tau-core-controller image tag", controllerValues.Image.Tag, releaseVersion)
+	assertVersion("tau-core-controller image tag", controllerValues.Image.Tag, "")
 
 	type componentValues struct {
 		Image taggedImage `yaml:"image"`
@@ -747,15 +763,15 @@ func TestTauGridMCRReleaseVersionsStayAligned(t *testing.T) {
 		Portal            componentValues `yaml:"portal"`
 	}
 	loadYAML("../../../charts/taugrid-core/values.yaml", &coreValues)
-	assertVersion("taugrid-core stellar image tag", coreValues.Stellar.Image.Tag, releaseVersion)
-	assertVersion("taugrid-core lifecycle recorder image tag", coreValues.LifecycleRecorder.Image.Tag, releaseVersion)
-	assertVersion("taugrid-core portal image tag", coreValues.Portal.Image.Tag, releaseVersion)
+	assertVersion("taugrid-core stellar image tag", coreValues.Stellar.Image.Tag, "")
+	assertVersion("taugrid-core lifecycle recorder image tag", coreValues.LifecycleRecorder.Image.Tag, "")
+	assertVersion("taugrid-core portal image tag", coreValues.Portal.Image.Tag, "")
 
 	kustomizeDeployment, err := os.ReadFile(filepath.Clean("../../../charts/tau-core-controller/kustomize/deployment.yaml"))
 	if err != nil {
 		t.Fatalf("read tau-core-controller kustomize deployment: %v", err)
 	}
-	wantControllerImage := "mcr.microsoft.com/aks/ai-runtime/tau-core-controller:" + releaseVersion
+	wantControllerImage := "mcr.microsoft.com/aks/ai-runtime/tau-core-controller:dev"
 	if !strings.Contains(string(kustomizeDeployment), "image: "+wantControllerImage) {
 		t.Errorf("tau-core-controller kustomize deployment must use %s", wantControllerImage)
 	}

@@ -1,9 +1,12 @@
 # Releasing Tau
 
 Tau releases use canonical SemVer tags (`vX.Y.Z`). Pushing a tag does not
-publish a GitHub Release. Maintainers publish and verify the coordinated Azure
-DevOps images and charts first, then manually dispatch the GitHub Actions
-release workflow from the existing tag ref.
+publish a release. A maintainer manually runs one protected release pipeline
+and supplies the existing tag. After approval, that pipeline publishes the
+coordinated images and charts through the existing protected publishers,
+verifies their public contents, and publishes the CLI and SDK GitHub Release
+last. Release-selected source is data only; orchestration and publisher logic
+always execute from protected control revisions.
 
 ## Distribution contract
 
@@ -20,19 +23,19 @@ macOS 13.0 or newer. Windows amd64 binaries are native PE executables.
 - `LICENSE`
 - `SHA256SUMS`
 
-The Tau Python SDK keeps its own package version. The workflow builds its wheel
+The Tau Python SDK keeps its own package version. The pipeline builds its wheel
 twice from the tagged source revision, compares the outputs, and publishes the
 wheel with the CLI assets.
 
 ## Prepare
 
-1. Land a release-preparation PR that updates install docs and
-   `releases/vX.Y.Z.md`.
-2. Choose a source commit on `main` and record its full SHA. The commit must
-   contain every feature named in the release notes.
+1. Choose a reviewed source commit on `main` and record its full SHA. No
+   release-specific version edit or release-preparation PR is required.
+2. Optionally include `releases/vX.Y.Z.md` in the tagged commit for curated
+   opening notes. Without it, the pipeline generates the release notes.
 3. Build twice from a clean macOS checkout using the exact Go version in
    `go.mod`. Darwin authentication-cache support requires CGO; the release
-   workflow pins an arm64 `macos-15` runner that can also cross-build Darwin
+   pipeline pins an arm64 `macos-15` runner that can also cross-build Darwin
    amd64 and static Linux binaries:
 
    ```bash
@@ -65,60 +68,75 @@ wheel with the CLI assets.
    done < /tmp/tau-release-a/SHA256SUMS
    ```
 
-4. Run the Go and Python gates used by `.github/workflows/release-tau.yaml`.
+4. Run the Go and Python gates used by the protected release pipeline.
 5. Review the candidate manifest, release notes, source SHA, and all gate
    results. Release publication requires explicit human authorization.
 
+## Protected publication configuration
+
+The release orchestrator uses its project build identity to read and queue an
+exact five-definition allowlist. It must not receive repository, service
+connection, registry, or administrative permissions. Every publisher remains a
+separate release boundary and independently requires the immutable annotated
+tag, exact source and control revisions, and `forcePublish=false`. Registry
+credentials remain inside the existing publishers. GitHub release publication
+uses the protected `taugrid` OAuth service connection only through built-in
+release tasks; its token is never exposed to scripts.
+
 ## Publish after authorization
+
+The annotated tag is the sole coordinated release version source. The checked-in
+charts retain release-neutral metadata, first-party image defaults follow the
+packaged chart `appVersion`, and release binaries derive their default chart
+version from their embedded build version. No version-bump commit or release PR
+is required. A non-empty `cli/releases/vX.Y.Z.md` may provide curated opening
+notes; when absent, the pipeline uses GitHub-generated notes.
 
 1. Create an annotated `vX.Y.Z` tag on the reviewed `main` source commit and
    push only that tag. Repository tag rules must prevent updates or deletion of
-   release tags. Pushing the tag does not start **Release TauGrid**.
-2. Run the public Azure DevOps image publication pipelines for every coordinated
-   first-party image using the tag's full source commit SHA and release tag
-   without the `v` prefix. For TauGrid 0.4.8, the required images are `tau`,
-   `taugrid-portal`, `tau-core-controller`, and
-   `taugrid-metrics-collector`.
-3. Verify the expected immutable image tags and coordinated chart versions are
-   available from MCR. Do not dispatch the GitHub Release while any ADO artifact
-   is missing or still publishing. This ordering is an operator gate: the
-   GitHub workflow has no credentials for, and does not infer readiness from,
-   the external ADO pipelines.
-4. Dispatch **Release TauGrid** from the same tag ref and supply the matching
-   tag. Use the same command to retry a matching draft:
-
-   ```bash
-   gh workflow run release-tau.yaml \
-     --repo Azure/taugrid \
-     --ref vX.Y.Z \
-     -f tag=vX.Y.Z
-   ```
-5. The read-only validation job verifies that the tag is annotated, follows
-   SemVer, points to `main`, has checked-in release notes, and has no published
-   GitHub Release.
-6. The workflow appends GitHub-generated change attribution, new-contributor
+   release tags. Pushing the tag does not start publication.
+2. In the protected release project, run the **Complete TauGrid Release**
+   pipeline from its default `main` control revision and set
+   `releaseTag` to `vX.Y.Z`.
+3. The read-only validation stage verifies that the input identifies the
+   annotated SemVer tag, that its exact commit is on `main`, and that no
+   published GitHub Release exists.
+4. The release gates and reproducible CLI and SDK builds run before publication.
+   The protected publication stage then waits for approval and uses the
+   short-lived job token to queue every approved image and chart publisher
+   with the exact source SHA, tag, and protected control revision.
+5. Before queueing, the pipeline independently verifies any existing public
+   artifact. Exact artifacts are reused, an active matching run is resumed, and
+   a terminal failed run may be replaced. A conflicting run, mismatched public
+   artifact, unknown state, ambiguous queue result, or unverified publisher
+   revision fails closed.
+6. All publisher runs are queued before the pipeline waits for terminal results.
+   The pipeline then verifies both required image architectures, source revision
+   labels, coordinated chart contents, dependency pins, and public digests.
+7. The pipeline appends GitHub-generated change attribution, new-contributor
    recognition, and the full changelog link to the checked-in curated notes.
-   It then reruns all release gates, compares two independent builds, and
-   transfers the validated assets to a separate write-authorized publish job.
-7. The publish job creates a draft release, uploads the assets once, verifies
-   every GitHub asset digest, and only then publishes the draft. A retry resumes
-   a draft only when its metadata, release notes, and assets exactly match the
-   rebuilt release. It never overwrites an existing release or asset.
-8. Before publication, a clean GitHub-hosted Windows runner verifies the two
+   The separate write-authorized publish job runs only after every coordinated
+   public artifact has been verified.
+8. The publish job creates or resumes a draft through the protected built-in
+   release task, replaces its asset set from the locally verified release
+   artifact, and publishes the draft without changing those assets. It then
+   downloads the public release and verifies every asset digest. A retry may
+   replace a draft but never overwrites a published release or asset.
+9. Before publication, a clean Windows agent verifies the two
    Windows executables and the `tau` release version. After publication,
    Ubuntu and macOS runners install the Python SDK wheel and exercise native
    CLI commands, while a Windows runner installs `tau` through `install.ps1`
    and exercises both Windows executables. A failure leaves the immutable
    published release unchanged when it occurs before publication.
 
-Every tag must contain its own release notes, complete the external ADO artifact
-gate, and use a manual run from the matching tag ref.
+Every release uses one manual protected pipeline run with the matching tag input.
 
 ## Verify
 
-Confirm the post-publication Ubuntu and macOS jobs succeeded. They exercise the
-published CLI installer, Python SDK wheel, and native version and help commands.
-The earlier release jobs compare every GitHub asset digest with `SHA256SUMS`,
-compare two SDK wheel builds, and inspect all cross-compiled binaries with
+Confirm the coordinated artifact job, GitHub publication, and
+post-publication smoke jobs succeeded. The smoke jobs exercise the published
+CLI installer, Python SDK wheel, and native version and help commands. Earlier
+jobs compare public image and chart contents, every GitHub asset digest with
+`SHA256SUMS`, two SDK wheel builds, and all cross-compiled binaries with
 `go version -m`. Do not update downstream minimum-version requirements until
 the full workflow succeeds.

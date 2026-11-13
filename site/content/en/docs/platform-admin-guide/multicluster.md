@@ -37,9 +37,10 @@ controller capability and gives the Tau controller read-only access to its
 prerequisites:
 
 ```bash
+TAUGRID_VERSION="$(tau version --short)"
 helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.8 \
+  --version "${TAUGRID_VERSION#v}" \
   --namespace tau-system --create-namespace \
   --wait --atomic
 ```

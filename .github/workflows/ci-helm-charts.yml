@@ -8,6 +8,8 @@ on:
       - charts/**
       - scripts/ci/publish-helm-charts.sh
       - scripts/ci/tests/publish-helm-charts_test.sh
+      - scripts/ci/release_artifacts.py
+      - scripts/ci/release-requirements.txt
       - scripts/ci/vendor-taugrid-dependencies.sh
       - scripts/ci/tests/vendor-taugrid-dependencies_test.sh
       - .github/workflows/ci-helm-charts.yml
@@ -126,11 +128,14 @@ jobs:
 
       - name: Install helm-unittest
         run: |
-          if [[ "${{ matrix.helm_version }}" == 3.* ]]; then
-            helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2
-          else
-            helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.2 --verify=false
-          fi
+          case "${{ matrix.helm_version }}" in
+            3.*)
+              helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2
+              ;;
+            *)
+              helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.2 --verify=false
+              ;;
+          esac
 
       - name: Run unit tests
         run: |

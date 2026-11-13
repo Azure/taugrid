@@ -65,9 +65,15 @@ that goal are welcome.
 ### Install TauGrid
 
 ```bash
+TAUGRID_RELEASE_URL="$(
+  curl -fsSL -o /dev/null -w '%{url_effective}' \
+    https://github.com/Azure/taugrid/releases/latest
+)"
+TAUGRID_VERSION="${TAUGRID_RELEASE_URL##*/}"
+
 helm install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
-  --version 0.4.8 \
+  --version "${TAUGRID_VERSION#v}" \
   --namespace tau-system \
   --create-namespace
 ```
@@ -121,7 +127,7 @@ Create a minimal `tau.yaml`:
 
 ```yaml
 name: hello-gpu
-image: mcr.microsoft.com/aks/ai-runtime/tau:0.4.8
+image: mcr.microsoft.com/aks/ai-runtime/tau:<version>
 command: ["python", "train.py"]
 resources:
   gpu: 4

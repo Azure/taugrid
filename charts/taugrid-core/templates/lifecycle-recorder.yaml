@@ -12,7 +12,7 @@
 {{- if ne $recorder.image.repository "mcr.microsoft.com/aks/ai-runtime/tau" -}}
 {{- fail "lifecycleRecorder.image.repository must be mcr.microsoft.com/aks/ai-runtime/tau when lifecycleRecorder.enabled=true" -}}
 {{- end -}}
-{{- $image := include "taugrid-core.image" (dict "component" "lifecycleRecorder" "image" $recorder.image) -}}
+{{- $image := include "taugrid-core.image" (dict "component" "lifecycleRecorder" "image" $recorder.image "appVersion" .Chart.AppVersion) -}}
 {{- if not $recorder.targetNamespace -}}
 {{- fail "lifecycleRecorder.targetNamespace is required when lifecycleRecorder.enabled=true" -}}
 {{- end -}}

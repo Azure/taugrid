@@ -9,8 +9,8 @@ description: |
   (https://azure.github.io/taugrid/docs/platform-admin-guide/kubernetes/)
   for the recommended install order.
 type: application
-version: 0.4.8
-appVersion: "0.4.8"
+version: 0.0.0-dev
+appVersion: dev
 keywords: [taugrid, ai, kueue, multi-cloud]
 maintainers:
   - name: taugrid

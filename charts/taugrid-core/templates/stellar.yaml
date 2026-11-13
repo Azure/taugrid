@@ -10,6 +10,7 @@
 {{- $extraInitContainers := default list $stellar.extraInitContainers -}}
 {{- $extraVolumeMounts := default list $stellar.extraVolumeMounts -}}
 {{- $extraVolumes := default list $stellar.extraVolumes -}}
+{{- $imageTag := default .Chart.AppVersion $stellar.image.tag -}}
 {{- $hasInitContainers := or $usesExpstore (gt (len $extraInitContainers) 0) -}}
 {{- $hasVolumeMounts := or $usesExpstore (gt (len $extraVolumeMounts) 0) -}}
 {{- $hasVolumes := or $usesExpstore (gt (len $extraVolumes) 0) -}}
@@ -34,7 +35,7 @@
 {{- if not $stellar.image.repository -}}
 {{- fail "stellar.image.repository is required when stellar.enabled=true" -}}
 {{- end -}}
-{{- if not $stellar.image.tag -}}
+{{- if not $imageTag -}}
 {{- fail "stellar.image.tag is required when stellar.enabled=true; publish or select a real TauGrid Portal image tag" -}}
 {{- end -}}
 {{- if not (has $source (list "local" "auto" "kusto")) -}}
@@ -111,7 +112,7 @@ spec:
       initContainers:
         {{- if $usesExpstore }}
         - name: init-expstore
-          image: "{{ $stellar.image.repository }}:{{ $stellar.image.tag }}"
+          image: "{{ $stellar.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ $stellar.image.pullPolicy }}
           args:
             - experiment
@@ -146,7 +147,7 @@ spec:
       {{- end }}
       containers:
         - name: stellar
-          image: "{{ $stellar.image.repository }}:{{ $stellar.image.tag }}"
+          image: "{{ $stellar.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ $stellar.image.pullPolicy }}
           {{- with $stellar.extraEnv }}
           env:
@@ -260,7 +261,7 @@ spec:
           {{- end }}
         {{- if $stellar.importer.enabled }}
         - name: metrics-importer
-          image: "{{ $stellar.image.repository }}:{{ $stellar.image.tag }}"
+          image: "{{ $stellar.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ $stellar.image.pullPolicy }}
           args:
             - experiment

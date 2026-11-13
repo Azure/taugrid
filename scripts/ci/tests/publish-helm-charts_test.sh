@@ -4,8 +4,10 @@
 
 set -euo pipefail
 
-readonly TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/publish-helm-charts-test.XXXXXX")"
+TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_DIR
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/publish-helm-charts-test.XXXXXX")"
+readonly TEST_ROOT
 readonly ISOLATED_REPO="${TEST_ROOT}/repo"
 readonly PACKAGE_DIR="${ISOLATED_REPO}/packages"
 readonly COMMAND_LOG="${TEST_ROOT}/commands.log"
@@ -67,11 +69,11 @@ version: ${version}
 EOF
 }
 
-write_chart tau-core-controller 0.3.0
+write_chart tau-core-controller 0.0.0-dev
 write_chart gpu-monitoring 0.1.4
-write_chart taugrid-core 0.3.0
+write_chart taugrid-core 0.0.0-dev
 write_chart adx-mon 0.3.3
-write_chart taugrid 0.3.0
+write_chart taugrid 0.0.0-dev
 
 cat >"${TEST_ROOT}/bin/helm" <<'EOF'
 #!/usr/bin/env bash
@@ -129,8 +131,20 @@ if [[ "$1 $2 $3" == "acr repository show-tags" ]]; then
     exit 1
   fi
 
-  version=$(awk '$1 == "version:" {gsub(/^"|"$/, "", $2); print $2; exit}' \
-    "charts/${chart_name}/Chart.yaml")
+  case "$chart_name" in
+    tau-core-controller | taugrid-core | taugrid)
+      if [[ "${SOURCE_BRANCH:-}" == refs/tags/v* ]]; then
+        version="${SOURCE_BRANCH#refs/tags/v}"
+      else
+        version="0.0.0-dev"
+      fi
+      ;;
+    *)
+      source_root="${TAUGRID_SOURCE_ROOT:-$PWD}"
+      version=$(awk '$1 == "version:" {gsub(/^"|"$/, "", $2); print $2; exit}' \
+        "${source_root}/charts/${chart_name}/Chart.yaml")
+      ;;
+  esac
   if [[ "${FAKE_UNPUBLISHED_CHART:-}" == "$chart_name" ]]; then
     echo "0.0.1"
   else
@@ -155,15 +169,23 @@ PATH="${TEST_ROOT}/bin:${PATH}"
 export PATH
 
 run_publish() {
+  local source_branch="${1:-refs/heads/main}"
+  local source_root="${2:-$ISOLATED_REPO}"
   (
     cd "$ISOLATED_REPO"
+    export SOURCE_BRANCH="$source_branch"
+    export TAUGRID_SOURCE_ROOT="$source_root"
     scripts/ci/publish-helm-charts.sh publish "$PACKAGE_DIR"
   )
 }
 
 : >"$COMMAND_LOG"
 existing_output=$(run_publish)
-for chart in tau-core-controller gpu-monitoring taugrid-core adx-mon taugrid; do
+for chart in tau-core-controller taugrid-core taugrid; do
+  assert_output_contains "$existing_output" \
+    "Skipping release-neutral coordinated chart ${chart} outside a release tag."
+done
+for chart in gpu-monitoring adx-mon; do
   version=$(awk '$1 == "version:" {print $2; exit}' \
     "${ISOLATED_REPO}/charts/${chart}/Chart.yaml")
   assert_output_contains "$existing_output" \
@@ -174,24 +196,34 @@ assert_log_excludes "helm push"
 assert_log_excludes "helm pull"
 
 : >"$COMMAND_LOG"
-touch "${PACKAGE_DIR}/taugrid-0.3.0.tgz"
+tag_output=$(run_publish refs/tags/v1.2.3)
+for chart in tau-core-controller taugrid-core taugrid; do
+  assert_output_contains "$tag_output" \
+    "Chart ${chart}:1.2.3 already exists in the publish registry; skipping."
+done
+assert_log_excludes "az acr login"
+assert_log_excludes "helm push"
+assert_log_excludes "helm pull"
+
+: >"$COMMAND_LOG"
+touch "${PACKAGE_DIR}/taugrid-1.2.3.tgz"
 export FAKE_UNPUBLISHED_CHART=taugrid
-new_version_output=$(run_publish)
+new_version_output=$(run_publish refs/tags/v1.2.3)
 unset FAKE_UNPUBLISHED_CHART
 assert_output_contains "$new_version_output" \
-  "Published and verified taugrid:0.3.0 at sha256:0123456789abcdef"
+  "Published and verified taugrid:1.2.3 at sha256:0123456789abcdef"
 assert_log_count 1 "az acr login"
 assert_log_count 1 "helm push"
 assert_log_contains \
-  "helm push ${PACKAGE_DIR}/taugrid-0.3.0.tgz oci://testacr.azurecr.io/public/aks/ai-runtime/helm"
+  "helm push ${PACKAGE_DIR}/taugrid-1.2.3.tgz oci://testacr.azurecr.io/public/aks/ai-runtime/helm"
 assert_log_contains \
-  "az acr repository show --name testacr --image public/aks/ai-runtime/helm/taugrid:0.3.0"
+  "az acr repository show --name testacr --image public/aks/ai-runtime/helm/taugrid:1.2.3"
 assert_log_contains \
-  "helm pull oci://testacr.azurecr.io/public/aks/ai-runtime/helm/taugrid --version 0.3.0"
+  "helm pull oci://testacr.azurecr.io/public/aks/ai-runtime/helm/taugrid --version 1.2.3"
 
 : >"$COMMAND_LOG"
 export FAKE_ERROR_CHART=tau-core-controller
-if lookup_error_output=$(run_publish 2>&1); then
+if lookup_error_output=$(run_publish refs/tags/v1.2.3 2>&1); then
   fail "unexpected registry lookup success"
 fi
 unset FAKE_ERROR_CHART
@@ -200,15 +232,24 @@ assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
 
 : >"$COMMAND_LOG"
-rm -f "${PACKAGE_DIR}/taugrid-0.3.0.tgz"
+rm -f "${PACKAGE_DIR}/taugrid-1.2.3.tgz"
 export FAKE_UNPUBLISHED_CHART=taugrid
-if missing_archive_output=$(run_publish 2>&1); then
+if missing_archive_output=$(run_publish refs/tags/v1.2.3 2>&1); then
   fail "publishing without the candidate archive unexpectedly succeeded"
 fi
 unset FAKE_UNPUBLISHED_CHART
 assert_output_contains "$missing_archive_output" \
-  "Expected chart package not found: ${PACKAGE_DIR}/taugrid-0.3.0.tgz"
+  "Expected chart package not found: ${PACKAGE_DIR}/taugrid-1.2.3.tgz"
 assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
+
+: >"$COMMAND_LOG"
+release_source="${TEST_ROOT}/release-source"
+cp -R "$ISOLATED_REPO" "$release_source"
+release_source="$(cd "$release_source" && pwd)"
+separate_source_output=$(run_publish refs/heads/main "$release_source")
+assert_output_contains "$separate_source_output" \
+  "Skipping release-neutral coordinated chart taugrid outside a release tag."
+assert_log_contains "helm show chart ${release_source}/charts/taugrid"
 
 echo "publish-helm-charts tests passed"

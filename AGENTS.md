@@ -133,7 +133,7 @@ CI runs on every PR to main (`.github/workflows/taugrid-validation.yml`). It bui
 
 Key CI settings: `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`. Tests run with `-count=1` (no caching). The controller module uses `-race`.
 
-## TauGrid Release Version Bump
+## TauGrid Release Versioning
 
 TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
 `tau-core-controller` charts plus the `tau`, `taugrid-portal`, and
@@ -142,17 +142,18 @@ TauGrid uses one release version for the `taugrid`, `taugrid-core`, and
 independently versioned Python SDK wheel; `gpu-monitoring` and `adx-mon` keep
 their own release versions.
 
-1. Update `version`/`appVersion` in the three `Chart.yaml` files and the two
-   first-party dependency versions in `charts/taugrid/Chart.yaml`.
-2. Update their image tags, the controller Kustomize image, the CLI default
-   chart version, install examples, and version assertions.
-3. Run `scripts/ci/vendor-taugrid-dependencies.sh charts/taugrid`, Helm lint and
-   unit tests for the three charts, `cd cli && go test ./internal/cli`, and
-   `python3 scripts/check-license-headers.py`.
-4. Before tagging, add `cli/releases/vX.Y.Z.md`. After merge, push the annotated
-   tag; the TauGrid release starts automatically and publishes the CLI binaries
-   plus the independently versioned Python SDK wheel. Retry it by dispatching
-   the workflow from the same tag ref with the same tag input.
+The immutable annotated tag is the release version source. Coordinated charts
+keep release-neutral source metadata and default first-party images to their
+packaged `appVersion`; release packaging stamps chart metadata, dependency
+versions, and binary defaults from the tag without a version-bump commit.
+
+1. Confirm the intended source commit is reviewed on `main`.
+2. Optionally add curated notes at `cli/releases/vX.Y.Z.md`; otherwise the
+   workflow uses GitHub-generated notes.
+3. Create and push an annotated `vX.Y.Z` tag on that commit.
+4. Dispatch `release-tau.yaml` from the same tag ref with the identical tag
+   input. The workflow publishes coordinated images and charts, then the CLI
+   binaries and independently versioned Python SDK wheel.
 
 ## Architecture
 

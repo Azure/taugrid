@@ -52,7 +52,7 @@
 {{- $serviceAccountName := default $resourceName $serviceAccount.name -}}
 {{- $workloadIdentityClientID := trim (default "" (index (default dict $serviceAccount.annotations) "azure.workload.identity/client-id")) -}}
 {{- $workspaceConfigMapName := printf "%s-workspaces" $resourceName -}}
-{{- $image := include "taugrid-core.image" (dict "component" "portal" "image" $portal.image) -}}
+{{- $image := include "taugrid-core.image" (dict "component" "portal" "image" $portal.image "appVersion" .Chart.AppVersion) -}}
 {{- $extraInitContainers := default list $portal.extraInitContainers -}}
 {{- $extraVolumeMounts := default list $portal.extraVolumeMounts -}}
 {{- $extraVolumes := default list $portal.extraVolumes -}}

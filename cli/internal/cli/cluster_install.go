@@ -17,14 +17,23 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Azure/taugrid/cli/internal/installationcheck"
+	buildversion "github.com/Azure/taugrid/core/version"
 )
 
 const (
-	defaultTauGridRelease      = "taugrid"
-	defaultTauGridNamespace    = "tau-system"
-	defaultTauGridChartVersion = "0.4.8"
-	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
+	defaultTauGridRelease   = "taugrid"
+	defaultTauGridNamespace = "tau-system"
+	defaultTauGridChart     = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
 )
+
+var defaultTauGridChartVersion = chartVersionFromBuild(buildversion.Version)
+
+func chartVersionFromBuild(buildVersion string) string {
+	if buildVersion == "" || buildVersion == "dev" {
+		return ""
+	}
+	return strings.TrimPrefix(buildVersion, "v")
+}
 
 type clusterInstallSpec struct {
 	KubeContext  string
@@ -172,12 +181,14 @@ func validateClusterInstallSpec(spec clusterInstallSpec) error {
 		"--release":   spec.Release,
 		"--namespace": spec.Namespace,
 		"--chart":     spec.Chart,
-		"--version":   spec.Version,
 		"--timeout":   spec.Timeout,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s must not be empty", name)
 		}
+	}
+	if spec.Version != "" && strings.TrimSpace(spec.Version) == "" {
+		return fmt.Errorf("--version must not be blank")
 	}
 	return nil
 }
@@ -191,6 +202,10 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
 	if spec.Atomic {
 		rollback = "enabled (implies Helm watcher wait)"
 	}
+	chartVersion := spec.Version
+	if chartVersion == "" {
+		chartVersion = "latest published"
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), `TauGrid installation plan
   Release:    %s
   Namespace:  %s
@@ -203,7 +218,7 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Opt-in:     Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
 
-`, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
+`, spec.Release, spec.Namespace, spec.Chart, chartVersion, helmWait, rollback)
 }
 
 func runClusterInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.Writer, args []string) error {
@@ -266,8 +281,10 @@ func clusterInstallRenderArgs(spec clusterInstallSpec) []string {
 	args := []string{
 		"template", spec.Release, spec.Chart,
 		"--namespace", spec.Namespace,
-		"--version", spec.Version,
 		"--include-crds",
+	}
+	if spec.Version != "" {
+		args = append(args, "--version", spec.Version)
 	}
 	if spec.KubeContext != "" {
 		args = append(args, "--kube-context", spec.KubeContext)
@@ -328,9 +345,11 @@ func clusterInstallArgs(spec clusterInstallSpec) []string {
 	args := []string{
 		"upgrade", "--install", spec.Release, spec.Chart,
 		"--namespace", spec.Namespace,
-		"--version", spec.Version,
 		"--timeout", spec.Timeout,
 		"--reset-values",
+	}
+	if spec.Version != "" {
+		args = append(args, "--version", spec.Version)
 	}
 	if spec.KubeContext != "" {
 		args = append(args, "--kube-context", spec.KubeContext)

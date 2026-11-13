@@ -33,6 +33,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM mcr.microsoft.com/azurelinux/distroless/base:3.0@sha256:6b85a86416a29cdcfd404e9fbd9c5ef49cc0612882cecc702535dcac39c9446c
 
+ARG VERSION=dev
+ARG COMMIT=none
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
+
 COPY --from=builder /taugrid-metrics-collector /usr/local/bin/taugrid-metrics-collector
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/taugrid-metrics-collector"]

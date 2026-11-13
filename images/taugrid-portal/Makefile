@@ -6,7 +6,7 @@ IMAGE  := taugrid-portal
 TAG    ?= latest
 
 VERSION ?= $(TAG)
-COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo none)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 ACR_REGISTRY ?= aksairuntime.azurecr.io

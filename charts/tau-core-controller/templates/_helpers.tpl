@@ -17,8 +17,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $image := .Values.image -}}
 {{- if $image.digest -}}
 {{ $image.repository }}@{{ $image.digest }}
-{{- else if $image.tag -}}
-{{ $image.repository }}:{{ $image.tag }}
+{{- else if (default .Chart.AppVersion $image.tag) -}}
+{{ $image.repository }}:{{ default .Chart.AppVersion $image.tag }}
 {{- else -}}
 {{ fail "image.digest or image.tag must be set" }}
 {{- end -}}
