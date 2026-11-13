@@ -12,6 +12,7 @@ type Profile struct {
 	Resources             Resources
 	Runtime               Runtime
 	ActiveDeadlineSeconds int64
+	HotVolume             *HotVolume
 }
 
 type Topology struct {

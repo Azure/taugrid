@@ -38,7 +38,7 @@ runtime dependencies work. Follow with client rendering, using an explicit
 | `run.working_dir` | RayJob only: local project directory packaged for Ray, relative to the config; entrypoint must be inside it |
 | `run.working_dir_excludes` | Additional archive exclusions; do not package datasets, credentials, caches, or large checkpoints |
 | `runtime.working_dir` | Direct Job only: absolute **container** working directory, not source delivery; incompatible with `run.source` and `run.working_dir` |
-| `run.ttl_seconds_after_finished` | Direct Job only: 1–2147483647 seconds; explicit run value overrides workspace retention, otherwise the built-in fallback is 28800 seconds |
+| `run.ttl_seconds_after_finished` | Direct Job only: 1–2147483647 seconds; explicit run value overrides workspace retention, otherwise the built-in fallback is 28800 seconds, or 600 seconds when the Job has a hot-volume claim |
 
 Nested `run.name`, `run.engine`, `run.entrypoint`, `run.script`, and
 `run.image` also exist; avoid conflicting top-level/nested values.
@@ -144,7 +144,7 @@ Read [Workload profiles](workload-profiles.md) before resolving placement.
 | `storage.volumes`, `mounts` | Extra direct Job volumes/mounts; RayJobs reject them |
 | `storage.image_assets` | Direct Job only: `{name, image, source_path, mount_path}` entries copy digest-pinned image directories to read-only main-container mounts |
 | `storage.publish` | Direct `staged` publication exposes pod-local `TAU_OUTPUT_STAGING_DIR`, verifies closed files into durable output, and writes a completion marker |
-| `storage.hot_size` | Direct only: Kubernetes quantity (e.g. `500Gi`) that becomes the `sizeLimit` of the pod-local `/mnt` scratch volume; direct Jobs mount `/mnt` and set `TAU_HOT_DIR` whenever it is set, even without `/data` |
+| `storage.hot_size` | Direct only: Kubernetes quantity (e.g. `500Gi`) that sizes the pod-local `/mnt` scratch volume: the `emptyDir` `sizeLimit`, or the claim size when the workload profile declares `hotVolume` (must not exceed its `maxSize`); direct Jobs mount `/mnt` and set `TAU_HOT_DIR` whenever it is set, even without `/data` |
 
 On a direct Job, `storage.data_pvc` cannot be combined with
 `storage.volumes`; use a consistent volume/mount layout rather than both

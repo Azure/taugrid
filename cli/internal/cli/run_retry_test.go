@@ -228,6 +228,60 @@ func TestRetryLoop_RejectsNotReadyReplacementBeforeDeletingFailedWorkload(t *tes
 	}
 }
 
+func TestRetryLoop_DeletesFailedWorkloadBeforeWaitingForHotVolumeCapacity(t *testing.T) {
+	var buf bytes.Buffer
+	opts := baseRetryOpts()
+	opts.maxRetries = 1
+	var calls []string
+	terminalCalls := 0
+	hooks := retryHooks{
+		waitForTerminal: func() (status.Snapshot, terminalState, error) {
+			terminalCalls++
+			if terminalCalls == 1 {
+				return preemptedSnapshot(), terminalFailed, nil
+			}
+			return status.Snapshot{}, terminalSuccess, nil
+		},
+		prepareResubmit: func(int, string) error {
+			calls = append(calls, "prepare")
+			return nil
+		},
+		deleteWorkload: func() error {
+			calls = append(calls, "delete")
+			return nil
+		},
+		awaitCapacity: func() error {
+			calls = append(calls, "await")
+			return nil
+		},
+		resubmit: func(int, string) error {
+			calls = append(calls, "resubmit")
+			return nil
+		},
+		sleep: func(time.Duration) error { return nil },
+	}
+	if err := retryLoopWithHooks(&buf, opts, hooks); err != nil {
+		t.Fatalf("retryLoopWithHooks() error = %v", err)
+	}
+	if got := strings.Join(calls, " "); got != "prepare delete await resubmit" {
+		t.Fatalf("retry calls = %q", got)
+	}
+
+	calls = nil
+	terminalCalls = 0
+	hooks.awaitCapacity = func() error {
+		calls = append(calls, "await")
+		return errors.New(`workload profile "hot" still has no free hot-volume capacity after 10m0s`)
+	}
+	err := retryLoopWithHooks(&buf, opts, hooks)
+	if err == nil || !strings.Contains(err.Error(), "waiting for hot-volume capacity for retry 1/1") {
+		t.Fatalf("await error = %v", err)
+	}
+	if got := strings.Join(calls, " "); got != "prepare delete await" {
+		t.Fatalf("retry calls after capacity timeout = %q", got)
+	}
+}
+
 func TestRetryLoop_NonRetryableFailure(t *testing.T) {
 	var buf bytes.Buffer
 	opts := baseRetryOpts()

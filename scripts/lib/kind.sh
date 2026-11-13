@@ -143,7 +143,7 @@ tau_kind_load_image() {
         "${engine}" save "${image}"
       fi |
         "${engine}" exec -i "${node}" \
-          ctr --namespace=k8s.io images import --all-platforms --digests -
+          ctr --namespace=k8s.io images import --digests -
     ); then
       echo "failed to load ${image} into ${node}" >&2
       return 1

@@ -97,6 +97,8 @@ type Options struct {
 
 	RayTrainConfig    map[string]any
 	AllowNCCLOverride bool
+
+	hotClaimSize string
 }
 
 type Resources struct {
@@ -146,6 +148,12 @@ func Render(o Options) ([]byte, error) {
 	}
 	if plan.QueueName == "" {
 		plan.QueueName = topology.SharedGPUQueueName
+	}
+	if hot := o.Profile.HotVolume; hot != nil {
+		o.hotClaimSize, err = hot.ClaimSize(o.HotSize)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	rayJob, err := buildRayJob(o, plan, encodedPayload, payloadDigest)
@@ -542,6 +550,9 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
 		}
 	}
+	if !isHead && o.hotClaimSize != "" {
+		storage.ApplyEphemeralFSGroup(pod)
+	}
 	if o.SecurityMode == runconfig.SecurityModeRestricted {
 		group := int64(65532)
 		if err := podsecurity.ApplyRestricted(pod, &group); err != nil {
@@ -916,15 +927,22 @@ func volumes(o Options, isHead bool) []any {
 			vols = append(vols, metricsoffload.RuntimeVolume())
 		}
 	}
+	return append(vols,
+		data,
+		hotVolume(o, isHead),
+		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
+	)
+}
+
+func hotVolume(o Options, isHead bool) map[string]any {
+	if !isHead && o.hotClaimSize != "" {
+		return storage.EphemeralVolume("tau-hot", o.Profile.HotVolume.StorageClassName, o.hotClaimSize)
+	}
 	hot := map[string]any{}
 	if o.HotSize != "" {
 		hot["sizeLimit"] = o.HotSize
 	}
-	return append(vols,
-		data,
-		map[string]any{"name": "tau-hot", "emptyDir": hot},
-		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
-	)
+	return map[string]any{"name": "tau-hot", "emptyDir": hot}
 }
 
 func volumeMounts(o Options, isHead bool) []any {

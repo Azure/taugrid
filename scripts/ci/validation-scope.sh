@@ -55,6 +55,7 @@ case "$suite" in
       'examples/**'
       'images/tau-core-controller/**'
       scripts/ci/vendor-taugrid-dependencies.sh
+      scripts/lib/kind.sh
     )
     ;;
   *)

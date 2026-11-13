@@ -122,7 +122,18 @@ node with enough free local capacity. Kueue doesn't account for hot storage.
 Both sizes are Kubernetes quantities, and `defaultSize` can't exceed `maxSize`.
 The controller publishes sizes in canonical form, so `1024Gi` appears as `1Ti`.
 Choose `maxSize` so it fits: it must not exceed a node's usable NVMe divided
-by the number of hot-volume pods that node runs at once. A `multiKueue`
+by the number of hot-volume pods that node runs at once.
+
+Runs that use the profile get `/mnt` from this StorageClass on every direct Job
+pod and every Ray worker. Each pod gets its own claim of the run's
+`storage.hot_size`, or `defaultSize` when the run doesn't set one, and the
+claim is deleted with the pod. The Ray head keeps an `emptyDir`. TauGrid
+rejects a run whose `hot_size` exceeds `maxSize`. Pods with a hot claim set
+`fsGroup: 65532` so non-root workloads can write to it. Kubernetes also applies
+that group to other volumes whose CSI driver supports `fsGroup`, such as a
+`ReadWriteOnce` disk mounted at `/data`. A claim is released only when its
+pod is deleted, so direct Jobs with a hot claim keep finished pods for 600
+seconds unless the run sets `run.ttl_seconds_after_finished`. A `multiKueue`
 profile can't declare `hotVolume`, because the controller observes storage on
 the manager cluster rather than on the workers.
 
@@ -143,10 +154,18 @@ zero. An eligible node counts only when a matching `CSIStorageCapacity` object
 reports capacity greater than zero. Some drivers publish zero-capacity objects for
 nodes without local disks, and those nodes don't count. Capacity is free
 space, so the condition also turns `False` while every profile node's local
-disks are full. The condition message reports how many profile nodes have free
-capacity. The condition doesn't check the fit rule, and it doesn't replace the
-`CSINode` registration and mount canary checks described above. Profiles
-without `hotVolume` don't get the condition.
+disks are full. That case has the reason `HotVolumeCapacityUnavailable`; the
+other cases use `HotVolumeNotReady`. The condition message reports how many
+profile nodes have free capacity. The condition doesn't check the fit rule,
+and it doesn't replace the `CSINode` registration and mount canary checks
+described above. Profiles without `hotVolume` don't get the condition.
+
+A failed run's own hot claim can use the last free capacity. So automatic
+retries and `tau run resume` accept a profile that is unready only for
+`HotVolumeCapacityUnavailable`: they still check authorization and every other
+dependency, delete the failed workload, and then wait up to 10 minutes for the
+profile to become `Ready` before submitting the replacement. New submissions
+still require `Ready`.
 
 ## Connected and offline rendering
 
