@@ -13,7 +13,6 @@ import json
 import os
 import random
 import shutil
-import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -22,8 +21,13 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_EXCEPTION, Future, ThreadPoolExecutor, wait
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from time import monotonic, perf_counter, sleep, time
+from time import monotonic, perf_counter, sleep
 from typing import BinaryIO, NamedTuple, TypeVar
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 _T = TypeVar("_T")
 
@@ -31,6 +35,7 @@ _MetricsSink = Callable[[Mapping[str, float], int], object]
 
 _DEFAULT_ENV_PREFIX = "FINEWEB_DATASET"
 _STAGE_MARKER = ".tau-stage.json"
+_STAGE_LOCK = ".tau-stage.lock"
 _PARTIAL_SUFFIX = ".tau-partial"
 _CHUNK_BYTES = 8 * 1024 * 1024
 _REQUEST_TIMEOUT_SECONDS = 120.0
@@ -142,7 +147,6 @@ def stage(
     version: str | None = None,
     dest: str | os.PathLike[str] | None = None,
     per: str = "node",
-    local_rank: int | None = None,
     max_workers: int = 8,
     retries: int = 3,
     timeout: float = 3600.0,
@@ -165,7 +169,8 @@ def stage(
     the dataset registry. The staged directory is returned.
 
     Up to ``max_workers`` files download in parallel, each retried up to
-    ``retries`` times with backoff on transient network errors. Every file is
+    ``retries`` times with backoff on transient network errors, including a
+    response that ends before its ``Content-Length``. Every file is
     written under a temporary name, hashed while it streams, and renamed into
     place only when its SHA-256 matches, so a partial or corrupt download never
     appears under its final name. Files already present with the expected hash
@@ -174,17 +179,21 @@ def stage(
     A hash mismatch, a full or over-quota volume, or an exhausted retry budget
     raises :class:`StageError`.
 
-    With ``per="node"`` only local rank 0 downloads. The rank comes from
-    ``local_rank``, else ``LOCAL_RANK``, else the Ray Train context, else 0.
-    Other local ranks wait up to ``timeout`` seconds for rank 0's completion
-    marker in ``dest`` and raise :class:`StageError` if rank 0 reports a
-    failure. A marker written for a different file list is ignored.
+    With ``per="node"`` the processes staging into ``dest`` take turns holding
+    an exclusive lock on it. The first stages the files and writes a
+    completion marker recording each file's size, modification time, and
+    inode. Each later process accepts the marker only if every file still
+    matches it, and otherwise stages the files itself. So a node downloads
+    each file once, and files that went missing or changed, or that a failed
+    process never finished, are staged again. A process raises
+    :class:`StageError` if it can't take the lock within ``timeout`` seconds.
+    The lock is released when its holder exits, even on a crash.
     ``per="none"`` stages in every calling process without coordination.
 
-    The downloading process logs ``data/stage_seconds``, ``data/stage_bytes``
-    (bytes downloaded), and ``data/stage_skipped_bytes`` (bytes already
-    present) to ``log(metrics, 0)`` when given, otherwise to the active
-    ``tau.stellar`` run.
+    Each call logs ``data/stage_seconds`` (including any wait for the lock),
+    ``data/stage_bytes`` (bytes it downloaded), and ``data/stage_skipped_bytes``
+    (bytes already present) to ``log(metrics, 0)`` when given, otherwise to
+    the active ``tau.stellar`` run.
     """
 
     if per not in ("node", "none"):
@@ -199,24 +208,15 @@ def stage(
     root = Path(dest).expanduser() if dest is not None else _stage_dest(name, version)
     files = _stage_plan(root, uri_list, sha_list, size_list)
     label = f"{name}@{version}" if name and version else str(root)
-    manifest = _manifest_digest(files)
-    marker = root / _STAGE_MARKER
-    coordinated = per == "node"
-    if coordinated and _resolve_local_rank(local_rank) != 0:
-        _wait_for_stage(marker, manifest, label, timeout)
-        return root
+    if per == "node" and fcntl is None:
+        raise StageError("per='node' needs POSIX file locks; use per='none' on this platform")
 
     started = perf_counter()
-    try:
-        _prepare_stage_dir(root, marker, coordinated)
+    root.mkdir(parents=True, exist_ok=True)
+    if per == "node":
+        downloaded, skipped = _stage_per_node(root, files, label, max_workers, retries, timeout)
+    else:
         downloaded, skipped = _stage_all(root, files, label, max_workers, retries)
-    except BaseException as exc:
-        if coordinated:
-            with contextlib.suppress(OSError):
-                _write_marker(marker, manifest, "failed", str(exc) or type(exc).__name__)
-        raise
-    if coordinated:
-        _write_marker(marker, manifest, "complete")
     sink = log if log is not None else _active_run_sink()
     if sink is not None:
         sink(
@@ -440,69 +440,68 @@ def _manifest_digest(files: list[_StageFile]) -> str:
     entries = sorted([file.relpath, file.sha256] for file in files)
     return hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode("utf-8")).hexdigest()
 
-def _resolve_local_rank(local_rank: int | None) -> int:
-    if local_rank is not None:
-        return int(local_rank)
-    value = os.environ.get("LOCAL_RANK", "").strip()
-    if value:
-        try:
-            return int(value)
-        except ValueError:
-            raise ValueError(f"LOCAL_RANK must be an integer, got {value!r}") from None
-    ray_train = sys.modules.get("ray.train")
-    if ray_train is not None:
-        try:
-            return int(ray_train.get_context().get_local_rank())
-        except Exception:
-            pass
-    return 0
+def _stage_per_node(
+    root: Path, files: list[_StageFile], label: str, max_workers: int, retries: int, timeout: float
+) -> tuple[int, int]:
+    marker = root / _STAGE_MARKER
+    manifest = _manifest_digest(files)
+    with _stage_lock(root / _STAGE_LOCK, label, timeout):
+        present = _completed_size(marker, manifest, files)
+        if present is not None:
+            return 0, present
+        marker.unlink(missing_ok=True)
+        for partial in root.rglob(f"*{_PARTIAL_SUFFIX}"):
+            partial.unlink(missing_ok=True)
+        staged = _stage_all(root, files, label, max_workers, retries)
+        _write_marker(marker, manifest, files)
+        return staged
 
-def _wait_for_stage(marker: Path, manifest: str, label: str, timeout: float) -> None:
-    waiting_since = time()
+@contextlib.contextmanager
+def _stage_lock(path: Path, label: str, timeout: float) -> Iterator[None]:
     deadline = monotonic() + timeout
-    while True:
-        record = _read_marker(marker)
-        if record is not None and record.get("manifest") == manifest:
-            status = record.get("status")
-            if status == "complete":
-                return
-            if status == "failed" and _marker_time(record) >= waiting_since:
-                raise StageError(f"local rank 0 failed to stage {label}: {record.get('error', 'unknown error')}")
-        if monotonic() >= deadline:
-            raise StageError(
-                f"timed out after {timeout:g}s waiting for local rank 0 to stage {label} into {marker.parent}"
-            )
-        sleep(_POLL_SECONDS)
+    with path.open("a") as handle:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if monotonic() >= deadline:
+                    raise StageError(
+                        f"timed out after {timeout:g}s waiting for another process to stage {label} into {path.parent}"
+                    ) from None
+                sleep(_POLL_SECONDS)
+        yield
 
-def _read_marker(marker: Path) -> dict[str, object] | None:
+def _file_stamp(path: Path) -> list[int]:
+    info = path.stat()
+    return [info.st_size, info.st_mtime_ns, info.st_ino]
+
+def _completed_size(marker: Path, manifest: str, files: list[_StageFile]) -> int | None:
     try:
         record = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return record if isinstance(record, dict) else None
+    if not isinstance(record, dict) or record.get("manifest") != manifest or not isinstance(record.get("files"), dict):
+        return None
+    total = 0
+    for file in files:
+        try:
+            stamp = _file_stamp(file.target)
+        except OSError:
+            return None
+        if record["files"].get(file.relpath) != stamp:
+            return None
+        total += stamp[0]
+    return total
 
-def _marker_time(record: Mapping[str, object]) -> float:
-    value = record.get("written_at")
-    return float(value) if isinstance(value, (int, float)) else 0.0
-
-def _write_marker(marker: Path, manifest: str, status: str, error: str | None = None) -> None:
-    record: dict[str, object] = {"manifest": manifest, "status": status, "written_at": time(), "pid": os.getpid()}
-    if error is not None:
-        record["error"] = error[:2000]
+def _write_marker(marker: Path, manifest: str, files: list[_StageFile]) -> None:
+    record = {"manifest": manifest, "files": {file.relpath: _file_stamp(file.target) for file in files}}
     pending = marker.with_name(f"{marker.name}.{uuid.uuid4().hex}.tmp")
     try:
         pending.write_text(json.dumps(record), encoding="utf-8")
         os.replace(pending, marker)
     finally:
         pending.unlink(missing_ok=True)
-
-def _prepare_stage_dir(root: Path, marker: Path, coordinated: bool) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    if not coordinated:
-        return
-    marker.unlink(missing_ok=True)
-    for partial in root.rglob(f"*{_PARTIAL_SUFFIX}"):
-        partial.unlink(missing_ok=True)
 
 def _stage_all(root: Path, files: list[_StageFile], label: str, max_workers: int, retries: int) -> tuple[int, int]:
     stop = threading.Event()
@@ -598,6 +597,8 @@ def _download(file: _StageFile, stop: threading.Event) -> int:
                 digest.update(chunk)
                 out.write(chunk)
                 written += len(chunk)
+            if length is not None and written != length:
+                raise ConnectionError(f"response ended after {written} of {length} bytes")
         actual = digest.hexdigest()
         if actual != file.sha256:
             raise StageError(

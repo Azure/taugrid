@@ -418,7 +418,8 @@ list, and `sizes=[...]` when byte counts are known. Sources can be `file://`,
 `https://`, or `http://` URIs or local paths.
 
 Up to `max_workers` files (default 8) download in parallel, and transient
-network errors are retried `retries` times (default 3) with backoff. Each file
+network errors are retried `retries` times (default 3) with backoff. A response
+that ends before its `Content-Length` counts as one of those errors. Each file
 is written under a temporary name, hashed while it streams, and renamed into
 place only when its SHA-256 matches, so an interrupted or corrupt download never
 appears under its final name. Files already present with the right hash are
@@ -428,14 +429,19 @@ over-quota volume raises `tau.datasets.StageError` naming `storage.hot_size`,
 the `tau.yaml` field that sizes the hot volume. A hash mismatch also raises
 `StageError` and names the file.
 
-With the default `per="node"`, only local rank 0 (from `LOCAL_RANK`, or the Ray
-Train context) downloads, so each node fetches each file once. The other local
-ranks wait up to `timeout` seconds (default 3600) for rank 0's completion marker
-and raise `StageError` if rank 0 fails. A marker left by a different file list
-is ignored. `per="none"` stages in every calling process without coordination.
-The downloading process logs `data/stage_seconds`, `data/stage_bytes` (bytes
-downloaded), and `data/stage_skipped_bytes` (bytes already present) to the
-active Stellar run, or to `log=callable`.
+With the default `per="node"`, processes staging into the same directory take
+turns holding a file lock on it, so each node fetches each file once. The first
+process stages the files and writes a completion marker that records each
+file's size, modification time, and inode. Later processes accept the marker
+only when every file still matches it, without rehashing. Otherwise they stage
+the files themselves, so files that were deleted or changed, or that a failed
+process never finished, are staged again. A process waits up to `timeout`
+seconds (default 3600) for the lock and then raises `StageError`. The lock is
+released when its holder exits, even after a crash. `per="none"` stages in
+every calling process without coordination. Each call logs `data/stage_seconds`
+(including any wait for the lock), `data/stage_bytes` (bytes it downloaded),
+and `data/stage_skipped_bytes` (bytes already present) to the active Stellar
+run, or to `log=callable`.
 
 ### PyTorch Lightning migration from W&B
 

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import functools
 import hashlib
 import http.server
@@ -43,7 +44,7 @@ class _Waiter(threading.Thread):
     def run(self) -> None:
         try:
             self.result = datasets.stage(**self.kwargs)
-        except BaseException as exc:
+        except Exception as exc:
             self.error = exc
 
 def _sha256(data: bytes) -> str:
@@ -337,6 +338,38 @@ class _QuietHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         pass
 
+@pytest.mark.parametrize(("retries", "requests"), [(0, 1), (1, 2)])
+def test_stage_retries_truncated_http_response(tmp_path, retries, requests):
+    payload = b"0123456789"
+    served: list[str] = []
+
+    class _Truncating(_QuietHandler):
+        def do_GET(self) -> None:
+            served.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload[:3] if len(served) == 1 else payload)
+            self.close_connection = True
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Truncating)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    dest = tmp_path / "dest"
+    uri = f"http://127.0.0.1:{server.server_address[1]}/shard.bin"
+    try:
+        if retries:
+            datasets.stage(uris=[uri], sha256s=[_sha256(payload)], dest=dest, per="none", retries=retries)
+        else:
+            with pytest.raises(datasets.StageError, match="after 1 attempt.*response ended after 3 of 10 bytes"):
+                datasets.stage(uris=[uri], sha256s=[_sha256(payload)], dest=dest, per="none", retries=retries)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert len(served) == requests
+    assert ((dest / "shard.bin").read_bytes() == payload) if retries else not (dest / "shard.bin").exists()
+
 def test_stage_downloads_over_http(tmp_path):
     root = tmp_path / "served"
     (root / "corpus").mkdir(parents=True)
@@ -386,121 +419,150 @@ def test_stage_closes_http_errors_it_retries(tmp_path, monkeypatch):
         datasets._fetch(file, "corpus@v1", 1, threading.Event())
     assert all(error.fp.closed for error in errors)
 
-def test_stage_per_node_waiter_returns_after_rank_zero(tmp_path):
+def _hold_lock(dest: Path):
+    dest.mkdir(parents=True, exist_ok=True)
+    handle = (dest / ".tau-stage.lock").open("a")
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    return handle
+
+def test_stage_per_node_waits_for_the_lock_holder(tmp_path):
     uri, sha = _source(tmp_path / "src", "shard.bin", b"node" * 100)
     dest = tmp_path / "dest"
-    waiter_sink = _RecordingSink()
-    leader_sink = _RecordingSink()
-    waiter = _Waiter(uris=[uri], sha256s=[sha], dest=dest, local_rank=1, timeout=10, log=waiter_sink)
+    holder = _hold_lock(dest)
+    sink = _RecordingSink()
+    waiter = _Waiter(uris=[uri], sha256s=[sha], dest=dest, timeout=10, log=sink)
     waiter.start()
     time.sleep(0.05)
     assert waiter.is_alive()
+    assert not (dest / "shard.bin").exists()
 
-    datasets.stage(uris=[uri], sha256s=[sha], dest=dest, local_rank=0, log=leader_sink)
+    holder.close()
     waiter.join(10)
 
     assert waiter.error is None
     assert waiter.result == dest
     assert (dest / "shard.bin").read_bytes() == b"node" * 100
-    assert waiter_sink.calls == []
-    assert len(leader_sink.calls) == 1
-    assert json.loads((dest / ".tau-stage.json").read_text())["status"] == "complete"
+    assert sink.calls[0][0]["data/stage_bytes"] == 400
 
-def test_stage_per_node_waiter_reports_rank_zero_failure(tmp_path):
+def test_stage_per_node_times_out_while_the_lock_is_held(tmp_path):
+    uri, sha = _source(tmp_path / "src", "shard.bin", b"current")
+    dest = tmp_path / "dest"
+    holder = _hold_lock(dest)
+    try:
+        with pytest.raises(datasets.StageError, match="timed out after 0.2s waiting for another process to stage"):
+            datasets.stage(uris=[uri], sha256s=[sha], dest=dest, timeout=0.2)
+    finally:
+        holder.close()
+
+    assert not (dest / "shard.bin").exists()
+
+def test_stage_per_node_trusts_unchanged_completed_files(tmp_path, monkeypatch):
+    uri, sha = _source(tmp_path / "src", "shard.bin", b"cached")
+    dest = tmp_path / "dest"
+    datasets.stage(uris=[uri], sha256s=[sha], dest=dest)
+    _forbid_source_reads(monkeypatch)
+    monkeypatch.setattr(datasets, "_staged_size", lambda file, stop: pytest.fail("completed files must not be rehashed"))
+    sink = _RecordingSink()
+
+    assert datasets.stage(uris=[uri], sha256s=[sha], dest=dest, log=sink) == dest
+
+    assert sink.calls[0][0]["data/stage_bytes"] == 0
+    assert sink.calls[0][0]["data/stage_skipped_bytes"] == 6
+
+def test_stage_per_node_restages_files_changed_after_completion(tmp_path):
+    first_uri, first_sha = _source(tmp_path / "src", "a.bin", b"first")
+    second_uri, second_sha = _source(tmp_path / "src", "b.bin", b"second")
+    dest = tmp_path / "dest"
+    datasets.stage(uris=[first_uri, second_uri], sha256s=[first_sha, second_sha], dest=dest)
+    (dest / "a.bin").unlink()
+    (dest / "b.bin").write_bytes(b"SECOND")
+    sink = _RecordingSink()
+
+    datasets.stage(uris=[first_uri, second_uri], sha256s=[first_sha, second_sha], dest=dest, log=sink)
+
+    assert (dest / "a.bin").read_bytes() == b"first"
+    assert (dest / "b.bin").read_bytes() == b"second"
+    assert sink.calls[0][0]["data/stage_bytes"] == 11
+
+def test_stage_per_node_ignores_marker_for_other_file_list(tmp_path):
+    uri, sha = _source(tmp_path / "src", "shard.bin", b"current")
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "shard.bin").write_bytes(b"stale!!")
+    stamp = datasets._file_stamp(dest / "shard.bin")
+    (dest / ".tau-stage.json").write_text(json.dumps({"manifest": "0" * 64, "files": {"shard.bin": stamp}}))
+
+    datasets.stage(uris=[uri], sha256s=[sha], dest=dest)
+
+    assert (dest / "shard.bin").read_bytes() == b"current"
+
+def test_stage_per_node_reports_its_own_error_after_another_process_failed(tmp_path):
     uri, _ = _source(tmp_path / "src", "shard.bin", b"corrupt")
     dest = tmp_path / "dest"
     expected = _sha256(b"expected")
-    waiter = _Waiter(uris=[uri], sha256s=[expected], dest=dest, local_rank=3, timeout=10)
-    waiter.start()
-    time.sleep(0.05)
+    for _ in range(2):
+        with pytest.raises(datasets.StageError, match="sha256 mismatch for shard.bin"):
+            datasets.stage(uris=[uri], sha256s=[expected], dest=dest, timeout=0.5)
+    assert not (dest / ".tau-stage.json").exists()
 
-    with pytest.raises(datasets.StageError, match="sha256 mismatch"):
-        datasets.stage(uris=[uri], sha256s=[expected], dest=dest, local_rank=0)
-    waiter.join(10)
+    (tmp_path / "src" / "shard.bin").write_bytes(b"expected")
+    datasets.stage(uris=[uri], sha256s=[expected], dest=dest, timeout=0.5)
 
-    assert isinstance(waiter.error, datasets.StageError)
-    assert "local rank 0 failed to stage" in str(waiter.error)
-    assert "sha256 mismatch for shard.bin" in str(waiter.error)
+    assert (dest / "shard.bin").read_bytes() == b"expected"
 
-def test_stage_per_node_waiter_ignores_marker_for_other_manifest(tmp_path):
-    uri, sha = _source(tmp_path / "src", "shard.bin", b"current")
+def test_stage_per_node_takes_over_from_a_killed_lock_holder(tmp_path):
+    uri, sha = _source(tmp_path / "src", "shard.bin", b"survivor")
     dest = tmp_path / "dest"
     dest.mkdir()
-    (dest / ".tau-stage.json").write_text(json.dumps({"manifest": "0" * 64, "status": "complete", "written_at": time.time()}))
-    waiter = _Waiter(uris=[uri], sha256s=[sha], dest=dest, local_rank=1, timeout=10)
-    waiter.start()
-    time.sleep(0.1)
-    assert waiter.is_alive()
+    code = f"""
+import fcntl, time
+handle = open({str(dest / ".tau-stage.lock")!r}, "a")
+fcntl.flock(handle, fcntl.LOCK_EX)
+print("locked", flush=True)
+time.sleep(60)
+"""
+    holder = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "locked"
+        (dest / ".shard.bin.dead.tau-partial").write_bytes(b"half")
+        holder.kill()
+        holder.wait(10)
 
-    datasets.stage(uris=[uri], sha256s=[sha], dest=dest, local_rank=0)
-    waiter.join(10)
+        datasets.stage(uris=[uri], sha256s=[sha], dest=dest, timeout=10)
+    finally:
+        holder.kill()
+        holder.wait(10)
+        holder.stdout.close()
 
-    assert waiter.error is None
-    assert (dest / "shard.bin").read_bytes() == b"current"
-
-def test_stage_per_node_waiter_times_out_on_stale_markers(tmp_path):
-    uri, sha = _source(tmp_path / "src", "shard.bin", b"current")
-    dest = tmp_path / "dest"
-    dest.mkdir()
-    files = datasets._stage_plan(dest, [uri], [sha], [None])
-    manifest = datasets._manifest_digest(files)
-    (dest / ".tau-stage.json").write_text(json.dumps({"manifest": manifest, "status": "failed", "error": "old", "written_at": time.time() - 60}))
-
-    with pytest.raises(datasets.StageError, match="timed out after 0.2s waiting for local rank 0"):
-        datasets.stage(uris=[uri], sha256s=[sha], dest=dest, local_rank=1, timeout=0.2)
-
-    (dest / ".tau-stage.json").write_text(json.dumps({"manifest": "f" * 64, "status": "complete", "written_at": time.time()}))
-    with pytest.raises(datasets.StageError, match="timed out"):
-        datasets.stage(uris=[uri], sha256s=[sha], dest=dest, local_rank=1, timeout=0.2)
-
-def test_stage_per_node_rank_zero_clears_stale_partials(tmp_path):
-    uri, sha = _source(tmp_path / "src", "shard.bin", b"data")
-    dest = tmp_path / "dest"
-    dest.mkdir()
-    (dest / ".shard.bin.dead.tau-partial").write_bytes(b"half")
-
-    datasets.stage(uris=[uri], sha256s=[sha], dest=dest, local_rank=0)
-
+    assert (dest / "shard.bin").read_bytes() == b"survivor"
     assert _leftovers(dest) == []
 
-def test_stage_local_rank_comes_from_env_then_ray(monkeypatch):
-    monkeypatch.setenv("LOCAL_RANK", "2")
-    assert datasets._resolve_local_rank(None) == 2
-    assert datasets._resolve_local_rank(0) == 0
-
-    monkeypatch.delenv("LOCAL_RANK")
-    context = types.SimpleNamespace(get_local_rank=lambda: 5)
-    monkeypatch.setitem(sys.modules, "ray.train", types.SimpleNamespace(get_context=lambda: context))
-    assert datasets._resolve_local_rank(None) == 5
-
-    monkeypatch.delitem(sys.modules, "ray.train")
-    assert datasets._resolve_local_rank(None) == 0
-
-def test_stage_per_node_coordinates_processes_by_local_rank_env(tmp_path):
-    uri, sha = _source(tmp_path / "src", "shard.bin", b"multi-process" * 1000)
+def test_stage_per_node_downloads_once_across_processes(tmp_path):
+    data = b"multi-process" * 1000
+    uri, sha = _source(tmp_path / "src", "shard.bin", data)
     dest = tmp_path / "dest"
     code = f"""
 import json
 from tau import datasets
 calls = []
 datasets._POLL_SECONDS = 0.01
-path = datasets.stage(uris=[{uri!r}], sha256s=[{sha!r}], dest={str(dest)!r}, timeout=30, log=lambda m, s: calls.append(m))
-print(json.dumps({{"path": str(path), "logged": len(calls)}}))
+path = datasets.stage(uris=[{uri!r}], sha256s=[{sha!r}], dest={str(dest)!r}, timeout=30, log=lambda m, s: calls.append(dict(m)))
+print(json.dumps({{"path": str(path), "metrics": calls}}))
 """
     env = {**os.environ, "PYTHONPATH": str(SDK_ROOT)}
-    waiters = [
-        subprocess.Popen([sys.executable, "-c", code], env={**env, "LOCAL_RANK": str(rank)}, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        for rank in (1, 2)
+    processes = [
+        subprocess.Popen([sys.executable, "-c", code], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(3)
     ]
-    leader = subprocess.run([sys.executable, "-c", code], env={**env, "LOCAL_RANK": "0"}, capture_output=True, text=True, check=False)
-    outputs = [process.communicate(timeout=60) for process in waiters]
+    outputs = [process.communicate(timeout=60) for process in processes]
 
-    assert leader.returncode == 0, leader.stderr
-    assert json.loads(leader.stdout) == {"path": str(dest), "logged": 1}
-    for process, (stdout, stderr) in zip(waiters, outputs):
+    results = []
+    for process, (stdout, stderr) in zip(processes, outputs):
         assert process.returncode == 0, stderr
-        assert json.loads(stdout) == {"path": str(dest), "logged": 0}
-    assert (dest / "shard.bin").read_bytes() == b"multi-process" * 1000
+        results.append(json.loads(stdout))
+    assert all(result["path"] == str(dest) for result in results)
+    assert sorted(result["metrics"][0]["data/stage_bytes"] for result in results) == [0, 0, len(data)]
+    assert (dest / "shard.bin").read_bytes() == data
 
 def test_stage_writes_to_active_stellar_run(tmp_path, no_active_run):
     uri, sha = _source(tmp_path / "src", "shard.bin", b"metrics")
