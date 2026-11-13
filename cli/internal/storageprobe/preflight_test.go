@@ -189,3 +189,21 @@ func TestScriptRequireLocalFailsWhenHotDirMissing(t *testing.T) {
 		t.Fatalf("require-local should fail on a missing hot dir: err=%v\n%s", err, out)
 	}
 }
+
+func TestScriptRequireLocalFailsWhenHotDirNotWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to a read-only directory")
+	}
+	hot := filepath.Join(t.TempDir(), "hot")
+	if err := os.Mkdir(hot, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runPreflight(t, []string{
+		"TAU_HOT_DIR=" + hot,
+		"TAU_DATA_DIR=" + filepath.Join(t.TempDir(), "data"),
+		"TAU_HOT_REQUIRE_LOCAL=1",
+	})
+	if err == nil || !strings.Contains(out, "is not writable; TAU_HOT_REQUIRE_LOCAL=1 forbids falling back") {
+		t.Fatalf("require-local should fail on a read-only hot dir: err=%v\n%s", err, out)
+	}
+}

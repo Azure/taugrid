@@ -39,7 +39,7 @@ hot_backing=""
 if [ ! -d "$TAU_HOT_DIR" ]; then
   hot_ok=0; hot_reason="missing"
 elif ! mkdir -p "$TAU_HOT_DIR/datasets" "$TAU_HOT_DIR/checkpoints" 2>/dev/null; then
-  hot_ok=0; hot_reason="mkdir failed"
+  hot_ok=0; hot_reason="not writable"
 else
   hot_real="$(cd "$TAU_HOT_DIR" 2>/dev/null && pwd -P)" || hot_real="$TAU_HOT_DIR"
   tau_mount_of "$hot_real"
