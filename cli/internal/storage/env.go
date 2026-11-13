@@ -13,3 +13,5 @@ func RuntimeEnv() map[string]string {
 		"TAU_DURABLE_CHECKPOINTS_DIR": DurableCheckpointsDir,
 	}
 }
+
+const HotRequireLocalEnv = "TAU_HOT_REQUIRE_LOCAL"

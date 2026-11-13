@@ -212,9 +212,14 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	}
 	if storagePlan.HasDurableData {
 		env = mergeEnv(storage.RuntimeEnv(), env)
-		cmd = wrapCommandWithStoragePreflight(cmd)
 	} else if o.HotSize != "" || hot.StorageClassName != "" {
 		env = mergeEnv(map[string]string{"TAU_HOT_DIR": storage.HotRoot}, env)
+	}
+	if storagePlan.hasHotClaim() {
+		env = mergeEnv(env, map[string]string{storage.HotRequireLocalEnv: "1"})
+	}
+	if storagePlan.HasDurableData || storagePlan.hasHotClaim() {
+		cmd = wrapCommandWithStoragePreflight(cmd)
 	}
 
 	if o.profileOptions().Mode != "" {
@@ -1287,6 +1292,15 @@ func (p *storagePlan) validateReferences() error {
 		}
 	}
 	return nil
+}
+
+func (p *storagePlan) hasHotClaim() bool {
+	for _, v := range p.Volumes {
+		if v.PVC == "" && v.StorageClassName != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *storagePlan) hasVolumeName(name string) bool {

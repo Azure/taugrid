@@ -180,3 +180,46 @@ func TestRender_HotVolumeJobUsesShortTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestRender_HotVolumeClaimRequiresLocalPreflight(t *testing.T) {
+	custom := Options{
+		Volumes:      []Volume{{Name: "scratch", PVC: "scratch-pvc"}},
+		VolumeMounts: []VolumeMount{{Name: "scratch", MountPath: "/mnt"}},
+	}
+	tests := []struct {
+		name          string
+		profile       profile.Profile
+		base          Options
+		pvc           string
+		wantRequire   bool
+		wantPreflight bool
+	}{
+		{name: "hot claim without durable data", profile: hotVolumeProfile(), wantRequire: true, wantPreflight: true},
+		{name: "hot claim with durable data", profile: hotVolumeProfile(), pvc: "blob-training", wantRequire: true, wantPreflight: true},
+		{name: "custom /mnt mount", profile: hotVolumeProfile(), base: custom},
+		{name: "emptyDir with durable data", profile: trainProfile(), pvc: "blob-training", wantPreflight: true},
+		{name: "emptyDir without durable data", profile: trainProfile()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := tt.base
+			o.Name = "hot"
+			o.Namespace = "tau"
+			o.Command = []string{"python", "train.py"}
+			o.PVCMount = tt.pvc
+			out, err := Render(tt.profile, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+			value, ok := containerEnv(pod, "TAU_HOT_REQUIRE_LOCAL")
+			if ok != tt.wantRequire || (ok && value != "1") {
+				t.Fatalf("TAU_HOT_REQUIRE_LOCAL = %q (set=%v), want set=%v", value, ok, tt.wantRequire)
+			}
+			command := fmt.Sprint(pod["containers"].([]any)[0].(map[string]any)["command"])
+			if got := strings.Contains(command, "tau-entrypoint"); got != tt.wantPreflight {
+				t.Fatalf("storage preflight wrapped = %v, want %v: %s", got, tt.wantPreflight, command)
+			}
+		})
+	}
+}
