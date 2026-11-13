@@ -3,7 +3,7 @@ module github.com/Azure/taugrid/metrics/experiment-metrics-collector
 go 1.27.2
 
 require (
-	github.com/Azure/azure-kusto-go/azkustodata v1.2.2
+	github.com/Azure/azure-kusto-go/azkustodata v1.2.3
 	github.com/Azure/azure-kusto-go/azkustoingest v1.2.2
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
