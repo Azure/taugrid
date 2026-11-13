@@ -28,11 +28,13 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 		name    string
 		mutate  func([]client.Object) []client.Object
 		status  metav1.ConditionStatus
+		reason  string
 		message string
 	}{
 		{
 			name:    "covered pool node",
 			status:  metav1.ConditionTrue,
+			reason:  "HotVolumeReady",
 			message: "StorageClass tau-hot reports free capacity on 1 of 2 profile nodes",
 		},
 		{
@@ -41,6 +43,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return omitHotVolumeObject(objects, "storageclass/tau-hot")
 			},
 			status:  metav1.ConditionFalse,
+			reason:  "HotVolumeNotReady",
 			message: "StorageClass tau-hot does not exist",
 		},
 		{
@@ -49,6 +52,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "storageclass/tau-hot"), testHotStorageClass(&immediate))
 			},
 			status:  metav1.ConditionFalse,
+			reason:  "HotVolumeNotReady",
 			message: "must use volumeBindingMode WaitForFirstConsumer",
 		},
 		{
@@ -57,6 +61,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "storageclass/tau-hot"), testHotStorageClass(nil))
 			},
 			status:  metav1.ConditionFalse,
+			reason:  "HotVolumeNotReady",
 			message: "must use volumeBindingMode WaitForFirstConsumer",
 		},
 		{
@@ -67,6 +72,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
 			},
 			status:  metav1.ConditionFalse,
+			reason:  profile.ReasonHotVolumeCapacityUnavailable,
 			message: "no CSIStorageCapacity for StorageClass tau-hot reports free capacity on any of 2 profile nodes",
 		},
 		{
@@ -77,6 +83,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
 			},
 			status:  metav1.ConditionFalse,
+			reason:  profile.ReasonHotVolumeCapacityUnavailable,
 			message: "reports free capacity on any of 2 profile nodes",
 		},
 		{
@@ -87,6 +94,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(objects, capacity)
 			},
 			status:  metav1.ConditionTrue,
+			reason:  "HotVolumeReady",
 			message: "reports free capacity on 1 of 2 profile nodes",
 		},
 		{
@@ -97,6 +105,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
 			},
 			status:  metav1.ConditionFalse,
+			reason:  profile.ReasonHotVolumeCapacityUnavailable,
 			message: "reports free capacity on any of 2 profile nodes",
 		},
 		{
@@ -107,6 +116,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), capacity)
 			},
 			status:  metav1.ConditionFalse,
+			reason:  profile.ReasonHotVolumeCapacityUnavailable,
 			message: "reports free capacity on any of 2 profile nodes",
 		},
 		{
@@ -115,6 +125,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return append(omitHotVolumeObject(objects, "csistoragecapacity/hot-gpu-1"), testHotStorageCapacity("cpu-1", "cpu-1"))
 			},
 			status:  metav1.ConditionFalse,
+			reason:  profile.ReasonHotVolumeCapacityUnavailable,
 			message: "reports free capacity on any of 2 profile nodes",
 		},
 		{
@@ -123,6 +134,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return omitHotVolumeObject(omitHotVolumeObject(objects, "node/gpu-1"), "node/gpu-2")
 			},
 			status:  metav1.ConditionFalse,
+			reason:  "HotVolumeNotReady",
 			message: "no nodes satisfy the resource groups of the profile's ClusterQueues",
 		},
 		{
@@ -131,6 +143,7 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 				return omitHotVolumeObject(objects, "resourceflavor/h200")
 			},
 			status:  metav1.ConditionFalse,
+			reason:  "HotVolumeNotReady",
 			message: "hot volume nodes cannot be resolved until ResourceFlavors are ready",
 		},
 	}
@@ -149,8 +162,8 @@ func TestWorkloadProfileHotVolumeReadiness(t *testing.T) {
 			}
 			conditions := state.status.Profiles[0].Conditions
 			hot := findCondition(conditions, profile.ConditionHotVolumeReady)
-			if hot == nil || hot.Status != test.status || !strings.Contains(hot.Message, test.message) {
-				t.Fatalf("HotVolumeReady = %#v, want %s containing %q", hot, test.status, test.message)
+			if hot == nil || hot.Status != test.status || hot.Reason != test.reason || !strings.Contains(hot.Message, test.message) {
+				t.Fatalf("HotVolumeReady = %#v, want %s/%s containing %q", hot, test.status, test.reason, test.message)
 			}
 			assertCondition(t, conditions, profile.ConditionReady, test.status)
 		})

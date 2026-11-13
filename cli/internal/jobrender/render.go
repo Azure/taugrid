@@ -34,6 +34,8 @@ const (
 	c10dPort = 29500
 
 	HeadlessSuffix = "-headless"
+
+	HotVolumeTTLSecondsAfterFinished int64 = 600
 )
 
 type Options struct {
@@ -80,6 +82,8 @@ type Options struct {
 
 	TTLSecondsAfterFinished int64
 
+	TTLExplicit bool
+
 	PVCMount string
 
 	Volumes      []Volume
@@ -124,9 +128,11 @@ type Options struct {
 }
 
 type Volume struct {
-	Name      string
-	PVC       string
-	SizeLimit string
+	Name             string
+	PVC              string
+	SizeLimit        string
+	StorageClassName string
+	ClaimSize        string
 }
 
 type VolumeMount struct {
@@ -190,7 +196,11 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		return nil, err
 	}
 
-	storagePlan, err := buildStoragePlan(o)
+	hot, err := hotVolume(p, o)
+	if err != nil {
+		return nil, err
+	}
+	storagePlan, err := buildStoragePlan(o, hot)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +213,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 	if storagePlan.HasDurableData {
 		env = mergeEnv(storage.RuntimeEnv(), env)
 		cmd = wrapCommandWithStoragePreflight(cmd)
-	} else if o.HotSize != "" {
+	} else if o.HotSize != "" || hot.StorageClassName != "" {
 		env = mergeEnv(map[string]string{"TAU_HOT_DIR": storage.HotRoot}, env)
 	}
 
@@ -765,6 +775,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if len(resources) > 0 {
 		container["resources"] = resources
 	}
+	hotClaim := false
 	if len(storagePlan.Volumes) > 0 {
 		volumes := make([]any, 0, len(storagePlan.Volumes))
 		for _, v := range storagePlan.Volumes {
@@ -775,6 +786,12 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 						"claimName": v.PVC,
 					},
 				})
+				continue
+			}
+			if v.StorageClassName != "" {
+				volumes = append(volumes, storage.EphemeralVolume(v.Name, v.StorageClassName, v.ClaimSize))
+				storage.ApplyEphemeralFSGroup(pod)
+				hotClaim = true
 				continue
 			}
 			emptyDir := map[string]any{}
@@ -915,6 +932,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	}
 	if o.TTLSecondsAfterFinished > 0 {
 		jobSpec["ttlSecondsAfterFinished"] = o.TTLSecondsAfterFinished
+	}
+	if hotClaim && !o.TTLExplicit {
+		jobSpec["ttlSecondsAfterFinished"] = HotVolumeTTLSecondsAfterFinished
 	}
 	if o.Nodes > 1 {
 		jobSpec["completionMode"] = "Indexed"
@@ -1152,7 +1172,18 @@ func copyResourceQuantities(existing any) map[string]any {
 	return out
 }
 
-func buildStoragePlan(o Options) (storagePlan, error) {
+func hotVolume(p profile.Profile, o Options) (Volume, error) {
+	if p.HotVolume == nil {
+		return Volume{Name: "tau-hot", SizeLimit: o.HotSize}, nil
+	}
+	size, err := p.HotVolume.ClaimSize(o.HotSize)
+	if err != nil {
+		return Volume{}, err
+	}
+	return Volume{Name: "tau-hot", StorageClassName: p.HotVolume.StorageClassName, ClaimSize: size}, nil
+}
+
+func buildStoragePlan(o Options, hot Volume) (storagePlan, error) {
 	var plan storagePlan
 	if o.PVCMount != "" {
 		plan.removeMountPath(storage.DurableRoot)
@@ -1186,9 +1217,9 @@ func buildStoragePlan(o Options) (storagePlan, error) {
 	if o.HotSize != "" && plan.hasMountPath(storage.HotRoot) {
 		return storagePlan{}, fmt.Errorf("storage.hot_size sizes the Tau-managed %s volume; remove the custom mount at %s", storage.HotRoot, storage.HotRoot)
 	}
-	if (plan.HasDurableData || o.HotSize != "") && !plan.hasMountPath(storage.HotRoot) {
+	if (plan.HasDurableData || o.HotSize != "" || hot.StorageClassName != "") && !plan.hasMountPath(storage.HotRoot) {
 		if err := plan.addVolumeMount(
-			Volume{Name: "tau-hot", SizeLimit: o.HotSize},
+			hot,
 			VolumeMount{Name: "tau-hot", MountPath: storage.HotRoot},
 		); err != nil {
 			return storagePlan{}, err

@@ -164,6 +164,7 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	}
 	if c.Run.TTLSecondsAfterFinished != nil {
 		o.ttlSecondsAfterFinished = *c.Run.TTLSecondsAfterFinished
+		o.ttlExplicit = true
 	}
 	if mainScript := firstNonEmpty(c.Run.MainScript, c.Workflow.MainScript, c.Workflow.Script); mainScript != "" {
 		o.mainScript = configRelativePath(baseDir, mainScript)

@@ -697,8 +697,9 @@ func (r *TauClusterReconciler) observeHotVolume(
 		}
 	}
 	if covered == 0 {
-		return notReady(fmt.Sprintf("no CSIStorageCapacity for StorageClass %s reports free capacity on any of %d profile nodes",
-			hot.StorageClassName, len(poolNodes))), nil
+		return condition(profile.ConditionHotVolumeReady, metav1.ConditionFalse, profile.ReasonHotVolumeCapacityUnavailable,
+			fmt.Sprintf("no CSIStorageCapacity for StorageClass %s reports free capacity on any of %d profile nodes",
+				hot.StorageClassName, len(poolNodes)), generation), nil
 	}
 	return condition(profile.ConditionHotVolumeReady, metav1.ConditionTrue, "HotVolumeReady",
 		fmt.Sprintf("StorageClass %s reports free capacity on %d of %d profile nodes", hot.StorageClassName, covered, len(poolNodes)),

@@ -37,6 +37,7 @@ type resolvedRunJobOptions struct {
 	processesPerNode        int
 	nodes                   int
 	ttlSecondsAfterFinished int64
+	ttlExplicit             bool
 }
 
 type resolvedRunRayJobOptions struct {
@@ -127,6 +128,7 @@ func resolveRunJobOptions(o unresolvedRunOptions) resolvedRunJobOptions {
 		processesPerNode:         o.processesPerNode,
 		nodes:                    o.nodes,
 		ttlSecondsAfterFinished:  o.ttlSecondsAfterFinished,
+		ttlExplicit:              o.ttlExplicit,
 	}
 }
 
