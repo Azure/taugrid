@@ -356,16 +356,35 @@ def test_stage_downloads_over_http(tmp_path):
 @pytest.mark.parametrize(
     ("exc", "transient"),
     [
-        (urllib.error.HTTPError("u", 503, "unavailable", {}, None), True),
-        (urllib.error.HTTPError("u", 429, "slow down", {}, None), True),
-        (urllib.error.HTTPError("u", 404, "missing", {}, None), False),
-        (urllib.error.URLError("dns"), True),
-        (TimeoutError(), True),
-        (FileNotFoundError(), False),
+        (lambda: urllib.error.HTTPError("u", 503, "unavailable", {}, None), True),
+        (lambda: urllib.error.HTTPError("u", 429, "slow down", {}, None), True),
+        (lambda: urllib.error.HTTPError("u", 404, "missing", {}, None), False),
+        (lambda: urllib.error.URLError("dns"), True),
+        (TimeoutError, True),
+        (FileNotFoundError, False),
     ],
 )
 def test_stage_retries_only_transient_errors(exc, transient):
-    assert datasets._is_transient(exc) is transient
+    error = exc()
+    try:
+        assert datasets._is_transient(error) is transient
+    finally:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+
+def test_stage_closes_http_errors_it_retries(tmp_path, monkeypatch):
+    errors = [urllib.error.HTTPError("u", 503, "unavailable", {}, io.BytesIO()) for _ in range(2)]
+    attempts = iter(errors)
+
+    def fail(file, stop):
+        raise next(attempts)
+
+    monkeypatch.setattr(datasets, "_download", fail)
+    monkeypatch.setattr(datasets, "_RETRY_BACKOFF_SECONDS", 0.0)
+    file = datasets._StageFile("https://example.invalid/a.bin", "0" * 64, "a.bin", tmp_path / "a.bin", None)
+    with pytest.raises(datasets.StageError, match="after 2 attempt"):
+        datasets._fetch(file, "corpus@v1", 1, threading.Event())
+    assert all(error.fp.closed for error in errors)
 
 def test_stage_per_node_waiter_returns_after_rank_zero(tmp_path):
     uri, sha = _source(tmp_path / "src", "shard.bin", b"node" * 100)

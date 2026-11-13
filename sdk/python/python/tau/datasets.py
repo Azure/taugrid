@@ -378,7 +378,7 @@ def _datasets_root() -> Path:
 
 def _stage_plan(root: Path, uris: list[str], sha256s: list[str], sizes: list[int | None]) -> list[_StageFile]:
     keys = [_source_key(uri) for uri in uris]
-    common = len(os.path.commonprefix([key[:-1] for key in keys]))
+    common = _common_prefix_length([key[:-1] for key in keys])
     files: list[_StageFile] = []
     seen: set[str] = set()
     for uri, sha256, size, key in zip(uris, sha256s, sizes, keys):
@@ -390,6 +390,14 @@ def _stage_plan(root: Path, uris: list[str], sha256s: list[str], sizes: list[int
         known_size = size if size is not None else _local_size(uri)
         files.append(_StageFile(uri, sha256, relpath, root.joinpath(*parts), known_size))
     return files
+
+def _common_prefix_length(keys: list[tuple[str, ...]]) -> int:
+    length = 0
+    for parts in zip(*keys):
+        if any(part != parts[0] for part in parts):
+            break
+        length += 1
+    return length
 
 def _source_key(uri: str) -> tuple[str, ...]:
     parsed = urllib.parse.urlsplit(uri)
@@ -558,6 +566,8 @@ def _fetch(file: _StageFile, label: str, retries: int, stop: threading.Event) ->
         except (StageError, _Cancelled):
             raise
         except Exception as exc:
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()
             if attempt >= retries or not _is_transient(exc):
                 raise StageError(
                     f"failed to stage {file.relpath} of {label} from {_safe_uri(file.uri)} "
