@@ -441,6 +441,10 @@ targets, or alter the schedule. A candidate branch/manual run does not update
 the scheduled `main` source; recurring runs require the source change to be
 reviewed and landed separately.
 
+Offline contract checks clear inherited `FLEX_NIGHTLY_*` settings only within
+the test process before constructing their fake inventory. The real inventory
+and workload tasks retain the configured deployment values.
+
 Serialize nightly runs; capacity checks are snapshots, not exclusive
 reservations. Existing GPU requests inform shape skips, while admission
 remains subject to shared queue contention and its approved preemption policy.

@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+for variable in $(compgen -A variable FLEX_NIGHTLY_); do
+  unset "$variable"
+done
+
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly PIPELINE="${REPO_ROOT}/.pipelines/taugrid-flex-nightly.yml"
@@ -545,6 +549,27 @@ jq '(.targets[] | select(.name == "a100") | .nodes[0].gpu_allocatable) = 7' \
   "$FLEX_NIGHTLY_CONTRACT_FILE" >"${fake_bin}/drifted.json"
 if "$PREFLIGHT" compare-capability "$FLEX_NIGHTLY_CONTRACT_FILE" "${fake_bin}/drifted.json" >/dev/null 2>&1; then
   fail "postflight comparison must reject changed Flex node capability"
+fi
+
+if [[ "${TAUGRID_NIGHTLY_CONTRACT_ENVIRONMENT_TEST:-}" != "1" ]]; then
+  TAUGRID_NIGHTLY_CONTRACT_ENVIRONMENT_TEST=1 \
+  FLEX_NIGHTLY_WORKSPACE=outer-workspace \
+  FLEX_NIGHTLY_CLUSTER_QUEUE=outer-queue \
+  FLEX_NIGHTLY_A100_FLAVOR=outer-a100 \
+  FLEX_NIGHTLY_H200_FLAVOR=outer-h200 \
+  FLEX_NIGHTLY_DGX_FLAVOR=outer-dgx \
+  FLEX_NIGHTLY_A100_CLUSTER_QUEUE=outer-a100-queue \
+  FLEX_NIGHTLY_H200_CLUSTER_QUEUE=outer-h200-queue \
+  FLEX_NIGHTLY_DGX_CLUSTER_QUEUE=outer-dgx-queue \
+  FLEX_NIGHTLY_INCLUDE_DGX=false \
+  FLEX_NIGHTLY_GPU_TOPOLOGY=outer-topology \
+  FLEX_NIGHTLY_A100_SELECTOR=example.com/outer=a100 \
+  FLEX_NIGHTLY_H200_SELECTOR=example.com/outer=h200 \
+  FLEX_NIGHTLY_MIN_RDMA_NODES=99 \
+    bash "${BASH_SOURCE[0]}" >"${fake_bin}/outer-environment.log" 2>&1 || {
+      cat "${fake_bin}/outer-environment.log" >&2
+      fail "the complete offline fixture must ignore inherited deployment settings"
+    }
 fi
 
 echo "TauGrid Flex nightly contract tests passed"
