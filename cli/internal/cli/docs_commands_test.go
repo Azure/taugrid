@@ -82,6 +82,7 @@ func TestExtractDocumentedTauCommandsIncludesIndentedFences(t *testing.T) {
 }
 
 func extractDocumentedTauCommands(content string) []documentedTauCommand {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
 	var commands []documentedTauCommand
 	for _, match := range markdownFencePattern.FindAllStringSubmatchIndex(content, -1) {
 		language := strings.TrimSpace(content[match[2]:match[3]])
@@ -129,4 +130,12 @@ func extractTauCommands(text string, startLine int) []documentedTauCommand {
 
 func lineAt(content string, offset int) int {
 	return strings.Count(content[:offset], "\n") + 1
+}
+
+func TestExtractDocumentedTauCommandsHandlesCRLF(t *testing.T) {
+	content := "```text\r\ntau storage: /mnt backing=dedicated\r\n```\r\n\r\n```bash\r\ntau run status example\r\n```\r\n"
+	commands := extractDocumentedTauCommands(content)
+	if len(commands) != 1 || commands[0].command != "tau run status example" {
+		t.Fatalf("got %#v, want only the bash command", commands)
+	}
 }

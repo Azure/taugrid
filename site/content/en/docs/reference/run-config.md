@@ -65,6 +65,29 @@ an `emptyDir`, because it requests no GPUs and can run on system nodes. A
 custom mount at `/mnt` replaces the hot volume. Managed workflow configs don't
 use the hot volume.
 
+Before the workload starts, each pod with a hot claim checks `/mnt` and logs
+what backs it:
+
+```text
+tau storage: /mnt source=/dev/mapper/vg0-hot1 fstype=xfs size_kib=1073217536 avail_kib=1073209344 backing=dedicated
+```
+
+`size_kib` is the volume size or its quota. `backing` is `dedicated` when `/mnt`
+is its own volume. It is `container-root` when `/mnt` is a directory in the
+image, and `kubelet-disk` when `/mnt` shares a device with the pod's
+`/etc/hosts`, as an `emptyDir` on the kubelet's disk does. TauGrid sets
+`TAU_HOT_REQUIRE_LOCAL=1` on these pods, so the pod fails instead of falling
+back to `/data` when any of the following holds:
+
+- the backing isn't `dedicated`;
+- `/mnt` is missing or not writable;
+- `/mnt` has 1 GiB or less free;
+- a 64 MiB write runs slower than 50 MB/s.
+
+On a Ray worker, the check runs before `ray start`, so the worker never joins
+the cluster. Direct Jobs that mount `/data` without a hot claim run the same
+check, but they fall back to `/data` when it fails.
+
 A claim is released only when its pod is deleted, and Kueue doesn't account for
 hot storage. So a direct Job with a hot claim keeps its finished pods for 600
 seconds instead of the workspace or built-in retention, and its pod logs go
