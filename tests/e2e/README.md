@@ -372,7 +372,13 @@ preflight snapshot. Active GPU requests are not compared because the cluster is
 shared and unrelated workloads may start or finish during the matrix run.
 
 The workload job creates one run-scoped namespace and one LocalQueue per
-hardware target. Every available target runs:
+hardware target. Namespace cleanup records the UID and run label, refuses PVCs,
+and sends a UID-preconditioned deletion. A separate `always()` cleanup task
+rechecks ownership after interruption, before artifact publication; the in-task
+trap remains for normal diagnostics and postflight capability comparison.
+Every cleanup API subprocess is bounded to 30 seconds and reports timeouts as
+errors; namespace disappearance polling has a separate 15-minute bound.
+Every available target runs:
 
 | Target | Single GPU | Native multi-GPU | Cross-node |
 |--------|------------|------------------|------------|
@@ -398,6 +404,16 @@ The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
 profile adds all native and cross-node shapes. The generic matrix sets
 `NCCL_IB_DISABLE=1` for ordinary GPU workers, retaining CUDA/NCCL collectives
 without requiring InfiniBand resources or memory-locking privileges.
+The configured matrix image must provide global Torch `2.7.1+cu128` with
+CUDA runtime `12.8` on Python `3.12` / Ray `2.58.0`, plus
+`/opt/taugrid/ray-torch/check_image.py`; see
+[`images/ray-torch`](../../images/ray-torch/README.md).
+Ordinary CPU-only init checks on the head and workers reject missing or
+incompatible packages before Ray starts, without increasing the effective Pod
+resource shape. Existing job and Serve pip specifications reuse system-site
+packages instead of downloading and extracting Torch per Pod. Configure the
+validated immutable variant through `AKS_AI_RUNTIME_RAY_E2E_IMAGE`; there is no
+fallback installation on a Ray-only image.
 `rdmaConformance=true` independently adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
 it is not part of the default hardware matrix.

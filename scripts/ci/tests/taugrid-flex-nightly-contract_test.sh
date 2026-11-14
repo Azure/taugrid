@@ -44,13 +44,18 @@ grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
 grep -Fq "azureSubscription: \$(azureServiceConnection)" "$PIPELINE" ||
   fail "pipeline must use the approved Azure DevOps service connection"
 python3 - "$PIPELINE" <<'PY'
+import contextlib
+import io
 import os
+import importlib.util
+import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 import textwrap
+from unittest.mock import patch
 
 pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
@@ -163,6 +168,9 @@ with tempfile.TemporaryDirectory() as temporary:
         "set -euo pipefail\n"
         'printf "%s\\n" "$*" >>"$ROUTING_CALLS"\n'
         'if [[ "$1" == "apply" ]]; then cat >>"$ROUTING_MANIFESTS"; fi\n'
+        'if [[ "$1" == "get" ]]; then printf \'{"metadata":{"name":"%s",'
+        '"uid":"11111111-1111-4111-8111-111111111111",'
+        '"labels":{"tau.azure.com/e2e-run":"42-1"}}}\\n\' "$3"; fi\n'
     )
     kubectl.chmod(0o755)
     for job in jobs:
@@ -248,6 +256,7 @@ with tempfile.TemporaryDirectory() as temporary:
         script = textwrap.dedent(inline.group(1))
         routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
         routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
+        routing = routing.replace("$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent))
         for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
             directory = root / name / workspace
             directory.mkdir()
@@ -270,20 +279,134 @@ with tempfile.TemporaryDirectory() as temporary:
                 TEST_CONTRACT=str(contract),
             )
             result = subprocess.run(
-                ["bash", "-c", 'set -euo pipefail\nnamespace=taugrid-nightly-test\ncontract="$TEST_CONTRACT"\n' + routing],
+                ["bash", "-c",
+                 'set -euo pipefail\n'
+                 'namespace=taugrid-nightly-matrix-42-1\n'
+                 f'bundle_dir="{directory}"\n'
+                 'contract="$TEST_CONTRACT"\n' + routing],
                 env=environment,
                 capture_output=True,
                 text=True,
             )
             assert result.returncode == 0, (name, workspace, result.stderr)
             actual = calls.read_text().splitlines()
-            assert actual[0] == "create namespace taugrid-nightly-test", (name, actual)
-            assert actual[1].startswith("label namespace taugrid-nightly-test "), (name, actual)
+            assert actual[0] == "create namespace taugrid-nightly-matrix-42-1", (name, actual)
+            assert actual[1].startswith("label namespace taugrid-nightly-matrix-42-1 "), (name, actual)
             assert f"tau.azure.com/workspace={workspace}" in actual[1].split(), (name, actual)
             assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
             expected_queues = 2 if name == "hardware_matrix" else 1
-            assert actual[2:] == ["apply -f -"] * expected_queues, (name, actual)
+            queue_start = 2
+            if name == "hardware_matrix":
+                assert actual[2] == "get namespace taugrid-nightly-matrix-42-1 --ignore-not-found -o json"
+                queue_start = 3
+                assert json.loads((directory / "namespace-owner.json").read_text())["run_id"] == "42-1"
+            assert actual[queue_start:] == ["apply -f -"] * expected_queues, (name, actual)
             assert manifests.read_text().count(f"clusterQueue: {queue}\n") == expected_queues, name
+
+    matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
+    assert "cancelTimeoutInMinutes: 30" in matrix
+    cleanup_step = re.search(
+        r"      - task: AzureCLI@2\n"
+        r"        displayName: Clean up owned hardware matrix namespace\n"
+        r"(.*?)"
+        r"      - task: PublishPipelineArtifact@1",
+        matrix, re.DOTALL,
+    )
+    assert cleanup_step, "owned cleanup must run before artifact publication"
+    assert "condition: always()" in cleanup_step.group(1)
+    assert "timeoutInMinutes: 20" in cleanup_step.group(1)
+    assert "azureSubscription: $(azureServiceConnection)" in cleanup_step.group(1)
+    assert "taugrid-flex-nightly-cleanup.py" in cleanup_step.group(1)
+    assert "owned-cleanup-status.json" in cleanup_step.group(1)
+    assert "kubectl delete namespace" not in matrix
+    cleanup_path = Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-cleanup.py"
+    spec = importlib.util.spec_from_file_location("nightly_cleanup", cleanup_path)
+    cleanup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cleanup)
+    namespace = "taugrid-nightly-matrix-42-1"
+    run_id = "42-1"
+    uid = "11111111-1111-4111-8111-111111111111"
+    owner_path = root / "cleanup-owner.json"
+    live = {"metadata": {
+        "name": namespace, "uid": uid,
+        "labels": {"tau.azure.com/e2e-run": run_id},
+    }}
+    for scenario in (
+        "record", "delete", "absent", "missing-owner", "wrong-uid", "wrong-label",
+        "pvc", "api-failure", "delete-conflict", "replacement", "timeout",
+    ):
+        owner_path.write_text(json.dumps({"namespace": namespace, "run_id": run_id, "uid": uid}))
+        state = json.loads(json.dumps(live))
+        if scenario == "missing-owner":
+            owner_path.unlink()
+        if scenario == "wrong-uid":
+            state["metadata"]["uid"] = "22222222-2222-4222-8222-222222222222"
+        if scenario == "wrong-label":
+            state["metadata"]["labels"]["tau.azure.com/e2e-run"] = "43-1"
+        calls = []
+
+        def fake_kubectl(*arguments, input_text=None):
+            calls.append((arguments, input_text))
+            if arguments[:2] == ("get", "namespace"):
+                if scenario == "api-failure":
+                    raise subprocess.CalledProcessError(1, ["kubectl"], stderr="unavailable")
+                if scenario == "absent":
+                    return ""
+                deleted = any(call[0][0] == "delete" for call in calls)
+                if deleted and scenario == "replacement":
+                    replacement = json.loads(json.dumps(state))
+                    replacement["metadata"]["uid"] = "22222222-2222-4222-8222-222222222222"
+                    return json.dumps(replacement)
+                return "" if deleted and scenario != "timeout" else json.dumps(state)
+            if arguments[:2] == ("get", "pvc"):
+                return json.dumps({"items": [{}] if scenario == "pvc" else []})
+            assert arguments == ("delete", "--raw", f"/api/v1/namespaces/{namespace}", "-f", "-"), arguments
+            assert json.loads(input_text)["preconditions"] == {"uid": uid}
+            if scenario == "delete-conflict":
+                raise subprocess.CalledProcessError(1, ["kubectl"], stderr="UID conflict")
+            return "{}"
+
+        expected = {"record": "recorded", "delete": "deleted", "absent": "absent"}
+        with patch.object(cleanup, "kubectl", side_effect=fake_kubectl), \
+             patch.object(cleanup.time, "sleep"), \
+             patch.object(cleanup.time, "monotonic", side_effect=[0, 1, 901]):
+            try:
+                status = cleanup.run(
+                    "record" if scenario == "record" else "cleanup",
+                    namespace, run_id, owner_path,
+                )
+            except (OSError, RuntimeError, subprocess.CalledProcessError):
+                assert scenario not in expected, scenario
+            else:
+                assert status == expected[scenario], (scenario, status)
+        if scenario in ("missing-owner", "wrong-uid", "wrong-label", "pvc", "api-failure", "record", "absent"):
+            assert not any(call[0][0] == "delete" for call in calls), scenario
+    with patch.object(cleanup, "kubectl") as mocked:
+        try:
+            cleanup.run("cleanup", "unrelated", run_id, owner_path)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("unrelated namespace accepted")
+        mocked.assert_not_called()
+
+    timeout_stderr = io.StringIO()
+    with patch.object(
+        cleanup.subprocess, "run",
+        side_effect=subprocess.TimeoutExpired(["kubectl"], 30),
+    ) as process, patch.object(
+        sys, "argv", [str(cleanup_path), "cleanup", namespace, run_id, str(owner_path)],
+    ), contextlib.redirect_stderr(timeout_stderr):
+        try:
+            cleanup.main()
+        except SystemExit as error:
+            assert error.code == 1, error.code
+        else:
+            raise AssertionError("timed-out namespace lookup succeeded")
+        process.assert_called_once()
+        assert process.call_args.args[0][:3] == ["kubectl", "get", "namespace"]
+        assert process.call_args.kwargs["timeout"] == 30
+    assert "kubectl timed out after 30 seconds" in timeout_stderr.getvalue()
 
     preflight = next(job for job in jobs if job.startswith("preflight\n"))
     inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)
