@@ -28,13 +28,31 @@ parameters:
     displayName: Include DGX Spark targets
     type: boolean
     default: false
+  - name: workspace
+    displayName: Authorized shared workspace
+    type: string
+    default: $(FLEX_NIGHTLY_WORKSPACE)
+  - name: clusterQueue
+    displayName: Platform-managed ClusterQueue
+    type: string
+    default: $(FLEX_NIGHTLY_CLUSTER_QUEUE)
+  - name: a100Flavor
+    displayName: A100 ResourceFlavor
+    type: string
+    default: $(FLEX_NIGHTLY_A100_FLAVOR)
+  - name: h200Flavor
+    displayName: H200 ResourceFlavor
+    type: string
+    default: $(FLEX_NIGHTLY_H200_FLAVOR)
+  - name: dgxFlavor
+    displayName: DGX Spark ResourceFlavor
+    type: string
+    default: $(FLEX_NIGHTLY_DGX_FLAVOR)
 
 pool:
   name: 1es-aks-ai-runtime-ado-eastus2
 
 variables:
-  - name: azureServiceConnection
-    value: aks ai runtime - prod
   - name: GOFLAGS
     value: -mod=readonly
   - name: GOTOOLCHAIN
@@ -59,6 +77,11 @@ jobs:
     steps:
       - checkout: self
 
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(Build.ArtifactStagingDirectory)/preflight"
+        displayName: Initialize nightly diagnostics
+
       - bash: scripts/ci/tests/taugrid-flex-nightly-contract_test.sh
         displayName: Validate nightly pipeline contract
 
@@ -73,6 +96,13 @@ jobs:
           scriptLocation: inlineScript
           inlineScript: |
             set -euo pipefail
+
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
 
             tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
             mkdir -p "${tools_dir}"
@@ -91,9 +121,19 @@ jobs:
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
 
+            source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
+
             artifact_dir="$(Build.ArtifactStagingDirectory)/preflight"
             mkdir -p "${artifact_dir}"
-            image_platforms="$(docker manifest inspect "${RAY_E2E_IMAGE}" |
+            inspection_image="${RAY_E2E_IMAGE}"
+            if [[ "${inspection_image}" == *@* ]]; then
+              image_repository="${inspection_image%@*}"
+              if [[ "${image_repository##*/}" == *:* ]]; then
+                image_repository="${image_repository%:*}"
+              fi
+              inspection_image="${image_repository}@${inspection_image##*@}"
+            fi
+            image_platforms="$(docker manifest inspect "${inspection_image}" |
               jq -r 'if .manifests then [.manifests[].platform | (.os + "/" + .architecture)] | unique[] else (.os + "/" + .architecture) end')"
             if [[ "${RAY_E2E_IMAGE}" =~ ray([0-9]+\.[0-9]+\.[0-9]+) ]]; then
               ray_version="${BASH_REMATCH[1]}"
@@ -114,6 +154,13 @@ jobs:
             export FLEX_NIGHTLY_CONTRACT_FILE="${artifact_dir}/hardware-matrix.json"
             scripts/ci/taugrid-flex-nightly-preflight.sh cluster
         env:
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
+          FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
+          FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}
+          FLEX_NIGHTLY_DGX_FLAVOR: ${{ parameters.dgxFlavor }}
+          FLEX_NIGHTLY_A100_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_H200_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_DGX_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
           FLEX_NIGHTLY_DEPLOY_MODE: $(FLEX_NIGHTLY_DEPLOY_MODE)
           FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
@@ -138,8 +185,14 @@ jobs:
     displayName: Ray Serve and Ray Train hardware matrix
     dependsOn: preflight
     timeoutInMinutes: 300
+    cancelTimeoutInMinutes: 30
     steps:
       - checkout: self
+
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(Build.ArtifactStagingDirectory)/hardware-matrix/diagnostics"
+        displayName: Initialize nightly diagnostics
 
       - task: GoTool@0
         displayName: Use Microsoft Go 1.27.4-1
@@ -162,6 +215,13 @@ jobs:
           inlineScript: |
             set -euo pipefail
 
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
+
             tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
             mkdir -p "${tools_dir}"
             if ! command -v kubelogin >/dev/null 2>&1; then
@@ -178,6 +238,8 @@ jobs:
               --file "${KUBECONFIG}" \
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+
+            source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
             contract="$(Pipeline.Workspace)/taugrid-flex-hardware-contract/hardware-matrix.json"
             test -s "${contract}"
@@ -211,7 +273,9 @@ jobs:
                   accelerator_domain: .metadata.labels["tau.azure.com/accelerator-domain"],
                   gpu: .status.allocatable["nvidia.com/gpu"]
                 }]' >"${bundle_dir}/nodes.json" 2>&1
-              if ! kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m; then
+              if ! python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
+                cleanup "${namespace}" "$(Build.BuildId)-$(System.JobAttempt)" \
+                "${bundle_dir}/namespace-owner.json"; then
                 cleanup_status=failed
                 cleanup_reason="namespace deletion command failed"
                 rc=1
@@ -253,9 +317,12 @@ jobs:
 
             kubectl create namespace "${namespace}"
             kubectl label namespace "${namespace}" \
-              tau.azure.com/workspace=nightly \
+              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
               tau.azure.com/gpu-queue=enabled \
               "tau.azure.com/e2e-run=$(Build.BuildId)-$(System.JobAttempt)"
+            python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
+              record "${namespace}" "$(Build.BuildId)-$(System.JobAttempt)" \
+              "${bundle_dir}/namespace-owner.json"
 
             while IFS= read -r target; do
               name="$(jq -r '.name' <<<"${target}")"
@@ -436,6 +503,14 @@ jobs:
             exit "${matrix_rc}"
         env:
           PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
+          FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
+          FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}
+          FLEX_NIGHTLY_DGX_FLAVOR: ${{ parameters.dgxFlavor }}
+          FLEX_NIGHTLY_A100_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_H200_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_DGX_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
           FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
@@ -447,6 +522,48 @@ jobs:
           FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
           H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
+
+      - task: AzureCLI@2
+        displayName: Clean up owned hardware matrix namespace
+        condition: always()
+        timeoutInMinutes: 20
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+            bundle_dir="$(Build.ArtifactStagingDirectory)/hardware-matrix/diagnostics"
+            mkdir -p "${bundle_dir}"
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+            fi
+            export PATH="${tools_dir}:${PATH}"
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+            python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
+              cleanup "taugrid-nightly-matrix-$(Build.BuildId)-$(System.JobAttempt)" \
+              "$(Build.BuildId)-$(System.JobAttempt)" "${bundle_dir}/namespace-owner.json" \
+              >"${bundle_dir}/owned-cleanup-status.json"
+        env:
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish hardware matrix results
@@ -463,6 +580,11 @@ jobs:
     steps:
       - checkout: self
 
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$(Build.ArtifactStagingDirectory)"
+        displayName: Initialize nightly diagnostics
+
       - task: GoTool@0
         displayName: Use Microsoft Go 1.27.4-1
         inputs:
@@ -477,6 +599,13 @@ jobs:
           scriptLocation: inlineScript
           inlineScript: |
             set -euo pipefail
+
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
 
             tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
             mkdir -p "${tools_dir}"
@@ -495,6 +624,8 @@ jobs:
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
 
+            source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
+
             namespace="taugrid-nightly-rdma-$(Build.BuildId)-$(System.JobAttempt)"
             cleanup() {
               rc=$?
@@ -508,7 +639,9 @@ jobs:
             trap cleanup EXIT
 
             kubectl create namespace "${namespace}"
-            kubectl label namespace "${namespace}" tau.azure.com/gpu-queue=enabled
+            kubectl label namespace "${namespace}" \
+              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
+              tau.azure.com/gpu-queue=enabled
             cat <<EOF | kubectl apply -f -
             apiVersion: kueue.x-k8s.io/v1beta2
             kind: LocalQueue
@@ -516,7 +649,7 @@ jobs:
               name: h200
               namespace: ${namespace}
             spec:
-              clusterQueue: tau-gpu-cq
+              clusterQueue: ${FLEX_NIGHTLY_CLUSTER_QUEUE}
             EOF
 
             cd "$(Build.SourcesDirectory)/tests/e2e"
@@ -545,6 +678,9 @@ jobs:
             go test -v -count=1 -timeout 75m \
               -run '^TestFineWebRayTrain16xH200IB$' ./stack/
         env:
+          FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
+          FLEX_NIGHTLY_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)

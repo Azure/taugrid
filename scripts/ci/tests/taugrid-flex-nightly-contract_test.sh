@@ -4,6 +4,10 @@
 
 set -euo pipefail
 
+for variable in $(compgen -A variable FLEX_NIGHTLY_); do
+  unset "$variable"
+done
+
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly PIPELINE="${REPO_ROOT}/.pipelines/taugrid-flex-nightly.yml"
@@ -39,6 +43,430 @@ grep -Fq "name: 1es-aks-ai-runtime-ado-eastus2" "$PIPELINE" ||
   fail "pipeline must run on the approved 1ES AKS AI Runtime pool"
 grep -Fq "azureSubscription: \$(azureServiceConnection)" "$PIPELINE" ||
   fail "pipeline must use the approved Azure DevOps service connection"
+python3 - "$PIPELINE" <<'PY'
+import contextlib
+import io
+import os
+import importlib.util
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import textwrap
+from unittest.mock import patch
+
+pipeline = Path(sys.argv[1]).read_text()
+jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
+targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    binary = root / "bin"
+    binary.mkdir()
+    for command in ("az", "kubelogin"):
+        stub = binary / command
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            f'printf "%s\\n" "{command} $*" >>"$AUTH_CALLS"\n'
+            'test -d "$EXPECTED_ARTIFACT_DIR"\n'
+            'if [[ "$*" == "$FAIL_COMMAND" ]]; then exit 41; fi\n'
+        )
+        stub.chmod(0o755)
+
+    for job in jobs:
+        name = job.splitlines()[0]
+        if name not in targets:
+            continue
+        assert "azureSubscription: $(azureServiceConnection)" in job, name
+        assert "FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)" in job, name
+        initialization = re.search(
+            r"      - bash: \|\n(.*?)        displayName: Initialize nightly diagnostics\n",
+            job,
+            re.DOTALL,
+        )
+        assert initialization, f"{name}: diagnostics must initialize outside AzureCLI login"
+        assert initialization.end() < job.index("      - task: AzureCLI@2"), name
+        inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
+        assert inline, name
+        authentication = textwrap.dedent(inline.group(1)).splitlines(keepends=True)
+        end = next(i for i, line in enumerate(authentication) if "kubelogin convert-kubeconfig" in line)
+        authentication = "".join(authentication[:end + 1])
+
+        for scenario, subscription, failure, expected, status in (
+            ("success", "test-subscription", "", 3, 0),
+            ("missing", None, "", 0, 1),
+            ("empty", "", "", 0, 1),
+            ("unexpanded", "$(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)", "", 0, 1),
+            ("selection-failure", "test-subscription", "account set --subscription test-subscription", 1, 41),
+            ("credential-failure", "test-subscription", None, 2, 41),
+            ("conversion-failure", "test-subscription", None, 3, 41),
+        ):
+            directory = root / name / scenario
+            directory.mkdir(parents=True)
+            artifact = directory / "artifacts"
+            calls = directory / "calls"
+            calls.touch()
+            kubeconfig = directory / "agent" / "flex-kubeconfig"
+            credential_command = (
+                "aks get-credentials --resource-group test-resource-group --name test-cluster "
+                f"--file {kubeconfig} --overwrite-existing"
+            )
+            conversion_command = f"convert-kubeconfig --kubeconfig {kubeconfig} --login azurecli"
+            if scenario == "credential-failure":
+                failure = credential_command
+            elif scenario == "conversion-failure":
+                failure = conversion_command
+            environment = dict(os.environ)
+            environment.pop("FLEX_NIGHTLY_SUBSCRIPTION_ID", None)
+            environment.update(
+                PATH=f"{binary}:{os.environ['PATH']}",
+                AUTH_CALLS=str(calls),
+                EXPECTED_ARTIFACT_DIR=str(artifact / targets[name]),
+                FAIL_COMMAND=failure,
+                FLEX_NIGHTLY_RESOURCE_GROUP="test-resource-group",
+                FLEX_NIGHTLY_CLUSTER_NAME="test-cluster",
+            )
+            if subscription is not None:
+                environment["FLEX_NIGHTLY_SUBSCRIPTION_ID"] = subscription
+
+            def expand(script):
+                return script.replace("$(Build.ArtifactStagingDirectory)", str(artifact)).replace(
+                    "$(Agent.TempDirectory)", str(directory / "agent")
+                )
+
+            subprocess.run(
+                ["bash", "-c", expand(textwrap.dedent(initialization.group(1)))],
+                env=environment,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            assert (artifact / targets[name]).is_dir(), f"{name}: missing diagnostics before login"
+            result = subprocess.run(
+                ["bash", "-c", expand(authentication)],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == status, (name, scenario, result.returncode, result.stderr)
+            actual = calls.read_text().splitlines()
+            ordered = [
+                "az account set --subscription test-subscription",
+                f"az {credential_command}",
+                f"kubelogin {conversion_command}",
+            ]
+            assert actual == ordered[:expected], (name, scenario, actual)
+            if expected == 0:
+                assert "FLEX_NIGHTLY_SUBSCRIPTION_ID" in result.stderr, (name, scenario)
+
+    kubectl = binary / "kubectl"
+    kubectl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'printf "%s\\n" "$*" >>"$ROUTING_CALLS"\n'
+        'if [[ "$1" == "apply" ]]; then cat >>"$ROUTING_MANIFESTS"; fi\n'
+        'if [[ "$1" == "get" ]]; then printf \'{"metadata":{"name":"%s",'
+        '"uid":"11111111-1111-4111-8111-111111111111",'
+        '"labels":{"tau.azure.com/e2e-run":"42-1"}}}\\n\' "$3"; fi\n'
+    )
+    kubectl.chmod(0o755)
+    for job in jobs:
+        name = job.splitlines()[0]
+        if name not in targets:
+            continue
+        overrides = {}
+        if name != "h200_rdma":
+            for target in ("A100", "H200", "DGX"):
+                overrides[f"FLEX_NIGHTLY_{target}_FLAVOR"] = f"{target.lower()}Flavor"
+                overrides[f"FLEX_NIGHTLY_{target}_CLUSTER_QUEUE"] = "clusterQueue"
+        else:
+            overrides["FLEX_NIGHTLY_CLUSTER_QUEUE"] = "clusterQueue"
+        if name != "preflight":
+            overrides["FLEX_NIGHTLY_WORKSPACE"] = "workspace"
+        for variable, parameter in overrides.items():
+            assert f"{variable}: ${{{{ parameters.{parameter} }}}}" in job, (name, variable)
+        routing_source = 'source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"'
+        assert routing_source in job, name
+        first_use = (
+            "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
+            if name == "preflight" else "kubectl create namespace"
+        )
+        assert job.index(routing_source) < job.index(first_use), name
+        defaults = {
+            "workspace": ("FLEX_NIGHTLY_WORKSPACE", "nightly"),
+            "clusterQueue": ("FLEX_NIGHTLY_CLUSTER_QUEUE", "tau-gpu-cq"),
+            "a100Flavor": ("FLEX_NIGHTLY_A100_FLAVOR", "tau-gpu-a100-80gb-v2"),
+            "h200Flavor": ("FLEX_NIGHTLY_H200_FLAVOR", "tau-gpu-h200-141gb-v2"),
+            "dgxFlavor": ("FLEX_NIGHTLY_DGX_FLAVOR", "tau-gpu-dgx-spark-v2"),
+        }
+        configured = {
+            parameter: f"shared-{parameter.lower()}"
+            for parameter in defaults
+        }
+        explicit = {
+            parameter: default
+            for parameter, (_, default) in defaults.items()
+        }
+        for parameter, (variable, _) in defaults.items():
+            definition = re.search(
+                rf"^  - name: {parameter}\n(.*?)(?=^  - name: |^pool:)",
+                pipeline, re.MULTILINE | re.DOTALL,
+            )
+            assert definition and f"default: $({variable})" in definition.group(1), parameter
+        for scenario, settings, parameters in (
+            ("legacy-defaults", {}, {}),
+            ("scheduled-definition-settings", configured, {}),
+            ("explicit-defaults-win", configured, explicit),
+            ("partial-manual-override", configured, {"h200Flavor": "manual-h200"}),
+            ("empty-definition-settings", {parameter: "" for parameter in defaults}, {}),
+        ):
+            environment = {
+                key: value for key, value in os.environ.items()
+                if not key.startswith("FLEX_NIGHTLY_")
+            }
+            expected = []
+            for variable, parameter in overrides.items():
+                setting, fallback = defaults[parameter]
+                template_default = f"$({setting})"
+                value = parameters.get(parameter, template_default)
+                if value == template_default and parameter in settings:
+                    value = settings[parameter]
+                environment[variable] = value
+                expected.append(
+                    fallback if not value or value == template_default else value
+                )
+            source = routing_source.replace(
+                "$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent)
+            )
+            output = 'printf "%s\\n" ' + " ".join(
+                f'"${variable}"' for variable in overrides
+            )
+            result = subprocess.run(
+                ["bash", "-c", f"set -euo pipefail\n{source}\n{output}"],
+                env=environment, capture_output=True, text=True,
+            )
+            assert result.returncode == 0, (name, scenario, result.stderr)
+            assert result.stdout.splitlines() == expected, (name, scenario, result.stdout, expected)
+        if name == "preflight":
+            continue
+        inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
+        script = textwrap.dedent(inline.group(1))
+        routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
+        routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
+        routing = routing.replace("$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent))
+        for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
+            directory = root / name / workspace
+            directory.mkdir()
+            calls = directory / "routing-calls"
+            manifests = directory / "routing-manifests"
+            contract = directory / "contract.json"
+            contract.write_text(
+                '{"targets":['
+                f'{{"name":"a100","status":"available","cluster_queue":"{queue}"}},'
+                f'{{"name":"h200","status":"available","cluster_queue":"{queue}"}}'
+                ']}'
+            )
+            environment = dict(os.environ)
+            environment.update(
+                PATH=f"{binary}:{os.environ['PATH']}",
+                ROUTING_CALLS=str(calls),
+                ROUTING_MANIFESTS=str(manifests),
+                FLEX_NIGHTLY_WORKSPACE=workspace,
+                FLEX_NIGHTLY_CLUSTER_QUEUE=queue,
+                TEST_CONTRACT=str(contract),
+            )
+            result = subprocess.run(
+                ["bash", "-c",
+                 'set -euo pipefail\n'
+                 'namespace=taugrid-nightly-matrix-42-1\n'
+                 f'bundle_dir="{directory}"\n'
+                 'contract="$TEST_CONTRACT"\n' + routing],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (name, workspace, result.stderr)
+            actual = calls.read_text().splitlines()
+            assert actual[0] == "create namespace taugrid-nightly-matrix-42-1", (name, actual)
+            assert actual[1].startswith("label namespace taugrid-nightly-matrix-42-1 "), (name, actual)
+            assert f"tau.azure.com/workspace={workspace}" in actual[1].split(), (name, actual)
+            assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
+            expected_queues = 2 if name == "hardware_matrix" else 1
+            queue_start = 2
+            if name == "hardware_matrix":
+                assert actual[2] == "get namespace taugrid-nightly-matrix-42-1 --ignore-not-found -o json"
+                queue_start = 3
+                assert json.loads((directory / "namespace-owner.json").read_text())["run_id"] == "42-1"
+            assert actual[queue_start:] == ["apply -f -"] * expected_queues, (name, actual)
+            assert manifests.read_text().count(f"clusterQueue: {queue}\n") == expected_queues, name
+
+    matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
+    assert "cancelTimeoutInMinutes: 30" in matrix
+    cleanup_step = re.search(
+        r"      - task: AzureCLI@2\n"
+        r"        displayName: Clean up owned hardware matrix namespace\n"
+        r"(.*?)"
+        r"      - task: PublishPipelineArtifact@1",
+        matrix, re.DOTALL,
+    )
+    assert cleanup_step, "owned cleanup must run before artifact publication"
+    assert "condition: always()" in cleanup_step.group(1)
+    assert "timeoutInMinutes: 20" in cleanup_step.group(1)
+    assert "azureSubscription: $(azureServiceConnection)" in cleanup_step.group(1)
+    assert "taugrid-flex-nightly-cleanup.py" in cleanup_step.group(1)
+    assert "owned-cleanup-status.json" in cleanup_step.group(1)
+    assert "kubectl delete namespace" not in matrix
+    cleanup_path = Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-cleanup.py"
+    spec = importlib.util.spec_from_file_location("nightly_cleanup", cleanup_path)
+    cleanup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cleanup)
+    namespace = "taugrid-nightly-matrix-42-1"
+    run_id = "42-1"
+    uid = "11111111-1111-4111-8111-111111111111"
+    owner_path = root / "cleanup-owner.json"
+    live = {"metadata": {
+        "name": namespace, "uid": uid,
+        "labels": {"tau.azure.com/e2e-run": run_id},
+    }}
+    for scenario in (
+        "record", "delete", "absent", "missing-owner", "wrong-uid", "wrong-label",
+        "pvc", "api-failure", "delete-conflict", "replacement", "timeout",
+    ):
+        owner_path.write_text(json.dumps({"namespace": namespace, "run_id": run_id, "uid": uid}))
+        state = json.loads(json.dumps(live))
+        if scenario == "missing-owner":
+            owner_path.unlink()
+        if scenario == "wrong-uid":
+            state["metadata"]["uid"] = "22222222-2222-4222-8222-222222222222"
+        if scenario == "wrong-label":
+            state["metadata"]["labels"]["tau.azure.com/e2e-run"] = "43-1"
+        calls = []
+
+        def fake_kubectl(*arguments, input_text=None):
+            calls.append((arguments, input_text))
+            if arguments[:2] == ("get", "namespace"):
+                if scenario == "api-failure":
+                    raise subprocess.CalledProcessError(1, ["kubectl"], stderr="unavailable")
+                if scenario == "absent":
+                    return ""
+                deleted = any(call[0][0] == "delete" for call in calls)
+                if deleted and scenario == "replacement":
+                    replacement = json.loads(json.dumps(state))
+                    replacement["metadata"]["uid"] = "22222222-2222-4222-8222-222222222222"
+                    return json.dumps(replacement)
+                return "" if deleted and scenario != "timeout" else json.dumps(state)
+            if arguments[:2] == ("get", "pvc"):
+                return json.dumps({"items": [{}] if scenario == "pvc" else []})
+            assert arguments == ("delete", "--raw", f"/api/v1/namespaces/{namespace}", "-f", "-"), arguments
+            assert json.loads(input_text)["preconditions"] == {"uid": uid}
+            if scenario == "delete-conflict":
+                raise subprocess.CalledProcessError(1, ["kubectl"], stderr="UID conflict")
+            return "{}"
+
+        expected = {"record": "recorded", "delete": "deleted", "absent": "absent"}
+        with patch.object(cleanup, "kubectl", side_effect=fake_kubectl), \
+             patch.object(cleanup.time, "sleep"), \
+             patch.object(cleanup.time, "monotonic", side_effect=[0, 1, 901]):
+            try:
+                status = cleanup.run(
+                    "record" if scenario == "record" else "cleanup",
+                    namespace, run_id, owner_path,
+                )
+            except (OSError, RuntimeError, subprocess.CalledProcessError):
+                assert scenario not in expected, scenario
+            else:
+                assert status == expected[scenario], (scenario, status)
+        if scenario in ("missing-owner", "wrong-uid", "wrong-label", "pvc", "api-failure", "record", "absent"):
+            assert not any(call[0][0] == "delete" for call in calls), scenario
+    with patch.object(cleanup, "kubectl") as mocked:
+        try:
+            cleanup.run("cleanup", "unrelated", run_id, owner_path)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("unrelated namespace accepted")
+        mocked.assert_not_called()
+
+    timeout_stderr = io.StringIO()
+    with patch.object(
+        cleanup.subprocess, "run",
+        side_effect=subprocess.TimeoutExpired(["kubectl"], 30),
+    ) as process, patch.object(
+        sys, "argv", [str(cleanup_path), "cleanup", namespace, run_id, str(owner_path)],
+    ), contextlib.redirect_stderr(timeout_stderr):
+        try:
+            cleanup.main()
+        except SystemExit as error:
+            assert error.code == 1, error.code
+        else:
+            raise AssertionError("timed-out namespace lookup succeeded")
+        process.assert_called_once()
+        assert process.call_args.args[0][:3] == ["kubectl", "get", "namespace"]
+        assert process.call_args.kwargs["timeout"] == 30
+    assert "kubectl timed out after 30 seconds" in timeout_stderr.getvalue()
+
+    preflight = next(job for job in jobs if job.startswith("preflight\n"))
+    inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)
+    script = textwrap.dedent(inline.group(1))
+    start = script.index('artifact_dir=')
+    version_check = script.index('if [[ "${RAY_E2E_IMAGE}" =~ ray')
+    end = script.index('export FLEX_NIGHTLY_CONTRACT_FILE=')
+    inspection = script[start:version_check]
+    validation = script[start:end]
+    docker = binary / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        '[[ "$*" == "manifest inspect ${EXPECTED_IMAGE}" ]] || exit 42\n'
+        'if [[ "${MANIFEST_FAILURE:-false}" == "true" ]]; then exit 43; fi\n'
+        """printf '%s\\n' '{"manifests":[{"platform":{"os":"linux","architecture":"amd64"}},{"platform":{"os":"linux","architecture":"arm64"}}]}'\n"""
+    )
+    docker.chmod(0o755)
+    digest = "sha256:" + "a" * 64
+    tag = "py3.12-ray2.58.0-cuda13.0"
+    for repository in ("registry.example.com/team/ray", "registry.example.com:5000/team/ray", "ray"):
+        for reference, expected in (
+            (f"{repository}:{tag}@{digest}", f"{repository}@{digest}"),
+            (f"{repository}@{digest}", f"{repository}@{digest}"),
+            (f"{repository}:{tag}", f"{repository}:{tag}"),
+        ):
+            environment = dict(os.environ)
+            environment.update(
+                PATH=f"{binary}:{os.environ['PATH']}",
+                RAY_E2E_IMAGE=reference,
+                EXPECTED_IMAGE=expected,
+                INCLUDE_DGX="true",
+                MANIFEST_FAILURE="false",
+            )
+            expanded = inspection.replace("$(Build.ArtifactStagingDirectory)", str(root / "image-artifacts"))
+            result = subprocess.run(
+                ["bash", "-c", 'set -euo pipefail\n' + expanded + 'printf "%s\\n" "$RAY_E2E_IMAGE" "$image_platforms"'],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, (reference, result.returncode, result.stderr)
+            assert result.stdout.splitlines() == [reference, "linux/amd64", "linux/arm64"], reference
+            if reference == f"{repository}:{tag}@{digest}":
+                expanded = validation.replace("$(Build.ArtifactStagingDirectory)", str(root / "image-artifacts"))
+                for failure, status in (("false", 0), ("true", 43)):
+                    environment["MANIFEST_FAILURE"] = failure
+                    result = subprocess.run(
+                        ["bash", "-c", 'set -euo pipefail\n' + expanded],
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    assert result.returncode == status, (reference, failure, result.stderr)
+                assert (root / "image-artifacts/preflight/ray-version.txt").read_text() == "2.58.0\n"
+
+assert not re.search(r"^\s*- name: azureServiceConnection\s*$", pipeline, re.MULTILINE), (
+    "service connection must be configured outside public source"
+)
+PY
 grep -Fq "value: shared-cluster-controllers" "$PIPELINE" ||
   fail "pipeline must explicitly use the safe shared-controller mode"
 grep -Fq "taugrid-flex-nightly-preflight.sh cluster" "$PIPELINE" ||
@@ -140,7 +568,8 @@ JSON
 JSON
     ;;
   *"get nodes -l kueue.azure.com/gpu-series=nd-h200-v5 -o json"*)
-    cat <<'JSON'
+    cat <<'JSON' | jq --arg ready "${FAKE_H200_READY:-True}" \
+      '(.items[1].status.conditions[] | select(.type == "Ready") | .status) = $ready'
 {"items":[{"metadata":{"name":"h200-a","labels":{"tau.azure.com/site":"site-h200","tau.azure.com/network-domain":"h200-a","tau.azure.com/accelerator-domain":"h200-a"}},"spec":{"taints":[{"key":"nvidia.com/gpu","value":"present","effect":"NoSchedule"}]},"status":{"nodeInfo":{"architecture":"amd64","operatingSystem":"linux","containerRuntimeVersion":"containerd://2.0.4"},"conditions":[{"type":"Ready","status":"True"},{"type":"MemoryPressure","status":"False"},{"type":"DiskPressure","status":"False"},{"type":"PIDPressure","status":"False"}],"allocatable":{"nvidia.com/gpu":"8","rdma/rdma_shared_device_a":"1"}}},{"metadata":{"name":"h200-b","labels":{"tau.azure.com/site":"site-h200","tau.azure.com/network-domain":"h200-b","tau.azure.com/accelerator-domain":"h200-b"}},"spec":{"taints":[{"key":"nvidia.com/gpu","value":"present","effect":"NoSchedule"}]},"status":{"nodeInfo":{"architecture":"amd64","operatingSystem":"linux","containerRuntimeVersion":"containerd://2.0.4"},"conditions":[{"type":"Ready","status":"True"},{"type":"MemoryPressure","status":"False"},{"type":"DiskPressure","status":"False"},{"type":"PIDPressure","status":"False"}],"allocatable":{"nvidia.com/gpu":"8","rdma/rdma_shared_device_a":"1"}}}]}
 JSON
     ;;
@@ -164,18 +593,18 @@ JSON
   *"get resourceflavor tau-gpu-dgx-spark-v2 -o json"*)
     printf '%s\n' '{"spec":{"topologyName":"taugrid-gpu-topology"}}'
     ;;
-  *"get resourceflavor tau-gpu-a100-80gb-v2 -o json"*)
+  *"get resourceflavor tau-gpu-a100-80gb-v2 -o json"*|*"get resourceflavor test-a100-flavor -o json"*)
     printf '%s\n' '{"spec":{"topologyName":"taugrid-gpu-topology"}}'
     ;;
-  *"get resourceflavor tau-gpu-h200-141gb-v2 -o json"*)
+  *"get resourceflavor tau-gpu-h200-141gb-v2 -o json"*|*"get resourceflavor test-h200-flavor -o json"*)
     if [[ "${FAKE_STALE_H200:-0}" == "1" ]]; then
       printf '%s\n' '{"spec":{"topologyName":"default-node-topology"}}'
     else
       printf '%s\n' '{"spec":{"topologyName":"taugrid-gpu-topology"}}'
     fi
     ;;
-  *"get clusterqueue tau-gpu-cq -o json"*)
-    printf '%s\n' '{"spec":{"resourceGroups":[{"flavors":[{"name":"tau-gpu-dgx-spark-v2"},{"name":"tau-gpu-h200-141gb-v2"},{"name":"tau-gpu-a100-80gb-v2"}]}]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
+  *"get clusterqueue tau-gpu-cq -o json"*|*"get clusterqueue test-shared-queue -o json"*)
+    printf '%s\n' '{"spec":{"resourceGroups":[{"flavors":[{"name":"tau-gpu-dgx-spark-v2"},{"name":"tau-gpu-h200-141gb-v2"},{"name":"tau-gpu-a100-80gb-v2"},{"name":"test-a100-flavor"},{"name":"test-h200-flavor"}]}]},"status":{"conditions":[{"type":"Active","status":"True"}]}}'
     ;;
   *"get crd "*)
     printf '%s\n' '{}'
@@ -217,10 +646,49 @@ jq -e '
 ' "$FLEX_NIGHTLY_CONTRACT_FILE" >/dev/null ||
   fail "preflight contract does not preserve the hardware matrix inventory"
 
-if FAKE_STALE_H200=1 "$PREFLIGHT" cluster >/dev/null 2>&1; then
+FLEX_NIGHTLY_INCLUDE_DGX=false \
+FLEX_NIGHTLY_A100_FLAVOR=test-a100-flavor \
+FLEX_NIGHTLY_H200_FLAVOR=test-h200-flavor \
+FLEX_NIGHTLY_A100_CLUSTER_QUEUE=test-shared-queue \
+FLEX_NIGHTLY_H200_CLUSTER_QUEUE=test-shared-queue \
+FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/shared-contract.json" \
+  "$PREFLIGHT" cluster
+jq -e '
+  (.targets[] | select(.name == "a100") | .flavor == "test-a100-flavor" and .cluster_queue == "test-shared-queue")
+  and (.targets[] | select(.name == "h200") | .flavor == "test-h200-flavor" and .cluster_queue == "test-shared-queue")
+' "${fake_bin}/shared-contract.json" >/dev/null ||
+  fail "preflight must retain configured shared flavors and queue"
+
+mkdir -p "${fake_bin}/unready"
+if FAKE_H200_READY=Unknown \
+  FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/unready/hardware-matrix.json" \
+  "$PREFLIGHT" cluster >"${fake_bin}/unready-preflight.log" 2>&1; then
+  fail "preflight must reject an H200 node whose Ready condition is Unknown"
+fi
+[ -s "${fake_bin}/unready/hardware-matrix.json" ] ||
+  fail "failed preflight must preserve the collected hardware inventory"
+jq -e '
+  .targets[] | select(.name == "h200")
+  | .status == "misconfigured"
+    and .ready_nodes == 1
+    and (.capability_ready | not)
+    and .capability_violations == ["h200-b: Ready is not True"]
+    and .topology_ready and .queue_active and .queue_has_flavor
+' "${fake_bin}/unready/hardware-matrix.json" >/dev/null ||
+  fail "failed preflight must preserve the node readiness violation"
+PREFLIGHT_JOB_RESULT=Failed MATRIX_JOB_RESULT=Skipped \
+  "$REPORTER" "${fake_bin}/unready" "${fake_bin}/unready-report.md"
+grep -Fq '| Preflight job | **FAIL** |' "${fake_bin}/unready-report.md" &&
+  grep -Fq '| h200 | **misconfigured** | 1 |' "${fake_bin}/unready-report.md" &&
+  grep -Fq 'h200-b: Ready is not True' "${fake_bin}/unready-report.md" ||
+  fail "nightly report must show the failed readiness gate and collected inventory"
+
+if FAKE_STALE_H200=1 FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/stale-topology.json" \
+  "$PREFLIGHT" cluster >/dev/null 2>&1; then
   fail "preflight must reject GPU flavors that are not wired to taugrid-gpu-topology"
 fi
-if FAKE_STALE_LEASE=1 "$PREFLIGHT" cluster >/dev/null 2>&1; then
+if FAKE_STALE_LEASE=1 FLEX_NIGHTLY_CONTRACT_FILE="${fake_bin}/stale-lease.json" \
+  "$PREFLIGHT" cluster >/dev/null 2>&1; then
   fail "preflight must reject stale Flex node leases"
 fi
 
@@ -231,6 +699,27 @@ jq '(.targets[] | select(.name == "a100") | .nodes[0].gpu_allocatable) = 7' \
   "$FLEX_NIGHTLY_CONTRACT_FILE" >"${fake_bin}/drifted.json"
 if "$PREFLIGHT" compare-capability "$FLEX_NIGHTLY_CONTRACT_FILE" "${fake_bin}/drifted.json" >/dev/null 2>&1; then
   fail "postflight comparison must reject changed Flex node capability"
+fi
+
+if [[ "${TAUGRID_NIGHTLY_CONTRACT_ENVIRONMENT_TEST:-}" != "1" ]]; then
+  TAUGRID_NIGHTLY_CONTRACT_ENVIRONMENT_TEST=1 \
+  FLEX_NIGHTLY_WORKSPACE=outer-workspace \
+  FLEX_NIGHTLY_CLUSTER_QUEUE=outer-queue \
+  FLEX_NIGHTLY_A100_FLAVOR=outer-a100 \
+  FLEX_NIGHTLY_H200_FLAVOR=outer-h200 \
+  FLEX_NIGHTLY_DGX_FLAVOR=outer-dgx \
+  FLEX_NIGHTLY_A100_CLUSTER_QUEUE=outer-a100-queue \
+  FLEX_NIGHTLY_H200_CLUSTER_QUEUE=outer-h200-queue \
+  FLEX_NIGHTLY_DGX_CLUSTER_QUEUE=outer-dgx-queue \
+  FLEX_NIGHTLY_INCLUDE_DGX=false \
+  FLEX_NIGHTLY_GPU_TOPOLOGY=outer-topology \
+  FLEX_NIGHTLY_A100_SELECTOR=example.com/outer=a100 \
+  FLEX_NIGHTLY_H200_SELECTOR=example.com/outer=h200 \
+  FLEX_NIGHTLY_MIN_RDMA_NODES=99 \
+    bash "${BASH_SOURCE[0]}" >"${fake_bin}/outer-environment.log" 2>&1 || {
+      cat "${fake_bin}/outer-environment.log" >&2
+      fail "the complete offline fixture must ignore inherited deployment settings"
+    }
 fi
 
 echo "TauGrid Flex nightly contract tests passed"

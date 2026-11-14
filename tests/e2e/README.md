@@ -372,7 +372,13 @@ preflight snapshot. Active GPU requests are not compared because the cluster is
 shared and unrelated workloads may start or finish during the matrix run.
 
 The workload job creates one run-scoped namespace and one LocalQueue per
-hardware target. Every available target runs:
+hardware target. Namespace cleanup records the UID and run label, refuses PVCs,
+and sends a UID-preconditioned deletion. A separate `always()` cleanup task
+rechecks ownership after interruption, before artifact publication; the in-task
+trap remains for normal diagnostics and postflight capability comparison.
+Every cleanup API subprocess is bounded to 30 seconds and reports timeouts as
+errors; namespace disappearance polling has a separate 15-minute bound.
+Every available target runs:
 
 | Target | Single GPU | Native multi-GPU | Cross-node |
 |--------|------------|------------------|------------|
@@ -395,7 +401,20 @@ after coordinating exclusive capacity; disabled targets are recorded rather
 than silently omitted.
 
 The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
-profile adds all native and cross-node shapes. `rdmaConformance=true` adds the
+profile adds all native and cross-node shapes. The generic matrix sets
+`NCCL_IB_DISABLE=1` for ordinary GPU workers, retaining CUDA/NCCL collectives
+without requiring InfiniBand resources or memory-locking privileges.
+The configured matrix image must provide global Torch `2.7.1+cu128` with
+CUDA runtime `12.8` on Python `3.12` / Ray `2.58.0`, plus
+`/opt/taugrid/ray-torch/check_image.py`; see
+[`images/ray-torch`](../../images/ray-torch/README.md).
+Ordinary CPU-only init checks on the head and workers reject missing or
+incompatible packages before Ray starts, without increasing the effective Pod
+resource shape. Existing job and Serve pip specifications reuse system-site
+packages instead of downloading and extracting Torch per Pod. Configure the
+validated immutable variant through `AKS_AI_RUNTIME_RAY_E2E_IMAGE`; there is no
+fallback installation on a Ray-only image.
+`rdmaConformance=true` independently adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
 it is not part of the default hardware matrix.
 
@@ -416,15 +435,66 @@ hostname-only topology and intentionally fail preflight. DGX opt-in additionally
 requires an externally managed topology-aware flavor and quota; the checked-in
 overlay deliberately does not publish the environment-specific DGX selector.
 
+For an existing equivalent platform-managed allocation, set the pipeline
+parameters `workspace`, `clusterQueue`, `a100Flavor`, and `h200Flavor`
+explicitly; `dgxFlavor` applies only when DGX Spark is enabled. Defaults retain
+the nightly workspace and shared v2 queue contract above. Both the hardware
+matrix and optional RDMA job label only their newly created run namespaces
+with the selected workspace identity and route their LocalQueues to the
+selected ClusterQueue. The workspace value must match that queue's
+namespace selector and be authorized to share its allocation. These
+parameters do not create or increase quota, relabel existing namespaces, or
+relax the required topology and hardware checks.
+
+For recurring runs, configure `FLEX_NIGHTLY_WORKSPACE`,
+`FLEX_NIGHTLY_CLUSTER_QUEUE`, `FLEX_NIGHTLY_A100_FLAVOR`, and
+`FLEX_NIGHTLY_H200_FLAVOR` as nonsecret pipeline-definition variables;
+`FLEX_NIGHTLY_DGX_FLAVOR` applies only to the optional target. The parameter
+defaults reference these variables so scheduled runs retain the configured
+routing. An explicit runtime parameter takes precedence, including an explicit
+legacy default value. Missing, empty, or unresolved routing variables retain
+the public defaults above. Template parameters expand before task-time
+variable macros; the shared routing helper resolves any remaining unset values.
+These settings do not change the default `full` profile, enable optional
+targets, or alter the schedule. A candidate branch/manual run does not update
+the scheduled `main` source; recurring runs require the source change to be
+reviewed and landed separately.
+
+Offline contract checks clear inherited `FLEX_NIGHTLY_*` settings only within
+the test process before constructing their fake inventory. The real inventory
+and workload tasks retain the configured deployment values.
+
+Serialize nightly runs; capacity checks are snapshots, not exclusive
+reservations. Existing GPU requests inform shape skips, while admission
+remains subject to shared queue contention and its approved preemption policy.
+The harness cleans up only its own run namespace.
+
 Create the pipeline in the AKS AI Runtime Azure DevOps project from
-`.pipelines/taugrid-flex-nightly.yml`. It uses the existing
-`aks ai runtime - prod` Azure service connection. The selected Ray image must
+`.pipelines/taugrid-flex-nightly.yml`. Configure `azureServiceConnection` in
+the pipeline definition to reference an authorized service connection with
+access to the target subscription and cluster. The YAML deliberately has no
+service-connection default. Each cluster task explicitly selects
+`AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID` before obtaining credentials and fails
+without attempting cluster access if the variable is missing or unresolved,
+or if subscription selection fails. Diagnostic directories are initialized
+in a separate step before authentication so failure artifacts can still publish.
+After collecting all target inventories, preflight saves `hardware-matrix.json`
+before checking node readiness, RDMA capacity, and controller availability.
+Failed checks still fail the job and prevent workloads from starting; the
+published snapshot and nightly report retain the collected failure details.
+The presence of a hardware snapshot is not proof of successful qualification.
+The selected Ray image must
 include `linux/amd64`; manual runs with `includeDGXSpark=true` additionally
 require `linux/arm64` because DGX Spark is arm64.
+For a `tag@digest` image, preflight inspects `repository@digest` so a moved tag
+cannot redirect manifest inspection. Version checks and workloads retain the
+original image reference and immutable digest.
 Configure:
 
 | Name | Secret | Purpose |
 |------|--------|---------|
+| `azureServiceConnection` | no | Pipeline-definition variable naming the authorized service connection; required with no YAML default |
+| `AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID` | no | Target subscription explicitly selected before cluster credential retrieval; must be accessible to the service connection |
 | `AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP`, `AKS_AI_RUNTIME_FLEX_CLUSTER_NAME` | no | Persistent Flex target |
 | `AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE` | no | Environment-specific authoritative site-label values for the default targets |
 | `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR`, `AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE` | no | Environment-specific DGX selector and site; required only when `includeDGXSpark=true` |
