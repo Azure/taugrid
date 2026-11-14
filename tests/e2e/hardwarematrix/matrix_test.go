@@ -6,6 +6,7 @@ package hardwarematrix
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/Azure/taugrid/tests/e2e/results"
@@ -206,6 +208,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 		},
 	}
 	workerSpec := map[string]any{
+		"initContainers": []any{imagePackageGuard(cfg)},
 		"nodeSelector": map[string]any{
 			cfg.selectorKey:      cfg.selectorValue,
 			"tau.azure.com/site": cfg.site,
@@ -261,7 +264,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			"ttlSecondsAfterFinished":  int64(600),
 			"activeDeadlineSeconds":    int64(2100),
 			"runtimeEnvYAML": fmt.Sprintf(
-				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n    - --extra-index-url\n    - https://pypi.org/simple\n  pip_check: false\nenv_vars:\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
+				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n    - --extra-index-url\n    - https://pypi.org/simple\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
 				cfg.torchSpec,
 				cfg.torchIndexURL,
 				cfg.torchSpec,
@@ -296,7 +299,8 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 							"labels": map[string]any{"tau.azure.com/e2e-hardware-matrix": cfg.target},
 						},
 						"spec": map[string]any{
-							"nodeSelector": map[string]any{"kubernetes.azure.com/mode": "system"},
+							"initContainers": []any{imagePackageGuard(cfg)},
+							"nodeSelector":   map[string]any{"kubernetes.azure.com/mode": "system"},
 							"tolerations": []any{
 								map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
 							},
@@ -342,6 +346,23 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 		},
 	}}
 	return object
+}
+
+func imagePackageGuard(cfg matrixConfig) map[string]any {
+	return map[string]any{
+		"name":  "image-package-check",
+		"image": cfg.image,
+		"command": []any{
+			"python3", "/opt/taugrid/ray-torch/check_image.py",
+			"--torch-spec", cfg.torchSpec,
+			"--torch-index-url", cfg.torchIndexURL,
+			"--ray-version", cfg.rayVersion,
+		},
+		"resources": map[string]any{
+			"requests": map[string]any{"cpu": "250m", "memory": "256Mi"},
+			"limits":   map[string]any{"cpu": "1", "memory": "1Gi"},
+		},
+	}
 }
 
 func requireTopologyAssignment(t *testing.T, workload *unstructured.Unstructured, workers int) {
@@ -483,41 +504,128 @@ func rayVersion(t *testing.T, image string) string {
 }
 
 func TestBuildRayJobContract(t *testing.T) {
-	cfg := matrixConfig{
-		namespace:        "nightly",
-		queue:            "h200",
-		target:           "h200",
-		site:             "site-h200",
-		selectorKey:      "kueue.azure.com/gpu-series",
-		selectorValue:    "nd-h200-v5",
-		image:            "ray:test",
-		rayVersion:       "2.55.1",
-		torchSpec:        "torch==2.7.1",
-		torchIndexURL:    "https://download.pytorch.org/whl/cu128",
-		workers:          16,
-		expectedHosts:    2,
-		expectedPerHost:  8,
-		requiredTopology: "tau.azure.com/site",
-	}
-	job := buildRayJob(cfg, "train", trainRayJobName, trainRayJobName+"-script")
+	for _, workerCount := range []int{8, 16} {
+		t.Run(fmt.Sprintf("%dgpu", workerCount), func(t *testing.T) {
+			cfg := matrixConfig{
+				namespace:        "nightly",
+				queue:            "h200",
+				target:           "h200",
+				site:             "site-h200",
+				selectorKey:      "kueue.azure.com/gpu-series",
+				selectorValue:    "nd-h200-v5",
+				image:            "ray:test",
+				rayVersion:       "2.58.0",
+				torchSpec:        "torch==2.7.1",
+				torchIndexURL:    "https://download.pytorch.org/whl/cu128",
+				workers:          workerCount,
+				expectedHosts:    workerCount / 8,
+				expectedPerHost:  8,
+				requiredTopology: "kubernetes.io/hostname",
+			}
+			if cfg.expectedHosts > 1 {
+				cfg.requiredTopology = "tau.azure.com/site"
+			}
+			job := buildRayJob(cfg, "train", trainRayJobName, trainRayJobName+"-script")
 
-	workers, found, err := unstructured.NestedSlice(
-		job.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, workers, 1)
-	group := workers[0].(map[string]any)
-	require.Equal(t, int64(16), group["replicas"])
-	annotations, found, err := unstructured.NestedStringMap(
-		group, "template", "metadata", "annotations")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "tau.azure.com/site",
-		annotations["kueue.x-k8s.io/podset-required-topology"])
-	spread, found, err := unstructured.NestedSlice(group, "template", "spec", "topologySpreadConstraints")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, spread, 1)
+			runtimeEnvYAML, found, err := unstructured.NestedString(job.Object, "spec", "runtimeEnvYAML")
+			require.NoError(t, err)
+			require.True(t, found)
+			var runtimeEnv struct {
+				EnvVars map[string]any `json:"env_vars"`
+				Pip     map[string]any `json:"pip"`
+			}
+			require.NoError(t, yaml.Unmarshal([]byte(runtimeEnvYAML), &runtimeEnv))
+			require.Equal(t, "1", runtimeEnv.EnvVars["NCCL_IB_DISABLE"])
+			pipSpec, err := os.ReadFile("../../../scripts/images/ray-torch/pip_spec.json")
+			require.NoError(t, err)
+			var expectedPip map[string]any
+			require.NoError(t, json.Unmarshal(pipSpec, &expectedPip))
+			require.Equal(t, expectedPip, runtimeEnv.Pip)
+
+			workers, found, err := unstructured.NestedSlice(
+				job.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Len(t, workers, 1)
+			group := workers[0].(map[string]any)
+			require.Equal(t, int64(workerCount), group["replicas"])
+			annotations, found, err := unstructured.NestedStringMap(
+				group, "template", "metadata", "annotations")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, cfg.requiredTopology,
+				annotations["kueue.x-k8s.io/podset-required-topology"])
+			spread, found, err := unstructured.NestedSlice(group, "template", "spec", "topologySpreadConstraints")
+			require.NoError(t, err)
+			require.Equal(t, cfg.expectedHosts > 1, found)
+			if found {
+				require.Len(t, spread, 1)
+			}
+
+			podSpec, found, err := unstructured.NestedMap(group, "template", "spec")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.NotContains(t, podSpec, "securityContext")
+			headSpec, found, err := unstructured.NestedMap(
+				job.Object, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+			require.NoError(t, err)
+			require.True(t, found)
+			for _, spec := range []map[string]any{headSpec, podSpec} {
+				initContainers, found, err := unstructured.NestedSlice(spec, "initContainers")
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Len(t, initContainers, 1)
+				guard := initContainers[0].(map[string]any)
+				require.Equal(t, cfg.image, guard["image"])
+				command, found, err := unstructured.NestedStringSlice(guard, "command")
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, []string{
+					"python3", "/opt/taugrid/ray-torch/check_image.py",
+					"--torch-spec", cfg.torchSpec,
+					"--torch-index-url", cfg.torchIndexURL,
+					"--ray-version", cfg.rayVersion,
+				}, command)
+				require.NotContains(t, guard, "securityContext")
+				for _, field := range []string{"requests", "limits"} {
+					resources, found, err := unstructured.NestedStringMap(guard, "resources", field)
+					require.NoError(t, err)
+					require.True(t, found)
+					require.Len(t, resources, 2)
+					require.Contains(t, resources, "cpu")
+					require.Contains(t, resources, "memory")
+					appContainers, found, err := unstructured.NestedSlice(spec, "containers")
+					require.NoError(t, err)
+					require.True(t, found)
+					appResources, found, err := unstructured.NestedStringMap(
+						appContainers[0].(map[string]any), "resources", field)
+					require.NoError(t, err)
+					require.True(t, found)
+					for key, quantity := range resources {
+						initQuantity := resource.MustParse(quantity)
+						appQuantity := resource.MustParse(appResources[key])
+						require.LessOrEqual(t, initQuantity.Cmp(appQuantity), 0,
+							"init resources must not increase the effective pod shape")
+					}
+				}
+			}
+			containers, found, err := unstructured.NestedSlice(podSpec, "containers")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Len(t, containers, 1)
+			container := containers[0].(map[string]any)
+			require.NotContains(t, container, "securityContext")
+			for _, field := range []string{"requests", "limits"} {
+				resources, found, err := unstructured.NestedStringMap(container, "resources", field)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Len(t, resources, 3)
+				require.Contains(t, resources, "cpu")
+				require.Contains(t, resources, "memory")
+				require.Equal(t, "1", resources["nvidia.com/gpu"])
+			}
+		})
+	}
 }
 
 func TestParseSelector(t *testing.T) {
