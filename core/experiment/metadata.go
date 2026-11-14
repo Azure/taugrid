@@ -14,6 +14,7 @@ import (
 
 	"github.com/Azure/taugrid/core/exptelemetry"
 	"github.com/Azure/taugrid/core/fileutil"
+	"github.com/Azure/taugrid/core/version"
 	"github.com/Azure/taugrid/core/workloadmeta"
 )
 
@@ -27,6 +28,7 @@ const (
 	labelStellarGroup      = workloadmeta.LabelStellarGroup
 
 	AnnotationCaptureVersion      = workloadmeta.AnnotationCaptureVersion
+	AnnotationTauVersion          = workloadmeta.AnnotationTauVersion
 	AnnotationNamespace           = workloadmeta.AnnotationNamespace
 	AnnotationTauCommand          = workloadmeta.AnnotationTauCommand
 	AnnotationImage               = workloadmeta.AnnotationImage
@@ -99,6 +101,7 @@ func (m Metadata) KubernetesMetadata() (map[string]string, map[string]string) {
 
 	annotations := map[string]string{}
 	addAnnotation(annotations, AnnotationCaptureVersion, captureVersion)
+	addAnnotation(annotations, AnnotationTauVersion, producingTauVersion())
 	addAnnotation(annotations, AnnotationNamespace, m.Namespace)
 	addAnnotation(annotations, AnnotationWorkspaceID, m.WorkspaceID)
 	addAnnotation(annotations, AnnotationResultScope, m.ResultScope)
@@ -130,6 +133,17 @@ func (m Metadata) KubernetesMetadata() (map[string]string, map[string]string) {
 		addAnnotation(annotations, AnnotationStellarTags, encoded)
 	}
 	return labels, annotations
+}
+
+func producingTauVersion() string {
+	commit := strings.TrimSpace(version.Commit)
+	if version.Version != "dev" || commit == "" || commit == "none" {
+		return version.Version
+	}
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	return "dev+" + commit
 }
 
 func MergeMetadata(labels, annotations map[string]string, m Metadata) (map[string]string, map[string]string) {

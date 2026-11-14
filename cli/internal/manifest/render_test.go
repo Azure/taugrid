@@ -4128,6 +4128,49 @@ func incompressibleASCII(seed int64, n int) []byte {
 	return out
 }
 
+func TestRenderPayloadDigestAnnotationMatchesScriptPayloadEnv(t *testing.T) {
+	cases := []struct {
+		name string
+		kind string
+		raw  string
+	}{
+		{name: "job", kind: WorkloadKindJob, raw: "schema_version: 1\nname: digest-job\ncompute: { gpus: 1 }\nruntime: { pip: [torch==2.4.0] }\n"},
+		{name: "rayjob", kind: WorkloadKindRayJob, raw: "schema_version: 1\nname: digest-rayjob\ncompute: { gpus: 1, workers: 2 }\nruntime: { pip: [torch==2.4.0] }\n"},
+		{name: "rayjob-cpu", kind: WorkloadKindRayJob, raw: "schema_version: 1\nname: digest-rayjob-cpu\ncompute: { gpus: 0, workers: 2 }\nruntime: { image: mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0, pip: [torch==2.4.0] }\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := Parse([]byte(tc.raw))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			out, err := Render(RenderOptions{
+				Manifest:         m,
+				ManifestRaw:      []byte(tc.raw),
+				ManifestFilename: "digest.yaml",
+				MainScript:       []byte("# trainer\n"),
+				WorkloadKind:     tc.kind,
+			})
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			doc := unmarshalLast(t, out)
+			podSpec := dig(doc, "spec", "template", "spec")
+			if tc.kind != WorkloadKindJob {
+				podSpec = dig(doc, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec")
+			}
+			scriptIC := containerByName(t, podSpecInitContainers(t, podSpec), scriptPayloadInitContainerName)
+			envDigest := initContainerEnvValue(t, scriptIC, payload.EnvDigest)
+			scriptDigest, _ := dig(doc, "metadata", "annotations", workloadmeta.AnnotationScriptPayloadDigest).(string)
+			payloadDigest, _ := dig(doc, "metadata", "annotations", workloadmeta.AnnotationPayloadDigest).(string)
+			if envDigest == "" || payloadDigest != envDigest || scriptDigest != envDigest {
+				t.Fatalf("%s = %q, %s = %q, want both to equal the script payload %s %q",
+					workloadmeta.AnnotationPayloadDigest, payloadDigest, workloadmeta.AnnotationScriptPayloadDigest, scriptDigest, payload.EnvDigest, envDigest)
+			}
+		})
+	}
+}
+
 func TestRenderRejectsScriptPayloadOverCap(t *testing.T) {
 	raw := []byte(`
 schema_version: 1
