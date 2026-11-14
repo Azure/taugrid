@@ -395,7 +395,10 @@ after coordinating exclusive capacity; disabled targets are recorded rather
 than silently omitted.
 
 The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
-profile adds all native and cross-node shapes. `rdmaConformance=true` adds the
+profile adds all native and cross-node shapes. The generic matrix sets
+`NCCL_IB_DISABLE=1` for ordinary GPU workers, retaining CUDA/NCCL collectives
+without requiring InfiniBand resources or memory-locking privileges.
+`rdmaConformance=true` independently adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
 it is not part of the default hardware matrix.
 
