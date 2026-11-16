@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -12,8 +13,10 @@ import uuid
 
 
 def kubectl(*arguments, input_text=None):
+    context = os.environ.get("AI_RUNTIME_E2E_KUBE_CONTEXT", "").strip()
+    context_arguments = ["--context", context] if context else []
     return subprocess.run(
-        ["kubectl", *arguments],
+        ["kubectl", *context_arguments, *arguments],
         input=input_text,
         capture_output=True,
         text=True,

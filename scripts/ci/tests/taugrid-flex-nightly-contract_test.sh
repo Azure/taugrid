@@ -178,12 +178,9 @@ with tempfile.TemporaryDirectory() as temporary:
         if name not in targets:
             continue
         overrides = {}
-        if name != "h200_rdma":
-            for target in ("A100", "H200", "DGX"):
-                overrides[f"FLEX_NIGHTLY_{target}_FLAVOR"] = f"{target.lower()}Flavor"
-                overrides[f"FLEX_NIGHTLY_{target}_CLUSTER_QUEUE"] = "clusterQueue"
-        else:
-            overrides["FLEX_NIGHTLY_CLUSTER_QUEUE"] = "clusterQueue"
+        for target in ("A100", "H200", "DGX"):
+            overrides[f"FLEX_NIGHTLY_{target}_FLAVOR"] = f"{target.lower()}Flavor"
+            overrides[f"FLEX_NIGHTLY_{target}_CLUSTER_QUEUE"] = "clusterQueue"
         if name != "preflight":
             overrides["FLEX_NIGHTLY_WORKSPACE"] = "workspace"
         for variable, parameter in overrides.items():
@@ -192,7 +189,10 @@ with tempfile.TemporaryDirectory() as temporary:
         assert routing_source in job, name
         first_use = (
             "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
-            if name == "preflight" else "kubectl create namespace"
+            if name == "preflight" else (
+                "scripts/ci/taugrid-flex-nightly-ib.sh"
+                if name == "h200_rdma" else "kubectl create namespace"
+            )
         )
         assert job.index(routing_source) < job.index(first_use), name
         defaults = {
@@ -254,7 +254,11 @@ with tempfile.TemporaryDirectory() as temporary:
             continue
         inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
         script = textwrap.dedent(inline.group(1))
-        routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
+        if name == "h200_rdma":
+            script = (Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh").read_text()
+            routing = script[script.index("kubectl create namespace"):script.index('selector="$(jq')]
+        else:
+            routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
         routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
         routing = routing.replace("$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent))
         for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
@@ -283,7 +287,11 @@ with tempfile.TemporaryDirectory() as temporary:
                  'set -euo pipefail\n'
                  'namespace=taugrid-nightly-matrix-42-1\n'
                  f'bundle_dir="{directory}"\n'
-                 'contract="$TEST_CONTRACT"\n' + routing],
+                 f'repo_root="{Path(sys.argv[1]).resolve().parent.parent}"\n'
+                 'run_id=42-1\n'
+                 'contract="$TEST_CONTRACT"\n'
+                 'h200="$(jq -c \'.targets[] | select(.name == "h200")\' "$contract")"\n'
+                 'cluster_queue="$(jq -r .cluster_queue <<<"$h200")"\n' + routing],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -296,7 +304,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
             expected_queues = 2 if name == "hardware_matrix" else 1
             queue_start = 2
-            if name == "hardware_matrix":
+            if name in ("hardware_matrix", "h200_rdma"):
                 assert actual[2] == "get namespace taugrid-nightly-matrix-42-1 --ignore-not-found -o json"
                 queue_start = 3
                 assert json.loads((directory / "namespace-owner.json").read_text())["run_id"] == "42-1"
@@ -396,7 +404,7 @@ with tempfile.TemporaryDirectory() as temporary:
         side_effect=subprocess.TimeoutExpired(["kubectl"], 30),
     ) as process, patch.object(
         sys, "argv", [str(cleanup_path), "cleanup", namespace, run_id, str(owner_path)],
-    ), contextlib.redirect_stderr(timeout_stderr):
+    ), patch.dict(os.environ, {"AI_RUNTIME_E2E_KUBE_CONTEXT": ""}), contextlib.redirect_stderr(timeout_stderr):
         try:
             cleanup.main()
         except SystemExit as error:
@@ -407,6 +415,70 @@ with tempfile.TemporaryDirectory() as temporary:
         assert process.call_args.args[0][:3] == ["kubectl", "get", "namespace"]
         assert process.call_args.kwargs["timeout"] == 30
     assert "kubectl timed out after 30 seconds" in timeout_stderr.getvalue()
+    for selected_context in ("", "target-context"):
+        with patch.dict(os.environ, {"AI_RUNTIME_E2E_KUBE_CONTEXT": selected_context}), \
+                patch.object(cleanup.subprocess, "run") as process:
+            process.return_value.stdout = "{}"
+            cleanup.kubectl("get", "namespace", namespace)
+            expected = ["kubectl"]
+            if selected_context:
+                expected += ["--context", selected_context]
+            expected += ["get", "namespace", namespace]
+            assert process.call_args.args[0] == expected
+            assert process.call_args.kwargs["timeout"] == 30
+            assert process.call_args.kwargs["check"] is True
+
+    ib_script = (Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh").read_text()
+    queue_check = ib_script.split("\nrepo_root=", 1)[0]
+    directory = root / "ib-queue-contract"
+    directory.mkdir()
+    commands = directory / "bin"
+    commands.mkdir()
+    command = commands / "kubectl"
+    command.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'case "$*" in\n'
+        '  *"get clusterqueue "*) cat "$QUEUE_FIXTURE";;\n'
+        '  *"get cohort "*) cat "$COHORT_FIXTURE";;\n'
+        '  *) exit 91;;\nesac\n'
+    )
+    command.chmod(0o755)
+    resource = "rdma/rdma_shared_device_a"
+
+    def quota_group(nominal, borrowing=None):
+        quota = {"name": resource, "nominalQuota": nominal}
+        if borrowing is not None:
+            quota["borrowingLimit"] = borrowing
+        return [{"coveredResources": [resource], "flavors": [
+            {"name": "selected-flavor", "resources": [quota]},
+        ]}]
+
+    for scenario, queue_groups, cohort_groups, parent, passes in (
+        ("missing-queue-resource", [], quota_group(16), "", False),
+        ("missing-cohort-resource", quota_group(0, 16), [], "", False),
+        ("insufficient-borrowing", quota_group(0, 8), quota_group(16), "", False),
+        ("insufficient-pool", quota_group(0, 16), quota_group(8), "", False),
+        ("valid-direct-pool", quota_group(0, 16), quota_group(16), "", True),
+        ("unqualified-nested-pool", quota_group(0, 16), quota_group(16), "parent-pool", False),
+    ):
+        queue_fixture = directory / "queue.json"
+        cohort_fixture = directory / "cohort.json"
+        queue_fixture.write_text(json.dumps({"spec": {
+            "cohortName": "selected-cohort", "resourceGroups": queue_groups,
+        }}))
+        cohort_fixture.write_text(json.dumps({"spec": {
+            "resourceGroups": cohort_groups, "parentName": parent,
+        }}))
+        environment = dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}",
+                           QUEUE_FIXTURE=str(queue_fixture), COHORT_FIXTURE=str(cohort_fixture))
+        result = subprocess.run(
+            ["bash", "-c", queue_check + '\nverify_ib_queue_contract selected-queue selected-flavor "$1"',
+             "queue-test", str(directory)],
+            env=environment, capture_output=True, text=True,
+        )
+        assert (result.returncode == 0) == passes, (scenario, result.stderr)
+        if not passes:
+            assert "IB admission contract failed" in result.stderr, (scenario, result.stderr)
 
     preflight = next(job for job in jobs if job.startswith("preflight\n"))
     inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)
@@ -519,16 +591,15 @@ grep -Fq "MATRIX_SCHEDULER_RECOVERY_NODE" "$PIPELINE" ||
 grep -Fq "TestConcurrentGPUWorkloadsAcrossHardwareSites" \
   "${REPO_ROOT}/tests/e2e/multisite/multisite_test.go" ||
   fail "full profile must include concurrent hardware-site validation"
-grep -Fq "TestFineWebRayTrain16xH200IB" "$PIPELINE" ||
-  fail "optional H200 RDMA/NCCL conformance must remain available"
-grep -Fq 'name: FINEWEB_CHECKPOINT_INTERVAL' "$PIPELINE" ||
-  fail "short RDMA qualification must explicitly configure its checkpoint interval"
-grep -Fq 'value: "1"' "$PIPELINE" ||
-  fail "two-step RDMA qualification must checkpoint within the run"
-grep -Fq 'FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)' "$PIPELINE" ||
-  fail "RDMA qualification must forward its checkpoint interval to the fixture"
-grep -Fq "export FINEWEB_TAS_MODE=site" "$PIPELINE" ||
-  fail "H200 RDMA extension must use site-level topology for its two-node shape"
+grep -Fq 'scripts/ci/taugrid-flex-nightly-ib.sh' "$PIPELINE" ||
+  fail "optional RDMA lane must invoke the dedicated synthetic IB path"
+grep -Fq "TestRayIBGPU" "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" ||
+  fail "optional RDMA lane must retain CUDA IB collective conformance"
+grep -Fq 'export MATRIX_REQUIRED_TOPOLOGY=tau.azure.com/site' "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" ||
+  fail "IB collective must use site-level topology for its two-node shape"
+if grep -Fq 'TestFineWebRayTrain16xH200IB' "$PIPELINE"; then
+  fail "nightly must not run legacy FineWeb IB storage/privilege contracts"
+fi
 grep -Fq "trap cleanup EXIT" "$PIPELINE" ||
   fail "pipeline must retain fail-safe cleanup traps"
 grep -Fq "condition: always()" "$PIPELINE" ||
@@ -656,6 +727,16 @@ jq -e '
   and .rdma_target.rdma_nodes == 2
 ' "$FLEX_NIGHTLY_CONTRACT_FILE" >/dev/null ||
   fail "preflight contract does not preserve the hardware matrix inventory"
+
+if PATH="${fake_bin}:${PATH}" bash "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" \
+  "${FLEX_NIGHTLY_CONTRACT_FILE}" "${fake_bin}/ib-capacity" 42-1 \
+  >"${fake_bin}/ib-capacity.log" 2>&1; then
+  fail "IB must reject hosts advertising fewer than eight RDMA units each"
+fi
+grep -Fq "at least eight RDMA units each" "${fake_bin}/ib-capacity.log" ||
+  fail "IB must fail explicitly on insufficient RDMA capacity before namespace creation"
+[ ! -e "${fake_bin}/ib-capacity/diagnostics/namespace-owner.json" ] ||
+  fail "IB capacity refusal must not create namespace ownership"
 
 FLEX_NIGHTLY_INCLUDE_DGX=false \
 FLEX_NIGHTLY_A100_FLAVOR=test-a100-flavor \

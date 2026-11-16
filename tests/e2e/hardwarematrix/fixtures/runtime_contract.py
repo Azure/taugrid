@@ -6,6 +6,7 @@ import importlib
 import json
 import os
 import platform
+import resource
 import sys
 
 
@@ -29,6 +30,13 @@ def check_base(ray_version):
     if sys.prefix != sys.base_prefix:
         raise RuntimeError("Ray base image must use the global interpreter")
     return check_python_ray(ray_version)
+
+
+def check_memlock():
+    limits = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+    if any(limit != resource.RLIM_INFINITY and limit < 64 * 1024 * 1024 for limit in limits):
+        raise RuntimeError(f"IB requires inherited soft/hard memlock of at least 64 MiB, got {limits}")
+    return limits
 
 
 def check_runtime():
@@ -56,5 +64,9 @@ def check_runtime():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ray-version", required=True)
+    parser.add_argument("--ib", action="store_true")
     args = parser.parse_args()
-    print("MATRIX_BASE_RESULT=" + json.dumps(check_base(args.ray_version), sort_keys=True))
+    result = check_base(args.ray_version)
+    if args.ib:
+        result["memlock"] = check_memlock()
+    print("MATRIX_BASE_RESULT=" + json.dumps(result, sort_keys=True))

@@ -4,6 +4,9 @@
 import ast
 import os
 from pathlib import Path
+import re
+import resource
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -54,6 +57,84 @@ class RuntimeContractTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "global interpreter"):
                 runtime_contract.check_base("2.58.0")
 
+    def test_ib_rejects_low_inherited_memlock_without_changing_limits(self):
+        for limits, passes in (
+            ((65536, 65536), False),
+            ((65536, 67108864), False),
+            ((67108864, 67108864), True),
+            ((resource.RLIM_INFINITY, resource.RLIM_INFINITY), True),
+        ):
+            with self.subTest(limits=limits):
+                with patch("runtime_contract.resource.getrlimit", return_value=limits):
+                    with patch("runtime_contract.resource.setrlimit") as change_limits:
+                        if passes:
+                            self.assertEqual(runtime_contract.check_memlock(), limits)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, "inherited soft/hard memlock"):
+                                runtime_contract.check_memlock()
+                        change_limits.assert_not_called()
+
+    def test_ib_requires_real_transport_and_exact_unique_rank_results(self):
+        source = ast.parse(Path(__file__).with_name("ib_gpu.py").read_text())
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                     and node.name in ("require_ib_transport", "require_rank_results")]
+        namespace = {"re": re, "IB_HCAS": [f"mlx5_ib{index}" for index in range(8)]}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "ib_gpu.py", "exec"), namespace)
+        validate = namespace["require_rank_results"]
+        log = "Bootstrap: Using eth0\nNET/IB : Using [0]mlx5_ib0:1/IB\nUsing network IB\n"
+        records = [{"rank": rank, "hostname": f"worker-{rank}", "nccl_log": log,
+                    "all_reduce": [float(index * 16 + 120) for index in range(16)]}
+                   for rank in range(16)]
+        validate(records, 16)
+        for broken in (
+            records[:-1],
+            [dict(item, rank=0) for item in records],
+            [dict(item, hostname="one-pod") for item in records],
+            [dict(item, all_reduce=[0.0] * 16) for item in records],
+            [dict(item, nccl_log="NET/IB : No device found\nUsing network Socket\n") for item in records],
+            [dict(item, nccl_log=log + "NET/Socket : Using [0]eth0\n") for item in records],
+            [dict(item, nccl_log="NET/IB : Using [0]mlx5_ib0:1/IB\n") for item in records],
+            [dict(item, nccl_log=log.replace("mlx5_ib0:1/IB", "mlx5_an0:1/RoCE")) for item in records],
+            [dict(item, nccl_log=log.replace("mlx5_ib0:1/IB", "mlx5_ib0:1/RoCE")) for item in records],
+            [dict(item, nccl_log=log.replace("mlx5_ib0:1/IB", "mlx5_an0:1/IB")) for item in records],
+        ):
+            with self.subTest(broken=broken[0]):
+                with self.assertRaises(RuntimeError):
+                    validate(broken, 16)
+
+    def test_ib_rejects_missing_inactive_or_ethernet_ports(self):
+        source = ast.parse(Path(__file__).with_name("ib_gpu.py").read_text())
+        function = next(node for node in source.body if getattr(node, "name", "") == "require_ib_devices")
+        hcas = [f"mlx5_ib{index}" for index in range(8)]
+        namespace = {"Path": Path, "os": os, "IB_HCAS": hcas}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "ib_gpu.py", "exec"), namespace)
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(
+            os.environ, {"NCCL_IB_HCA": "=" + ",".join(f"{hca}:1" for hca in hcas)},
+        ):
+            root = Path(temporary)
+            for hca in hcas:
+                port = root / hca / "ports" / "1"
+                port.mkdir(parents=True)
+                for name, value in (("link_layer", "InfiniBand"), ("state", "4: ACTIVE"),
+                                    ("phys_state", "5: LinkUp")):
+                    (port / name).write_text(value)
+            validate = namespace["require_ib_devices"]
+            self.assertEqual(len(validate(root)), 8)
+            for name, invalid in (("link_layer", "Ethernet"), ("state", "1: DOWN"),
+                                  ("phys_state", "2: Polling")):
+                path = root / hcas[0] / "ports" / "1" / name
+                original = path.read_text()
+                path.write_text(invalid)
+                with self.assertRaisesRegex(RuntimeError, "not ACTIVE/LinkUp"):
+                    validate(root)
+                path.write_text(original)
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                validate(root)
+            with patch.dict(os.environ, {"NCCL_IB_HCA": "mlx5"}):
+                with self.assertRaisesRegex(RuntimeError, "exact approved"):
+                    validate(root)
+
     def test_runtime_accepts_exact_downloaded_packages_in_virtualenv(self):
         self.modules["torch"] = self.torch
         with patch("runtime_contract.sys.prefix", "/tmp/ray/venv"):
@@ -93,6 +174,7 @@ class RuntimeContractTest(unittest.TestCase):
         for fixture, owner, method in (
             ("serve_gpu.py", "GPUInference", "__init__"),
             ("train_gpu.py", None, "train_loop"),
+            ("ib_gpu.py", None, "collective_loop"),
         ):
             with self.subTest(fixture=fixture):
                 source = ast.parse(Path(__file__).with_name(fixture).read_text())

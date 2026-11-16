@@ -40,6 +40,9 @@ var serveScript string
 //go:embed fixtures/train_gpu.py
 var trainScript string
 
+//go:embed fixtures/ib_gpu.py
+var ibScript string
+
 //go:embed fixtures/runtime_contract.py
 var runtimeContractScript string
 
@@ -80,9 +83,24 @@ func TestRayTrainGPU(t *testing.T) {
 	runMatrixWorkload(t, "train", trainRayJobName, trainScript)
 }
 
+func TestRayIBGPU(t *testing.T) {
+	if !matrixEnabled() || os.Getenv("E2E_HARDWARE_IB") != "1" {
+		t.Skip("set AI_RUNTIME_E2E=1, E2E_HARDWARE_MATRIX=1 and E2E_HARDWARE_IB=1 to run IB conformance")
+	}
+	runMatrixWorkload(t, "ib", "e2e-matrix-ib", ibScript)
+}
+
 func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	t.Helper()
 	cfg := configFromEnv(t)
+	if workload == "ib" {
+		require.Equal(t, "h200", cfg.target)
+		require.Equal(t, 16, cfg.workers)
+		require.Equal(t, 2, cfg.expectedHosts)
+		require.Equal(t, 8, cfg.expectedPerHost)
+		require.Empty(t, os.Getenv("MATRIX_SCHEDULER_RECOVERY_NODE"),
+			"IB conformance does not permit scheduler recovery overrides")
+	}
 	tc := e2e.NewTestContext(t, context.Background())
 	tc.RecordOutcomeAs(fmt.Sprintf("%s/%s/%dgpu", workload, cfg.target, cfg.workers))
 
@@ -165,6 +183,12 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 		success = "SUCCESS: Ray Train completed on every GPU worker"
 		logMarkers = []string{"MATRIX_TRAIN_RESULT=", success}
 	}
+	if workload == "ib" {
+		logMarkers = []string{
+			"MATRIX_IB_RESULT=",
+			"SUCCESS: CUDA NCCL InfiniBand collectives completed on every GPU worker",
+		}
+	}
 	logMarkers = append(logMarkers, "MATRIX_RUNTIME_RESULT=")
 	logs, err := tc.WaitForFullPodLogsByLabelContaining(
 		cfg.namespace,
@@ -215,6 +239,17 @@ func configFromEnv(t *testing.T) matrixConfig {
 
 func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstructured.Unstructured {
 	scriptName := workload + "_gpu.py"
+	ncclIBDisable := "1"
+	runtimeEnvExtras := ""
+	if workload == "ib" {
+		ncclIBDisable = "0"
+		runtimeEnvExtras = "  NCCL_NET: IB\n  NCCL_DEBUG: INFO\n  NCCL_DEBUG_SUBSYS: INIT,NET\n  NCCL_DEBUG_FILE: /tmp/taugrid-nccl.%h.%p.log\n"
+		hcas := make([]string, 8)
+		for i := range hcas {
+			hcas[i] = fmt.Sprintf("mlx5_ib%d:1", i)
+		}
+		runtimeEnvExtras += fmt.Sprintf("  NCCL_IB_HCA: %q\n", "="+strings.Join(hcas, ","))
+	}
 	workerLabels := map[string]any{
 		"tau.azure.com/e2e-hardware-matrix": cfg.target,
 		"tau.azure.com/e2e-matrix-workload": workload,
@@ -226,7 +261,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 		},
 	}
 	workerSpec := map[string]any{
-		"initContainers": []any{baseImageGuard(cfg)},
+		"initContainers": []any{baseImageGuard(cfg, false)},
 		"nodeSelector": map[string]any{
 			cfg.selectorKey:      cfg.selectorValue,
 			"tau.azure.com/site": cfg.site,
@@ -282,12 +317,14 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			"ttlSecondsAfterFinished":  int64(600),
 			"activeDeadlineSeconds":    int64(2100),
 			"runtimeEnvYAML": fmt.Sprintf(
-				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
+				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: %q\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n%s",
 				cfg.torchSpec,
 				cfg.torchIndexURL,
+				ncclIBDisable,
 				cfg.rayVersion,
 				cfg.torchSpec,
 				cfg.torchIndexURL,
+				runtimeEnvExtras,
 			),
 			"submitterPodTemplate": map[string]any{
 				"spec": map[string]any{
@@ -318,7 +355,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 							"labels": map[string]any{"tau.azure.com/e2e-hardware-matrix": cfg.target},
 						},
 						"spec": map[string]any{
-							"initContainers": []any{baseImageGuard(cfg)},
+							"initContainers": []any{baseImageGuard(cfg, false)},
 							"nodeSelector":   map[string]any{"kubernetes.azure.com/mode": "system"},
 							"tolerations": []any{
 								map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
@@ -364,11 +401,23 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			},
 		},
 	}}
+	if workload == "ib" {
+		guard := baseImageGuard(cfg, true)
+		for _, raw := range workerSpec["containers"].([]any) {
+			container := raw.(map[string]any)
+			resources := container["resources"].(map[string]any)
+			for _, field := range []string{"requests", "limits"} {
+				resources[field].(map[string]any)["rdma/rdma_shared_device_a"] = "1"
+			}
+			container["securityContext"] = guard["securityContext"]
+		}
+		workerSpec["initContainers"] = []any{guard}
+	}
 	return object
 }
 
-func baseImageGuard(cfg matrixConfig) map[string]any {
-	return map[string]any{
+func baseImageGuard(cfg matrixConfig, ib bool) map[string]any {
+	guard := map[string]any{
 		"name":  "base-image-check",
 		"image": cfg.image,
 		"command": []any{
@@ -383,6 +432,16 @@ func baseImageGuard(cfg matrixConfig) map[string]any {
 			"limits":   map[string]any{"cpu": "1", "memory": "1Gi"},
 		},
 	}
+	if ib {
+		guard["command"] = append(guard["command"].([]any), "--ib")
+		guard["securityContext"] = map[string]any{
+			"runAsNonRoot": true, "runAsUser": int64(65532), "runAsGroup": int64(65532),
+			"allowPrivilegeEscalation": false,
+			"capabilities":             map[string]any{"drop": []any{"ALL"}},
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+		}
+	}
+	return guard
 }
 
 func requireTopologyAssignment(t *testing.T, workload *unstructured.Unstructured, workers int) {
@@ -439,6 +498,11 @@ func requirePlacement(t *testing.T, tc *e2e.TestContext, cfg matrixConfig, workl
 		perHost[pod.Spec.NodeName]++
 		require.Equal(t, resource.MustParse("1"),
 			pod.Spec.Containers[0].Resources.Requests[corev1.ResourceName("nvidia.com/gpu")])
+		if workload == "ib" {
+			rdma := corev1.ResourceName("rdma/rdma_shared_device_a")
+			require.Equal(t, resource.MustParse("1"), pod.Spec.Containers[0].Resources.Requests[rdma])
+			require.Equal(t, resource.MustParse("1"), pod.Spec.Containers[0].Resources.Limits[rdma])
+		}
 	}
 	require.Len(t, perHost, cfg.expectedHosts)
 	for host, count := range perHost {
@@ -656,6 +720,75 @@ func TestBuildRayJobContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildIBRayJobContract(t *testing.T) {
+	cfg := matrixConfig{
+		namespace: "nightly", queue: "matrix-ib", target: "h200", site: "site-h200",
+		selectorKey: "kueue.azure.com/gpu-series", selectorValue: "nd-h200-v5",
+		image: "ray:test", rayVersion: "2.58.0", torchSpec: "torch==2.7.1",
+		torchIndexURL: "https://download.pytorch.org/whl/cu128",
+		workers:       16, expectedHosts: 2, expectedPerHost: 8, requiredTopology: "tau.azure.com/site",
+	}
+	job := buildRayJob(cfg, "ib", "e2e-matrix-ib", "ib-script")
+	runtimeYAML, found, err := unstructured.NestedString(job.Object, "spec", "runtimeEnvYAML")
+	require.NoError(t, err)
+	require.True(t, found)
+	var runtimeEnv struct {
+		EnvVars map[string]string `json:"env_vars"`
+		Pip     map[string]any    `json:"pip"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(runtimeYAML), &runtimeEnv))
+	require.Equal(t, "0", runtimeEnv.EnvVars["NCCL_IB_DISABLE"])
+	require.Equal(t, "IB", runtimeEnv.EnvVars["NCCL_NET"])
+	require.Equal(t, "=mlx5_ib0:1,mlx5_ib1:1,mlx5_ib2:1,mlx5_ib3:1,mlx5_ib4:1,mlx5_ib5:1,mlx5_ib6:1,mlx5_ib7:1",
+		runtimeEnv.EnvVars["NCCL_IB_HCA"])
+	require.Equal(t, "/tmp/taugrid-nccl.%h.%p.log", runtimeEnv.EnvVars["NCCL_DEBUG_FILE"])
+	expectedPip, err := os.ReadFile("../../../scripts/images/ray-torch/pip_spec.json")
+	require.NoError(t, err)
+	var pip map[string]any
+	require.NoError(t, json.Unmarshal(expectedPip, &pip))
+	require.Equal(t, pip, runtimeEnv.Pip)
+	groups, found, err := unstructured.NestedSlice(job.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, groups, 1)
+	group := groups[0].(map[string]any)
+	require.Equal(t, int64(16), group["replicas"])
+	spec, found, err := unstructured.NestedMap(group, "template", "spec")
+	require.NoError(t, err)
+	require.True(t, found)
+	data, err := json.Marshal(spec)
+	require.NoError(t, err)
+	var pod corev1.PodSpec
+	require.NoError(t, json.Unmarshal(data, &pod))
+	require.Len(t, pod.Containers, 1)
+	require.Len(t, pod.InitContainers, 1)
+	worker := pod.Containers[0]
+	rdma := corev1.ResourceName("rdma/rdma_shared_device_a")
+	for _, resources := range []corev1.ResourceList{worker.Resources.Requests, worker.Resources.Limits} {
+		require.Equal(t, resource.MustParse("1"), resources[rdma])
+		require.Equal(t, resource.MustParse("1"), resources["nvidia.com/gpu"])
+	}
+	require.Len(t, pod.TopologySpreadConstraints, 1)
+	require.Equal(t, "kubernetes.io/hostname", pod.TopologySpreadConstraints[0].TopologyKey)
+	require.Contains(t, pod.InitContainers[0].Command, "--ib")
+	for _, container := range []corev1.Container{worker, pod.InitContainers[0]} {
+		security := container.SecurityContext
+		require.NotNil(t, security)
+		require.True(t, *security.RunAsNonRoot)
+		require.Equal(t, int64(65532), *security.RunAsUser)
+		require.Equal(t, int64(65532), *security.RunAsGroup)
+		require.False(t, *security.AllowPrivilegeEscalation)
+		require.Nil(t, security.Privileged)
+		require.Empty(t, security.Capabilities.Add)
+		require.Equal(t, []corev1.Capability{"ALL"}, security.Capabilities.Drop)
+		require.Equal(t, corev1.SeccompProfileTypeRuntimeDefault, security.SeccompProfile.Type)
+	}
+	require.Len(t, pod.Volumes, 1)
+	require.NotNil(t, pod.Volumes[0].ConfigMap)
+	require.Nil(t, pod.Volumes[0].HostPath)
+	require.Nil(t, pod.Volumes[0].EmptyDir)
 }
 
 func TestRuntimePackageContract(t *testing.T) {

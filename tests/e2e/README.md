@@ -435,9 +435,65 @@ and final usage against each host's actual backing filesystem and eviction
 headroom before running eight one-GPU workers per host. This path does not
 provision storage, alter eviction thresholds, or claim that free GPU memory
 provides filesystem capacity.
-`rdmaConformance=true` independently adds the
-existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
-it is not part of the default hardware matrix.
+`rdmaConformance=true` adds `TestRayIBGPU` after the generic matrix succeeds.
+It uses the same base, pinned runtime downloads, and one-GPU worker renderer:
+16 worker Pods, eight on each of two H200 hosts. Each worker requests and limits
+one `rdma/rdma_shared_device_a`, one GPU, 1/2 CPUs and 4/8 GiB memory
+(request/limit). The system-pool head adds 1/2 CPUs and 4/8 GiB; the generated
+submitter adds 250m/1 CPU and 256 MiB/1 GiB. Workers and their base checks use
+UID/GID 65532, dropped capabilities, no privilege escalation, and RuntimeDefault
+seccomp. They require inherited soft and hard memlock of at least 64 MiB
+(or unlimited); the test never raises limits. That minimum detects the known
+64 KiB CQ failure, not a guarantee of sufficient locked memory for every NCCL
+configuration.
+
+The synthetic workload checks exact CUDA all-reduce vectors and all-gather ranks,
+exact packages, unique worker Pods, and observed 8/8 host placement.
+`NCCL_NET=IB` is mandatory, with exact `NCCL_IB_HCA` selection of ports
+`mlx5_ib0:1` through `mlx5_ib7:1`. Every rank verifies those sysfs ports have
+`link_layer=InfiniBand` and are ACTIVE/LinkUp, then requires `NET/IB` device
+selections explicitly ending in `/IB` and `Using network IB`. Ethernet/RoCE,
+unapproved HCAs, and selected `NET/Socket` transports fail.
+TCP bootstrap is allowed, but TCP collective transport is not. Full per-rank
+NCCL logs, devices, memlock, numerics, and package records are preserved in
+`MATRIX_IB_RESULT` inside `submitter.log`, alongside the observed worker Pod JSON.
+The test has a 50-minute Go deadline and the existing 35-minute RayJob deadline.
+It requires no dataset, PVC, hostPath, memory-backed volume, image publication,
+or namespace policy exception. Insufficient capacity or runtime permissions fail
+the selected lane rather than becoming successful skips.
+
+The lane rechecks the hardware contract, uses a fresh UID-recorded
+`taugrid-nightly-matrix-<run>-<attempt>` namespace after generic cleanup, and
+reuses the existing PVC/replacement-refusing cleanup and capability postflight.
+Its separate authenticated `always()` cleanup precedes diagnostic publication.
+It does not overlap the same run's matrix; other runs and tenants still compete
+for explicitly allocated GPU/RDMA resources. For a coordinated standalone run
+with existing authenticated access and the same routing variables as preflight:
+
+```bash
+RAY_E2E_IMAGE='<validated immutable base>' \
+  bash scripts/ci/taugrid-flex-nightly-ib.sh \
+  '<preflight hardware-contract.json>' '<absolute artifact directory>' '<numeric-run>-<attempt>'
+```
+
+Before namespace creation, the selected ClusterQueue must explicitly cover
+`rdma/rdma_shared_device_a` on the selected H200 ResourceFlavor. Its nominal
+quota and permitted borrowing from a directly configured Cohort must support
+16 units; a referenced Cohort must also cover that resource/flavor. A nested
+Cohort fails closed pending separate capacity qualification. The captured
+ClusterQueue/Cohort snapshots establish declared admission bounds, not a
+reservation or guarantee against concurrent consumption; Kueue admission
+remains mandatory. Device-plugin capacity alone is insufficient. Missing
+coverage requires a change to the authoritative queue/Cohort configuration,
+not removal of the worker RDMA requests or an automatic quota mutation.
+
+This is optional IB qualification, not evidence that the default matrix used IB,
+nor a GPUDirect RDMA or performance qualification.
+The shell lane uses the pipeline-owned kubeconfig's active context and refuses a
+conflicting `AI_RUNTIME_E2E_KUBE_CONTEXT`. For focused local Go test execution,
+that existing variable selects the context without changing global kubeconfig;
+the UID-owned cleanup helper honors the same override. Namespace and queue
+commands outside the test must also select that context explicitly.
 
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
