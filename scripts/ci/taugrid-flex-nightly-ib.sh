@@ -4,47 +4,44 @@
 
 set -euo pipefail
 
-verify_ib_queue_contract() {
-  local queue="$1" flavor="$2" directory="$3" cohort
-  kubectl --request-timeout=30s get clusterqueue "${queue}" -o json >"${directory}/ib-clusterqueue.json"
-  cohort="$(jq -er '.spec.cohortName // .spec.cohort // ""' "${directory}/ib-clusterqueue.json")"
-  printf '{}\n' >"${directory}/ib-cohort.json"
-  if [[ -n "${cohort}" ]]; then
-    kubectl --request-timeout=30s get cohort "${cohort}" -o json >"${directory}/ib-cohort.json"
-  fi
-  if ! jq -en --arg resource rdma/rdma_shared_device_a --arg flavor "${flavor}" \
-    --slurpfile queues "${directory}/ib-clusterqueue.json" \
-    --slurpfile cohorts "${directory}/ib-cohort.json" '
-      def units:
-        tostring | if test("^[0-9]+$") then tonumber else error("invalid RDMA quota quantity") end;
-      def quota($object):
-        [$object.spec.resourceGroups[]?
-          | select(any(.coveredResources[]?; . == $resource))
-          | .flavors[]? | select(.name == $flavor)
-          | .resources[]? | select(.name == $resource)];
-      $queues[0] as $queue | $cohorts[0] as $cohort
-      | quota($queue) as $quotas | quota($cohort) as $cohortQuotas
-      | (if ($quotas | length) != 1 then
-          error("selected ClusterQueue must cover RDMA on the selected H200 flavor")
-        else $quotas[0] end) as $quota
-      | ($quota.nominalQuota | units) as $nominal
-      | if ($cohort | length) == 0 then
-          if $nominal < 16 then error("ClusterQueue nominal RDMA quota is below 16") else true end
-        elif ($cohort.spec.parentName // "") != "" then
-          error("nested RDMA cohort capacity requires separate qualification")
-        elif ($cohortQuotas | length) != 1 then
-          error("selected Cohort must cover RDMA on the selected H200 flavor")
-        else
-          ($cohortQuotas[0].nominalQuota | units) as $pool
-          | ($quota.borrowingLimit // $pool | units) as $borrowing
-          | if $nominal + ([$borrowing, $pool] | min) < 16 then
-              error("declared ClusterQueue/Cohort RDMA quota cannot admit 16 workers")
-            else true end
-        end
-    ' >"${directory}/ib-queue-contract.json"; then
-    echo "IB admission contract failed for selected ClusterQueue/Cohort; declare RDMA coverage and quota through their authoritative configuration" >&2
+verify_ib_accounting_policy() {
+  local queue="$1" directory="$2" selector pod
+  local namespace="${FLEX_NIGHTLY_KUEUE_NAMESPACE:-kueue-system}"
+  local deployment="${FLEX_NIGHTLY_KUEUE_DEPLOYMENT:-kueue-controller-manager}"
+  if ! kubectl --request-timeout=30s get clusterqueue "${queue}" -o json >"${directory}/ib-clusterqueue.json" ||
+    ! kubectl --request-timeout=30s -n "${namespace}" get deployment "${deployment}" -o json \
+      >"${directory}/ib-kueue-deployment.json"; then
+    echo "Cannot verify effective IB accounting policy with existing queue/controller read access" >&2
     return 1
   fi
+  selector="$(jq -er '
+    .spec.selector | select((.matchExpressions // [] | length) == 0)
+    | .matchLabels | to_entries | select(length > 0) | map(.key + "=" + .value) | join(",")
+  ' "${directory}/ib-kueue-deployment.json")" || {
+    echo "Cannot verify Kueue controller selector for effective IB accounting policy" >&2
+    return 1
+  }
+  if ! kubectl --request-timeout=30s -n "${namespace}" get pods -l "${selector}" -o json \
+    >"${directory}/ib-kueue-pods.json"; then
+    echo "Cannot read current Kueue Pods to verify effective IB accounting policy" >&2
+    return 1
+  fi
+  while IFS= read -r pod; do
+    if ! kubectl --request-timeout=30s -n "${namespace}" logs "${pod}" -c manager \
+      --tail=-1 --limit-bytes=16777216 >"${directory}/${pod}.log"; then
+      echo "Cannot read current Kueue startup configuration with existing Pod log access" >&2
+      return 1
+    fi
+  done < <(jq -r '.items[].metadata.name' "${directory}/ib-kueue-pods.json")
+  if ! kubectl --request-timeout=30s -n "${namespace}" get pods -l "${selector}" -o json \
+    >"${directory}/ib-kueue-pods-after.json"; then
+    echo "Cannot recheck current Kueue process identities after effective config capture" >&2
+    return 1
+  fi
+  (
+    cd "${repo_root}/tests/e2e"
+    go run ./cmd/taugrid-ib-policy -directory "${directory}"
+  ) >"${directory}/ib-accounting-policy.json"
 }
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -109,8 +106,7 @@ if ! h200="$(jq -ce '.targets[] | select(
   exit 1
 fi
 cluster_queue="$(jq -er '.cluster_queue' <<<"${h200}")"
-flavor="$(jq -er '.flavor' <<<"${h200}")"
-verify_ib_queue_contract "${cluster_queue}" "${flavor}" "${bundle_dir}"
+verify_ib_accounting_policy "${cluster_queue}" "${bundle_dir}"
 trap cleanup EXIT
 kubectl create namespace "${namespace}"
 kubectl label namespace "${namespace}" \

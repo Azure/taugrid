@@ -256,7 +256,8 @@ with tempfile.TemporaryDirectory() as temporary:
         script = textwrap.dedent(inline.group(1))
         if name == "h200_rdma":
             script = (Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh").read_text()
-            routing = script[script.index("kubectl create namespace"):script.index('selector="$(jq')]
+            start = script.index("kubectl create namespace")
+            routing = script[start:script.index('selector="$(jq', start)]
         else:
             routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
         routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
@@ -438,47 +439,27 @@ with tempfile.TemporaryDirectory() as temporary:
     command.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         'case "$*" in\n'
-        '  *"get clusterqueue "*) cat "$QUEUE_FIXTURE";;\n'
-        '  *"get cohort "*) cat "$COHORT_FIXTURE";;\n'
+        '  *"get clusterqueue "*) [[ "$DENIED" != queue ]] || exit 1; printf \'{"spec":{}}\\n\';;\n'
+        '  *"get deployment "*) [[ "$DENIED" != deployment ]] || exit 1; '
+        'printf \'{"spec":{"selector":{"matchLabels":{"app":"controller"}}}}\\n\';;\n'
+        '  *"get pods "*) printf \'{"items":[{"metadata":{"name":"controller-pod"}}]}\\n\';;\n'
+        '  *"logs controller-pod "*) exit 1;;\n'
         '  *) exit 91;;\nesac\n'
     )
     command.chmod(0o755)
-    resource = "rdma/rdma_shared_device_a"
-
-    def quota_group(nominal, borrowing=None):
-        quota = {"name": resource, "nominalQuota": nominal}
-        if borrowing is not None:
-            quota["borrowingLimit"] = borrowing
-        return [{"coveredResources": [resource], "flavors": [
-            {"name": "selected-flavor", "resources": [quota]},
-        ]}]
-
-    for scenario, queue_groups, cohort_groups, parent, passes in (
-        ("missing-queue-resource", [], quota_group(16), "", False),
-        ("missing-cohort-resource", quota_group(0, 16), [], "", False),
-        ("insufficient-borrowing", quota_group(0, 8), quota_group(16), "", False),
-        ("insufficient-pool", quota_group(0, 16), quota_group(8), "", False),
-        ("valid-direct-pool", quota_group(0, 16), quota_group(16), "", True),
-        ("unqualified-nested-pool", quota_group(0, 16), quota_group(16), "parent-pool", False),
+    for denied, message in (
+        ("queue", "existing queue/controller read access"),
+        ("deployment", "existing queue/controller read access"),
+        ("logs", "existing Pod log access"),
     ):
-        queue_fixture = directory / "queue.json"
-        cohort_fixture = directory / "cohort.json"
-        queue_fixture.write_text(json.dumps({"spec": {
-            "cohortName": "selected-cohort", "resourceGroups": queue_groups,
-        }}))
-        cohort_fixture.write_text(json.dumps({"spec": {
-            "resourceGroups": cohort_groups, "parentName": parent,
-        }}))
-        environment = dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}",
-                           QUEUE_FIXTURE=str(queue_fixture), COHORT_FIXTURE=str(cohort_fixture))
+        environment = dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}", DENIED=denied)
         result = subprocess.run(
-            ["bash", "-c", queue_check + '\nverify_ib_queue_contract selected-queue selected-flavor "$1"',
+            ["bash", "-c", queue_check + '\nverify_ib_accounting_policy selected-queue "$1"',
              "queue-test", str(directory)],
             env=environment, capture_output=True, text=True,
         )
-        assert (result.returncode == 0) == passes, (scenario, result.stderr)
-        if not passes:
-            assert "IB admission contract failed" in result.stderr, (scenario, result.stderr)
+        assert result.returncode != 0, (denied, result.stderr)
+        assert message in result.stderr, (denied, result.stderr)
 
     preflight = next(job for job in jobs if job.startswith("preflight\n"))
     inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)

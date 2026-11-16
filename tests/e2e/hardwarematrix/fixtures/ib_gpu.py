@@ -82,7 +82,7 @@ def collective_loop():
     hostname = socket.gethostname()
     log_path = Path(f"/tmp/taugrid-nccl.{hostname}.{os.getpid()}.log")
     try:
-        device = torch.device("cuda")
+        device = torch.device("cuda", torch.cuda.current_device())
         torch.cuda.set_device(device)
         values = torch.arange(16, dtype=torch.float32, device=device) + rank
         dist.all_reduce(values)

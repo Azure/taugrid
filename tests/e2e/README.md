@@ -476,16 +476,26 @@ RAY_E2E_IMAGE='<validated immutable base>' \
   '<preflight hardware-contract.json>' '<absolute artifact directory>' '<numeric-run>-<attempt>'
 ```
 
-Before namespace creation, the selected ClusterQueue must explicitly cover
-`rdma/rdma_shared_device_a` on the selected H200 ResourceFlavor. Its nominal
-quota and permitted borrowing from a directly configured Cohort must support
-16 units; a referenced Cohort must also cover that resource/flavor. A nested
-Cohort fails closed pending separate capacity qualification. The captured
-ClusterQueue/Cohort snapshots establish declared admission bounds, not a
-reservation or guarantee against concurrent consumption; Kueue admission
-remains mandatory. Device-plugin capacity alone is insufficient. Missing
-coverage requires a change to the authoritative queue/Cohort configuration,
-not removal of the worker RDMA requests or an automatic quota mutation.
+Before namespace creation, the lane verifies the effective Kueue accounting
+policy from current, Ready controller processes' JSON startup logs, not from a
+mutable ConfigMap. It accepts a matching `resources.excludeResourcePrefixes`,
+or `resources.quotaCheckStrategy=IgnoreUndeclared` when the selected ClusterQueue
+does not declare RDMA and the effective `QuotaCheckStrategy` feature gate is
+verified enabled. The latter requires the controller's `Loaded feature gates`
+startup record; missing gate evidence fails rather than guessing a default.
+Excluded RDMA remains explicitly requested by Pods for kubelet/device-plugin
+allocation; no RDMA ClusterQueue/Cohort quota is required. No RDMA quota
+workaround is attempted if the effective policy still accounts for it.
+
+The read-only check uses existing Deployment, Pod, Pod-log, and ClusterQueue
+access. It requires a stable rollout and unchanged current container identities
+across log capture. Missing permissions, rotated startup records, unsupported
+log/config formats, or unverifiable accounting fail explicitly. Namespace and
+Deployment default to `kueue-system/kueue-controller-manager`, with the existing
+`FLEX_NIGHTLY_KUEUE_NAMESPACE` and `FLEX_NIGHTLY_KUEUE_DEPLOYMENT` overrides;
+the standard `manager` container is inspected. No permissions or controller
+settings are changed. A managed controller that does not expose a supported
+resource-exclusion policy is a real platform prerequisite blocker.
 
 This is optional IB qualification, not evidence that the default matrix used IB,
 nor a GPUDirect RDMA or performance qualification.

@@ -74,6 +74,28 @@ class RuntimeContractTest(unittest.TestCase):
                                 runtime_contract.check_memlock()
                         change_limits.assert_not_called()
 
+    def test_ib_resolves_unindexed_cuda_before_set_device(self):
+        source = ast.parse(Path(__file__).with_name("ib_gpu.py").read_text())
+        loop = next(node for node in source.body if getattr(node, "name", "") == "collective_loop")
+        collective = next(node for node in loop.body if isinstance(node, ast.Try))
+        selected = []
+
+        def set_device(device):
+            if device.index is None:
+                raise ValueError("Expected a torch.device with a specified index or an integer")
+            selected.append(device.index)
+
+        torch = SimpleNamespace(
+            device=lambda kind, index=None: SimpleNamespace(type=kind, index=index),
+            cuda=SimpleNamespace(current_device=lambda: 0, set_device=set_device),
+        )
+        with self.assertRaisesRegex(ValueError, "specified index"):
+            torch.cuda.set_device(torch.device("cuda"))
+        namespace = {"torch": torch}
+        exec(compile(ast.Module(body=collective.body[:2], type_ignores=[]), "ib_gpu.py", "exec"), namespace)
+        self.assertEqual(selected, [0])
+        self.assertEqual(namespace["device"].type, "cuda")
+
     def test_ib_requires_real_transport_and_exact_unique_rank_results(self):
         source = ast.parse(Path(__file__).with_name("ib_gpu.py").read_text())
         functions = [node for node in source.body if isinstance(node, ast.FunctionDef)
