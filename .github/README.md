@@ -1,6 +1,7 @@
 # Pull request reviewers
 
-`CODEOWNERS` requests the existing `Azure/taugrid-maintainers` team for repository changes.
+`CODEOWNERS` names `Azure/taugrid-maintainers` as the code owner for all repository paths.
+That file does not list team members or individual-review assignment settings.
 The additional-reviewer workflow requests `AaronLiChen` as an individual reviewer.
 This supports individual-review-request discovery without granting repository write access or changing code ownership.
 
