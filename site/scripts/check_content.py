@@ -29,6 +29,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Tau documentation metadata")
     parser.add_argument("content_dir", type=pathlib.Path)
     parser.add_argument("--max-age-days", type=int, default=120)
+    parser.add_argument("--skip-review-age", action="store_true")
     args = parser.parse_args()
 
     today = datetime.date.today()
@@ -53,7 +54,7 @@ def main() -> int:
         reviewed = datetime.date.fromisoformat(match.group("reviewed"))
         if reviewed > today:
             errors.append(f"{page}: review date {reviewed} is in the future")
-        elif (today - reviewed).days > args.max_age_days:
+        elif not args.skip_review_age and (today - reviewed).days > args.max_age_days:
             errors.append(
                 f"{page}: review is {(today - reviewed).days} days old "
                 f"(limit {args.max_age_days})"
