@@ -6,6 +6,9 @@ at `sha256:fc5f26891f1d9e170914f2052efbc49ceb9d50253acbb5955656455e120d8078`.
 Torch `2.7.1+cu128` and its wheel-declared CUDA 12.8 dependencies are installed
 globally. The default `nonroot:nonroot` user and global Python interpreter remain
 unchanged. The Torch CUDA runtime version is distinct from the base toolkit.
+Installation uses the CUDA 12.8 package index as the sole primary index, without
+mixing in a secondary index. The nightly job, Serve actors, and optional-image
+smoke specification use the same dependency-source configuration.
 
 Run Make from this directory. `PYTHON_VERSION=3.12`, `RAY_VERSION=2.58.0`,
 and `CUDA_VERSION=13.0` are the only supported tuple; incompatible overrides fail

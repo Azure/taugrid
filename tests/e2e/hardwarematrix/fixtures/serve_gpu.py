@@ -34,8 +34,6 @@ TORCH_INDEX_URL = os.environ.get(
                     "--no-cache-dir",
                     "--index-url",
                     TORCH_INDEX_URL,
-                    "--extra-index-url",
-                    "https://pypi.org/simple",
                 ],
                 "pip_check": False,
             }

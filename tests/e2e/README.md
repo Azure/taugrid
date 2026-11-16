@@ -419,6 +419,8 @@ contract before Ray starts, without requiring preinstalled Torch or an
 image-owned checker. Configure the immutable base through
 `AKS_AI_RUNTIME_RAY_E2E_IMAGE`.
 The existing pinned job and Serve pip specifications install Torch on demand.
+They use `https://download.pytorch.org/whl/cu128` as the sole primary index,
+without a secondary package index.
 After runtime environment setup, the driver, each Serve replica, and each Train
 worker require Torch `2.7.1+cu128` with CUDA runtime `12.8` and the requested Ray
 version. Package versions and paths are included in the raw runtime and workload

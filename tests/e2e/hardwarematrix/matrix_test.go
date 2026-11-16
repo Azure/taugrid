@@ -282,7 +282,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			"ttlSecondsAfterFinished":  int64(600),
 			"activeDeadlineSeconds":    int64(2100),
 			"runtimeEnvYAML": fmt.Sprintf(
-				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n    - --extra-index-url\n    - https://pypi.org/simple\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
+				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
 				cfg.torchSpec,
 				cfg.torchIndexURL,
 				cfg.rayVersion,
