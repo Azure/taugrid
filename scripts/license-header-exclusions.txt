@@ -1,7 +1,7 @@
 # Copyright and license headers are not added to these copied or derived
 # third-party sources. Keep this list aligned with the repository NOTICE.
 
-# Azure/adx-mon v0.3.0 CRDs and derived collector build instructions.
+# Azure/adx-mon v0.4.1 CRDs and derived collector build instructions.
 charts/adx-mon/crds/
 images/adx-mon/Dockerfile.collector
 

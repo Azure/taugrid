@@ -264,7 +264,7 @@ changed view definition, so definition changes require a versioned view or a
 controlled replacement. A separate desired-state ManagementCommand applies the
 same retention period to the deduplicated materialized view. It retries until
 asynchronous view creation completes instead of racing the backfill operation.
-adx-mon v0.3.0 records successful submission of the asynchronous create command,
+adx-mon v0.4.1 records successful submission of the asynchronous create command,
 not completion of its backfill operation. Monitor `.show operations`; if a
 backfill fails, ADX does not retry it automatically and `ifnotexists` cannot
 repair the disabled view. Drop the failed materialized view and rerun the
@@ -330,7 +330,7 @@ Available alerts: `gpuXidCritical`, `nodeNotReady`, `eccUncorrectable`, `nvlinkD
 Available rules: `gpuUtilizationHourly`, `gpuCostHourly`, `gpuCostDaily`, `namespaceCostMonthly`, `nodeResourcesHourly`.
 
 `gpuCostDaily` and `namespaceCostMonthly` default to disabled. They are derived,
-append-only rollups; adx-mon v0.3.0 cannot safely order dependent rules when a
+append-only rollups; adx-mon v0.4.1 cannot safely order dependent rules when a
 rule generation changes. The Portal reads `GpuCostHourly` directly.
 
 ### GPU Cost Rates

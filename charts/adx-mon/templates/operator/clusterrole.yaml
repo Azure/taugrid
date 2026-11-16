@@ -7,14 +7,19 @@ metadata:
     {{- include "adx-mon.componentLabels" (dict "root" . "component" "operator") | nindent 4 }}
 rules:
   - apiGroups: [""]
-    resources: [namespaces, pods, services, configmaps, serviceaccounts]
+    resources: [namespaces, services, configmaps, serviceaccounts]
     verbs: [get, list, watch, create, update, delete]
+  # The ingestor Role the operator grants includes pods patch, so the operator
+  # must hold it too (RBAC escalation prevention).
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, daemonsets]
     verbs: [get, list, watch, create, update, delete]
   - apiGroups: [rbac.authorization.k8s.io]
-    resources: [clusterroles, clusterrolebindings]
-    verbs: [get, list, watch]
+    resources: [clusterroles, clusterrolebindings, roles, rolebindings]
+    verbs: [get, list, watch, create, update, delete]
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
@@ -37,6 +42,15 @@ rules:
       - collectors/status
       - ingestors/status
     verbs: [update, patch]
+  # The operator grants these to the ingestor ClusterRole it reconciles, so it
+  # must hold them too (RBAC escalation prevention).
+  - apiGroups: [adx-mon.azure.com]
+    resources:
+      - functions/status
+      - managementcommands/status
+      - summaryrules/status
+      - functions/finalizers
+    verbs: [update]
   - apiGroups: [adx-mon.azure.com]
     resources:
       - adxclusters/finalizers

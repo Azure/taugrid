@@ -2,8 +2,8 @@ apiVersion: v2
 name: adx-mon
 description: Azure Data Explorer Monitor - observability pipeline for GPU-enabled Kubernetes
 type: application
-version: 0.3.10
-appVersion: "v0.3.0"
+version: 0.3.11
+appVersion: "v0.4.1"
 kubeVersion: ">=1.28.0"
 maintainers:
   - name: TauGrid maintainers

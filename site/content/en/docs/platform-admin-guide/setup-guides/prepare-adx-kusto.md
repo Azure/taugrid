@@ -152,7 +152,7 @@ kubectl -n <adx-mon-namespace> get managementcommand \
   -o jsonpath='{.status.conditions[0].status}{" "}{.status.conditions[0].reason}{"\n"}'
 ```
 
-Wait for a successful status. adx-mon v0.3.0 reconciles commands every 10
+Wait for a successful status. adx-mon v0.4.1 reconciles commands every 10
 minutes. The recorder starts immediately and retries ingestion until the
 schema is available; use `kubectl rollout status deploy/tau-lifecycle-recorder
 --timeout=25m` to wait for it to become Ready. Set

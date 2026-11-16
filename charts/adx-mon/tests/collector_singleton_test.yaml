@@ -30,7 +30,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/collector:v0.3.0
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/collector:v0.4.1
 
   - it: has exactly 1 replica
     template: collector-singleton/deployment.yaml
