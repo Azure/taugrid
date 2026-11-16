@@ -116,7 +116,10 @@ A profile can declare a node-local NVMe scratch volume with `hotVolume`:
 ```
 
 `storageClassName` names a StorageClass whose CSI driver publishes
-`CSIStorageCapacity`. Because the StorageClass uses
+`CSIStorageCapacity`. On AKS clusters created with TauGrid's Terraform, set
+`local_nvme_enabled = true` to install one on the GPU pool as `local`; see the
+[Terraform README](https://github.com/Azure/taugrid/tree/main/terraform/aks#local-nvme-for-hot-volumes).
+Because the StorageClass uses
 `volumeBindingMode: WaitForFirstConsumer`, kube-scheduler places each pod on a
 node with enough free local capacity. Kueue doesn't account for hot storage.
 Both sizes are Kubernetes quantities, and `defaultSize` can't exceed `maxSize`.

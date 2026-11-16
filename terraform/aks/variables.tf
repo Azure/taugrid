@@ -281,6 +281,18 @@ variable "dcgm_exporter_chart_version" {
   default     = "4.8.3"
 }
 
+variable "local_nvme_enabled" {
+  description = "Install the Azure local-csi-driver on the GPU pool and create the WaitForFirstConsumer StorageClass local for workload profile hot volumes. gpu_vm_size must have local NVMe disks."
+  type        = bool
+  default     = false
+}
+
+variable "local_csi_driver_chart_version" {
+  description = "Pinned Azure local-csi-driver Helm chart version used when local_nvme_enabled is true."
+  type        = string
+  default     = "0.4.1"
+}
+
 variable "tags" {
   description = "Tags applied to Azure resources."
   type        = map(string)

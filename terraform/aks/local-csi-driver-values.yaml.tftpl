@@ -1,0 +1,13 @@
+daemonset:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.azure.com/agentpool
+              operator: In
+              values:
+                - ${gpu_node_pool_name}
+            - key: kubernetes.azure.com/nodepool-type
+              operator: NotIn
+              values:
+                - FlexNodes

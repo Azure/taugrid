@@ -37,6 +37,10 @@ gpu_auto_scaling_enabled = false
 gpu_min_count            = 1
 gpu_max_count            = 1
 
+# Installs the Azure local-csi-driver on the GPU pool and creates the
+# StorageClass local for workload profile hot volumes on local NVMe.
+# local_nvme_enabled = true
+
 # ADX enables adx-mon, DCGM GPU telemetry, and Portal Kusto data.
 enable_adx = true
 # Empty generates a stable 20-character name such as taugrid1a2b3c4d5e6f7.
