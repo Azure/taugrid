@@ -392,6 +392,14 @@ requests and report its hostname/device. Train requires every rank to initialize
 the collective, execute optimizer steps on CUDA, and report rank-zero evidence
 that a non-empty checkpoint was serialized. Durable remote checkpoint upload is
 covered only by storage-backed extended workloads.
+Before deleting workload Pods, the matrix preserves full submitter logs in
+`submitter.log` and the observed worker Pod list in `worker-pods.json`.
+Serve waits for both its replica result and its success sentinel. The nightly
+publishes these bundles under
+`diagnostics/<target>-<workers>gpu/<workload>/<test-name>/`, keeping evidence
+from different shapes separate. Evidence write failures fail the test.
+Failed jobs also capture available full submitter logs and diagnostics before
+workload deletion, including failures that occur before the success-log wait.
 Kueue TAS assignments and observed pod placement must match the requested
 same-host or same-site/spread contract. A separate test requires available
 hardware targets to be Running concurrently on distinct authoritative sites.
@@ -404,16 +412,27 @@ The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
 profile adds all native and cross-node shapes. The generic matrix sets
 `NCCL_IB_DISABLE=1` for ordinary GPU workers, retaining CUDA/NCCL collectives
 without requiring InfiniBand resources or memory-locking privileges.
-The configured matrix image must provide global Torch `2.7.1+cu128` with
-CUDA runtime `12.8` on Python `3.12` / Ray `2.58.0`, plus
-`/opt/taugrid/ray-torch/check_image.py`; see
-[`images/ray-torch`](../../images/ray-torch/README.md).
-Ordinary CPU-only init checks on the head and workers reject missing or
-incompatible packages before Ray starts, without increasing the effective Pod
-resource shape. Existing job and Serve pip specifications reuse system-site
-packages instead of downloading and extracting Torch per Pod. Configure the
-validated immutable variant through `AKS_AI_RUNTIME_RAY_E2E_IMAGE`; there is no
-fallback installation on a Ray-only image.
+The configured matrix image must provide global Python `3.12` and the requested
+Ray version as the default nonroot user, with a working bare `python` command.
+Read-only ConfigMap-mounted init checks on the head and workers verify that base
+contract before Ray starts, without requiring preinstalled Torch or an
+image-owned checker. Configure the immutable base through
+`AKS_AI_RUNTIME_RAY_E2E_IMAGE`.
+The existing pinned job and Serve pip specifications install Torch on demand.
+After runtime environment setup, the driver, each Serve replica, and each Train
+worker require Torch `2.7.1+cu128` with CUDA runtime `12.8` and the requested Ray
+version. Package versions and paths are included in the raw runtime and workload
+results; GPU execution and numerical checks remain mandatory.
+
+Matching pip specifications reuse one installation within a Ray node, not
+between separate worker Pods. Runtime downloads and extracted CUDA dependencies
+can require multiple GiB per Pod, including simultaneous installation scratch.
+The optional preinstalled-image 512 MiB gate is not a download-storage budget.
+The full matrix is not storage-qualified by these source checks: measure peak
+and final usage against each host's actual backing filesystem and eviction
+headroom before running eight one-GPU workers per host. This path does not
+provision storage, alter eviction thresholds, or claim that free GPU memory
+provides filesystem capacity.
 `rdmaConformance=true` independently adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
 it is not part of the default hardware matrix.

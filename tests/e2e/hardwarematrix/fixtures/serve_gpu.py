@@ -12,6 +12,10 @@ import urllib.request
 import ray
 from ray import serve
 
+from runtime_contract import check_runtime
+
+print("MATRIX_RUNTIME_RESULT=" + json.dumps(check_runtime(), sort_keys=True))
+
 EXPECTED_REPLICAS = int(os.environ["MATRIX_WORKERS"])
 REQUEST_TIMEOUT_SECONDS = 180
 TORCH_SPEC = os.environ.get("MATRIX_TORCH_SPEC", "torch==2.7.1")
@@ -41,7 +45,9 @@ TORCH_INDEX_URL = os.environ.get(
 class GPUInference:
     def __init__(self):
         import torch
+        from runtime_contract import check_runtime
 
+        self.packages = check_runtime()
         if not torch.cuda.is_available():
             raise RuntimeError("expected CUDA in Ray Serve replica")
         self.torch = torch
@@ -64,6 +70,7 @@ class GPUInference:
             "device_name": self.device_name,
             "visible_devices": self.visible_devices,
             "checksum": checksum,
+            "packages": self.packages,
         }
 
 def invoke():

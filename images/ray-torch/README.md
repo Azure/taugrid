@@ -13,6 +13,10 @@ before a build or push. Tags use `-torch2.7.1-cu128`. The existing
 `docker-push-arch` interface accepts `IMG`, `ARCH`, `SOURCE_REVISION`, and
 `CACHE_REPO`; use a variant-specific cache and immutable image reference.
 Publication remains governed separately.
+The hardware nightly no longer requires this variant: its Ray base checks run
+before startup, while pinned Torch/CUDA packages are checked after on-demand
+runtime environment installation. The checks below apply only to this optional
+preinstalled image, not to the storage budget of runtime downloads.
 
 The Docker build context is the repository root (`--file Dockerfile ../..`).
 Image-owned scripts have one home, `scripts/images/ray-torch/`; source revision

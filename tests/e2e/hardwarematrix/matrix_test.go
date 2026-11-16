@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -38,6 +39,9 @@ var serveScript string
 
 //go:embed fixtures/train_gpu.py
 var trainScript string
+
+//go:embed fixtures/runtime_contract.py
+var runtimeContractScript string
 
 type matrixConfig struct {
 	namespace        string
@@ -82,14 +86,26 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	tc := e2e.NewTestContext(t, context.Background())
 	tc.RecordOutcomeAs(fmt.Sprintf("%s/%s/%dgpu", workload, cfg.target, cfg.workers))
 
+	cleanupMatrixResources(t, tc, cfg.namespace, rayJobName)
+	t.Cleanup(func() {
+		cleanupMatrixResources(t, tc, cfg.namespace, rayJobName)
+	})
 	tc.OnFailure(func() {
-		tc.DumpCRState(cfg.namespace, e2e.RayJobGVR, rayJobName)
-		tc.DumpCRList(cfg.namespace, e2e.WorkloadGVR)
-		tc.DumpPods(cfg.namespace, "")
-		tc.DumpEvents(cfg.namespace)
+		diagnostics, cancel := tc.WithContext(context.WithoutCancel(tc.Ctx())).WithTimeout(time.Minute)
+		defer cancel()
+		logs, err := diagnostics.GetFullPodLogsByLabel(cfg.namespace,
+			fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName))
+		if err != nil {
+			t.Errorf("capture failed matrix submitter logs: %v", err)
+		} else if err := tc.Bundle().WriteFile("submitter.log", []byte(logs)); err != nil {
+			t.Errorf("preserve failed matrix submitter logs: %v", err)
+		}
+		diagnostics.DumpCRState(cfg.namespace, e2e.RayJobGVR, rayJobName)
+		diagnostics.DumpCRList(cfg.namespace, e2e.WorkloadGVR)
+		diagnostics.DumpPods(cfg.namespace, "")
+		diagnostics.DumpEvents(cfg.namespace)
 	})
 
-	cleanupMatrixResources(t, tc, cfg.namespace, rayJobName)
 	configMapName := rayJobName + "-script"
 	_, err := tc.KubeClient().CoreV1().ConfigMaps(cfg.namespace).Create(tc.Ctx(), &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -98,7 +114,10 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 				"tau.azure.com/e2e-hardware-matrix": cfg.target,
 			},
 		},
-		Data: map[string]string{workload + "_gpu.py": script},
+		Data: map[string]string{
+			workload + "_gpu.py":  script,
+			"runtime_contract.py": runtimeContractScript,
+		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err, "create matrix script ConfigMap")
 
@@ -106,10 +125,6 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	_, err = tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Create(
 		tc.Ctx(), rayJob, metav1.CreateOptions{})
 	require.NoError(t, err, "create %s RayJob", workload)
-
-	t.Cleanup(func() {
-		cleanupMatrixResources(t, tc, cfg.namespace, rayJobName)
-	})
 
 	admission, err := tc.WaitForWorkloadAdmittedByRayJob(cfg.namespace, rayJobName, 5*time.Minute)
 	require.NoError(t, err, "Kueue should admit %s matrix workload", workload)
@@ -145,17 +160,20 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	require.NoError(t, err, "%s RayJob should succeed", workload)
 
 	success := "SUCCESS: Ray Serve GPU inference completed on every replica"
-	logMarkers := []string{success}
+	logMarkers := []string{"MATRIX_SERVE_RESULT=", success}
 	if workload == "train" {
 		success = "SUCCESS: Ray Train completed on every GPU worker"
 		logMarkers = []string{"MATRIX_TRAIN_RESULT=", success}
 	}
-	_, err = tc.WaitForFullPodLogsByLabelContaining(
+	logMarkers = append(logMarkers, "MATRIX_RUNTIME_RESULT=")
+	logs, err := tc.WaitForFullPodLogsByLabelContaining(
 		cfg.namespace,
 		fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName),
 		logMarkers,
 		2*time.Minute,
 	)
+	require.NoError(t, tc.Bundle().WriteFile("submitter.log", []byte(logs)),
+		"preserve full submitter logs before cleanup")
 	require.NoError(t, err, "%s submitter logs should contain the success sentinel", workload)
 }
 
@@ -208,7 +226,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 		},
 	}
 	workerSpec := map[string]any{
-		"initContainers": []any{imagePackageGuard(cfg)},
+		"initContainers": []any{baseImageGuard(cfg)},
 		"nodeSelector": map[string]any{
 			cfg.selectorKey:      cfg.selectorValue,
 			"tau.azure.com/site": cfg.site,
@@ -264,9 +282,10 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			"ttlSecondsAfterFinished":  int64(600),
 			"activeDeadlineSeconds":    int64(2100),
 			"runtimeEnvYAML": fmt.Sprintf(
-				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n    - --extra-index-url\n    - https://pypi.org/simple\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
+				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n    - --extra-index-url\n    - https://pypi.org/simple\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
 				cfg.torchSpec,
 				cfg.torchIndexURL,
+				cfg.rayVersion,
 				cfg.torchSpec,
 				cfg.torchIndexURL,
 			),
@@ -299,7 +318,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 							"labels": map[string]any{"tau.azure.com/e2e-hardware-matrix": cfg.target},
 						},
 						"spec": map[string]any{
-							"initContainers": []any{imagePackageGuard(cfg)},
+							"initContainers": []any{baseImageGuard(cfg)},
 							"nodeSelector":   map[string]any{"kubernetes.azure.com/mode": "system"},
 							"tolerations": []any{
 								map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
@@ -348,15 +367,16 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 	return object
 }
 
-func imagePackageGuard(cfg matrixConfig) map[string]any {
+func baseImageGuard(cfg matrixConfig) map[string]any {
 	return map[string]any{
-		"name":  "image-package-check",
+		"name":  "base-image-check",
 		"image": cfg.image,
 		"command": []any{
-			"python3", "/opt/taugrid/ray-torch/check_image.py",
-			"--torch-spec", cfg.torchSpec,
-			"--torch-index-url", cfg.torchIndexURL,
+			"python", "/matrix/runtime_contract.py",
 			"--ray-version", cfg.rayVersion,
+		},
+		"volumeMounts": []any{
+			map[string]any{"name": "matrix-script", "mountPath": "/matrix", "readOnly": true},
 		},
 		"resources": map[string]any{
 			"requests": map[string]any{"cpu": "250m", "memory": "256Mi"},
@@ -402,6 +422,10 @@ func requirePlacement(t *testing.T, tc *e2e.TestContext, cfg matrixConfig, workl
 		LabelSelector: matrixWorkerSelector(cfg, workload),
 	})
 	require.NoError(t, err)
+	placement, err := json.MarshalIndent(pods, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, tc.Bundle().WriteFile("worker-pods.json", placement),
+		"preserve worker placement before cleanup")
 	require.Len(t, pods.Items, cfg.workers)
 
 	perHost := make(map[string]int)
@@ -536,6 +560,8 @@ func TestBuildRayJobContract(t *testing.T) {
 			}
 			require.NoError(t, yaml.Unmarshal([]byte(runtimeEnvYAML), &runtimeEnv))
 			require.Equal(t, "1", runtimeEnv.EnvVars["NCCL_IB_DISABLE"])
+			require.Equal(t, "/matrix", runtimeEnv.EnvVars["PYTHONPATH"])
+			require.Equal(t, cfg.rayVersion, runtimeEnv.EnvVars["MATRIX_RAY_VERSION"])
 			pipSpec, err := os.ReadFile("../../../scripts/images/ray-torch/pip_spec.json")
 			require.NoError(t, err)
 			var expectedPip map[string]any
@@ -581,11 +607,15 @@ func TestBuildRayJobContract(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, found)
 				require.Equal(t, []string{
-					"python3", "/opt/taugrid/ray-torch/check_image.py",
-					"--torch-spec", cfg.torchSpec,
-					"--torch-index-url", cfg.torchIndexURL,
+					"python", "/matrix/runtime_contract.py",
 					"--ray-version", cfg.rayVersion,
 				}, command)
+				mounts, found, err := unstructured.NestedSlice(guard, "volumeMounts")
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, []any{
+					map[string]any{"name": "matrix-script", "mountPath": "/matrix", "readOnly": true},
+				}, mounts)
 				require.NotContains(t, guard, "securityContext")
 				for _, field := range []string{"requests", "limits"} {
 					resources, found, err := unstructured.NestedStringMap(guard, "resources", field)
@@ -626,6 +656,12 @@ func TestBuildRayJobContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntimePackageContract(t *testing.T) {
+	command := exec.Command("python3", "-B", "fixtures/test_runtime_contract.py")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", output)
 }
 
 func TestParseSelector(t *testing.T) {

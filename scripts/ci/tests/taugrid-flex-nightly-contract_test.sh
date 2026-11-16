@@ -497,6 +497,17 @@ grep -Fq "grep -Fxq linux/amd64" "$PIPELINE" ||
   fail "preflight must require an amd64 Ray image for A100/H200"
 grep -Fq "TestRayTrainGPU" "$PIPELINE" ||
   fail "hardware matrix must run distributed Ray Train"
+grep -Fq 'if E2E_BUNDLE_DIR="${bundle_dir}/${target}-${workers}gpu/${workload}" \' "$PIPELINE" ||
+  fail "matrix evidence must be published separately for every target, shape, and workload"
+matrix_source="${REPO_ROOT}/tests/e2e/hardwarematrix/matrix_test.go"
+grep -Fq 'logMarkers := []string{"MATRIX_SERVE_RESULT=", success}' "$matrix_source" ||
+  fail "Serve must wait for numerical replica evidence as well as the success sentinel"
+grep -Fq 'logs, err := tc.WaitForFullPodLogsByLabelContaining(' "$matrix_source" ||
+  fail "matrix must retain the full submitter logs returned by the log wait"
+grep -Fq 'require.NoError(t, tc.Bundle().WriteFile("submitter.log", []byte(logs)),' "$matrix_source" ||
+  fail "matrix must preserve submitter evidence and fail if it cannot be written"
+grep -Fq 'require.NoError(t, tc.Bundle().WriteFile("worker-pods.json", placement),' "$matrix_source" ||
+  fail "matrix must preserve worker placement and fail if it cannot be written"
 grep -Fq "run_case \"\${target}\" 2 2 1 tau.azure.com/site" "$PIPELINE" ||
   fail "DGX Spark matrix must include two GPUs across two hosts"
 grep -Fq "run_case \"\${target}\" 8 1 8 kubernetes.io/hostname" "$PIPELINE" ||

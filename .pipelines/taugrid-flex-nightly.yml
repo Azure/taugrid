@@ -418,7 +418,8 @@ jobs:
                 test_name=TestRayServeGPU
                 [[ "${workload}" == "train" ]] && test_name=TestRayTrainGPU
                 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                if go test -v -count=1 -timeout 50m -run "^${test_name}$" ./hardwarematrix/; then
+                if E2E_BUNDLE_DIR="${bundle_dir}/${target}-${workers}gpu/${workload}" \
+                  go test -v -count=1 -timeout 50m -run "^${test_name}$" ./hardwarematrix/; then
                   outcome=passed
                 else
                   outcome=failed
