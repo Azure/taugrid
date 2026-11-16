@@ -1,0 +1,75 @@
+name: Request additional reviewer
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/request-additional-reviewer.yml
+      - .github/tests/request-additional-reviewer.test.mjs
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Review request automation tests
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "22"
+      - name: Test reviewer requests and permission boundaries
+        run: node --test .github/tests/request-additional-reviewer.test.mjs
+
+  request:
+    name: Request Li Chen review
+    if: github.event_name == 'pull_request_target' && github.repository == 'Azure/taugrid'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    concurrency:
+      group: taugrid-review-request-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Request additional reviewer
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          retries: 2
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            if (context.repo.owner.toLowerCase() !== "azure" || context.repo.repo.toLowerCase() !== "taugrid") {
+              return;
+            }
+            const reviewer = "AaronLiChen";
+            const params = { ...context.repo, pull_number: context.payload.pull_request.number };
+            const eligible = (pull) => pull.state === "open" && !pull.draft &&
+              pull.user.login.toLowerCase() !== reviewer.toLowerCase();
+            const { data: pull } = await github.rest.pulls.get(params);
+            if (!eligible(pull)) {
+              core.info("Skip a closed, draft, or self-authored pull request.");
+              return;
+            }
+            const { data: requested } = await github.rest.pulls.listRequestedReviewers(params);
+            if (requested.users.some((user) => user.login.toLowerCase() === reviewer.toLowerCase())) {
+              core.info("The additional reviewer already has an outstanding request.");
+              return;
+            }
+            const { data: current } = await github.rest.pulls.get(params);
+            if (!eligible(current)) {
+              core.info("The pull request is no longer eligible for review.");
+              return;
+            }
+            await github.rest.pulls.requestReviewers({ ...params, reviewers: [reviewer] });
+            core.info(`Requested ${reviewer} review for PR ${params.pull_number}.`);
