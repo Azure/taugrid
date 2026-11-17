@@ -631,7 +631,7 @@ jobs:
 
             export RAY_E2E_IMAGE
             bash "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-ib.sh" \
-              "$(Pipeline.Workspace)/preflight/taugrid-flex-nightly-contract.json" \
+              "$(Pipeline.Workspace)/preflight/hardware-matrix.json" \
               "$(Build.ArtifactStagingDirectory)/rdma" \
               "$(Build.BuildId)-$(System.JobAttempt)"
         env:

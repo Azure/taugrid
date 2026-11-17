@@ -87,10 +87,48 @@ for override, matrix_succeeded, expected in (
         override, matrix_succeeded, compiled,
     )
 
+producer_name = re.search(
+    r'export FLEX_NIGHTLY_CONTRACT_FILE="\$\{artifact_dir\}/([^"]+)"', pipeline,
+).group(1)
+download_path = re.search(
+    r"artifact: taugrid-flex-hardware-contract\n          targetPath: ([^\n]+)", rdma_job,
+).group(1)
+consumer_path = re.search(
+    r'scripts/ci/taugrid-flex-nightly-ib\.sh" \\\n\s+"([^"]+)"', rdma_job,
+).group(1)
+assert producer_name == "hardware-matrix.json", producer_name
+assert consumer_path == f"{download_path}/{producer_name}", consumer_path
+
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     binary = root / "bin"
     binary.mkdir()
+    refused_calls = root / "refused-contract-calls"
+    kubectl = binary / "kubectl"
+    kubectl.write_text(
+        '#!/bin/sh\nprintf "unexpected kubectl call\\n" >>"$REFUSED_CALLS"\nexit 90\n'
+    )
+    kubectl.chmod(0o755)
+    staged = root / "preflight"
+    staged.mkdir()
+    wrapper = Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh"
+    for scenario in ("missing", "empty"):
+        contract = staged / producer_name
+        if scenario == "empty":
+            contract.touch()
+        artifact = root / f"refused-{scenario}"
+        result = subprocess.run(
+            ["bash", str(wrapper), str(contract), str(artifact), "42-1"],
+            env=dict(
+                os.environ, PATH=f"{binary}:{os.environ['PATH']}",
+                AI_RUNTIME_E2E_KUBE_CONTEXT="target-context", REFUSED_CALLS=str(refused_calls),
+            ),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 1, (scenario, result.returncode, result.stderr)
+        assert "IB hardware contract is missing or empty:" in result.stderr, result.stderr
+        assert not refused_calls.exists(), "missing contract must refuse before any kubectl call"
+        assert not artifact.exists(), "missing contract must not initialize workload artifacts"
     for command in ("az", "kubelogin"):
         stub = binary / command
         stub.write_text(
@@ -758,8 +796,10 @@ jq -e '
 ' "$FLEX_NIGHTLY_CONTRACT_FILE" >/dev/null ||
   fail "preflight contract does not preserve the hardware matrix inventory"
 
+mkdir -p "${fake_bin}/preflight"
+cp "${FLEX_NIGHTLY_CONTRACT_FILE}" "${fake_bin}/preflight/hardware-matrix.json"
 if PATH="${fake_bin}:${PATH}" bash "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" \
-  "${FLEX_NIGHTLY_CONTRACT_FILE}" "${fake_bin}/ib-capacity" 42-1 \
+  "${fake_bin}/preflight/hardware-matrix.json" "${fake_bin}/ib-capacity" 42-1 \
   >"${fake_bin}/ib-capacity.log" 2>&1; then
   fail "IB must reject hosts advertising fewer than eight RDMA units each"
 fi

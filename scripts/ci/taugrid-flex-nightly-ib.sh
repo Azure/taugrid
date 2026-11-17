@@ -63,6 +63,10 @@ run_id="${3:?run identity is required}"
   echo "Nightly IB contract and artifact paths must be absolute" >&2
   exit 1
 }
+if [[ ! -s "${contract}" ]]; then
+  echo "IB hardware contract is missing or empty: ${contract}" >&2
+  exit 1
+fi
 if [[ -n "${AI_RUNTIME_E2E_KUBE_CONTEXT:-}" &&
       "$(kubectl config current-context)" != "${AI_RUNTIME_E2E_KUBE_CONTEXT}" ]]; then
   echo "IB shell lane requires its pipeline kubeconfig context; use the focused Go test for a context override" >&2
@@ -71,7 +75,6 @@ fi
 namespace="taugrid-nightly-matrix-${run_id}"
 bundle_dir="${artifact_dir}/diagnostics"
 mkdir -p "${bundle_dir}"
-test -s "${contract}"
 
 cleanup() {
   rc=$?
