@@ -23,7 +23,7 @@ parameters:
   - name: rdmaConformance
     displayName: Run extended H200 RDMA/NCCL conformance
     type: boolean
-    default: false
+    default: true
   - name: includeDGXSpark
     displayName: Include DGX Spark targets
     type: boolean
@@ -568,7 +568,7 @@ jobs:
           artifact: taugrid-flex-hardware-matrix-$(Build.BuildId)-$(System.JobAttempt)
 
   - job: h200_rdma
-    displayName: Optional H200 synthetic IB collectives
+    displayName: H200 synthetic IB collectives
     dependsOn: hardware_matrix
     condition: and(succeeded(), ${{ eq(parameters.rdmaConformance, true) }})
     timeoutInMinutes: 90

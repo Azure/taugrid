@@ -61,6 +61,32 @@ pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
 
+rdma_parameter = re.search(
+    r"^  - name: rdmaConformance\n(?P<body>(?:    .*\n)+)", pipeline, re.MULTILINE,
+)
+assert rdma_parameter, "RDMA parameter is required"
+assert re.search(r"^    type: boolean$", rdma_parameter["body"], re.MULTILINE)
+rdma_default = re.search(r"^    default: (true|false)$", rdma_parameter["body"], re.MULTILINE)
+assert rdma_default, "RDMA default must be an explicit boolean"
+rdma_job = next(job for job in jobs if job.startswith("h200_rdma\n"))
+assert re.search(r"^    dependsOn: hardware_matrix$", rdma_job, re.MULTILINE)
+condition = re.search(r"^    condition: (.+)$", rdma_job, re.MULTILINE).group(1)
+assert condition == "and(succeeded(), ${{ eq(parameters.rdmaConformance, true) }})", condition
+for override, matrix_succeeded, expected in (
+    (None, True, True),
+    (False, True, False),
+    (True, True, True),
+    (None, False, False),
+    (True, False, False),
+):
+    parameter = rdma_default.group(1) == "true" if override is None else override
+    compiled = condition.replace(
+        "${{ eq(parameters.rdmaConformance, true) }}", str(parameter).lower(),
+    )
+    assert (compiled == "and(succeeded(), true)" and matrix_succeeded) == expected, (
+        override, matrix_succeeded, compiled,
+    )
+
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     binary = root / "bin"
@@ -561,8 +587,6 @@ grep -Fq "name: rdmaConformance" "$PIPELINE" ||
   fail "extended H200 RDMA conformance must remain explicitly selectable"
 grep -Fq "name: includeDGXSpark" "$PIPELINE" ||
   fail "DGX Spark execution must remain an explicit opt-in while the nodes are reserved"
-grep -Fq "default: false" "$PIPELINE" ||
-  fail "extended H200 RDMA conformance must be disabled by default"
 grep -Fq "TestRayServeGPU" "$PIPELINE" ||
   fail "hardware matrix must run Ray Serve online inference"
 grep -Fq "Ray Serve protobuf compatibility fix" "$PIPELINE" ||
@@ -598,9 +622,9 @@ grep -Fq "TestConcurrentGPUWorkloadsAcrossHardwareSites" \
   "${REPO_ROOT}/tests/e2e/multisite/multisite_test.go" ||
   fail "full profile must include concurrent hardware-site validation"
 grep -Fq 'scripts/ci/taugrid-flex-nightly-ib.sh' "$PIPELINE" ||
-  fail "optional RDMA lane must invoke the dedicated synthetic IB path"
+  fail "RDMA lane must invoke the dedicated synthetic IB path"
 grep -Fq "TestRayIBGPU" "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" ||
-  fail "optional RDMA lane must retain CUDA IB collective conformance"
+  fail "RDMA lane must retain CUDA IB collective conformance"
 grep -Fq 'export MATRIX_REQUIRED_TOPOLOGY=tau.azure.com/site' "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" ||
   fail "IB collective must use site-level topology for its two-node shape"
 if grep -Fq 'TestFineWebRayTrain16xH200IB' "$PIPELINE"; then

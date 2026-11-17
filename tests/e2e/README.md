@@ -435,7 +435,9 @@ and final usage against each host's actual backing filesystem and eviction
 headroom before running eight one-GPU workers per host. This path does not
 provision storage, alter eviction thresholds, or claim that free GPU memory
 provides filesystem capacity.
-`rdmaConformance=true` adds `TestRayIBGPU` after the generic matrix succeeds.
+`rdmaConformance` defaults to `true`, so scheduled runs include `TestRayIBGPU`
+after the generic matrix succeeds. Manual runs can explicitly set
+`rdmaConformance=false` to opt out; such runs do not qualify IB.
 It uses the same base, pinned runtime downloads, and one-GPU worker renderer:
 16 worker Pods, eight on each of two H200 hosts. Each worker requests and limits
 one `rdma/rdma_shared_device_a`, one GPU, 1/2 CPUs and 4/8 GiB memory
@@ -512,7 +514,7 @@ the standard `manager` container is inspected. No permissions or controller
 settings are changed. A managed controller without a supported resource-exclusion
 policy can use explicitly declared queue/Cohort RDMA quota instead.
 
-This is optional IB qualification, not evidence that the default matrix used IB,
+This is separate IB qualification, not evidence that the generic matrix used IB,
 nor a GPUDirect RDMA or performance qualification.
 The shell lane uses the pipeline-owned kubeconfig's active context and refuses a
 conflicting `AI_RUNTIME_E2E_KUBE_CONTEXT`. For focused local Go test execution,
