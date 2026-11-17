@@ -15,10 +15,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/yaml"
 )
 
 const rdmaResource = "rdma/rdma_shared_device_a"
+const requiredRDMAUnits int64 = 16
 
 type configuration struct {
 	Kind       string `json:"kind"`
@@ -27,6 +29,117 @@ type configuration struct {
 		ExcludeResourcePrefixes []string `json:"excludeResourcePrefixes"`
 		QuotaCheckStrategy      string   `json:"quotaCheckStrategy"`
 	} `json:"resources"`
+}
+
+type quotaObject struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		CohortName     string `json:"cohortName"`
+		ParentName     string `json:"parentName"`
+		ResourceGroups []struct {
+			CoveredResources []string `json:"coveredResources"`
+			Flavors          []struct {
+				Name      string `json:"name"`
+				Resources []struct {
+					Name           string             `json:"name"`
+					NominalQuota   *resource.Quantity `json:"nominalQuota"`
+					BorrowingLimit *resource.Quantity `json:"borrowingLimit"`
+				} `json:"resources"`
+			} `json:"flavors"`
+		} `json:"resourceGroups"`
+	} `json:"spec"`
+}
+
+func (object quotaObject) rdmaQuota(flavor string) (int64, *resource.Quantity, error) {
+	var nominal int64
+	var borrowing *resource.Quantity
+	found := false
+	for _, group := range object.Spec.ResourceGroups {
+		covered := false
+		for _, name := range group.CoveredResources {
+			covered = covered || name == rdmaResource
+		}
+		if !covered {
+			continue
+		}
+		for _, candidate := range group.Flavors {
+			if candidate.Name != flavor {
+				continue
+			}
+			for _, quota := range candidate.Resources {
+				if quota.Name != rdmaResource {
+					continue
+				}
+				if found || quota.NominalQuota == nil {
+					return 0, nil, fmt.Errorf("missing or duplicate RDMA nominal quota for flavor %q", flavor)
+				}
+				value, exact := quota.NominalQuota.AsInt64()
+				if !exact || value < 0 {
+					return 0, nil, fmt.Errorf("RDMA nominal quota must be a nonnegative integer for flavor %q", flavor)
+				}
+				if quota.BorrowingLimit != nil {
+					limit, exact := quota.BorrowingLimit.AsInt64()
+					if !exact || limit < 0 {
+						return 0, nil, fmt.Errorf("RDMA borrowing limit must be a nonnegative integer for flavor %q", flavor)
+					}
+				}
+				nominal, borrowing, found = value, quota.BorrowingLimit, true
+			}
+		}
+	}
+	if !found {
+		return 0, nil, fmt.Errorf("missing declared %s quota for target flavor %q", rdmaResource, flavor)
+	}
+	return nominal, borrowing, nil
+}
+
+func verifyQuota(directory string, queue quotaObject) error {
+	var target struct {
+		Flavor       string `json:"flavor"`
+		ClusterQueue string `json:"cluster_queue"`
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "ib-target.json"))
+	if err != nil {
+		return fmt.Errorf("read hardware target for RDMA quota verification: %w", err)
+	}
+	if err := json.Unmarshal(data, &target); err != nil {
+		return fmt.Errorf("decode hardware target: %w", err)
+	}
+	if target.Flavor == "" || target.ClusterQueue == "" || queue.Metadata.Name != target.ClusterQueue {
+		return fmt.Errorf("RDMA quota evidence does not match selected hardware target and ClusterQueue")
+	}
+	nominal, borrowing, err := queue.rdmaQuota(target.Flavor)
+	if err != nil {
+		return err
+	}
+	if nominal >= requiredRDMAUnits {
+		return nil
+	}
+	needed := requiredRDMAUnits - nominal
+	if queue.Spec.CohortName == "" || borrowing != nil && borrowing.CmpInt64(needed) < 0 {
+		return fmt.Errorf("selected ClusterQueue lacks declared RDMA capacity for 16 workers")
+	}
+	data, err = os.ReadFile(filepath.Join(directory, "ib-cohort.json"))
+	if err != nil {
+		return fmt.Errorf("read direct Cohort RDMA capacity with existing read access: %w", err)
+	}
+	var cohort quotaObject
+	if err := json.Unmarshal(data, &cohort); err != nil {
+		return fmt.Errorf("decode direct Cohort RDMA capacity: %w", err)
+	}
+	if cohort.Metadata.Name != queue.Spec.CohortName || cohort.Spec.ParentName != "" {
+		return fmt.Errorf("RDMA borrowing requires the named direct root Cohort; hierarchical borrowing is not supported by this preflight")
+	}
+	capacity, _, err := cohort.rdmaQuota(target.Flavor)
+	if err != nil {
+		return fmt.Errorf("direct Cohort: %w", err)
+	}
+	if capacity < needed {
+		return fmt.Errorf("direct Cohort lacks declared RDMA capacity for 16 workers; sibling or ancestor quota is not inferred")
+	}
+	return nil
 }
 
 func accountingPolicy(logs []byte, declared bool) (string, error) {
@@ -80,17 +193,20 @@ func accountingPolicy(logs []byte, declared bool) (string, error) {
 	}
 	switch config.Resources.QuotaCheckStrategy {
 	case "IgnoreUndeclared":
-		if strategyEnabled == nil {
+		if !declared && strategyEnabled == nil {
 			return "", fmt.Errorf("effective QuotaCheckStrategy feature gate is unavailable in current controller logs")
 		}
-		if *strategyEnabled && !declared {
+		if !declared && *strategyEnabled {
 			return "IgnoreUndeclared", nil
 		}
 	case "", "BlockUndeclared":
 	default:
 		return "", fmt.Errorf("unsupported Kueue quotaCheckStrategy %q", config.Resources.QuotaCheckStrategy)
 	}
-	return "", fmt.Errorf("RDMA remains Kueue-accounted; verify the intended managed resource-exclusion policy, not an RDMA quota workaround")
+	if declared {
+		return "DeclaredQuota", nil
+	}
+	return "", fmt.Errorf("RDMA remains Kueue-accounted without declared queue coverage; configure RDMA quota or a verified resource-exclusion policy")
 }
 
 func verifyDirectory(directory string) (map[string]string, error) {
@@ -139,13 +255,7 @@ func verifyDirectory(directory string) (map[string]string, error) {
 		!reflect.DeepEqual(beforeIdentities, afterIdentities) {
 		return nil, fmt.Errorf("Kueue manager processes changed or became unready during effective configuration capture")
 	}
-	var queue struct {
-		Spec struct {
-			ResourceGroups []struct {
-				CoveredResources []string `json:"coveredResources"`
-			} `json:"resourceGroups"`
-		} `json:"spec"`
-	}
+	var queue quotaObject
 	if err := readJSON("ib-clusterqueue.json", &queue); err != nil {
 		return nil, fmt.Errorf("read selected ClusterQueue: %w", err)
 	}
@@ -164,6 +274,11 @@ func verifyDirectory(directory string) (map[string]string, error) {
 		policy, err := accountingPolicy(logs, declared)
 		if err != nil {
 			return nil, fmt.Errorf("Kueue Pod %q: %w", pod.Name, err)
+		}
+		if policy == "DeclaredQuota" {
+			if err := verifyQuota(directory, queue); err != nil {
+				return nil, fmt.Errorf("verify declared RDMA queue capacity: %w", err)
+			}
 		}
 		result[pod.Name] = policy
 	}

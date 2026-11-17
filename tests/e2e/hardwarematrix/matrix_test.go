@@ -770,6 +770,33 @@ func TestBuildIBRayJobContract(t *testing.T) {
 		require.Equal(t, resource.MustParse("1"), resources[rdma])
 		require.Equal(t, resource.MustParse("1"), resources["nvidia.com/gpu"])
 	}
+	var workerRDMA resource.Quantity
+	for _, container := range pod.Containers {
+		workerRDMA.Add(container.Resources.Requests[rdma])
+	}
+	for _, container := range pod.InitContainers {
+		require.True(t, container.Resources.Requests.Name(rdma, resource.DecimalSI).IsZero())
+		require.Nil(t, container.RestartPolicy)
+	}
+	require.True(t, pod.Overhead.Name(rdma, resource.DecimalSI).IsZero())
+	require.Equal(t, int64(16), group["replicas"].(int64)*workerRDMA.Value())
+	for _, path := range [][]string{
+		{"spec", "rayClusterSpec", "headGroupSpec", "template", "spec"},
+		{"spec", "submitterPodTemplate", "spec"},
+	} {
+		spec, found, err := unstructured.NestedMap(job.Object, path...)
+		require.NoError(t, err)
+		require.True(t, found)
+		data, err := json.Marshal(spec)
+		require.NoError(t, err)
+		var auxiliary corev1.PodSpec
+		require.NoError(t, json.Unmarshal(data, &auxiliary))
+		for _, container := range append(auxiliary.Containers, auxiliary.InitContainers...) {
+			require.True(t, container.Resources.Requests.Name(rdma, resource.DecimalSI).IsZero())
+			require.True(t, container.Resources.Limits.Name(rdma, resource.DecimalSI).IsZero())
+		}
+		require.True(t, auxiliary.Overhead.Name(rdma, resource.DecimalSI).IsZero())
+	}
 	require.Len(t, pod.TopologySpreadConstraints, 1)
 	require.Equal(t, "kubernetes.io/hostname", pod.TopologySpreadConstraints[0].TopologyKey)
 	require.Contains(t, pod.InitContainers[0].Command, "--ib")

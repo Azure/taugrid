@@ -439,11 +439,15 @@ with tempfile.TemporaryDirectory() as temporary:
     command.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         'case "$*" in\n'
-        '  *"get clusterqueue "*) [[ "$DENIED" != queue ]] || exit 1; printf \'{"spec":{}}\\n\';;\n'
+        '  *"get clusterqueue "*) [[ "$DENIED" != queue ]] || exit 1; '
+        'if [[ "$DENIED" == cohort ]]; then '
+        'printf \'{"spec":{"cohortName":"direct-cohort","resourceGroups":[{"coveredResources":["rdma/rdma_shared_device_a"]}]}}\\n\'; '
+        'else printf \'{"spec":{}}\\n\'; fi;;\n'
+        '  *"get cohort direct-cohort -o json"*) printf \'{"metadata":{"name":"direct-cohort"}}\\n\'; exit 1;;\n'
         '  *"get deployment "*) [[ "$DENIED" != deployment ]] || exit 1; '
         'printf \'{"spec":{"selector":{"matchLabels":{"app":"controller"}}}}\\n\';;\n'
         '  *"get pods "*) printf \'{"items":[{"metadata":{"name":"controller-pod"}}]}\\n\';;\n'
-        '  *"logs controller-pod "*) exit 1;;\n'
+        '  *"logs controller-pod "*) [[ "$DENIED" == cohort ]] || exit 1; printf \'{}\\n\';;\n'
         '  *) exit 91;;\nesac\n'
     )
     command.chmod(0o755)
@@ -460,6 +464,27 @@ with tempfile.TemporaryDirectory() as temporary:
         )
         assert result.returncode != 0, (denied, result.stderr)
         assert message in result.stderr, (denied, result.stderr)
+
+    go = commands / "go"
+    go.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        '[[ ! -e "$EVIDENCE/ib-cohort.json" ]] || exit 92\n'
+        'exit 1\n'
+    )
+    go.chmod(0o755)
+    environment = dict(
+        os.environ, PATH=f"{commands}:{os.environ['PATH']}", DENIED="cohort",
+        EVIDENCE=str(directory),
+    )
+    result = subprocess.run(
+        ["bash", "-c",
+         queue_check + '\nrepo_root="$1"\nverify_ib_accounting_policy selected-queue "$2"',
+         "queue-test", str(Path(sys.argv[1]).resolve().parent.parent), str(directory)],
+        env=environment, capture_output=True, text=True,
+    )
+    assert result.returncode == 1, (result.returncode, result.stderr)
+    assert "Direct Cohort quota evidence unavailable" in result.stderr, result.stderr
+    assert not (directory / "ib-cohort.json").exists()
 
     preflight = next(job for job in jobs if job.startswith("preflight\n"))
     inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)

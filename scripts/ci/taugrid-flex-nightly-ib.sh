@@ -5,7 +5,7 @@
 set -euo pipefail
 
 verify_ib_accounting_policy() {
-  local queue="$1" directory="$2" selector pod
+  local queue="$1" directory="$2" selector pod cohort
   local namespace="${FLEX_NIGHTLY_KUEUE_NAMESPACE:-kueue-system}"
   local deployment="${FLEX_NIGHTLY_KUEUE_DEPLOYMENT:-kueue-controller-manager}"
   if ! kubectl --request-timeout=30s get clusterqueue "${queue}" -o json >"${directory}/ib-clusterqueue.json" ||
@@ -13,6 +13,16 @@ verify_ib_accounting_policy() {
       >"${directory}/ib-kueue-deployment.json"; then
     echo "Cannot verify effective IB accounting policy with existing queue/controller read access" >&2
     return 1
+  fi
+  cohort="$(jq -er '
+    select(any(.spec.resourceGroups[]?.coveredResources[]?; . == "rdma/rdma_shared_device_a"))
+    | .spec.cohortName | select(type == "string" and length > 0)
+  ' "${directory}/ib-clusterqueue.json")" || cohort=""
+  if [[ -n "${cohort}" ]]; then
+    if ! kubectl --request-timeout=30s get cohort "${cohort}" -o json >"${directory}/ib-cohort.json"; then
+      rm -f -- "${directory}/ib-cohort.json"
+      echo "Direct Cohort quota evidence unavailable; accounted RDMA borrowing will be refused" >&2
+    fi
   fi
   selector="$(jq -er '
     .spec.selector | select((.matchExpressions // [] | length) == 0)
@@ -106,6 +116,7 @@ if ! h200="$(jq -ce '.targets[] | select(
   exit 1
 fi
 cluster_queue="$(jq -er '.cluster_queue' <<<"${h200}")"
+printf '%s\n' "${h200}" >"${bundle_dir}/ib-target.json"
 verify_ib_accounting_policy "${cluster_queue}" "${bundle_dir}"
 trap cleanup EXIT
 kubectl create namespace "${namespace}"

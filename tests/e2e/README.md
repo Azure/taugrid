@@ -484,18 +484,33 @@ does not declare RDMA and the effective `QuotaCheckStrategy` feature gate is
 verified enabled. The latter requires the controller's `Loaded feature gates`
 startup record; missing gate evidence fails rather than guessing a default.
 Excluded RDMA remains explicitly requested by Pods for kubelet/device-plugin
-allocation; no RDMA ClusterQueue/Cohort quota is required. No RDMA quota
-workaround is attempted if the effective policy still accounts for it.
+allocation; no RDMA ClusterQueue/Cohort quota is required on those routes.
+
+When the effective policy accounts for RDMA, the selected ClusterQueue must
+declare `rdma/rdma_shared_device_a` for the hardware target's exact flavor with
+capacity for 16 units. This bound comes from the rendered worker PodSet:
+16 replicas, each with one regular container requesting one RDMA unit; head,
+submitter, and non-sidecar init containers request none. An offline renderer
+regression checks this total. Capacity may be queue nominal quota, or nominal
+quota plus borrowing within its limit from its named direct root Cohort's own
+same-flavor nominal quota. An omitted borrowing limit is unbounded, but proven
+Cohort capacity is still required. Sibling and ancestor capacity is not inferred;
+hierarchical borrowing is outside this preflight's supported contract.
+Missing, zero, fractional, negative, or insufficient capacity fails before
+namespace creation. These are declared quota bounds, not idle capacity:
+Kueue remains responsible for actual admission and shared contention.
 
 The read-only check uses existing Deployment, Pod, Pod-log, and ClusterQueue
-access. It requires a stable rollout and unchanged current container identities
-across log capture. Missing permissions, rotated startup records, unsupported
+access. It also attempts a named Cohort read when the queue declares RDMA and
+references a Cohort; that evidence is required only when borrowing is needed.
+It requires a stable rollout and unchanged current container identities across
+log capture. Missing required permissions, rotated startup records, unsupported
 log/config formats, or unverifiable accounting fail explicitly. Namespace and
 Deployment default to `kueue-system/kueue-controller-manager`, with the existing
 `FLEX_NIGHTLY_KUEUE_NAMESPACE` and `FLEX_NIGHTLY_KUEUE_DEPLOYMENT` overrides;
 the standard `manager` container is inspected. No permissions or controller
-settings are changed. A managed controller that does not expose a supported
-resource-exclusion policy is a real platform prerequisite blocker.
+settings are changed. A managed controller without a supported resource-exclusion
+policy can use explicitly declared queue/Cohort RDMA quota instead.
 
 This is optional IB qualification, not evidence that the default matrix used IB,
 nor a GPUDirect RDMA or performance qualification.
