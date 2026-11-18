@@ -3,14 +3,14 @@ id = "overview"
 site = "content/en/docs/overview/_index.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview"
 owner = "taugrid"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[pairs]]
 id = "getting-started"
 site = "content/en/docs/getting-started/_index.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Example-10-Researcher-Onboarding"
 owner = "taugrid"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[pairs]]
 id = "workspace"
@@ -18,21 +18,21 @@ site = "content/en/docs/reference/workspace.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Researcher-Onboarding-Workspace-Design"
 owner = "taugrid"
 maturity = "alpha"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[pairs]]
 id = "day-two"
 site = "content/en/docs/developer-guide/_index.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Day-2-Workflows"
 owner = "taugrid"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[pairs]]
 id = "operations"
 site = "content/en/docs/platform-admin-guide/_index.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Operations-and-Multi-Cluster"
 owner = "taugrid"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[pairs]]
 id = "contributing"
@@ -40,25 +40,25 @@ site = "content/en/docs/community/contributing.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Architecture-Contributing-and-Roadmap"
 owner = "taugrid"
 maturity = "ga"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[pairs]]
 id = "visual-curriculum"
 site = "content/en/docs/overview/visual-curriculum.md"
 wiki = "https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview#complete-visual-curriculum"
 owner = "taugrid"
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[site_only]]
 id = "canonical-glossary"
 site = "content/en/docs/reference/glossary.md"
 owner = "taugrid"
 reason = "Versioned source-adjacent terminology; wiki concepts remain grouped under the overview and workspace parity pairs."
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
 
 [[site_only]]
 id = "cli-reference"
 site = "content/en/docs/reference/cli.md"
 owner = "taugrid"
 reason = "Exact installed command paths track the versioned CLI; the wiki maintains task journeys rather than a duplicate command catalog."
-reviewed = "2026-07-16"
+reviewed = "2026-10-19"
