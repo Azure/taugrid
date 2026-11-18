@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import ast
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -165,6 +166,20 @@ class RuntimeContractTest(unittest.TestCase):
         self.assertEqual(result["cuda"], "12.8")
         self.assertEqual(result["torch_file"], os.path.realpath(self.torch.__file__))
         self.assertEqual(result["prefix"], "/tmp/ray/venv")
+        self.assertEqual(
+            result["pip_spec_sha256"],
+            hashlib.sha256(runtime_contract.PIP_SPEC_PATH.read_bytes()).hexdigest(),
+        )
+
+    def test_runtime_requires_mounted_lock_provenance(self):
+        self.modules["torch"] = self.torch
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "runtime_contract.PIP_SPEC_PATH", Path(temporary) / "missing.json",
+        ):
+            with self.assertRaises(FileNotFoundError):
+                runtime_contract.check_runtime()
+            with self.assertRaises(FileNotFoundError):
+                runtime_contract.runtime_pip_spec()
 
     def test_runtime_requires_torch_after_setup(self):
         with self.assertRaises(ModuleNotFoundError):

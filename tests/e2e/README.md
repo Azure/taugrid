@@ -418,13 +418,34 @@ Read-only ConfigMap-mounted init checks on the head and workers verify that base
 contract before Ray starts, without requiring preinstalled Torch or an
 image-owned checker. Configure the immutable base through
 `AKS_AI_RUNTIME_RAY_E2E_IMAGE`.
-The existing pinned job and Serve pip specifications install Torch on demand.
+The job and Serve actors share the embedded
+`hardwarematrix/fixtures/pip_spec.json` lock and install Torch on demand.
 They use `https://download.pytorch.org/whl/cu128` as the sole primary index,
-without a secondary package index.
+without a secondary package index. Pip runs isolated from ambient environment
+and user configuration, requires hashes, and accepts only binary wheels.
+The lock covers all newly downloaded dependencies: 19 distributions on Linux
+x86_64 and five on Linux aarch64, for CPython 3.12. Torch and Triton hashes select
+only those platform wheels; CUDA dependency markers match Torch's x86_64
+requirements. Other platforms have no approved Torch wheel and fail.
+The immutable Ray base supplies filelock, typing-extensions, setuptools, Jinja2,
+and fsspec, including their installed dependencies. Ray's virtualenv creation
+inherits those packages and disables seed downloads and periodic updates;
+no separate pip upgrade is requested. An unsatisfied, unlocked dependency must
+fail installation, not be fetched without a hash.
+
+The fixed wheel digests come from the primary index. Torch/Triton dependency
+metadata was checked against that index's metadata hashes; the other wheel
+filenames and digests were corroborated with official release JSON metadata.
+These hashes pin the reviewed release identities, not a publisher signature or
+an audit of package source. Updating the lock requires reviewing the complete
+dependency graph against the immutable base on both supported architectures
+and qualifying actual hash-checked installation; metadata checks alone do not
+qualify downloaded bytes, runtime behavior, or storage fit.
 After runtime environment setup, the driver, each Serve replica, and each Train
 worker require Torch `2.7.1+cu128` with CUDA runtime `12.8` and the requested Ray
-version. Package versions and paths are included in the raw runtime and workload
-results; GPU execution and numerical checks remain mandatory.
+version. Package versions, paths, and the mounted pip specification's SHA-256 are
+included in the raw runtime and workload results; GPU execution and numerical
+checks remain mandatory.
 
 Matching pip specifications reuse one installation within a Ray node, not
 between separate worker Pods. Runtime downloads and extracted CUDA dependencies

@@ -46,6 +46,9 @@ var ibScript string
 //go:embed fixtures/runtime_contract.py
 var runtimeContractScript string
 
+//go:embed fixtures/pip_spec.json
+var runtimePipJSON string
+
 type matrixConfig struct {
 	namespace        string
 	queue            string
@@ -135,6 +138,7 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 		Data: map[string]string{
 			workload + "_gpu.py":  script,
 			"runtime_contract.py": runtimeContractScript,
+			"pip_spec.json":       runtimePipJSON,
 		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err, "create matrix script ConfigMap")
@@ -317,9 +321,8 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			"ttlSecondsAfterFinished":  int64(600),
 			"activeDeadlineSeconds":    int64(2100),
 			"runtimeEnvYAML": fmt.Sprintf(
-				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: %q\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n%s",
-				cfg.torchSpec,
-				cfg.torchIndexURL,
+				"pip: %s\nenv_vars:\n  NCCL_IB_DISABLE: %q\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n%s",
+				strings.ReplaceAll(strings.TrimSpace(runtimePipJSON), "\n", "\n  "),
 				ncclIBDisable,
 				cfg.rayVersion,
 				cfg.torchSpec,
@@ -626,7 +629,7 @@ func TestBuildRayJobContract(t *testing.T) {
 			require.Equal(t, "1", runtimeEnv.EnvVars["NCCL_IB_DISABLE"])
 			require.Equal(t, "/matrix", runtimeEnv.EnvVars["PYTHONPATH"])
 			require.Equal(t, cfg.rayVersion, runtimeEnv.EnvVars["MATRIX_RAY_VERSION"])
-			pipSpec, err := os.ReadFile("../../../scripts/images/ray-torch/pip_spec.json")
+			pipSpec, err := os.ReadFile("fixtures/pip_spec.json")
 			require.NoError(t, err)
 			var expectedPip map[string]any
 			require.NoError(t, json.Unmarshal(pipSpec, &expectedPip))
@@ -744,7 +747,7 @@ func TestBuildIBRayJobContract(t *testing.T) {
 	require.Equal(t, "=mlx5_ib0:1,mlx5_ib1:1,mlx5_ib2:1,mlx5_ib3:1,mlx5_ib4:1,mlx5_ib5:1,mlx5_ib6:1,mlx5_ib7:1",
 		runtimeEnv.EnvVars["NCCL_IB_HCA"])
 	require.Equal(t, "/tmp/taugrid-nccl.%h.%p.log", runtimeEnv.EnvVars["NCCL_DEBUG_FILE"])
-	expectedPip, err := os.ReadFile("../../../scripts/images/ray-torch/pip_spec.json")
+	expectedPip, err := os.ReadFile("fixtures/pip_spec.json")
 	require.NoError(t, err)
 	var pip map[string]any
 	require.NoError(t, json.Unmarshal(expectedPip, &pip))

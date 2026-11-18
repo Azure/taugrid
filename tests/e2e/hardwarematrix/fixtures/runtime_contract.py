@@ -2,12 +2,20 @@
 # Licensed under the MIT License.
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
+from pathlib import Path
 import platform
 import resource
 import sys
+
+PIP_SPEC_PATH = Path(__file__).with_name("pip_spec.json")
+
+
+def runtime_pip_spec():
+    return json.loads(PIP_SPEC_PATH.read_text())
 
 
 def check_python_ray(ray_version):
@@ -57,6 +65,7 @@ def check_runtime():
         torch=torch.__version__,
         cuda=torch.version.cuda,
         torch_file=os.path.realpath(torch.__file__),
+        pip_spec_sha256=hashlib.sha256(PIP_SPEC_PATH.read_bytes()).hexdigest(),
     )
     return result
 

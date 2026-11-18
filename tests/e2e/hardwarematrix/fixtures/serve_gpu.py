@@ -12,31 +12,19 @@ import urllib.request
 import ray
 from ray import serve
 
-from runtime_contract import check_runtime
+from runtime_contract import check_runtime, runtime_pip_spec
 
 print("MATRIX_RUNTIME_RESULT=" + json.dumps(check_runtime(), sort_keys=True))
 
 EXPECTED_REPLICAS = int(os.environ["MATRIX_WORKERS"])
 REQUEST_TIMEOUT_SECONDS = 180
-TORCH_SPEC = os.environ.get("MATRIX_TORCH_SPEC", "torch==2.7.1")
-TORCH_INDEX_URL = os.environ.get(
-    "MATRIX_TORCH_INDEX_URL", "https://download.pytorch.org/whl/cu128"
-)
 
 @serve.deployment(
     num_replicas=EXPECTED_REPLICAS,
     ray_actor_options={
         "num_gpus": 1,
         "runtime_env": {
-            "pip": {
-                "packages": [TORCH_SPEC],
-                "pip_install_options": [
-                    "--no-cache-dir",
-                    "--index-url",
-                    TORCH_INDEX_URL,
-                ],
-                "pip_check": False,
-            }
+            "pip": runtime_pip_spec(),
         },
     },
 )
