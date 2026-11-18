@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -38,6 +39,9 @@ var serveScript string
 
 //go:embed fixtures/train_gpu.py
 var trainScript string
+
+//go:embed fixtures/runtime_contract.py
+var runtimeContractScript string
 
 type matrixConfig struct {
 	namespace        string
@@ -98,7 +102,10 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 				"tau.azure.com/e2e-hardware-matrix": cfg.target,
 			},
 		},
-		Data: map[string]string{workload + "_gpu.py": script},
+		Data: map[string]string{
+			workload + "_gpu.py":  script,
+			"runtime_contract.py": runtimeContractScript,
+		},
 	}, metav1.CreateOptions{})
 	require.NoError(t, err, "create matrix script ConfigMap")
 
@@ -208,7 +215,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 		},
 	}
 	workerSpec := map[string]any{
-		"initContainers": []any{imagePackageGuard(cfg)},
+		"initContainers": []any{baseImageGuard(cfg)},
 		"nodeSelector": map[string]any{
 			cfg.selectorKey:      cfg.selectorValue,
 			"tau.azure.com/site": cfg.site,
@@ -264,9 +271,10 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 			"ttlSecondsAfterFinished":  int64(600),
 			"activeDeadlineSeconds":    int64(2100),
 			"runtimeEnvYAML": fmt.Sprintf(
-				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n    - --extra-index-url\n    - https://pypi.org/simple\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
+				"pip:\n  packages:\n    - %s\n  pip_install_options:\n    - --no-cache-dir\n    - --index-url\n    - %s\n  pip_check: false\nenv_vars:\n  NCCL_IB_DISABLE: \"1\"\n  PYTHONPATH: /matrix\n  MATRIX_RAY_VERSION: %q\n  MATRIX_TORCH_SPEC: %q\n  MATRIX_TORCH_INDEX_URL: %q\n",
 				cfg.torchSpec,
 				cfg.torchIndexURL,
+				cfg.rayVersion,
 				cfg.torchSpec,
 				cfg.torchIndexURL,
 			),
@@ -299,7 +307,7 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 							"labels": map[string]any{"tau.azure.com/e2e-hardware-matrix": cfg.target},
 						},
 						"spec": map[string]any{
-							"initContainers": []any{imagePackageGuard(cfg)},
+							"initContainers": []any{baseImageGuard(cfg)},
 							"nodeSelector":   map[string]any{"kubernetes.azure.com/mode": "system"},
 							"tolerations": []any{
 								map[string]any{"key": "CriticalAddonsOnly", "operator": "Exists", "effect": "NoSchedule"},
@@ -348,15 +356,16 @@ func buildRayJob(cfg matrixConfig, workload, name, configMapName string) *unstru
 	return object
 }
 
-func imagePackageGuard(cfg matrixConfig) map[string]any {
+func baseImageGuard(cfg matrixConfig) map[string]any {
 	return map[string]any{
-		"name":  "image-package-check",
+		"name":  "base-image-check",
 		"image": cfg.image,
 		"command": []any{
-			"python3", "/opt/taugrid/ray-torch/check_image.py",
-			"--torch-spec", cfg.torchSpec,
-			"--torch-index-url", cfg.torchIndexURL,
+			"python", "/matrix/runtime_contract.py",
 			"--ray-version", cfg.rayVersion,
+		},
+		"volumeMounts": []any{
+			map[string]any{"name": "matrix-script", "mountPath": "/matrix", "readOnly": true},
 		},
 		"resources": map[string]any{
 			"requests": map[string]any{"cpu": "250m", "memory": "256Mi"},
@@ -536,6 +545,8 @@ func TestBuildRayJobContract(t *testing.T) {
 			}
 			require.NoError(t, yaml.Unmarshal([]byte(runtimeEnvYAML), &runtimeEnv))
 			require.Equal(t, "1", runtimeEnv.EnvVars["NCCL_IB_DISABLE"])
+			require.Equal(t, "/matrix", runtimeEnv.EnvVars["PYTHONPATH"])
+			require.Equal(t, cfg.rayVersion, runtimeEnv.EnvVars["MATRIX_RAY_VERSION"])
 			pipSpec, err := os.ReadFile("../../../scripts/images/ray-torch/pip_spec.json")
 			require.NoError(t, err)
 			var expectedPip map[string]any
@@ -581,11 +592,15 @@ func TestBuildRayJobContract(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, found)
 				require.Equal(t, []string{
-					"python3", "/opt/taugrid/ray-torch/check_image.py",
-					"--torch-spec", cfg.torchSpec,
-					"--torch-index-url", cfg.torchIndexURL,
+					"python", "/matrix/runtime_contract.py",
 					"--ray-version", cfg.rayVersion,
 				}, command)
+				mounts, found, err := unstructured.NestedSlice(guard, "volumeMounts")
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, []any{
+					map[string]any{"name": "matrix-script", "mountPath": "/matrix", "readOnly": true},
+				}, mounts)
 				require.NotContains(t, guard, "securityContext")
 				for _, field := range []string{"requests", "limits"} {
 					resources, found, err := unstructured.NestedStringMap(guard, "resources", field)
@@ -626,6 +641,12 @@ func TestBuildRayJobContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntimePackageContract(t *testing.T) {
+	command := exec.Command("python3", "-B", "fixtures/test_runtime_contract.py")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "%s", output)
 }
 
 func TestParseSelector(t *testing.T) {

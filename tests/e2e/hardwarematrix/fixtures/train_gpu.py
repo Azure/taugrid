@@ -11,13 +11,19 @@ from ray import train
 from ray.train import ScalingConfig
 from ray.train.torch import TorchTrainer
 
+from runtime_contract import check_runtime
+
+check_runtime()
+
 WORKERS = int(os.environ["MATRIX_WORKERS"])
 
 def train_loop():
     import torch
     import torch.distributed as dist
     import torch.nn as nn
+    from runtime_contract import check_runtime
 
+    check_runtime()
     context = train.get_context()
     rank = context.get_world_rank()
     world_size = context.get_world_size()

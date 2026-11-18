@@ -404,16 +404,18 @@ The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
 profile adds all native and cross-node shapes. The generic matrix sets
 `NCCL_IB_DISABLE=1` for ordinary GPU workers, retaining CUDA/NCCL collectives
 without requiring InfiniBand resources or memory-locking privileges.
-The configured matrix image must provide global Torch `2.7.1+cu128` with
-CUDA runtime `12.8` on Python `3.12` / Ray `2.58.0`, plus
-`/opt/taugrid/ray-torch/check_image.py`; see
-[`images/ray-torch`](../../images/ray-torch/README.md).
-Ordinary CPU-only init checks on the head and workers reject missing or
-incompatible packages before Ray starts, without increasing the effective Pod
-resource shape. Existing job and Serve pip specifications reuse system-site
-packages instead of downloading and extracting Torch per Pod. Configure the
-validated immutable variant through `AKS_AI_RUNTIME_RAY_E2E_IMAGE`; there is no
-fallback installation on a Ray-only image.
+The configured immutable `AKS_AI_RUNTIME_RAY_E2E_IMAGE` must provide global
+Python `3.12`, the requested Ray version, and a working bare `python` command as
+the default nonroot user. ConfigMap-mounted init checks verify that base before
+Ray starts; Torch need not be preinstalled. Existing job and Serve runtime
+environments install Torch on demand using
+`https://download.pytorch.org/whl/cu128` as the sole primary index.
+The driver and every GPU worker require exact Torch `2.7.1+cu128` / CUDA `12.8`
+after installation, retaining all CUDA numerical and placement assertions.
+Matching pip environments reuse an installation within a Ray node, not across
+Pods. Downloads and extraction require multiple GiB per Pod; this
+repair does not establish a scratch-space reservation or peak-storage bound,
+hash-lock transitive downloads, or serialize overlapping runs.
 `rdmaConformance=true` independently adds the
 existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
 it is not part of the default hardware matrix.
