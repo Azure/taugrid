@@ -16,6 +16,5 @@ other users, discuss workloads, and get help.
 - [Run the Kind smoke test](kind-smoke-test/)
 - [Releasing TauGrid](releasing/)
 - [Roadmap](https://github.com/Azure/taugrid/blob/main/ROADMAP.md)
-- [Site and wiki parity](wiki-parity/)
+- [Documentation maintenance](documentation/)
 - [GitHub repository](https://github.com/Azure/taugrid)
-- [GitHub Wiki](https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview)

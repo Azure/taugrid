@@ -31,5 +31,6 @@ pod scheduling.
 - `controllers/tau-core`: the separately deployed controller. One manager runs
   three reconcilers -- `TauCluster`, `TauWorkspace`, and `TauQuotaRequest`.
 
-The [visual architecture guide](https://github.com/Azure/taugrid/wiki/Tau-Architecture-Contributing-and-Roadmap)
-maps the main packages and extension points.
+See the [object model](../../developer-guide/concepts/object-model/) for the
+resources and execution boundaries, and [contributing](../../community/contributing/)
+for implementation and validation expectations.

@@ -13,7 +13,6 @@ GOPROXY ?= https://proxy.golang.org,direct
 BASE_URL ?=
 BASE_PATH ?= /taugrid
 CONTENT_ARGS ?= --skip-review-age
-WIKI_PARITY_ARGS ?= --skip-review-age
 HUGO_BASE_URL := $(if $(BASE_URL),--baseURL "$(BASE_URL)")
 
 .PHONY: deps build check test check-review-age serve train-market-policy verify-cache-location verify-market-policy clean
@@ -35,14 +34,11 @@ test:
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 check-review-age:
-	python3 scripts/check_content.py content/en/docs; content_status=$$?; \
-	python3 scripts/check_wiki_parity.py; parity_status=$$?; \
-	test $$content_status -eq 0 && test $$parity_status -eq 0
+	python3 scripts/check_content.py content/en/docs
 
 check: verify-cache-location build verify-market-policy test
 	python3 scripts/check_links.py public --base-path "$(BASE_PATH)"
 	python3 scripts/check_content.py content/en/docs $(CONTENT_ARGS)
-	python3 scripts/check_wiki_parity.py $(WIKI_PARITY_ARGS)
 	python3 scripts/check_theme.py public
 	python3 scripts/check_accessibility.py public assets/scss/_styles_project.scss
 	cd ../cli && go test ./internal/cli -run TestDocumentedTauCommandsUsePublicTree -count=1

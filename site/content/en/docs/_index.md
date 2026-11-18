@@ -14,5 +14,5 @@ TauGrid documentation is organized by reader intent:
 - **[Reference](reference/):** inspect exact CLI, configuration, workspace, and release contracts.
 - **[Community](community/):** contribute, validate changes, and understand releases.
 
-The [GitHub Wiki](https://github.com/Azure/taugrid/wiki/Tau-Open-Source-Overview)
-remains a complete visual companion.
+This versioned documentation site is the maintained source for TauGrid guides
+and reference material.
