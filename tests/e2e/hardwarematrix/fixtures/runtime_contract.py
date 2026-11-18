@@ -2,23 +2,15 @@
 # Licensed under the MIT License.
 
 import argparse
-import hashlib
 import importlib
-import json
 import os
-from pathlib import Path
 import platform
-import resource
 import sys
-
-PIP_SPEC_PATH = Path(__file__).with_name("pip_spec.json")
-
-
-def runtime_pip_spec():
-    return json.loads(PIP_SPEC_PATH.read_text())
 
 
 def check_python_ray(ray_version):
+    if ray_version != "2.58.0":
+        raise RuntimeError(f"unsupported Ray version: {ray_version}")
     if sys.version_info[:2] != (3, 12):
         raise RuntimeError(f"expected Python 3.12, got {platform.python_version()}")
     if os.getuid() == 0:
@@ -26,25 +18,12 @@ def check_python_ray(ray_version):
     ray = importlib.import_module("ray")
     if ray.__version__ != ray_version:
         raise RuntimeError(f"expected Ray {ray_version}, got {ray.__version__}")
-    return {
-        "python": platform.python_version(),
-        "ray": ray.__version__,
-        "uid": os.getuid(),
-        "prefix": sys.prefix,
-    }
 
 
 def check_base(ray_version):
     if sys.prefix != sys.base_prefix:
         raise RuntimeError("Ray base image must use the global interpreter")
-    return check_python_ray(ray_version)
-
-
-def check_memlock():
-    limits = resource.getrlimit(resource.RLIMIT_MEMLOCK)
-    if any(limit != resource.RLIM_INFINITY and limit < 64 * 1024 * 1024 for limit in limits):
-        raise RuntimeError(f"IB requires inherited soft/hard memlock of at least 64 MiB, got {limits}")
-    return limits
+    check_python_ray(ray_version)
 
 
 def check_runtime():
@@ -54,28 +33,17 @@ def check_runtime():
         raise RuntimeError(f"unsupported Torch requirement: {torch_spec}")
     if torch_index.rstrip("/") != "https://download.pytorch.org/whl/cu128":
         raise RuntimeError(f"unsupported Torch index: {torch_index}")
-    result = check_python_ray(os.environ["MATRIX_RAY_VERSION"])
+    check_python_ray(os.environ["MATRIX_RAY_VERSION"])
     torch = importlib.import_module("torch")
     if torch.__version__ != "2.7.1+cu128" or torch.version.cuda != "12.8":
         raise RuntimeError(
             f"expected Torch 2.7.1+cu128/CUDA 12.8, "
             f"got {torch.__version__}/CUDA {torch.version.cuda}"
         )
-    result.update(
-        torch=torch.__version__,
-        cuda=torch.version.cuda,
-        torch_file=os.path.realpath(torch.__file__),
-        pip_spec_sha256=hashlib.sha256(PIP_SPEC_PATH.read_bytes()).hexdigest(),
-    )
-    return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ray-version", required=True)
-    parser.add_argument("--ib", action="store_true")
     args = parser.parse_args()
-    result = check_base(args.ray_version)
-    if args.ib:
-        result["memlock"] = check_memlock()
-    print("MATRIX_BASE_RESULT=" + json.dumps(result, sort_keys=True))
+    check_base(args.ray_version)

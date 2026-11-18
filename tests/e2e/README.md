@@ -392,14 +392,6 @@ requests and report its hostname/device. Train requires every rank to initialize
 the collective, execute optimizer steps on CUDA, and report rank-zero evidence
 that a non-empty checkpoint was serialized. Durable remote checkpoint upload is
 covered only by storage-backed extended workloads.
-Before deleting workload Pods, the matrix preserves full submitter logs in
-`submitter.log` and the observed worker Pod list in `worker-pods.json`.
-Serve waits for both its replica result and its success sentinel. The nightly
-publishes these bundles under
-`diagnostics/<target>-<workers>gpu/<workload>/<test-name>/`, keeping evidence
-from different shapes separate. Evidence write failures fail the test.
-Failed jobs also capture available full submitter logs and diagnostics before
-workload deletion, including failures that occur before the success-log wait.
 Kueue TAS assignments and observed pod placement must match the requested
 same-host or same-site/spread contract. A separate test requires available
 hardware targets to be Running concurrently on distinct authoritative sites.
@@ -412,145 +404,21 @@ The `smoke` profile runs the one-GPU row for each target. The scheduled `full`
 profile adds all native and cross-node shapes. The generic matrix sets
 `NCCL_IB_DISABLE=1` for ordinary GPU workers, retaining CUDA/NCCL collectives
 without requiring InfiniBand resources or memory-locking privileges.
-The configured matrix image must provide global Python `3.12` and the requested
-Ray version as the default nonroot user, with a working bare `python` command.
-Read-only ConfigMap-mounted init checks on the head and workers verify that base
-contract before Ray starts, without requiring preinstalled Torch or an
-image-owned checker. Configure the immutable base through
-`AKS_AI_RUNTIME_RAY_E2E_IMAGE`.
-The job and Serve actors share the embedded
-`hardwarematrix/fixtures/pip_spec.json` lock and install Torch on demand.
-They use `https://download.pytorch.org/whl/cu128` as the sole primary index,
-without a secondary package index. Pip runs isolated from ambient environment
-and user configuration, requires hashes, and accepts only binary wheels.
-The lock covers all newly downloaded dependencies: 19 distributions on Linux
-x86_64 and five on Linux aarch64, for CPython 3.12. Torch and Triton hashes select
-only those platform wheels; CUDA dependency markers match Torch's x86_64
-requirements. Other platforms have no approved Torch wheel and fail.
-The immutable Ray base supplies filelock, typing-extensions, setuptools, Jinja2,
-and fsspec, including their installed dependencies. Ray's virtualenv creation
-inherits those packages and disables seed downloads and periodic updates;
-no separate pip upgrade is requested. An unsatisfied, unlocked dependency must
-fail installation, not be fetched without a hash.
-
-The fixed wheel digests come from the primary index. Torch/Triton dependency
-metadata was checked against that index's metadata hashes; the other wheel
-filenames and digests were corroborated with official release JSON metadata.
-These hashes pin the reviewed release identities, not a publisher signature or
-an audit of package source. Updating the lock requires reviewing the complete
-dependency graph against the immutable base on both supported architectures
-and qualifying actual hash-checked installation; metadata checks alone do not
-qualify downloaded bytes, runtime behavior, or storage fit.
-After runtime environment setup, the driver, each Serve replica, and each Train
-worker require Torch `2.7.1+cu128` with CUDA runtime `12.8` and the requested Ray
-version. Package versions, paths, and the mounted pip specification's SHA-256 are
-included in the raw runtime and workload results; GPU execution and numerical
-checks remain mandatory.
-
-Matching pip specifications reuse one installation within a Ray node, not
-between separate worker Pods. Runtime downloads and extracted CUDA dependencies
-can require multiple GiB per Pod, including simultaneous installation scratch.
-The optional preinstalled-image 512 MiB gate is not a download-storage budget.
-The full matrix is not storage-qualified by these source checks: measure peak
-and final usage against each host's actual backing filesystem and eviction
-headroom before running eight one-GPU workers per host. This path does not
-provision storage, alter eviction thresholds, or claim that free GPU memory
-provides filesystem capacity.
-`rdmaConformance` defaults to `true`, so scheduled runs include `TestRayIBGPU`
-after the generic matrix succeeds. Manual runs can explicitly set
-`rdmaConformance=false` to opt out; such runs do not qualify IB.
-It uses the same base, pinned runtime downloads, and one-GPU worker renderer:
-16 worker Pods, eight on each of two H200 hosts. Each worker requests and limits
-one `rdma/rdma_shared_device_a`, one GPU, 1/2 CPUs and 4/8 GiB memory
-(request/limit). The system-pool head adds 1/2 CPUs and 4/8 GiB; the generated
-submitter adds 250m/1 CPU and 256 MiB/1 GiB. Workers and their base checks use
-UID/GID 65532, dropped capabilities, no privilege escalation, and RuntimeDefault
-seccomp. They require inherited soft and hard memlock of at least 64 MiB
-(or unlimited); the test never raises limits. That minimum detects the known
-64 KiB CQ failure, not a guarantee of sufficient locked memory for every NCCL
-configuration.
-
-The synthetic workload checks exact CUDA all-reduce vectors and all-gather ranks,
-exact packages, unique worker Pods, and observed 8/8 host placement.
-`NCCL_NET=IB` is mandatory, with exact `NCCL_IB_HCA` selection of ports
-`mlx5_ib0:1` through `mlx5_ib7:1`. Every rank verifies those sysfs ports have
-`link_layer=InfiniBand` and are ACTIVE/LinkUp, then requires `NET/IB` device
-selections explicitly ending in `/IB` and `Using network IB`. Ethernet/RoCE,
-unapproved HCAs, and selected `NET/Socket` transports fail.
-TCP bootstrap is allowed, but TCP collective transport is not. Full per-rank
-NCCL logs, devices, memlock, numerics, and package records are preserved in
-`MATRIX_IB_RESULT` inside `submitter.log`, alongside the observed worker Pod JSON.
-The test has a 50-minute Go deadline and the existing 35-minute RayJob deadline.
-It requires no dataset, PVC, hostPath, memory-backed volume, image publication,
-or namespace policy exception. Insufficient capacity or runtime permissions fail
-the selected lane rather than becoming successful skips.
-
-The lane rechecks the hardware contract, uses a fresh UID-recorded
-`taugrid-nightly-matrix-<run>-<attempt>` namespace after generic cleanup, and
-reuses the existing PVC/replacement-refusing cleanup and capability postflight.
-Its separate authenticated `always()` cleanup precedes diagnostic publication.
-It does not overlap the same run's matrix. Configure the private pipeline variable
-`FLEX_NIGHTLY_GPU_ENVIRONMENT` to an existing, pipeline-authorized
-environment with an Exclusive lock check. The nightly uses sequential lock
-behavior and one implicit stage containing preflight, the protected deployment,
-all hardware jobs, authenticated cleanup, and reporting. The environment check
-therefore holds access for the entire stage, not only the deployment step.
-An unresolved or unauthorized environment must fail admission; YAML alone does
-not provision the resource or its check. Qualify the compiled binding and native
-mutual exclusion before claiming overlapping-run protection. Runs that do not
-consume the same protected environment, including standalone commands, and other
-tenants remain outside that serialization. For a coordinated standalone run with
-existing authenticated access and the same routing variables as preflight:
-
-```bash
-RAY_E2E_IMAGE='<validated immutable base>' \
-  bash scripts/ci/taugrid-flex-nightly-ib.sh \
-  '<preflight hardware-contract.json>' '<absolute artifact directory>' '<numeric-run>-<attempt>'
-```
-
-Before namespace creation, the lane verifies the effective Kueue accounting
-policy from current, Ready controller processes' JSON startup logs, not from a
-mutable ConfigMap. It accepts a matching `resources.excludeResourcePrefixes`,
-or `resources.quotaCheckStrategy=IgnoreUndeclared` when the selected ClusterQueue
-does not declare RDMA and the effective `QuotaCheckStrategy` feature gate is
-verified enabled. The latter requires the controller's `Loaded feature gates`
-startup record; missing gate evidence fails rather than guessing a default.
-Excluded RDMA remains explicitly requested by Pods for kubelet/device-plugin
-allocation; no RDMA ClusterQueue/Cohort quota is required on those routes.
-
-When the effective policy accounts for RDMA, the selected ClusterQueue must
-declare `rdma/rdma_shared_device_a` for the hardware target's exact flavor with
-capacity for 16 units. This bound comes from the rendered worker PodSet:
-16 replicas, each with one regular container requesting one RDMA unit; head,
-submitter, and non-sidecar init containers request none. An offline renderer
-regression checks this total. Capacity may be queue nominal quota, or nominal
-quota plus borrowing within its limit from its named direct root Cohort's own
-same-flavor nominal quota. An omitted borrowing limit is unbounded, but proven
-Cohort capacity is still required. Sibling and ancestor capacity is not inferred;
-hierarchical borrowing is outside this preflight's supported contract.
-Missing, zero, fractional, negative, or insufficient capacity fails before
-namespace creation. These are declared quota bounds, not idle capacity:
-Kueue remains responsible for actual admission and shared contention.
-
-The read-only check uses existing Deployment, Pod, Pod-log, and ClusterQueue
-access. It also attempts a named Cohort read when the queue declares RDMA and
-references a Cohort; that evidence is required only when borrowing is needed.
-It requires a stable rollout and unchanged current container identities across
-log capture. Missing required permissions, rotated startup records, unsupported
-log/config formats, or unverifiable accounting fail explicitly. Namespace and
-Deployment default to `kueue-system/kueue-controller-manager`, with the existing
-`FLEX_NIGHTLY_KUEUE_NAMESPACE` and `FLEX_NIGHTLY_KUEUE_DEPLOYMENT` overrides;
-the standard `manager` container is inspected. No permissions or controller
-settings are changed. A managed controller without a supported resource-exclusion
-policy can use explicitly declared queue/Cohort RDMA quota instead.
-
-This is separate IB qualification, not evidence that the generic matrix used IB,
-nor a GPUDirect RDMA or performance qualification.
-The shell lane uses the pipeline-owned kubeconfig's active context and refuses a
-conflicting `AI_RUNTIME_E2E_KUBE_CONTEXT`. For focused local Go test execution,
-that existing variable selects the context without changing global kubeconfig;
-the UID-owned cleanup helper honors the same override. Namespace and queue
-commands outside the test must also select that context explicitly.
+The configured immutable `AKS_AI_RUNTIME_RAY_E2E_IMAGE` must provide global
+Python `3.12`, the requested Ray version, and a working bare `python` command as
+the default nonroot user. ConfigMap-mounted init checks verify that base before
+Ray starts; Torch need not be preinstalled. Existing job and Serve runtime
+environments install Torch on demand using
+`https://download.pytorch.org/whl/cu128` as the sole primary index.
+The driver and every GPU worker require exact Torch `2.7.1+cu128` / CUDA `12.8`
+after installation, retaining all CUDA numerical and placement assertions.
+Matching pip environments reuse an installation within a Ray node, not across
+Pods. Downloads and extraction require multiple GiB per Pod; this
+repair does not establish a scratch-space reservation or peak-storage bound,
+hash-lock transitive downloads, or serialize overlapping runs.
+`rdmaConformance=true` independently adds the
+existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
+it is not part of the default hardware matrix.
 
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler

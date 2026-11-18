@@ -5,18 +5,12 @@ FROM mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.58.0-cuda13.0@sha256:fc5f2
 
 USER root
 
-COPY tests/e2e/hardwarematrix/fixtures/pip_spec.json /opt/taugrid/ray-torch/pip_spec.json
-
-RUN python3 -c 'import json; print("\n".join(json.load(open("/opt/taugrid/ray-torch/pip_spec.json"))["packages"]))' >/tmp/torch-requirements.txt
-
 RUN python3 -m pip install --no-cache-dir \
-    --isolated --disable-pip-version-check --require-hashes --only-binary=:all: \
     --index-url https://download.pytorch.org/whl/cu128 \
-    --requirement /tmp/torch-requirements.txt \
-    && rm /tmp/torch-requirements.txt \
+    "torch==2.7.1+cu128" \
     && python3 -m pip check
 
-COPY scripts/images/ray-torch/check_image.py scripts/images/ray-torch/test_runtime_env.py /opt/taugrid/ray-torch/
+COPY scripts/images/ray-torch/check_image.py scripts/images/ray-torch/pip_spec.json scripts/images/ray-torch/test_runtime_env.py /opt/taugrid/ray-torch/
 
 USER nonroot:nonroot
 

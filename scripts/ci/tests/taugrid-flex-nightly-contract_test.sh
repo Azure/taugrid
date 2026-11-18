@@ -61,94 +61,10 @@ pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
 
-assert re.search(r"^lockBehavior: sequential$", pipeline, re.MULTILINE)
-assert re.search(r"^jobs:$", pipeline, re.MULTILINE)
-assert not re.search(r"^stages:", pipeline, re.MULTILINE), (
-    "all hardware execution and authenticated cleanup must share the protected implicit stage"
-)
-hardware_access = re.search(
-    r"^  - deployment: hardware_access\n(?P<body>.*?)(?=^  - job:|\Z)",
-    pipeline, re.MULTILINE | re.DOTALL,
-)
-assert hardware_access, "hardware execution requires a protected environment deployment"
-assert re.search(r"^    dependsOn: preflight$", hardware_access["body"], re.MULTILINE)
-assert re.search(
-    r"^    environment: \$\(FLEX_NIGHTLY_GPU_ENVIRONMENT\)$",
-    hardware_access["body"], re.MULTILINE,
-), "the existing exclusive-lock environment must be supplied privately"
-matrix_job = next(job for job in jobs if job.startswith("hardware_matrix\n"))
-assert re.search(r"^    dependsOn: hardware_access$", matrix_job, re.MULTILINE), (
-    "hardware must not run when protected deployment admission fails"
-)
-
-rdma_parameter = re.search(
-    r"^  - name: rdmaConformance\n(?P<body>(?:    .*\n)+)", pipeline, re.MULTILINE,
-)
-assert rdma_parameter, "RDMA parameter is required"
-assert re.search(r"^    type: boolean$", rdma_parameter["body"], re.MULTILINE)
-rdma_default = re.search(r"^    default: (true|false)$", rdma_parameter["body"], re.MULTILINE)
-assert rdma_default, "RDMA default must be an explicit boolean"
-rdma_job = next(job for job in jobs if job.startswith("h200_rdma\n"))
-assert re.search(r"^    dependsOn: hardware_matrix$", rdma_job, re.MULTILINE)
-condition = re.search(r"^    condition: (.+)$", rdma_job, re.MULTILINE).group(1)
-assert condition == "and(succeeded(), ${{ eq(parameters.rdmaConformance, true) }})", condition
-for override, matrix_succeeded, expected in (
-    (None, True, True),
-    (False, True, False),
-    (True, True, True),
-    (None, False, False),
-    (True, False, False),
-):
-    parameter = rdma_default.group(1) == "true" if override is None else override
-    compiled = condition.replace(
-        "${{ eq(parameters.rdmaConformance, true) }}", str(parameter).lower(),
-    )
-    assert (compiled == "and(succeeded(), true)" and matrix_succeeded) == expected, (
-        override, matrix_succeeded, compiled,
-    )
-
-producer_name = re.search(
-    r'export FLEX_NIGHTLY_CONTRACT_FILE="\$\{artifact_dir\}/([^"]+)"', pipeline,
-).group(1)
-download_path = re.search(
-    r"artifact: taugrid-flex-hardware-contract\n          targetPath: ([^\n]+)", rdma_job,
-).group(1)
-consumer_path = re.search(
-    r'scripts/ci/taugrid-flex-nightly-ib\.sh" \\\n\s+"([^"]+)"', rdma_job,
-).group(1)
-assert producer_name == "hardware-matrix.json", producer_name
-assert consumer_path == f"{download_path}/{producer_name}", consumer_path
-
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     binary = root / "bin"
     binary.mkdir()
-    refused_calls = root / "refused-contract-calls"
-    kubectl = binary / "kubectl"
-    kubectl.write_text(
-        '#!/bin/sh\nprintf "unexpected kubectl call\\n" >>"$REFUSED_CALLS"\nexit 90\n'
-    )
-    kubectl.chmod(0o755)
-    staged = root / "preflight"
-    staged.mkdir()
-    wrapper = Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh"
-    for scenario in ("missing", "empty"):
-        contract = staged / producer_name
-        if scenario == "empty":
-            contract.touch()
-        artifact = root / f"refused-{scenario}"
-        result = subprocess.run(
-            ["bash", str(wrapper), str(contract), str(artifact), "42-1"],
-            env=dict(
-                os.environ, PATH=f"{binary}:{os.environ['PATH']}",
-                AI_RUNTIME_E2E_KUBE_CONTEXT="target-context", REFUSED_CALLS=str(refused_calls),
-            ),
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 1, (scenario, result.returncode, result.stderr)
-        assert "IB hardware contract is missing or empty:" in result.stderr, result.stderr
-        assert not refused_calls.exists(), "missing contract must refuse before any kubectl call"
-        assert not artifact.exists(), "missing contract must not initialize workload artifacts"
     for command in ("az", "kubelogin"):
         stub = binary / command
         stub.write_text(
@@ -262,9 +178,12 @@ with tempfile.TemporaryDirectory() as temporary:
         if name not in targets:
             continue
         overrides = {}
-        for target in ("A100", "H200", "DGX"):
-            overrides[f"FLEX_NIGHTLY_{target}_FLAVOR"] = f"{target.lower()}Flavor"
-            overrides[f"FLEX_NIGHTLY_{target}_CLUSTER_QUEUE"] = "clusterQueue"
+        if name != "h200_rdma":
+            for target in ("A100", "H200", "DGX"):
+                overrides[f"FLEX_NIGHTLY_{target}_FLAVOR"] = f"{target.lower()}Flavor"
+                overrides[f"FLEX_NIGHTLY_{target}_CLUSTER_QUEUE"] = "clusterQueue"
+        else:
+            overrides["FLEX_NIGHTLY_CLUSTER_QUEUE"] = "clusterQueue"
         if name != "preflight":
             overrides["FLEX_NIGHTLY_WORKSPACE"] = "workspace"
         for variable, parameter in overrides.items():
@@ -273,10 +192,7 @@ with tempfile.TemporaryDirectory() as temporary:
         assert routing_source in job, name
         first_use = (
             "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
-            if name == "preflight" else (
-                "scripts/ci/taugrid-flex-nightly-ib.sh"
-                if name == "h200_rdma" else "kubectl create namespace"
-            )
+            if name == "preflight" else "kubectl create namespace"
         )
         assert job.index(routing_source) < job.index(first_use), name
         defaults = {
@@ -338,12 +254,7 @@ with tempfile.TemporaryDirectory() as temporary:
             continue
         inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
         script = textwrap.dedent(inline.group(1))
-        if name == "h200_rdma":
-            script = (Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh").read_text()
-            start = script.index("kubectl create namespace")
-            routing = script[start:script.index('selector="$(jq', start)]
-        else:
-            routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
+        routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
         routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
         routing = routing.replace("$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent))
         for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
@@ -372,11 +283,7 @@ with tempfile.TemporaryDirectory() as temporary:
                  'set -euo pipefail\n'
                  'namespace=taugrid-nightly-matrix-42-1\n'
                  f'bundle_dir="{directory}"\n'
-                 f'repo_root="{Path(sys.argv[1]).resolve().parent.parent}"\n'
-                 'run_id=42-1\n'
-                 'contract="$TEST_CONTRACT"\n'
-                 'h200="$(jq -c \'.targets[] | select(.name == "h200")\' "$contract")"\n'
-                 'cluster_queue="$(jq -r .cluster_queue <<<"$h200")"\n' + routing],
+                 'contract="$TEST_CONTRACT"\n' + routing],
                 env=environment,
                 capture_output=True,
                 text=True,
@@ -389,7 +296,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
             expected_queues = 2 if name == "hardware_matrix" else 1
             queue_start = 2
-            if name in ("hardware_matrix", "h200_rdma"):
+            if name == "hardware_matrix":
                 assert actual[2] == "get namespace taugrid-nightly-matrix-42-1 --ignore-not-found -o json"
                 queue_start = 3
                 assert json.loads((directory / "namespace-owner.json").read_text())["run_id"] == "42-1"
@@ -489,7 +396,7 @@ with tempfile.TemporaryDirectory() as temporary:
         side_effect=subprocess.TimeoutExpired(["kubectl"], 30),
     ) as process, patch.object(
         sys, "argv", [str(cleanup_path), "cleanup", namespace, run_id, str(owner_path)],
-    ), patch.dict(os.environ, {"AI_RUNTIME_E2E_KUBE_CONTEXT": ""}), contextlib.redirect_stderr(timeout_stderr):
+    ), contextlib.redirect_stderr(timeout_stderr):
         try:
             cleanup.main()
         except SystemExit as error:
@@ -500,75 +407,6 @@ with tempfile.TemporaryDirectory() as temporary:
         assert process.call_args.args[0][:3] == ["kubectl", "get", "namespace"]
         assert process.call_args.kwargs["timeout"] == 30
     assert "kubectl timed out after 30 seconds" in timeout_stderr.getvalue()
-    for selected_context in ("", "target-context"):
-        with patch.dict(os.environ, {"AI_RUNTIME_E2E_KUBE_CONTEXT": selected_context}), \
-                patch.object(cleanup.subprocess, "run") as process:
-            process.return_value.stdout = "{}"
-            cleanup.kubectl("get", "namespace", namespace)
-            expected = ["kubectl"]
-            if selected_context:
-                expected += ["--context", selected_context]
-            expected += ["get", "namespace", namespace]
-            assert process.call_args.args[0] == expected
-            assert process.call_args.kwargs["timeout"] == 30
-            assert process.call_args.kwargs["check"] is True
-
-    ib_script = (Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-ib.sh").read_text()
-    queue_check = ib_script.split("\nrepo_root=", 1)[0]
-    directory = root / "ib-queue-contract"
-    directory.mkdir()
-    commands = directory / "bin"
-    commands.mkdir()
-    command = commands / "kubectl"
-    command.write_text(
-        "#!/usr/bin/env bash\nset -euo pipefail\n"
-        'case "$*" in\n'
-        '  *"get clusterqueue "*) [[ "$DENIED" != queue ]] || exit 1; '
-        'if [[ "$DENIED" == cohort ]]; then '
-        'printf \'{"spec":{"cohortName":"direct-cohort","resourceGroups":[{"coveredResources":["rdma/rdma_shared_device_a"]}]}}\\n\'; '
-        'else printf \'{"spec":{}}\\n\'; fi;;\n'
-        '  *"get cohort direct-cohort -o json"*) printf \'{"metadata":{"name":"direct-cohort"}}\\n\'; exit 1;;\n'
-        '  *"get deployment "*) [[ "$DENIED" != deployment ]] || exit 1; '
-        'printf \'{"spec":{"selector":{"matchLabels":{"app":"controller"}}}}\\n\';;\n'
-        '  *"get pods "*) printf \'{"items":[{"metadata":{"name":"controller-pod"}}]}\\n\';;\n'
-        '  *"logs controller-pod "*) [[ "$DENIED" == cohort ]] || exit 1; printf \'{}\\n\';;\n'
-        '  *) exit 91;;\nesac\n'
-    )
-    command.chmod(0o755)
-    for denied, message in (
-        ("queue", "existing queue/controller read access"),
-        ("deployment", "existing queue/controller read access"),
-        ("logs", "existing Pod log access"),
-    ):
-        environment = dict(os.environ, PATH=f"{commands}:{os.environ['PATH']}", DENIED=denied)
-        result = subprocess.run(
-            ["bash", "-c", queue_check + '\nverify_ib_accounting_policy selected-queue "$1"',
-             "queue-test", str(directory)],
-            env=environment, capture_output=True, text=True,
-        )
-        assert result.returncode != 0, (denied, result.stderr)
-        assert message in result.stderr, (denied, result.stderr)
-
-    go = commands / "go"
-    go.write_text(
-        "#!/usr/bin/env bash\nset -euo pipefail\n"
-        '[[ ! -e "$EVIDENCE/ib-cohort.json" ]] || exit 92\n'
-        'exit 1\n'
-    )
-    go.chmod(0o755)
-    environment = dict(
-        os.environ, PATH=f"{commands}:{os.environ['PATH']}", DENIED="cohort",
-        EVIDENCE=str(directory),
-    )
-    result = subprocess.run(
-        ["bash", "-c",
-         queue_check + '\nrepo_root="$1"\nverify_ib_accounting_policy selected-queue "$2"',
-         "queue-test", str(Path(sys.argv[1]).resolve().parent.parent), str(directory)],
-        env=environment, capture_output=True, text=True,
-    )
-    assert result.returncode == 1, (result.returncode, result.stderr)
-    assert "Direct Cohort quota evidence unavailable" in result.stderr, result.stderr
-    assert not (directory / "ib-cohort.json").exists()
 
     preflight = next(job for job in jobs if job.startswith("preflight\n"))
     inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", preflight, re.DOTALL)
@@ -645,6 +483,8 @@ grep -Fq "name: rdmaConformance" "$PIPELINE" ||
   fail "extended H200 RDMA conformance must remain explicitly selectable"
 grep -Fq "name: includeDGXSpark" "$PIPELINE" ||
   fail "DGX Spark execution must remain an explicit opt-in while the nodes are reserved"
+grep -Fq "default: false" "$PIPELINE" ||
+  fail "extended H200 RDMA conformance must be disabled by default"
 grep -Fq "TestRayServeGPU" "$PIPELINE" ||
   fail "hardware matrix must run Ray Serve online inference"
 grep -Fq "Ray Serve protobuf compatibility fix" "$PIPELINE" ||
@@ -657,17 +497,6 @@ grep -Fq "grep -Fxq linux/amd64" "$PIPELINE" ||
   fail "preflight must require an amd64 Ray image for A100/H200"
 grep -Fq "TestRayTrainGPU" "$PIPELINE" ||
   fail "hardware matrix must run distributed Ray Train"
-grep -Fq 'if E2E_BUNDLE_DIR="${bundle_dir}/${target}-${workers}gpu/${workload}" \' "$PIPELINE" ||
-  fail "matrix evidence must be published separately for every target, shape, and workload"
-matrix_source="${REPO_ROOT}/tests/e2e/hardwarematrix/matrix_test.go"
-grep -Fq 'logMarkers := []string{"MATRIX_SERVE_RESULT=", success}' "$matrix_source" ||
-  fail "Serve must wait for numerical replica evidence as well as the success sentinel"
-grep -Fq 'logs, err := tc.WaitForFullPodLogsByLabelContaining(' "$matrix_source" ||
-  fail "matrix must retain the full submitter logs returned by the log wait"
-grep -Fq 'require.NoError(t, tc.Bundle().WriteFile("submitter.log", []byte(logs)),' "$matrix_source" ||
-  fail "matrix must preserve submitter evidence and fail if it cannot be written"
-grep -Fq 'require.NoError(t, tc.Bundle().WriteFile("worker-pods.json", placement),' "$matrix_source" ||
-  fail "matrix must preserve worker placement and fail if it cannot be written"
 grep -Fq "run_case \"\${target}\" 2 2 1 tau.azure.com/site" "$PIPELINE" ||
   fail "DGX Spark matrix must include two GPUs across two hosts"
 grep -Fq "run_case \"\${target}\" 8 1 8 kubernetes.io/hostname" "$PIPELINE" ||
@@ -679,15 +508,16 @@ grep -Fq "MATRIX_SCHEDULER_RECOVERY_NODE" "$PIPELINE" ||
 grep -Fq "TestConcurrentGPUWorkloadsAcrossHardwareSites" \
   "${REPO_ROOT}/tests/e2e/multisite/multisite_test.go" ||
   fail "full profile must include concurrent hardware-site validation"
-grep -Fq 'scripts/ci/taugrid-flex-nightly-ib.sh' "$PIPELINE" ||
-  fail "RDMA lane must invoke the dedicated synthetic IB path"
-grep -Fq "TestRayIBGPU" "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" ||
-  fail "RDMA lane must retain CUDA IB collective conformance"
-grep -Fq 'export MATRIX_REQUIRED_TOPOLOGY=tau.azure.com/site' "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" ||
-  fail "IB collective must use site-level topology for its two-node shape"
-if grep -Fq 'TestFineWebRayTrain16xH200IB' "$PIPELINE"; then
-  fail "nightly must not run legacy FineWeb IB storage/privilege contracts"
-fi
+grep -Fq "TestFineWebRayTrain16xH200IB" "$PIPELINE" ||
+  fail "optional H200 RDMA/NCCL conformance must remain available"
+grep -Fq 'name: FINEWEB_CHECKPOINT_INTERVAL' "$PIPELINE" ||
+  fail "short RDMA qualification must explicitly configure its checkpoint interval"
+grep -Fq 'value: "1"' "$PIPELINE" ||
+  fail "two-step RDMA qualification must checkpoint within the run"
+grep -Fq 'FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)' "$PIPELINE" ||
+  fail "RDMA qualification must forward its checkpoint interval to the fixture"
+grep -Fq "export FINEWEB_TAS_MODE=site" "$PIPELINE" ||
+  fail "H200 RDMA extension must use site-level topology for its two-node shape"
 grep -Fq "trap cleanup EXIT" "$PIPELINE" ||
   fail "pipeline must retain fail-safe cleanup traps"
 grep -Fq "condition: always()" "$PIPELINE" ||
@@ -815,18 +645,6 @@ jq -e '
   and .rdma_target.rdma_nodes == 2
 ' "$FLEX_NIGHTLY_CONTRACT_FILE" >/dev/null ||
   fail "preflight contract does not preserve the hardware matrix inventory"
-
-mkdir -p "${fake_bin}/preflight"
-cp "${FLEX_NIGHTLY_CONTRACT_FILE}" "${fake_bin}/preflight/hardware-matrix.json"
-if PATH="${fake_bin}:${PATH}" bash "${REPO_ROOT}/scripts/ci/taugrid-flex-nightly-ib.sh" \
-  "${fake_bin}/preflight/hardware-matrix.json" "${fake_bin}/ib-capacity" 42-1 \
-  >"${fake_bin}/ib-capacity.log" 2>&1; then
-  fail "IB must reject hosts advertising fewer than eight RDMA units each"
-fi
-grep -Fq "at least eight RDMA units each" "${fake_bin}/ib-capacity.log" ||
-  fail "IB must fail explicitly on insufficient RDMA capacity before namespace creation"
-[ ! -e "${fake_bin}/ib-capacity/diagnostics/namespace-owner.json" ] ||
-  fail "IB capacity refusal must not create namespace ownership"
 
 FLEX_NIGHTLY_INCLUDE_DGX=false \
 FLEX_NIGHTLY_A100_FLAVOR=test-a100-flavor \

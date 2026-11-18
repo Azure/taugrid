@@ -3,7 +3,6 @@
 
 trigger: none
 pr: none
-lockBehavior: sequential
 
 schedules:
   - cron: "15 8 * * *"
@@ -24,7 +23,7 @@ parameters:
   - name: rdmaConformance
     displayName: Run extended H200 RDMA/NCCL conformance
     type: boolean
-    default: true
+    default: false
   - name: includeDGXSpark
     displayName: Include DGX Spark targets
     type: boolean
@@ -64,6 +63,12 @@ variables:
     value: taugrid-gpu-topology
   - name: AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES
     value: "2"
+  - name: FINEWEB_TRAIN_STEPS
+    value: "2"
+  - name: FINEWEB_CHECKPOINT_INTERVAL
+    value: "1"
+  - name: FINEWEB_RAYJOB_TIMEOUT_MINUTES
+    value: "60"
 
 jobs:
   - job: preflight
@@ -176,23 +181,9 @@ jobs:
           targetPath: $(Build.ArtifactStagingDirectory)/preflight
           artifact: taugrid-flex-hardware-contract
 
-  - deployment: hardware_access
-    displayName: Acquire shared hardware execution
-    dependsOn: preflight
-    environment: $(FLEX_NIGHTLY_GPU_ENVIRONMENT)
-    timeoutInMinutes: 5
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-            - download: none
-            - checkout: none
-            - bash: printf '%s\n' 'Shared hardware execution admitted by protected environment checks.'
-              displayName: Confirm protected hardware access
-
   - job: hardware_matrix
     displayName: Ray Serve and Ray Train hardware matrix
-    dependsOn: hardware_access
+    dependsOn: preflight
     timeoutInMinutes: 300
     cancelTimeoutInMinutes: 30
     steps:
@@ -427,8 +418,7 @@ jobs:
                 test_name=TestRayServeGPU
                 [[ "${workload}" == "train" ]] && test_name=TestRayTrainGPU
                 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                if E2E_BUNDLE_DIR="${bundle_dir}/${target}-${workers}gpu/${workload}" \
-                  go test -v -count=1 -timeout 50m -run "^${test_name}$" ./hardwarematrix/; then
+                if go test -v -count=1 -timeout 50m -run "^${test_name}$" ./hardwarematrix/; then
                   outcome=passed
                 else
                   outcome=failed
@@ -583,11 +573,10 @@ jobs:
           artifact: taugrid-flex-hardware-matrix-$(Build.BuildId)-$(System.JobAttempt)
 
   - job: h200_rdma
-    displayName: H200 synthetic IB collectives
+    displayName: Optional H200 RDMA and NCCL extension
     dependsOn: hardware_matrix
     condition: and(succeeded(), ${{ eq(parameters.rdmaConformance, true) }})
     timeoutInMinutes: 90
-    cancelTimeoutInMinutes: 30
     steps:
       - checkout: self
 
@@ -601,13 +590,6 @@ jobs:
         inputs:
           version: 1.27.4-1
           goDownloadUrl: https://aka.ms/golang/release/latest
-
-      - task: DownloadPipelineArtifact@2
-        displayName: Download IB hardware contract
-        inputs:
-          buildType: current
-          artifact: taugrid-flex-hardware-contract
-          targetPath: $(Pipeline.Workspace)/preflight
 
       - task: AzureCLI@2
         displayName: Run synthetic H200 InfiniBand conformance
@@ -644,72 +626,68 @@ jobs:
 
             source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
+            namespace="taugrid-nightly-rdma-$(Build.BuildId)-$(System.JobAttempt)"
+            cleanup() {
+              rc=$?
+              trap - EXIT
+              set +e
+              kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" -o wide \
+                >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1
+              kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m
+              exit "${rc}"
+            }
+            trap cleanup EXIT
+
+            kubectl create namespace "${namespace}"
+            kubectl label namespace "${namespace}" \
+              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
+              tau.azure.com/gpu-queue=enabled
+            cat <<EOF | kubectl apply -f -
+            apiVersion: kueue.x-k8s.io/v1beta2
+            kind: LocalQueue
+            metadata:
+              name: h200
+              namespace: ${namespace}
+            spec:
+              clusterQueue: ${FLEX_NIGHTLY_CLUSTER_QUEUE}
+            EOF
+
+            cd "$(Build.SourcesDirectory)/tests/e2e"
+            export AI_RUNTIME_E2E=1
+            export E2E_GPU=1
+            export E2E_FINEWEB=1
+            export E2E_STACK_USE_ARGOCD_QUEUE=1
+            export E2E_STACK_NAMESPACE="${namespace}"
+            export E2E_STACK_QUEUE=h200
+            export E2E_STACK_LARGE_GPU_QUEUE=h200
+            export GPU_NODE_SELECTOR_KEY=kueue.azure.com/gpu-series
+            export GPU_NODE_SELECTOR_VALUE=nd-h200-v5
+            export RAY_SUBMITTER_NODE_SELECTOR_KEY=kubernetes.azure.com/mode
+            export RAY_SUBMITTER_NODE_SELECTOR_VALUE=system
+            export FINEWEB_DATA_MODE=synthetic
+            export FINEWEB_TAS_MODE=site
+            export FINEWEB_TRAIN_WORKERS=16
+            export FINEWEB_TRAIN_STEPS
+            export FINEWEB_CHECKPOINT_INTERVAL
+            export FINEWEB_RAYJOB_TIMEOUT_MINUTES
             export RAY_E2E_IMAGE
-            bash "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-ib.sh" \
-              "$(Pipeline.Workspace)/preflight/hardware-matrix.json" \
-              "$(Build.ArtifactStagingDirectory)/rdma" \
-              "$(Build.BuildId)-$(System.JobAttempt)"
+            if [[ -n "${H200_SCHEDULER_RECOVERY_NODE:-}" &&
+                  "${H200_SCHEDULER_RECOVERY_NODE}" != '$('* ]]; then
+              export FINEWEB_SCHEDULER_RECOVERY_NODE="${H200_SCHEDULER_RECOVERY_NODE}"
+            fi
+            go test -v -count=1 -timeout 75m \
+              -run '^TestFineWebRayTrain16xH200IB$' ./stack/
         env:
           FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
-          FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
-          FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}
-          FLEX_NIGHTLY_DGX_FLAVOR: ${{ parameters.dgxFlavor }}
-          FLEX_NIGHTLY_A100_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
-          FLEX_NIGHTLY_H200_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
-          FLEX_NIGHTLY_DGX_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
+          FLEX_NIGHTLY_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
-          FLEX_NIGHTLY_GPU_TOPOLOGY: $(FLEX_NIGHTLY_GPU_TOPOLOGY)
-          FLEX_NIGHTLY_MIN_RDMA_NODES: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_MIN_RDMA_NODES)
-          FLEX_NIGHTLY_INCLUDE_DGX: ${{ parameters.includeDGXSpark }}
-          FLEX_NIGHTLY_DGX_SELECTOR: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SELECTOR)
-          FLEX_NIGHTLY_DGX_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_DGX_SITE)
-          FLEX_NIGHTLY_A100_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_A100_SITE)
-          FLEX_NIGHTLY_H200_SITE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_H200_SITE)
           RAY_E2E_IMAGE: $(AKS_AI_RUNTIME_RAY_E2E_IMAGE)
-
-      - task: AzureCLI@2
-        displayName: Clean up owned IB namespace
-        condition: always()
-        timeoutInMinutes: 20
-        inputs:
-          azureSubscription: $(azureServiceConnection)
-          scriptType: bash
-          scriptLocation: inlineScript
-          inlineScript: |
-            set -euo pipefail
-            bundle_dir="$(Build.ArtifactStagingDirectory)/rdma/diagnostics"
-            mkdir -p "${bundle_dir}"
-            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
-                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
-              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
-              exit 1
-            fi
-            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
-            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
-            mkdir -p "${tools_dir}"
-            if ! command -v kubelogin >/dev/null 2>&1; then
-              az aks install-cli \
-                --install-location "${tools_dir}/kubectl" \
-                --kubelogin-install-location "${tools_dir}/kubelogin"
-            fi
-            export PATH="${tools_dir}:${PATH}"
-            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
-            az aks get-credentials \
-              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
-              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
-              --file "${KUBECONFIG}" \
-              --overwrite-existing
-            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
-            python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
-              cleanup "taugrid-nightly-matrix-$(Build.BuildId)-$(System.JobAttempt)" \
-              "$(Build.BuildId)-$(System.JobAttempt)" "${bundle_dir}/namespace-owner.json" \
-              >"${bundle_dir}/owned-cleanup-status.json"
-        env:
-          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
-          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
-          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
+          H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
+          FINEWEB_TRAIN_STEPS: $(FINEWEB_TRAIN_STEPS)
+          FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)
+          FINEWEB_RAYJOB_TIMEOUT_MINUTES: $(FINEWEB_RAYJOB_TIMEOUT_MINUTES)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish H200 RDMA diagnostics

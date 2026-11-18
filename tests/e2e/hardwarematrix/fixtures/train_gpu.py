@@ -13,7 +13,7 @@ from ray.train.torch import TorchTrainer
 
 from runtime_contract import check_runtime
 
-print("MATRIX_RUNTIME_RESULT=" + json.dumps(check_runtime(), sort_keys=True))
+check_runtime()
 
 WORKERS = int(os.environ["MATRIX_WORKERS"])
 
@@ -23,7 +23,7 @@ def train_loop():
     import torch.nn as nn
     from runtime_contract import check_runtime
 
-    packages = check_runtime()
+    check_runtime()
     context = train.get_context()
     rank = context.get_world_rank()
     world_size = context.get_world_size()
@@ -60,7 +60,6 @@ def train_loop():
         "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
         "first_loss": first_loss,
         "last_loss": last_loss,
-        "packages": packages,
     }
     gathered = [None] * world_size
     dist.all_gather_object(gathered, metadata)
