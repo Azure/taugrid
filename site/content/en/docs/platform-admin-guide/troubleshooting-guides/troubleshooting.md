@@ -8,7 +8,7 @@ aliases:
   - "/docs/operations/troubleshooting/"
 ---
 
-{{< maturity status="ga" reviewed="2026-11-18" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 This is the canonical diagnose-first path for a stuck or failed
 [run](../../reference/glossary/#run). Work through the layers in order and
@@ -28,7 +28,7 @@ ordered phase tree for every run -- Submitted, Kueue admission, (for a RayJob)
 RayCluster, pod scheduling, DRA allocation, image pull, init containers,
 container start, readiness, and (for a RayJob) RayJob status -- and each phase
 reports pending, active, done, warning, or skipped. Read it top to bottom and
-treat the first phase that is neither `done` nor `skipped` as the layer to investigate,
+treat the first phase that is not `done` as the layer to investigate,
 addressing it before any later phase. Add `--watch` to follow it live.
 
 Two things are never proof of training progress by themselves:
@@ -114,7 +114,7 @@ resolved credentials, reached Kubernetes, and verified the TauWorkspace,
 LocalQueue, and authorization contract. Add `--offline` to prove only local
 project and descriptor resolution.
 
-**What local resolution failure means:** No checked-in descriptor or local assignment was found,
+**What failure means:** No checked-in descriptor or local assignment was found,
 more than one candidate was found, or the effective descriptor failed schema
 validation. This is a repository configuration problem rather than a workload
 problem, and every later layer stays unreachable until it is fixed.
@@ -183,17 +183,15 @@ customer setup path to deploy and validate a compatible CSI implementation. See
 [AKS storage drivers and Flex nodes](../aks-setup/#aks-storage-drivers-and-flex-nodes).
 
 **What failure means:** `Pending` or `Degraded` phase means one or more
-platform-owned phase conditions are unmet -- namespace/RBAC, queue accessibility,
-or detected drift. A failed `WorkloadIdentityReady` diagnostic alone does not
-change the overall phase. This is an
+platform-owned conditions are unmet -- namespace/RBAC, queue accessibility, or
+workload identity. This is an
 onboarding/policy problem for the platform to fix, not something a researcher can resolve by resubmitting
 the run.
 
 **Next owner/action:** Platform action required.
 [TauWorkspace](../../reference/glossary/#tauworkspace) is reconciled entirely
-by the platform's workspace controller; let it reconcile its owned RBAC and
-queue resources rather than hand-editing them to work around a `Degraded`
-condition. The platform owner repairs external queue policy and storage. See the
+by the platform's workspace controller; let it reconcile RBAC, queues, and
+storage rather than hand-editing them to work around a `Degraded` condition. See the
 [TauWorkspace reference](../../reference/workspace/#workspace-readiness-and-recovery)
 for the condition-driven recovery path.
 
@@ -208,14 +206,14 @@ anything is submitted to the cluster.
 tau run validate --config tau/train.yaml
 ```
 
-Add `--dry-run=client` to a normal `tau run` invocation to also resolve policy
-and render, or `--dry-run=server` to render and dry-run against the API server
+Add `--dry-run=client` to a normal `tau run` invocation for the same check
+inline, or `--dry-run=server` to render and dry-run against the API server
 while skipping admission.
 
 **What success proves:** The checked-in
 [direct run config](../../reference/glossary/#run-config-vs-manifest) parses,
-passes local validation, and resolves a direct execution target. This does
-not prove live workload-profile applicability or API-server acceptance. `tau run
+passes schema validation, and resolves to a renderable
+[Workload](../../reference/glossary/#workload) (`Job` or `RayJob`). `tau run
 validate` runs entirely offline. In a connected repository, `tau run
 --dry-run=client` activates the workspace connection and reads the live
 workload-profile catalog without submitting the rendered workload. Use
@@ -228,8 +226,8 @@ SDK-generated managed workflow being run through the wrong command. These are
 authoring problems in the repository, not cluster or scheduling problems.
 
 **Next owner/action:** Researcher action required. Fix the run config or
-target in the repository. Offline validation does not touch the cluster;
-connected dry-runs read cluster policy but do not submit the workload.
+target in the repository; nothing here touches the cluster, a queue, or a
+node.
 
 ## 4. Queue admission and quota
 
@@ -297,14 +295,12 @@ container started and passed readiness.
 - **Image pull** failing (`ErrImagePull`/`ImagePullBackOff`): verify the image
   name, tag, registry credentials, and node egress.
 - **Init containers**/**Container start** failing: the application or its
-  init step is failing before readiness. Inspect the error before assigning
-  ownership: image/application configuration, storage, identity, and other
-  platform dependencies can all affect startup.
+  init step is crashing before it becomes ready -- an application problem,
+  rather than an infrastructure one.
 
 **Next owner/action:** Scheduling and DRA capacity -- platform/node-pool
 owner. Image pull -- researcher (wrong pinned tag) or the image's owning
-team. Init/container failure -- researcher or platform owner, according to the
-reported error.
+team. Init/container crash -- researcher action required.
 
 Operator-only deep inspection, after `tau run status` has identified the
 stuck phase:
@@ -403,15 +399,13 @@ mirrored into the durable experiment record. Neither queue admission (layer
 evidence directly.
 
 **What failure means:** Logs show no progress despite a `Ready`/`Running`
-phase: investigate an application hang, data/storage/network dependency, or
-device/runtime failure rather than inferring the cause from pod phase alone.
-An empty or missing experiment record despite healthy
+phase: an application-level hang (data loader stall, deadlock), rather than an
+infrastructure fault. An empty or missing experiment record despite healthy
 logs: the metrics-offload path or checkpoint contract is missing for this
 run, rather than a training failure.
 
-**Next owner/action:** No progress in logs -- researcher first, with the
-platform owner when dependency or device evidence points outside the application.
-Missing durable evidence with otherwise healthy logs --
+**Next owner/action:** No progress in logs -- researcher action required
+(application logic). Missing durable evidence with otherwise healthy logs --
 platform/TauGrid owner for the metrics-offload or expstore configuration. See
 [Experiment evidence and artifacts](../../developer-guide/concepts/evidence/).
 

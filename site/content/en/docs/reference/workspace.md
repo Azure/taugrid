@@ -4,7 +4,7 @@ weight: 3
 description: Kubernetes workspace desired state and readiness
 ---
 
-{{< maturity status="alpha" reviewed="2026-11-18" >}}
+{{< maturity status="alpha" reviewed="2026-07-16" >}}
 
 `TauWorkspace` is a platform-authored Kubernetes resource in the TauGrid system namespace (`tau-system` by default). A custom `tau cluster install --namespace <name>` moves the controller and these objects together; administrative workspace commands use `--system-namespace <name>`, and repository descriptors persist the value as `cluster.systemNamespace`. It reconciles or verifies:
 
@@ -26,7 +26,7 @@ tau workspace list
 tau workspace status <name>
 ```
 
-Workspace RBAC is the API default and what `tau workspace create` writes; the controller binds the researcher subject in the workspace namespace. Cluster-wide authorization is an explicit opt-out: the platform grants researcher access separately. Some existing clusters use this mode. The [multiple-workspace lifecycle](../../developer-guide/concepts/workspaces/#multiple-workspaces) remains Alpha. Multiple workspace objects reconcile independently; a legacy primary-workspace marker preserves older CLI discovery, not tenant isolation.
+Workspace RBAC is the API default and what `tau workspace create` writes; the controller binds the researcher subject in the workspace namespace. Cluster-wide authorization is an explicit opt-out: the platform grants researcher access separately. Some existing clusters use this mode. The [multiple-workspace lifecycle](../../developer-guide/concepts/workspaces/#multiple-workspaces) is Alpha: v0 activates one workspace and blocks additional workspace objects until the active workspace is removed.
 
 The controller source and raw Kustomize manifests live in the [`Azure/taugrid`](https://github.com/Azure/taugrid) repository. Versioned MCR release artifacts include the controller image, the standalone controller OCI chart, the TauGrid umbrella OCI chart, and the CRDs packaged by both charts.
 

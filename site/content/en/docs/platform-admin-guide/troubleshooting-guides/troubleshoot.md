@@ -8,7 +8,7 @@ aliases:
   - "/docs/tasks/operator/troubleshoot/"
 ---
 
-{{< maturity status="ga" reviewed="2026-11-18" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 Start with:
 
@@ -17,8 +17,7 @@ tau run status <run-name>
 ```
 
 `tau run status` is the canonical lifecycle view for any run -- read its
-phases top to bottom and stop at the first one that is neither `done` nor
-`skipped`. Then work
+phases top to bottom and stop at the first one that is not `done`. Then work
 through the layers below, in order, until you reach that phase:
 
 1. Repository/connection resolution and cluster access --

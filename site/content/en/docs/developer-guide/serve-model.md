@@ -6,7 +6,7 @@ aliases:
   - "/docs/tasks/researcher/serve-model/"
 ---
 
-{{< maturity status="ga" reviewed="2026-11-18" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 `tau serve` turns a project-owned image and optional durable checkpoint into a
 [service](../../reference/glossary/#service). Choose:

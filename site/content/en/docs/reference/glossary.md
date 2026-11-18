@@ -6,7 +6,7 @@ aliases:
   - "/docs/concepts/glossary/"
 ---
 
-{{< maturity status="ga" reviewed="2026-11-18" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 This page is the canonical source for TauGrid terminology. Other concept and
 reference pages link to a definition here instead of redefining it. Where a
@@ -33,9 +33,8 @@ against it.
 ## Project {#project}
 
 The unit inside a repository that owns one or more [targets](#target) and
-one effective [workspace connection](#workspace-connection) at a time,
-from a checked-in descriptor or an exact machine-local assignment. A monorepo
-can hold multiple projects.
+exactly one [workspace connection descriptor](#workspace-connection) at a
+time. A monorepo can hold multiple projects.
 
 ## Target {#target}
 
@@ -108,9 +107,9 @@ namespace. `cluster-wide` is an explicit opt-out: the workspace supplies only
 routing and policy defaults, and the platform grants researcher access
 separately, which is how some existing clusters are configured. The
 [multiple-workspace lifecycle](../../developer-guide/concepts/workspaces/#multiple-workspaces) is Alpha: v0
-supports independently reconciled workspace objects; the legacy
-primary-workspace marker only preserves older CLI discovery behavior.
-Researcher isolation still requires its negative-access gate.
+activates one workspace and blocks additional workspace objects until the active
+workspace is removed. Researcher isolation still requires its negative-access
+gate.
 
 ## Status condition / Ready {#status-condition}
 
@@ -127,18 +126,19 @@ isolation needs its own check; see
 
 ## Profile / resource profile {#profile}
 
-An internal render-time resource profile sizes compute, including GPU, CPU,
-and memory intent. The current platform-facing **workload profile** is broader:
-the ready `TauCluster` profile contract also controls queue, priority,
-placement, and applicability. See
-[workload profiles](../../platform-admin-guide/workload-profiles/).
+The render-time resource contract (name, lane, and spec) a workload builder
+consumes to size compute -- GPU, CPU, and memory intent -- for a run. A
+profile describes shape only. It is narrower than a
+[topology preset](#topology), which additionally decides queue, priority,
+and placement routing.
 
 ## Topology and placement {#topology}
 
-The node locality required by a workload, expressed through
-`policy.topology` and the selected workload profile. Queue and priority are
-separate fields of that profile contract. TauGrid resolves topology intent;
-Kueue and Kubernetes still own admission and scheduling.
+The platform-owned mapping from a researcher-facing preset (for example
+`azure.research.training.l`) to Kueue-facing queue, priority, and topology
+metadata: which [queue](#queue) admits the workload, its priority class, and
+any required or preferred node topology for pod placement. TauGrid resolves
+topology intent; Kueue and Kubernetes still own admission and scheduling.
 See [Queue, quota, topology, and GPU placement](../../platform-admin-guide/policy-and-placement/).
 
 ## Queue / LocalQueue / ClusterQueue {#queue}
@@ -173,8 +173,7 @@ object `tau run status`, `tau logs`, `tau run get`,
 ## Workload (Job / RayJob) {#workload}
 
 The rendered Kubernetes object TauGrid submits: a `batch/v1` `Job` for
-direct batch work, including multi-node torchrun, or a KubeRay `RayJob` for
-Ray execution. The
+single-pod work, or a KubeRay `RayJob` for multi-node Ray execution. The
 workload is what Kueue admits and Kubernetes schedules: a run's rendered
 execution artifact, downstream of the run's own lifecycle handle.
 
@@ -200,7 +199,6 @@ run config's `experiment` block:
 
 Files and records saved by a run: metric history, summaries, checkpoints,
 model outputs, images, tables, reports, and retry or resume state. TauGrid
-preserves evidence through the run's configured durable storage and experiment
-capture/offload paths; pod-local output alone is not durable. The TauGrid Portal and optional
+keeps the durable copy with the experiment. The TauGrid Portal and optional
 ADX/Kusto dashboards provide additional ways to view and compare it. See
 [Experiment evidence and artifacts](../../developer-guide/concepts/evidence/).

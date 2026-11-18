@@ -4,7 +4,7 @@ weight: 3
 description: Governance for two separately maintained documentation surfaces
 ---
 
-{{< maturity status="ga" reviewed="2026-11-18" >}}
+{{< maturity status="ga" reviewed="2026-07-16" >}}
 
 The TauGrid documentation site and GitHub Wiki are both maintained as complete
 surfaces. They are edited separately, so semantic parity is a human ownership
@@ -19,10 +19,9 @@ responsibility rather than an automated synchronization claim.
 
 The GitHub documentation validation and Pages deployment pipelines validate that
 mapped site pages exist and parity metadata is structurally valid without
-blocking on review age. Local `make -C site check` enforces the 90-day
-review-age limit by default. Even with `--skip-review-age`, a mapped site's
-review date cannot be newer than its joint site/wiki review date; a site-only
-review does not establish semantic parity.
+blocking on review age. The consolidated Azure DevOps pipeline additionally
+enforces review age on the Monday parity-only schedule. Local `make -C site check`
+also enforces the 90-day review-age limit by default.
 
 When user-facing behavior or maturity changes:
 
