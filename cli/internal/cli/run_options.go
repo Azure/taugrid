@@ -42,6 +42,7 @@ type runPlacement struct {
 	queue                     string
 	workloadProfileSnapshot   string
 	selectedWorkloadProfile   *selectedWorkloadProfile
+	deferHotVolumeCapacity    bool
 	directJobProfile          *profile.Profile
 	team                      string
 	lane                      string
@@ -229,6 +230,7 @@ type runExecutionInput struct {
 	nodes                   int
 	nodesExplicit           bool
 	ttlSecondsAfterFinished int64
+	ttlExplicit             bool
 	configs                 map[string]any
 	smokePairs              int
 	upstreamCheckpoint      string

@@ -20,6 +20,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/podsecurity"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
 	"github.com/Azure/taugrid/cli/internal/storage"
+	"github.com/Azure/taugrid/cli/internal/storageprobe"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -31,6 +32,8 @@ const (
 	RayVersion      = "2.56.0"
 	DefaultGPUImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.56.0-cuda13.0"
 	DefaultCPUImage = "mcr.microsoft.com/aks/ai-runtime/ray:py3.12-ray2.54.0"
+
+	rayOverwriteContainerCmdKey = "ray.io/overwrite-container-cmd"
 
 	metricsPort              = 8080
 	dashboardPort            = 8265
@@ -97,6 +100,8 @@ type Options struct {
 
 	RayTrainConfig    map[string]any
 	AllowNCCLOverride bool
+
+	hotClaimSize string
 }
 
 type Resources struct {
@@ -146,6 +151,12 @@ func Render(o Options) ([]byte, error) {
 	}
 	if plan.QueueName == "" {
 		plan.QueueName = topology.SharedGPUQueueName
+	}
+	if hot := o.Profile.HotVolume; hot != nil {
+		o.hotClaimSize, err = hot.ClaimSize(o.HotSize)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	rayJob, err := buildRayJob(o, plan, encodedPayload, payloadDigest)
@@ -380,6 +391,17 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		"labels":      podLabels,
 		"annotations": podAnnotations,
 	}
+	workerPodMetadata := podMetadata
+	if o.hotClaimSize != "" {
+		workerPodAnnotations := map[string]any{rayOverwriteContainerCmdKey: "true"}
+		for k, v := range podAnnotations {
+			workerPodAnnotations[k] = v
+		}
+		workerPodMetadata = map[string]any{
+			"labels":      podLabels,
+			"annotations": workerPodAnnotations,
+		}
+	}
 	headPodAnnotations := topology.WithoutKueueTopologyAnnotations(stringMapFromAnyMap(podAnnotations))
 	headPodMetadata := map[string]any{
 		"labels":      podLabels,
@@ -420,7 +442,7 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 				"num-gpus": fmt.Sprintf("%d", o.GPUsPerWorker),
 			},
 			"template": map[string]any{
-				"metadata": podMetadata,
+				"metadata": workerPodMetadata,
 				"spec":     workerPod,
 			},
 		})
@@ -473,6 +495,9 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		"env":          env,
 		"resources":    resources(o, containerName),
 		"volumeMounts": volumeMounts(o, isHead),
+	}
+	if !isHead && o.hotClaimSize != "" {
+		container["command"] = []any{"bash", "-lc", hotWorkerStartScript()}
 	}
 	if !isHead && o.RDMA.Enabled {
 		container["securityContext"] = map[string]any{
@@ -542,6 +567,9 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			map[string]any{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"},
 		}
 	}
+	if !isHead && o.hotClaimSize != "" {
+		storage.ApplyEphemeralFSGroup(pod)
+	}
 	if o.SecurityMode == runconfig.SecurityModeRestricted {
 		group := int64(65532)
 		if err := podsecurity.ApplyRestricted(pod, &group); err != nil {
@@ -551,6 +579,10 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 		return nil, fmt.Errorf("unsupported runtime security mode %q", o.SecurityMode)
 	}
 	return pod, nil
+}
+
+func hotWorkerStartScript() string {
+	return storageprobe.Script() + "ulimit -n \"${RAY_START_ULIMIT_OPEN_FILES:-65536}\"\nexec bash -lc \"$KUBERAY_GEN_RAY_START_CMD\"\n"
 }
 
 func payloadInitContainer(image, encodedPayload, payloadDigest string) map[string]any {
@@ -828,6 +860,9 @@ func envList(o Options, isHead bool) ([]any, error) {
 	for k, v := range o.Env {
 		env[k] = v
 	}
+	if !isHead && o.hotClaimSize != "" {
+		env[storage.HotRequireLocalEnv] = "1"
+	}
 
 	backend := "gloo"
 	if o.GPUsPerWorker > 0 {
@@ -916,15 +951,22 @@ func volumes(o Options, isHead bool) []any {
 			vols = append(vols, metricsoffload.RuntimeVolume())
 		}
 	}
+	return append(vols,
+		data,
+		hotVolume(o, isHead),
+		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
+	)
+}
+
+func hotVolume(o Options, isHead bool) map[string]any {
+	if !isHead && o.hotClaimSize != "" {
+		return storage.EphemeralVolume("tau-hot", o.Profile.HotVolume.StorageClassName, o.hotClaimSize)
+	}
 	hot := map[string]any{}
 	if o.HotSize != "" {
 		hot["sizeLimit"] = o.HotSize
 	}
-	return append(vols,
-		data,
-		map[string]any{"name": "tau-hot", "emptyDir": hot},
-		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
-	)
+	return map[string]any{"name": "tau-hot", "emptyDir": hot}
 }
 
 func volumeMounts(o Options, isHead bool) []any {

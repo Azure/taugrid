@@ -231,6 +231,7 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 		CheckpointArtifact:      o.checkpointArtifact,
 		HotSize:                 o.hotSize,
 		TTLSecondsAfterFinished: o.ttlSecondsAfterFinished,
+		TTLExplicit:             o.ttlExplicit,
 		Annotations:             annotations,
 	}
 	topoWarnings, err := topo.applyWithChangedAndWorkspaceQueue(&opts, func(flag string) bool {

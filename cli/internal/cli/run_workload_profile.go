@@ -6,15 +6,22 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+const (
+	hotVolumeCapacityWaitTimeout  = 10 * time.Minute
+	hotVolumeCapacityPollInterval = 5 * time.Second
 )
 
 type selectedWorkloadProfile struct {
@@ -147,6 +154,8 @@ func selectRunWorkloadProfile(
 		Team:          o.team,
 		Lane:          o.lane,
 		GPUsPerWorker: requestedProfileGPUs(o),
+
+		DeferHotVolumeCapacity: o.deferHotVolumeCapacity,
 	})
 	if err != nil {
 		return o, err
@@ -156,6 +165,44 @@ func selectRunWorkloadProfile(
 		return o, fmt.Errorf("convert workload profile %q for rendering: %w", selection.Profile.Name, err)
 	}
 	return applySelectedWorkloadProfile(o, selection, renderProfile)
+}
+
+func hotVolumeCapacityDeferred(o unresolvedRunOptions) bool {
+	return o.selectedWorkloadProfile != nil && o.selectedWorkloadProfile.Selection.HotVolumeCapacityDeferred
+}
+
+func awaitHotVolumeCapacity(
+	ctx context.Context,
+	w io.Writer,
+	resolve func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error),
+	o unresolvedRunOptions,
+	timeout, interval time.Duration,
+) (unresolvedRunOptions, error) {
+	o.deferHotVolumeCapacity = true
+	deadline := time.Now().Add(timeout)
+	for waited := false; ; waited = true {
+		resolved, err := resolve(ctx, o)
+		if err != nil {
+			return resolved, err
+		}
+		if !hotVolumeCapacityDeferred(resolved) {
+			return resolved, nil
+		}
+		name := resolved.selectedWorkloadProfile.Selection.Profile.Name
+		if !waited {
+			fmt.Fprintf(w, "waiting up to %s for hot-volume capacity on workload profile %q...\n", timeout, name)
+		}
+		if !time.Now().Before(deadline) {
+			return resolved, fmt.Errorf("workload profile %q still has no free hot-volume capacity after %s", name, timeout)
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return resolved, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func applySelectedWorkloadProfile(

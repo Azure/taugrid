@@ -53,6 +53,47 @@ needed, omit `storage.data_pvc`. TauGrid still provides the pod-local `/mnt`
 `emptyDir` scratch path through `TAU_HOT_DIR`; its contents disappear with the
 pod.
 
+When the selected workload profile declares `hotVolume`, `/mnt` on each direct
+Job pod and each Ray worker is a node-local volume from the profile's
+StorageClass instead of an `emptyDir`. It is a generic ephemeral volume of
+`storage.hot_size`, or of the profile's `defaultSize` when `hot_size` is unset,
+and it is deleted with the pod. Those pods set `fsGroup: 65532` with
+`fsGroupChangePolicy: OnRootMismatch` so a non-root workload can write to
+`/mnt`. A direct Job then mounts `/mnt` even without `storage.data_pvc`.
+TauGrid rejects a `hot_size` above the profile's `maxSize`. The Ray head keeps
+an `emptyDir`, because it requests no GPUs and can run on system nodes. A
+custom mount at `/mnt` replaces the hot volume. Managed workflow configs don't
+use the hot volume.
+
+Before the workload starts, each pod with a hot claim checks `/mnt` and logs
+what backs it:
+
+```text
+tau storage: /mnt source=/dev/mapper/vg0-hot1 fstype=xfs size_kib=1073217536 avail_kib=1073209344 backing=dedicated
+```
+
+`size_kib` is the volume size or its quota. `backing` is `dedicated` when `/mnt`
+is its own volume. It is `container-root` when `/mnt` is a directory in the
+image, and `kubelet-disk` when `/mnt` shares a device with the pod's
+`/etc/hosts`, as an `emptyDir` on the kubelet's disk does. TauGrid sets
+`TAU_HOT_REQUIRE_LOCAL=1` on these pods, so the pod fails instead of falling
+back to `/data` when any of the following holds:
+
+- the backing isn't `dedicated`;
+- `/mnt` is missing or not writable;
+- `/mnt` has 1 GiB or less free;
+- a 64 MiB write runs slower than 50 MB/s.
+
+On a Ray worker, the check runs before `ray start`, so the worker never joins
+the cluster. Direct Jobs that mount `/data` without a hot claim run the same
+check, but they fall back to `/data` when it fails.
+
+A claim is released only when its pod is deleted, and Kueue doesn't account for
+hot storage. So a direct Job with a hot claim keeps its finished pods for 600
+seconds instead of the workspace or built-in retention, and its pod logs go
+with them. Set `run.ttl_seconds_after_finished` to keep them longer; the claims
+then hold their node-local capacity for that whole period.
+
 ## Jobs without workload profiles
 
 When `TauCluster.spec.queues.shareTeamQuotas` is enabled, or
@@ -167,8 +208,9 @@ printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 
 `run.ttl_seconds_after_finished` is an optional retention period from 1 through
 2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
-`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default. The
-TTL starts only after every regular container has finished running.
+`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default, or
+600 seconds for a Job with a hot-volume claim. The TTL starts only after every
+regular container has finished running.
 
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
 before workload creation. TauGrid's generated embedded-payload environment entries

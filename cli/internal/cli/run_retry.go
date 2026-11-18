@@ -36,6 +36,7 @@ type retryHooks struct {
 	waitForTerminal func() (status.Snapshot, terminalState, error)
 	deleteWorkload  func() error
 	prepareResubmit func(attempt int, reason string) error
+	awaitCapacity   func() error
 	resubmit        func(attempt int, reason string) error
 	emitEvent       func(attempt int, reason string, message string) error
 	sleep           func(d time.Duration) error
@@ -52,6 +53,14 @@ func retryLoop(cmd *cobra.Command, opts retryLoopOptions) error {
 	w := cmd.OutOrStdout()
 	var preparedTarget resolvedRunTarget
 	var preparedExperiment runExperimentMetadata
+	var preparedInput unresolvedRunOptions
+	preparedDeferred := false
+	resolveProfile := func(ctx context.Context, dispatch unresolvedRunOptions) (unresolvedRunOptions, error) {
+		if strings.TrimSpace(dispatch.workloadProfileSnapshot) != "" {
+			return resolveSnapshotRunWorkloadProfile(ctx, dispatch)
+		}
+		return resolveClusterRunWorkloadProfile(ctx, dispatch)
+	}
 
 	hooks := retryHooks{
 		waitForTerminal: func() (status.Snapshot, terminalState, error) {
@@ -70,14 +79,32 @@ func retryLoop(cmd *cobra.Command, opts retryLoopOptions) error {
 			retryDispatch.artifactPublicationID = ""
 			retryDispatch.submissionID = ""
 			retryDispatch.nameFromConfig = true
+			retryDispatch.deferHotVolumeCapacity = true
+			preparedInput = retryDispatch
 			var err error
-			if strings.TrimSpace(retryDispatch.workloadProfileSnapshot) != "" {
-				retryDispatch, err = resolveSnapshotRunWorkloadProfile(cmd.Context(), retryDispatch)
-			} else {
-				retryDispatch, err = resolveClusterRunWorkloadProfile(cmd.Context(), retryDispatch)
-			}
+			retryDispatch, err = resolveProfile(cmd.Context(), retryDispatch)
 			if err != nil {
 				return fmt.Errorf("resolving current workload profile for retry: %w", err)
+			}
+			if err := validateRunDispatchOptions(retryDispatch); err != nil {
+				return fmt.Errorf("validating retry dispatch: %w", err)
+			}
+			preparedTarget, err = resolveRunTarget(retryDispatch, opts.name)
+			if err != nil {
+				return err
+			}
+			preparedExperiment = retryDispatch.experiment
+			preparedDeferred = hotVolumeCapacityDeferred(retryDispatch)
+			return nil
+		},
+		awaitCapacity: func() error {
+			if !preparedDeferred {
+				return nil
+			}
+			retryDispatch, err := awaitHotVolumeCapacity(cmd.Context(), w, resolveProfile, preparedInput,
+				hotVolumeCapacityWaitTimeout, hotVolumeCapacityPollInterval)
+			if err != nil {
+				return err
 			}
 			if err := validateRunDispatchOptions(retryDispatch); err != nil {
 				return fmt.Errorf("validating retry dispatch: %w", err)
@@ -181,6 +208,11 @@ func retryLoopWithHooks(w io.Writer, opts retryLoopOptions, hooks retryHooks) er
 		fmt.Fprintf(w, "deleting failed workload %s/%s...\n", ns, opts.name)
 		if err := hooks.deleteWorkload(); err != nil {
 			return fmt.Errorf("deleting workload for retry: %w", err)
+		}
+		if hooks.awaitCapacity != nil {
+			if err := hooks.awaitCapacity(); err != nil {
+				return fmt.Errorf("waiting for hot-volume capacity for retry %d/%d: %w", attempt, opts.maxRetries, err)
+			}
 		}
 
 		if err := hooks.resubmit(attempt, reason.String()); err != nil {

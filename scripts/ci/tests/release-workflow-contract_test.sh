@@ -69,11 +69,11 @@ publish_block="$(job_block publish)"
 if grep -Fq 'releases/generate-notes' <<<"${validate_block}"; then
   fail "read-only validation must not call the write-authorized generate-notes endpoint"
 fi
-grep -Fq 'go-version: "1.27.3-1"' <<<"${build_block}" ||
-  fail "release assets must use Microsoft Go 1.27.3-1"
+grep -Fq 'go-version: "1.27.4-1"' <<<"${build_block}" ||
+  fail "release assets must use Microsoft Go 1.27.4-1"
 grep -Fq 'go-download-base-url: https://aka.ms/golang/release/latest' <<<"${build_block}" ||
   fail "release assets must use the Microsoft Go download source"
-grep -Fq 'microsoft_toolset_version=go1.27.3-1-microsoft' <<<"${build_block}" ||
+grep -Fq 'microsoft_toolset_version=go1.27.4-1-microsoft' <<<"${build_block}" ||
   fail "release assets must verify the Microsoft Go toolset identity"
 grep -Fq 'contents: write' <<<"${publish_block}" ||
   fail "release publication must retain narrowly scoped contents write permission"

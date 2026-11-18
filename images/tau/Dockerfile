@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1-azurelinux3.0@sha256:9af70997416d1deb69c2457146d56c74caf22c3a96ab66466647d4677ec5391f AS builder
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1-azurelinux3.0@sha256:71c0e7b946323c79103aa8348538b960637bfec33c13981ae5ccc71de0fa50a3 AS builder
 
-ENV GOTOOLCHAIN=go1.27.3 \
+ENV GOTOOLCHAIN=go1.27.4 \
     MS_GOTOOLCHAIN_ALLOW_NON_LOCAL=1
 
 ARG TARGETOS

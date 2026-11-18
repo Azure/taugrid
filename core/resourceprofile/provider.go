@@ -44,6 +44,8 @@ type SelectionRequest struct {
 	Team          string
 	Lane          string
 	GPUsPerWorker *int32
+
+	DeferHotVolumeCapacity bool
 }
 
 type Selection struct {
@@ -51,6 +53,8 @@ type Selection struct {
 	ProfileSetHash string
 	Profile        ResolvedWorkloadProfile
 	Source         ProfileSource
+
+	HotVolumeCapacityDeferred bool
 }
 
 type Provider struct {
@@ -124,17 +128,22 @@ func (set ProfileSet) Select(request SelectionRequest) (Selection, error) {
 		if candidate.Name != name {
 			continue
 		}
+		deferred := false
 		if err := requireProfileReady(candidate, set.Generation); err != nil {
-			return Selection{}, err
+			if !request.DeferHotVolumeCapacity || !onlyHotVolumeCapacityUnavailable(candidate, set.Generation) {
+				return Selection{}, err
+			}
+			deferred = true
 		}
 		if err := authorizeProfile(candidate, request); err != nil {
 			return Selection{}, err
 		}
 		return Selection{
-			Generation:     set.Generation,
-			ProfileSetHash: set.ProfileSetHash,
-			Profile:        candidate,
-			Source:         set.Source,
+			Generation:                set.Generation,
+			ProfileSetHash:            set.ProfileSetHash,
+			Profile:                   candidate,
+			Source:                    set.Source,
+			HotVolumeCapacityDeferred: deferred,
 		}, nil
 	}
 	names := make([]string, 0, len(set.Profiles))
@@ -157,11 +166,15 @@ func ValidateApplicability(resolved ResolvedWorkloadProfile, request SelectionRe
 }
 
 func selectUniqueProfile(set ProfileSet, request SelectionRequest) (Selection, error) {
-	var matches []ResolvedWorkloadProfile
+	var matches, deferredMatches []ResolvedWorkloadProfile
 	var excluded []string
 	for _, candidate := range set.Profiles {
+		deferred := false
 		if err := requireProfileReady(candidate, set.Generation); err != nil {
-			continue
+			if !request.DeferHotVolumeCapacity || !onlyHotVolumeCapacityUnavailable(candidate, set.Generation) {
+				continue
+			}
+			deferred = true
 		}
 		if err := authorizeProfile(candidate, request); err != nil {
 			continue
@@ -170,7 +183,16 @@ func selectUniqueProfile(set ProfileSet, request SelectionRequest) (Selection, e
 			excluded = append(excluded, fmt.Sprintf("%s (gpusPerWorker=%d)", candidate.Name, candidate.GPUsPerWorker))
 			continue
 		}
+		if deferred {
+			deferredMatches = append(deferredMatches, candidate)
+			continue
+		}
 		matches = append(matches, candidate)
+	}
+	deferred := false
+	if len(matches) == 0 && len(deferredMatches) > 0 {
+		matches = deferredMatches
+		deferred = true
 	}
 	scope := fmt.Sprintf(
 		"namespace=%q, team=%q, lane=%q",
@@ -197,10 +219,11 @@ func selectUniqueProfile(set ProfileSet, request SelectionRequest) (Selection, e
 		)
 	case 1:
 		return Selection{
-			Generation:     set.Generation,
-			ProfileSetHash: set.ProfileSetHash,
-			Profile:        matches[0],
-			Source:         set.Source,
+			Generation:                set.Generation,
+			ProfileSetHash:            set.ProfileSetHash,
+			Profile:                   matches[0],
+			Source:                    set.Source,
+			HotVolumeCapacityDeferred: deferred,
 		}, nil
 	default:
 		names := make([]string, 0, len(matches))
@@ -341,6 +364,29 @@ func requireProfileReady(profile ResolvedWorkloadProfile, generation int64) erro
 		fmt.Sprintf("workload profile %q", profile.Name),
 		true,
 	)
+}
+
+func onlyHotVolumeCapacityUnavailable(profile ResolvedWorkloadProfile, generation int64) bool {
+	capacityUnavailable := false
+	for _, condition := range profile.Conditions {
+		if condition.ObservedGeneration != generation {
+			return false
+		}
+		switch condition.Type {
+		case ConditionReady:
+		case ConditionHotVolumeReady:
+			if condition.Status == metav1.ConditionFalse && condition.Reason == ReasonHotVolumeCapacityUnavailable {
+				capacityUnavailable = true
+			} else if condition.Status != metav1.ConditionTrue {
+				return false
+			}
+		default:
+			if condition.Status != metav1.ConditionTrue {
+				return false
+			}
+		}
+	}
+	return capacityUnavailable && meta.FindStatusCondition(profile.Conditions, ConditionReady) != nil
 }
 
 func requireCondition(

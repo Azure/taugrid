@@ -6,11 +6,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tauworkspace "github.com/Azure/taugrid/cli/internal/workspace"
 	"github.com/Azure/taugrid/cli/internal/workspaceconnection"
@@ -1300,5 +1303,49 @@ func testRunResolvedProfile(
 			ObservedGeneration: generation,
 			Reason:             "Ready",
 		}},
+	}
+}
+
+func TestAwaitHotVolumeCapacity(t *testing.T) {
+	withDeferral := func(deferred bool) unresolvedRunOptions {
+		var o unresolvedRunOptions
+		o.selectedWorkloadProfile = &selectedWorkloadProfile{Selection: profile.Selection{
+			Profile:                   profile.ResolvedWorkloadProfile{WorkloadProfile: profile.WorkloadProfile{Name: "hot"}},
+			HotVolumeCapacityDeferred: deferred,
+		}}
+		return o
+	}
+
+	var out bytes.Buffer
+	calls := 0
+	got, err := awaitHotVolumeCapacity(context.Background(), &out,
+		func(_ context.Context, o unresolvedRunOptions) (unresolvedRunOptions, error) {
+			calls++
+			if !o.deferHotVolumeCapacity {
+				t.Fatal("awaitHotVolumeCapacity() resolved without deferring capacity")
+			}
+			return withDeferral(calls < 3), nil
+		}, unresolvedRunOptions{}, time.Minute, time.Millisecond)
+	if err != nil || hotVolumeCapacityDeferred(got) || calls != 3 {
+		t.Fatalf("awaitHotVolumeCapacity() = deferred %t, calls %d, error %v", hotVolumeCapacityDeferred(got), calls, err)
+	}
+	if strings.Count(out.String(), "waiting up to 1m0s for hot-volume capacity") != 1 {
+		t.Fatalf("output = %q", out.String())
+	}
+
+	_, err = awaitHotVolumeCapacity(context.Background(), io.Discard,
+		func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error) {
+			return withDeferral(true), nil
+		}, unresolvedRunOptions{}, 0, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), `workload profile "hot" still has no free hot-volume capacity`) {
+		t.Fatalf("timeout error = %v", err)
+	}
+
+	_, err = awaitHotVolumeCapacity(context.Background(), io.Discard,
+		func(context.Context, unresolvedRunOptions) (unresolvedRunOptions, error) {
+			return unresolvedRunOptions{}, errors.New("does not authorize team")
+		}, unresolvedRunOptions{}, time.Minute, time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "does not authorize team") {
+		t.Fatalf("resolution error = %v", err)
 	}
 }

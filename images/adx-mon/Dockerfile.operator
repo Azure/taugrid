@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.3-1 AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1 AS builder
 ARG ADX_MON_VERSION=main
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
