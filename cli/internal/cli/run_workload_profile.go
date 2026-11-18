@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/taugrid/cli/internal/manifest"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -163,7 +164,7 @@ func selectRunWorkloadProfile(
 	}
 	selection, err := set.Select(request)
 	if err != nil {
-		cpuRequest, ok := legacyCPULaneRequest(set, request)
+		cpuRequest, ok := legacyCPULaneRequest(set, request, runRequestsCPUOnly(o, request.GPUsPerWorker))
 		if !ok {
 			return o, err
 		}
@@ -219,16 +220,34 @@ func awaitHotVolumeCapacity(
 	}
 }
 
+func runRequestsCPUOnly(o unresolvedRunOptions, gpus *int32) bool {
+	if gpus != nil {
+		return *gpus == 0
+	}
+	if o.file == "" {
+		return false
+	}
+	raw, err := os.ReadFile(o.file)
+	if err != nil {
+		return false
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return m.IsCPUOnly()
+}
+
 func legacyCPULaneRequest(
 	set profile.ProfileSet,
 	request profile.SelectionRequest,
+	cpuOnly bool,
 ) (profile.SelectionRequest, bool) {
 	if strings.TrimSpace(request.Lane) != "" {
 		return request, false
 	}
-	cpuOnly := request.GPUsPerWorker != nil && *request.GPUsPerWorker == 0
 	if strings.TrimSpace(request.Name) != "" {
-		if request.GPUsPerWorker != nil && !cpuOnly {
+		if request.GPUsPerWorker != nil && *request.GPUsPerWorker != 0 {
 			return request, false
 		}
 	} else {
@@ -236,9 +255,12 @@ func legacyCPULaneRequest(
 			return request, false
 		}
 		for _, candidate := range set.Profiles {
-			if candidate.GPUsPerWorker == 0 &&
-				profile.ValidateReady(candidate, set.Generation) == nil &&
-				profile.ValidateApplicability(candidate, request) == nil {
+			if candidate.GPUsPerWorker != 0 {
+				continue
+			}
+			named := request
+			named.Name = candidate.Name
+			if _, err := set.Select(named); err == nil {
 				return request, false
 			}
 		}

@@ -6,6 +6,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -411,4 +412,74 @@ runtime:
 	if !strings.Contains(stdout.String(), "kind: RayJob") {
 		t.Fatalf("managed CPU workflow did not render a RayJob:\n%s", stdout.String())
 	}
+}
+
+func TestWorkflowFileWrapperCPUManifestReachesManagedCPURayJobRender(t *testing.T) {
+	options := loadWorkflowFileWrapperForTest(t, 0)
+	options, err := selectRunWorkloadProfile(context.Background(), options, defaultCatalogProvider(t))
+	if err != nil {
+		t.Fatalf("select default catalog CPU profile for wrapper: %v", err)
+	}
+	if options.profileName != "azure.workspace.cpu" || options.lane != "cpu" {
+		t.Fatalf("selected %q lane %q, want azure.workspace.cpu lane cpu", options.profileName, options.lane)
+	}
+	request, err := newRunManagedWorkflowRequest(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := executeRunManagedWorkflow(context.Background(), &stdout, &stderr, &request, "tau run"); err != nil {
+		t.Fatalf("managed CPU wrapper render: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "kind: RayJob") {
+		t.Fatalf("managed CPU wrapper did not render a RayJob:\n%s", stdout.String())
+	}
+}
+
+func TestWorkflowFileWrapperGPUManifestDoesNotFallBackToCPULane(t *testing.T) {
+	options := loadWorkflowFileWrapperForTest(t, 1)
+	got, err := selectRunWorkloadProfile(context.Background(), options, defaultCatalogProvider(t))
+	if err == nil || !strings.Contains(err.Error(), `lane=""`) {
+		t.Fatalf("GPU wrapper selected %q lane %q, err = %v; want the original-scope error", got.profileName, got.lane, err)
+	}
+}
+
+func loadWorkflowFileWrapperForTest(t *testing.T, gpus int) unresolvedRunOptions {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"train.py": "print('train')\n",
+		"manifest.yaml": fmt.Sprintf(`schema_version: 1
+name: wrapper
+compute: { gpus: %d, workers: 1 }
+runtime:
+  pip: [torch]
+`, gpus),
+		"tau.yaml": `schema_version: 1
+name: wrapper
+workflow:
+  file: manifest.yaml
+  main_script: train.py
+  workload_kind: rayjob
+runtime:
+  image: example.azurecr.io/wrapper:test
+policy:
+  disable_default_priorities: true
+`,
+	}
+	for name, raw := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	options, _, err := loadRunConfig(filepath.Join(root, "tau.yaml"))
+	if err != nil {
+		t.Fatalf("load wrapper config: %v", err)
+	}
+	if options.lane != "" || requestedProfileGPUs(options) != nil {
+		t.Fatalf("wrapper config sets lane %q or a GPU count; it must leave both to the manifest", options.lane)
+	}
+	options.namespace = defaultCatalogNamespace
+	options.dryRun = "client"
+	return options
 }
