@@ -4,11 +4,12 @@ weight: 2
 description: Human-authorized and reproducible release publication
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 TauGrid release preparation updates:
 
-- SDK version.
+- Coordinated chart and image versions, plus the independently versioned SDK
+  when its package changes.
 - Installation documentation.
 - `cli/releases/vX.Y.Z.md`.
 - The reviewed source commit on `main`.

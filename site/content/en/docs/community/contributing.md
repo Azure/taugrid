@@ -4,7 +4,7 @@ weight: 1
 description: Contributor expectations and validation depth
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 Start with the repository
 [`AGENTS.md`](https://github.com/Azure/taugrid/blob/main/AGENTS.md)

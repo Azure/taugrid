@@ -7,7 +7,7 @@ aliases:
   - "/docs/concepts/policy-and-placement/"
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 TauGrid resolves the selected ready `TauCluster` workload profile; upstream systems
 enforce the rendered queue, priority, resource, and placement contract. The
@@ -115,9 +115,9 @@ zero GPU quota. `tau-core-controller` discovers GPU Nodes and creates one
 topology-aware ResourceFlavor per distinct `tau.azure.com/gpu-class`. Initial
 GPU quota is the summed allocatable `nvidia.com/gpu` capacity for that class.
 The controller also advertises one `tau.azure.com/torchrun-host-slot` per GPU
-Node and publishes the ready slot count on the same flavor. GPU quota increases
+Node and publishes the advertised slot count on the same flavor. GPU quota increases
 when more capacity appears and is not automatically decreased or pruned; slot
-quota tracks ready slot capacity. Each discovered flavor declares
+quota tracks advertised slot capacity. Each discovered flavor declares
 `sku=gpu:NoSchedule` as an admission taint, keeping CPU-only workloads out of
 GPU quota. Node creation and later allocatable GPU or host-slot updates trigger
 reconciliation, so newly joining pools receive quota as soon as kubelet reports
@@ -159,7 +159,7 @@ spec:
             - {name: memory, nominalQuota: 100Ti}
             - {name: nvidia.com/gpu, nominalQuota: "0"}
             - {name: tau.azure.com/torchrun-host-slot, nominalQuota: "0"}
-        - name: taugrid-a100-80gb
+        - name: taugrid-gpu-a100-80gb
           resources:
             - {name: cpu, nominalQuota: "100000"}
             - {name: memory, nominalQuota: 100Ti}

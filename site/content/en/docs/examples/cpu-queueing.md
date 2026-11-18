@@ -5,32 +5,29 @@ weight: 20
 description: Observe Kueue admission and quota behavior with raw RayJobs and no GPU quota.
 ---
 
-{{< maturity status="alpha" reviewed="2026-07-16" >}}
+{{< maturity status="alpha" reviewed="2026-11-18" >}}
 
-Use this example when you want to understand the scheduling layer beneath TauGrid
-using only the CPU capacity you already have. It submits raw RayJobs to Kueue and makes
-admission, pending work, and team borrowing visible.
+CPU-only RayJobs can help explain the scheduling layer beneath TauGrid,
+including the distinction between pending work, admission, and pod scheduling.
 
-This is a **platform mechanics example** that demonstrates Kueue/Ray scheduling directly, distinct from the TauGrid researcher workflow.
+This is a **platform mechanics inspection guide**, distinct from the TauGrid
+researcher workflow. It does not provide runnable workload or queue manifests.
 
 ## Prerequisites
 
 - a disposable or explicitly approved Kubernetes context;
 - Kueue and KubeRay installed;
-- kubectl access that can create namespaces, queues, and RayJobs; and
-- enough CPU capacity for two small Ray workloads.
+- kubectl read access to Workloads, RayJobs, and Pods; and
+- platform-approved CPU RayJob and queue manifests, with suitable CPU capacity.
 
-## Run the single-queue demonstration
+## Inspect an approved demonstration
 
-```bash
-git clone https://github.com/Azure/taugrid-examples.git
-cd taugrid-examples/aks-blog/kueue-ray-cpu
+The previously linked external demonstration could not be retrieved during
+review. Its clone and script instructions are not a verified runnable path.
+Obtain approved manifests from your platform owner rather than relying on
+those instructions from older revisions of this page.
 
-./demo.sh single
-```
-
-The script applies the single-queue resources and enqueues two raw RayJobs. In a
-second terminal, watch admission:
+After an approved workload is submitted, watch admission and pod state:
 
 ```bash
 kubectl get workloads -A --watch
@@ -38,9 +35,8 @@ kubectl get rayjobs -A
 kubectl get pods -A
 ```
 
-The demo includes a shared-context safety guard. Do not bypass it with
-`--allow-shared-context` unless the target cluster is intentionally approved for
-these resources.
+Do not apply demonstration workloads or queue policy to a shared cluster
+without explicit platform approval.
 
 ## What to carry back to TauGrid
 
@@ -50,7 +46,3 @@ understand why a TauGrid run can be submitted but still wait for admission.
 
 Continue with [queue, quota, and GPU placement](../../platform-admin-guide/policy-and-placement/)
 or the [operator troubleshooting path](../../platform-admin-guide/troubleshoot/).
-
-See the
-[complete example README](https://github.com/Azure/taugrid-examples/tree/main/aks-blog/kueue-ray-cpu)
-for the team-borrowing mode and manual manifest path.

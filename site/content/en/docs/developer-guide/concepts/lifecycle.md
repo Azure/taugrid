@@ -6,7 +6,7 @@ aliases:
   - "/docs/concepts/lifecycle/"
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 A TauGrid run crosses independent control planes:
 

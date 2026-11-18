@@ -4,7 +4,7 @@ weight: 2
 description: Direct config-first workload intent
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 This page documents the **direct run config**: the normal, hand-written
 `tau.yaml` that `tau run --config` reads to submit a workload. See
@@ -208,8 +208,9 @@ printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 
 `run.ttl_seconds_after_finished` is an optional retention period from 1 through
 2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
-`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default, or
-600 seconds for a Job with a hot-volume claim. The TTL starts only after every
+`spec.ttlSecondsAfterFinished`; omission uses the workspace default when set,
+otherwise 28800 seconds. A Job with a hot-volume claim defaults to 600 seconds
+instead. The TTL starts only after every
 regular container has finished running.
 
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate

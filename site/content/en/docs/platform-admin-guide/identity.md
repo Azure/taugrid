@@ -7,7 +7,7 @@ aliases:
   - "/docs/concepts/identity/"
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 TauGrid platforms answer two different questions:
 
@@ -28,7 +28,8 @@ controller binds the researcher subject in the workspace namespace.
 `cluster-wide` is an explicit opt-out: the workspace supplies routing defaults
 only, and the platform grants researcher access separately; some existing
 clusters run that way. The [multiple-workspace lifecycle](../../developer-guide/concepts/workspaces/#multiple-workspaces) is
-Alpha: v0 activates one workspace and blocks additional workspace objects until
-the active workspace is removed. Researcher isolation still requires tests proving
+Alpha. Multiple workspace objects reconcile independently; the legacy
+primary-workspace discovery marker is not an isolation boundary.
+Researcher isolation still requires tests proving
 that one workspace cannot access another's resources, plus production rollout
 gates.

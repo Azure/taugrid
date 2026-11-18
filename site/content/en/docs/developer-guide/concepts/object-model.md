@@ -6,7 +6,7 @@ aliases:
   - "/docs/concepts/object-model/"
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 Full definitions for these terms live in the [glossary](../../../reference/glossary/). This
 page only explains how they relate and who owns what.

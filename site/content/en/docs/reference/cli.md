@@ -4,7 +4,7 @@ weight: 1
 description: Canonical Tau CLI command families
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 The Tau CLI has exactly eight public command roots. Every example in this site uses
 one of these roots and its current nested subcommand path:
@@ -26,7 +26,7 @@ below.
 
 The old flat roots have been removed. Pre-v0.5 top-level aliases (ray, model,
 dataset, exp, queue, status, cancel, topology, lanes, storage, eval,
-shell, submit, and finetune) are gone; their capabilities live under the seven
+shell, submit, and finetune) are gone; their capabilities live under the eight
 roots above. Job execution is owned directly by the config-first `tau run` path.
 
 ## `tau cluster`
@@ -94,8 +94,8 @@ name Helm recorded for the release and skips the drain when they disagree,
 rather than applying a different chart's manifests on the way out. When the
 reference cannot be resolved, or the drained objects are still present
 afterwards (Kueue holds `resource-in-use` until an active run finishes),
-uninstall reports which objects may strand and proceeds; teardown still
-completes. Draining is only possible through `tau`, because Helm decides the
+uninstall reports which objects may strand and proceeds with Helm uninstall;
+remaining finalizers may still require operator recovery. Draining is only possible through `tau`, because Helm decides the
 deletion order of a release's own custom resources; a plain `helm uninstall`
 of the TauGrid release still strands them.
 
@@ -122,8 +122,12 @@ default and needs `--apply` to take effect. Workspace desired state is a native
 `TauWorkspace` delivered through Helm/Kustomize/GitOps and reconciled by the
 [TauWorkspace](../glossary/#tauworkspace) controller.
 
-`tau workspace create` requires `--principal-name <external-group-or-team>`;
-`--subject-name` defaults to that principal when it is omitted.
+Use `tau workspace create --principal-name <external-group-or-team>` to name
+the intended principal explicitly; `--subject-name` defaults to that principal.
+For the default Entra Group mode and a non-object-ID workspace name, omitting
+`--principal-name` uses the workspace name as an inert subject until the
+platform configures the real group. Other providers or subject kinds require
+an explicit principal.
 `tau workspace connection` verifies and pins the current project's effective
 workspace access. `tau workspace connection assign [workspace]` creates a
 machine-local assignment from an already verified connection or a workspace

@@ -8,7 +8,7 @@ aliases:
   - "/docs/operations/recovery/"
 ---
 
-{{< maturity status="ga" reviewed="2026-07-16" >}}
+{{< maturity status="ga" reviewed="2026-11-18" >}}
 
 TauGrid has two recovery paths for a failed [run](../../reference/glossary/#run):
 automatic retry, driven entirely by the `resilience.*` fields in your
