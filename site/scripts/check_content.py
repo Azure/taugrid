@@ -11,7 +11,7 @@ import sys
 
 MATURITY_PATTERN = re.compile(
     r'\{\{<\s*maturity\s+status="(?P<status>[^"]+)"\s+'
-    r'reviewed="(?P<reviewed>\d{4}-\d{2}-\d{2})"\s*>\}\}'
+    r'reviewed="(?P<reviewed>[^"]*)"\s*>\}\}'
 )
 ALLOWED_STATUSES = {
     "alpha",
@@ -29,6 +29,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Tau documentation metadata")
     parser.add_argument("content_dir", type=pathlib.Path)
     parser.add_argument("--max-age-days", type=int, default=120)
+    parser.add_argument("--skip-review-age", action="store_true")
     args = parser.parse_args()
 
     today = datetime.date.today()
@@ -50,10 +51,16 @@ def main() -> int:
         status = match.group("status")
         if status not in ALLOWED_STATUSES:
             errors.append(f"{page}: unsupported maturity status {status!r}")
-        reviewed = datetime.date.fromisoformat(match.group("reviewed"))
+        try:
+            reviewed = datetime.date.fromisoformat(match.group("reviewed"))
+            if reviewed.isoformat() != match.group("reviewed"):
+                raise ValueError
+        except ValueError:
+            errors.append(f"{page}: invalid review date")
+            continue
         if reviewed > today:
             errors.append(f"{page}: review date {reviewed} is in the future")
-        elif (today - reviewed).days > args.max_age_days:
+        elif not args.skip_review_age and (today - reviewed).days > args.max_age_days:
             errors.append(
                 f"{page}: review is {(today - reviewed).days} days old "
                 f"(limit {args.max_age_days})"

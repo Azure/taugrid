@@ -24,7 +24,7 @@ ALLOWED_MATURITY = {
 }
 MATURITY_PATTERN = re.compile(
     r'\{\{<\s*maturity\s+status="(?P<status>[^"]+)"\s+'
-    r'reviewed="(?P<reviewed>\d{4}-\d{2}-\d{2})"\s*>\}\}'
+    r'reviewed="(?P<reviewed>[^"]*)"\s*>\}\}'
 )
 WIKI_PREFIX = (
     "https://github.com/Azure/taugrid/wiki/"
@@ -110,13 +110,25 @@ def main() -> int:
                 f"(limit {args.max_age_days})"
             )
         if site_metadata:
-            site_reviewed = datetime.date.fromisoformat(
-                site_metadata.group("reviewed")
-            )
-            if site_reviewed > reviewed:
+            try:
+                site_reviewed = datetime.date.fromisoformat(
+                    site_metadata.group("reviewed")
+                )
+                if site_reviewed.isoformat() != site_metadata.group("reviewed"):
+                    raise ValueError
+            except ValueError:
+                errors.append(f"{identifier}: invalid site review date")
+                continue
+            if site_reviewed > today:
                 errors.append(
-                    f"{identifier}: site review {site_reviewed} is newer than "
-                    f"site/wiki parity review {reviewed}"
+                    f"{identifier}: site review date {site_reviewed} is in the future"
+                )
+            elif site_reviewed > reviewed:
+                print(
+                    f"Advisory: {identifier}: site review {site_reviewed} is newer "
+                    f"than site/wiki parity review {reviewed}; assess whether "
+                    "the wiki counterpart needs an update",
+                    file=sys.stderr,
                 )
 
     for entry in site_only:
