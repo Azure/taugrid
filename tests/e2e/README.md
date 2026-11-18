@@ -468,9 +468,18 @@ The lane rechecks the hardware contract, uses a fresh UID-recorded
 `taugrid-nightly-matrix-<run>-<attempt>` namespace after generic cleanup, and
 reuses the existing PVC/replacement-refusing cleanup and capability postflight.
 Its separate authenticated `always()` cleanup precedes diagnostic publication.
-It does not overlap the same run's matrix; other runs and tenants still compete
-for explicitly allocated GPU/RDMA resources. For a coordinated standalone run
-with existing authenticated access and the same routing variables as preflight:
+It does not overlap the same run's matrix. Configure the private pipeline variable
+`FLEX_NIGHTLY_GPU_ENVIRONMENT` to an existing, pipeline-authorized
+environment with an Exclusive lock check. The nightly uses sequential lock
+behavior and one implicit stage containing preflight, the protected deployment,
+all hardware jobs, authenticated cleanup, and reporting. The environment check
+therefore holds access for the entire stage, not only the deployment step.
+An unresolved or unauthorized environment must fail admission; YAML alone does
+not provision the resource or its check. Qualify the compiled binding and native
+mutual exclusion before claiming overlapping-run protection. Runs that do not
+consume the same protected environment, including standalone commands, and other
+tenants remain outside that serialization. For a coordinated standalone run with
+existing authenticated access and the same routing variables as preflight:
 
 ```bash
 RAY_E2E_IMAGE='<validated immutable base>' \

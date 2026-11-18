@@ -61,6 +61,26 @@ pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
 
+assert re.search(r"^lockBehavior: sequential$", pipeline, re.MULTILINE)
+assert re.search(r"^jobs:$", pipeline, re.MULTILINE)
+assert not re.search(r"^stages:", pipeline, re.MULTILINE), (
+    "all hardware execution and authenticated cleanup must share the protected implicit stage"
+)
+hardware_access = re.search(
+    r"^  - deployment: hardware_access\n(?P<body>.*?)(?=^  - job:|\Z)",
+    pipeline, re.MULTILINE | re.DOTALL,
+)
+assert hardware_access, "hardware execution requires a protected environment deployment"
+assert re.search(r"^    dependsOn: preflight$", hardware_access["body"], re.MULTILINE)
+assert re.search(
+    r"^    environment: \$\(FLEX_NIGHTLY_GPU_ENVIRONMENT\)$",
+    hardware_access["body"], re.MULTILINE,
+), "the existing exclusive-lock environment must be supplied privately"
+matrix_job = next(job for job in jobs if job.startswith("hardware_matrix\n"))
+assert re.search(r"^    dependsOn: hardware_access$", matrix_job, re.MULTILINE), (
+    "hardware must not run when protected deployment admission fails"
+)
+
 rdma_parameter = re.search(
     r"^  - name: rdmaConformance\n(?P<body>(?:    .*\n)+)", pipeline, re.MULTILINE,
 )

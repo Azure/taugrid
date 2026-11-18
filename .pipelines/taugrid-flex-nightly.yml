@@ -3,6 +3,7 @@
 
 trigger: none
 pr: none
+lockBehavior: sequential
 
 schedules:
   - cron: "15 8 * * *"
@@ -175,9 +176,23 @@ jobs:
           targetPath: $(Build.ArtifactStagingDirectory)/preflight
           artifact: taugrid-flex-hardware-contract
 
+  - deployment: hardware_access
+    displayName: Acquire shared hardware execution
+    dependsOn: preflight
+    environment: $(FLEX_NIGHTLY_GPU_ENVIRONMENT)
+    timeoutInMinutes: 5
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - download: none
+            - checkout: none
+            - bash: printf '%s\n' 'Shared hardware execution admitted by protected environment checks.'
+              displayName: Confirm protected hardware access
+
   - job: hardware_matrix
     displayName: Ray Serve and Ray Train hardware matrix
-    dependsOn: preflight
+    dependsOn: hardware_access
     timeoutInMinutes: 300
     cancelTimeoutInMinutes: 30
     steps:
