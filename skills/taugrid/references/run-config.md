@@ -383,4 +383,5 @@ metrics:
 | Local import not shipped | Package Ray project sources or use a Job source image |
 | `runtime.env_kv` rejected | Use direct Secret references or the managed-workflow path |
 | `storage.output` outside workspace root | Use the assigned workspace result scope |
+| `tau storage error: /mnt is ...; TAU_HOT_REQUIRE_LOCAL=1 forbids falling back` | The profile's hot volume isn't a dedicated local mount, or it failed the free-space or write check; platform checks the `hotVolume` StorageClass and node disks |
 | RayJob rejects mounts / Job rejects Ray fields | Choose the correct engine-specific fields; do not silence validation |

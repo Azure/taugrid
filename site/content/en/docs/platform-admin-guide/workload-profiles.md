@@ -137,6 +137,15 @@ seconds unless the run sets `run.ttl_seconds_after_finished`. A `multiKueue`
 profile can't declare `hotVolume`, because the controller observes storage on
 the manager cluster rather than on the workers.
 
+Each pod with a hot claim checks `/mnt` before the workload or `ray start`
+runs, and logs the mount source, filesystem type, size, free space, and
+backing. The pod fails rather than falling back to `/data` when `/mnt` is on the
+container root filesystem or on the same device as the kubelet's pod
+directory. That failure means the StorageClass didn't give the pod a dedicated
+volume. The pod also fails when `/mnt` fails the free-space or write check. See
+[the run config reference](../../reference/run-config/) for the full list of
+checks.
+
 A profile with `hotVolume` gets a `HotVolumeReady` condition, and the profile
 is `Ready` only when that condition is `True`. The condition is `False` in
 these cases:

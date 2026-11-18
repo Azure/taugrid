@@ -113,3 +113,57 @@ func TestRenderHotVolumeProfileRejectsHotSizeAboveMaxSize(t *testing.T) {
 		t.Fatalf("Render error = %v, want maxSize rejection", err)
 	}
 }
+
+func TestRenderHotVolumeProfileRunsWorkerPreflightBeforeRayStart(t *testing.T) {
+	for _, hot := range []bool{true, false} {
+		t.Run(fmt.Sprintf("hot=%v", hot), func(t *testing.T) {
+			o := hotVolumeOptions(1)
+			if !hot {
+				o.Profile.HotVolume = nil
+			}
+			cluster := renderWithArchive(t, o)["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+			templates := map[string]map[string]any{
+				"head": cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any),
+			}
+			for _, item := range cluster["workerGroupSpecs"].([]any) {
+				templates["worker"] = item.(map[string]any)["template"].(map[string]any)
+			}
+			for role, template := range templates {
+				wantOverride := hot && role == "worker"
+				annotations, _ := template["metadata"].(map[string]any)["annotations"].(map[string]any)
+				if got := annotations["ray.io/overwrite-container-cmd"] == "true"; got != wantOverride {
+					t.Fatalf("%s overwrite-container-cmd = %v, want %v: %+v", role, got, wantOverride, annotations)
+				}
+				if wantOverride && annotations["adx-mon/scrape"] != "true" {
+					t.Fatalf("%s lost pod annotations: %+v", role, annotations)
+				}
+				container := template["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+				command, _ := container["command"].([]any)
+				if !wantOverride {
+					if command != nil {
+						t.Fatalf("%s command = %v, want KubeRay's generated command", role, command)
+					}
+				} else {
+					if len(command) != 3 || command[0] != "bash" || command[1] != "-lc" {
+						t.Fatalf("%s command = %v, want bash -lc script", role, command)
+					}
+					script := command[2].(string)
+					preflight := strings.Index(script, "TAU_HOT_REQUIRE_LOCAL=1 forbids falling back")
+					start := strings.Index(script, `exec bash -lc "$KUBERAY_GEN_RAY_START_CMD"`)
+					if preflight < 0 || start < preflight || !strings.Contains(script, `ulimit -n "${RAY_START_ULIMIT_OPEN_FILES:-65536}"`) {
+						t.Fatalf("%s script does not run the preflight before ray start:\n%s", role, script)
+					}
+				}
+				require := ""
+				for _, item := range container["env"].([]any) {
+					if e := item.(map[string]any); e["name"] == "TAU_HOT_REQUIRE_LOCAL" {
+						require = e["value"].(string)
+					}
+				}
+				if want := map[bool]string{true: "1"}[wantOverride]; require != want {
+					t.Fatalf("%s TAU_HOT_REQUIRE_LOCAL = %q, want %q", role, require, want)
+				}
+			}
+		})
+	}
+}

@@ -371,31 +371,7 @@ run_cluster_preflight() {
   a100="$(target_summary a100 "$A100_SELECTOR" "$A100_SITE" "$A100_FLAVOR" "$A100_CLUSTER_QUEUE" "$A100_MIN_NODES" "$A100_GPUS_PER_NODE" "$A100_ARCHITECTURE" true)"
   h200="$(target_summary h200 "$H200_SELECTOR" "$H200_SITE" "$H200_FLAVOR" "$H200_CLUSTER_QUEUE" "$H200_MIN_NODES" "$H200_GPUS_PER_NODE" "$H200_ARCHITECTURE" true)"
 
-  for target in "$dgx" "$a100" "$h200"; do
-    [ "$(jq -r '.status' <<<"$target")" != "misconfigured" ] ||
-      fail "hardware target $(jq -r '.name' <<<"$target") is misconfigured: $(jq -c '{sites,expected_site,capability_ready,capability_violations,topology_ready,queue_active,queue_has_flavor}' <<<"$target")"
-  done
-
   rdma="$(jq -c '{rdma_nodes: ([.nodes[] | select(.rdma_allocatable > 0)] | length)}' <<<"$h200")"
-  rdma_nodes="$(jq -r '.rdma_nodes' <<<"$rdma")"
-  [ "$rdma_nodes" -ge "$MIN_RDMA_NODES" ] ||
-    fail "RDMA selector has ${rdma_nodes}/${MIN_RDMA_NODES} Ready nodes advertising ${RDMA_RESOURCE}"
-
-  kueue_namespace="${FLEX_NIGHTLY_KUEUE_NAMESPACE:-kueue-system}"
-  kueue_deployment="${FLEX_NIGHTLY_KUEUE_DEPLOYMENT:-kueue-controller-manager}"
-  kuberay_namespace="${FLEX_NIGHTLY_KUBERAY_NAMESPACE:-kuberay-system}"
-  kuberay_deployment="${FLEX_NIGHTLY_KUBERAY_DEPLOYMENT:-kuberay-operator}"
-
-  "$KUBECTL_BIN" get crd rayjobs.ray.io >/dev/null
-  "$KUBECTL_BIN" get crd workloads.kueue.x-k8s.io >/dev/null
-  deployment_ready "$kueue_namespace" "$kueue_deployment"
-  deployment_ready "$kuberay_namespace" "$kuberay_deployment"
-  if [[ "$INCLUDE_DGX" == "true" || "$INCLUDE_DGX" == "True" ]]; then
-    cluster_queue_ready "$DGX_CLUSTER_QUEUE"
-  fi
-  cluster_queue_ready "$A100_CLUSTER_QUEUE"
-  cluster_queue_ready "$H200_CLUSTER_QUEUE"
-
   jq -n \
     --arg generatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg deployMode "shared-cluster-controllers" \
@@ -417,6 +393,30 @@ run_cluster_preflight() {
       targets: [$dgx, $a100, $h200],
       rdma_target: $rdma
     }' >"$CONTRACT_FILE"
+
+  for target in "$dgx" "$a100" "$h200"; do
+    [ "$(jq -r '.status' <<<"$target")" != "misconfigured" ] ||
+      fail "hardware target $(jq -r '.name' <<<"$target") is misconfigured: $(jq -c '{sites,expected_site,capability_ready,capability_violations,topology_ready,queue_active,queue_has_flavor}' <<<"$target")"
+  done
+
+  rdma_nodes="$(jq -r '.rdma_nodes' <<<"$rdma")"
+  [ "$rdma_nodes" -ge "$MIN_RDMA_NODES" ] ||
+    fail "RDMA selector has ${rdma_nodes}/${MIN_RDMA_NODES} Ready nodes advertising ${RDMA_RESOURCE}"
+
+  kueue_namespace="${FLEX_NIGHTLY_KUEUE_NAMESPACE:-kueue-system}"
+  kueue_deployment="${FLEX_NIGHTLY_KUEUE_DEPLOYMENT:-kueue-controller-manager}"
+  kuberay_namespace="${FLEX_NIGHTLY_KUBERAY_NAMESPACE:-kuberay-system}"
+  kuberay_deployment="${FLEX_NIGHTLY_KUBERAY_DEPLOYMENT:-kuberay-operator}"
+
+  "$KUBECTL_BIN" get crd rayjobs.ray.io >/dev/null
+  "$KUBECTL_BIN" get crd workloads.kueue.x-k8s.io >/dev/null
+  deployment_ready "$kueue_namespace" "$kueue_deployment"
+  deployment_ready "$kuberay_namespace" "$kuberay_deployment"
+  if [[ "$INCLUDE_DGX" == "true" || "$INCLUDE_DGX" == "True" ]]; then
+    cluster_queue_ready "$DGX_CLUSTER_QUEUE"
+  fi
+  cluster_queue_ready "$A100_CLUSTER_QUEUE"
+  cluster_queue_ready "$H200_CLUSTER_QUEUE"
 
   echo "Flex nightly preflight passed for DGX Spark, A100, and H200 targets"
   echo "Contract written to ${CONTRACT_FILE}"

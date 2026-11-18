@@ -1,0 +1,11 @@
+{
+  "packages": ["torch==2.7.1"],
+  "pip_install_options": [
+    "--no-cache-dir",
+    "--index-url",
+    "https://download.pytorch.org/whl/cu128",
+    "--extra-index-url",
+    "https://pypi.org/simple"
+  ],
+  "pip_check": false
+}
