@@ -1,5 +1,5 @@
-github.com/Azure/azure-kusto-go/azkustodata v1.2.2 h1:N0wIf3Yg5hy2ZFoJbQG2oSsZ9SaUkC28UuqdgOMiNEg=
-github.com/Azure/azure-kusto-go/azkustodata v1.2.2/go.mod h1:nVZRkSE5p7eT2k9jMWSo9Uosi/H6Lig2pxtETP+rX/U=
+github.com/Azure/azure-kusto-go/azkustodata v1.2.3 h1:ibMvbLBn4tTc1lwgjK7+HmJQnqjmE4ml9NocYNn6FJg=
+github.com/Azure/azure-kusto-go/azkustodata v1.2.3/go.mod h1:nVZRkSE5p7eT2k9jMWSo9Uosi/H6Lig2pxtETP+rX/U=
 github.com/Azure/azure-kusto-go/azkustoingest v1.2.2 h1:+wnhIqoQbEgyyGTWAGbQRkwuNwJFhiCE07CEg/p889s=
 github.com/Azure/azure-kusto-go/azkustoingest v1.2.2/go.mod h1:ttDjL9q6ldGul19cNa0NZf4zXjucNVSoWYrM8aTFQGo=
 github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.3 h1:qgnWTiWs1G7AqcKZegFvkJD1bmXJcaDU3uC0ELSgZ5U=

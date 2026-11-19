@@ -1,11 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import argparse
 import ast
 import copy
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -100,6 +102,24 @@ class ImageContractTest(unittest.TestCase):
 
 
 class SourceContractTest(unittest.TestCase):
+    def test_image_and_runtime_use_one_primary_index(self):
+        source = (IMAGE / "Dockerfile").read_text().replace("\\\n", " ")
+        install = next(
+            line for line in source.splitlines()
+            if line.startswith("RUN python3 -m pip install ")
+        )
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--no-cache-dir", action="store_true", required=True)
+        parser.add_argument("--index-url", required=True)
+        parser.add_argument("packages", nargs="+")
+        image_options = parser.parse_args(shlex.split(install.split("&&")[0])[5:])
+        runtime = json.loads((HERE / "pip_spec.json").read_text())
+        runtime_options = parser.parse_args(runtime["pip_install_options"] + runtime["packages"])
+        self.assertEqual(image_options.index_url, "https://download.pytorch.org/whl/cu128")
+        self.assertEqual(runtime_options.index_url, image_options.index_url)
+        self.assertEqual(image_options.packages, ["torch==2.7.1+cu128"])
+        self.assertEqual(runtime_options.packages, ["torch==2.7.1"])
+
     def test_serve_pip_spec_matches_image_smoke(self):
         source = ast.parse(
             (ROOT / "tests/e2e/hardwarematrix/fixtures/serve_gpu.py").read_text()
