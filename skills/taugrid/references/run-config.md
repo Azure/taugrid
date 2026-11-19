@@ -84,7 +84,7 @@ match it; CPU/memory settings remain workload settings.
 | `compute.gpus` | GPUs per pod; explicitly `0` for a CPU Job | Use `gpus_per_worker` |
 | `compute.workers` | Rejected | Execution worker pods, excluding the CPU-only head |
 | `compute.gpus_per_worker` | Rejected | GPUs per dedicated worker |
-| `compute.cpu_request`, `cpu_limit`, `memory_request`, `memory_limit` | Main container | Per-pod defaults |
+| `compute.cpu_request`, `cpu_limit`, `memory_request`, `memory_limit` | Main container; a CPU Job must set CPU or memory | Per-pod defaults |
 | `compute.head_cpu_*`, `head_memory_*`, `worker_cpu_*`, `worker_memory_*` | Rejected | Role-specific sizing |
 | `execution.launcher` | `python` (default), `torchrun` | `ray-train` (default), `ray-tune` |
 | `execution.nodes` | Indexed Job pod count for multi-node torchrun | Do not use for Ray worker count |

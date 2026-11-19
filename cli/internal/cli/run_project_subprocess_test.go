@@ -70,6 +70,7 @@ engine: job
 entrypoint: ../train.sh
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 policy:
@@ -82,6 +83,7 @@ engine: job
 entrypoint: ../train.sh
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 storage:
@@ -97,6 +99,7 @@ engine: job
 entrypoint: ../train.sh
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 storage:
@@ -113,6 +116,7 @@ engine: job
 entrypoint: ../train.sh
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 policy:
@@ -185,6 +189,7 @@ engine: job
 entrypoint: %s
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 policy:
@@ -520,6 +525,7 @@ engine: job
 entrypoint: %s
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 policy:
@@ -584,6 +590,7 @@ engine: job
 entrypoint: %s
 compute:
   gpus: 0
+  cpu_request: 100m
 runtime:
   image: busybox:1.36
 policy:

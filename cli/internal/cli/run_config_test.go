@@ -1132,6 +1132,7 @@ runtime:
   image: python:3.12
 compute:
   gpus: 0
+  cpu_request: 100m
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -2116,6 +2117,7 @@ runtime:
   image: example.azurecr.io/workload:latest
 compute:
   gpus: 0
+  cpu_request: 100m
 policy:
   namespace: tau-default
   queue: research-training
@@ -2162,6 +2164,7 @@ runtime:
   working_dir: /workspace/slime
 compute:
   gpus: 0
+  cpu_request: 100m
 policy:
   namespace: tau-default
   queue: research-training
@@ -2196,6 +2199,7 @@ runtime:
   image: example.azurecr.io/workload:latest
 compute:
   gpus: 0
+  cpu_request: 100m
 policy:
   namespace: tau-default
   queue: research-training

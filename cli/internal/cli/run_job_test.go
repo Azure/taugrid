@@ -864,6 +864,7 @@ func TestExecuteRunJobClientDryRunUsesAuthoritativeProfileRouting(t *testing.T) 
 	o.profileName = "tau-cpu-smoke"
 	o.image = "mcr.microsoft.com/azurelinux/base/python:3.12"
 	o.script = script
+	o.cpuRequest = "100m"
 	o.dryRun = "client"
 	attachAuthoritativeProfileForTest(&o)
 	setAuthoritativeProfileCardinalityForTest(&o, 0, 1)
@@ -907,6 +908,7 @@ func TestExecuteRunJobServerDryRunValidatesAuthoritativeQueue(t *testing.T) {
 	o.profileName = "tau-cpu-smoke"
 	o.image = "mcr.microsoft.com/azurelinux/base/python:3.12"
 	o.script = script
+	o.cpuRequest = "100m"
 	o.dryRun = "server"
 	o.namespace = "team-ns"
 	attachAuthoritativeProfileForTest(&o)
@@ -938,6 +940,7 @@ func TestExecuteRunJobClientDryRunWithExplicitValuesDoesNotWarn(t *testing.T) {
 	o.profileName = "tau-cpu-smoke"
 	o.image = "mcr.microsoft.com/azurelinux/base/python:3.12"
 	o.script = script
+	o.cpuRequest = "100m"
 	o.dryRun = "client"
 	o.namespace = "team-ns"
 	o.queue = "team-queue"

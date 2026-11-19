@@ -773,6 +773,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 		resources["limits"] = p.Resources.Limits
 	}
 	applyContainerResourceOverrides(resources, o)
+	if gpu.Count == 0 && !hasCPUOrMemory(resources) {
+		return nil, errors.New("CPU-only jobs must set compute.cpu_request or compute.memory_request; Kueue cannot admit a pod without resource requests")
+	}
 	profile.AddGPUResources(resources, gpu.Count)
 	if o.Launcher == "torchrun" && o.Nodes > 1 {
 		addIntegerResource(resources, workloadmeta.ResourceTorchrunHostSlot, 1)
@@ -1140,6 +1143,16 @@ func applyContainerResourceOverrides(resources map[string]any, o Options) {
 	if len(limits) > 0 {
 		resources["limits"] = limits
 	}
+}
+
+func hasCPUOrMemory(resources map[string]any) bool {
+	for _, key := range []string{"requests", "limits"} {
+		values := copyResourceQuantities(resources[key])
+		if values["cpu"] != nil || values["memory"] != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func addIntegerResource(resources map[string]any, name string, value int) {
