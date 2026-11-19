@@ -7,7 +7,6 @@ USER root
 
 RUN python3 -m pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu128 \
-    --extra-index-url https://pypi.org/simple \
     "torch==2.7.1+cu128" \
     && python3 -m pip check
 
