@@ -87,9 +87,15 @@ func resolveClusterRunWorkloadProfile(ctx context.Context, o unresolvedRunOption
 		if shared && team != "" {
 			return o, fmt.Errorf("shareTeamQuotas and capacityTeamRef are mutually exclusive")
 		}
-		profiles, _, err := unstructured.NestedSlice(cluster.Object, "spec", "workloadProfiles")
+		rawProfiles, _, err := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "workloadProfiles")
 		if err != nil {
 			return o, err
+		}
+		var profiles []any
+		if rawProfiles != nil {
+			if profiles, _, err = unstructured.NestedSlice(cluster.Object, "spec", "workloadProfiles"); err != nil {
+				return o, err
+			}
 		}
 		if (shared || team == o.workspaceTeam) && len(profiles) == 0 {
 			return resolveCapacityJob(o, cluster, shared)
