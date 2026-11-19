@@ -489,6 +489,69 @@ policy:
 	}
 }
 
+func TestRunConfigPolicyWorkspaceResolvesNamespace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "train.sh"), []byte("#!/bin/sh\necho train\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "tau.yaml")
+	if err := os.WriteFile(config, []byte(`name: policy-workspace
+engine: job
+entrypoint: train.sh
+runtime:
+  image: busybox:1.36
+compute:
+  gpus: 1
+policy:
+  workspace: development
+  team: research
+  lane: training
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalWorkspaceFetcher, originalClient := fetchRunWorkspace, newClusterProfileClient
+	t.Cleanup(func() { fetchRunWorkspace, newClusterProfileClient = originalWorkspaceFetcher, originalClient })
+	newClusterProfileClient = func(string) (dynamic.Interface, error) {
+		return readyClusterProfileClient(t, 9, false), nil
+	}
+	for _, tt := range []struct {
+		name          string
+		args          []string
+		wantWorkspace string
+	}{
+		{name: "config client dry-run", args: []string{"--dry-run=client"}, wantWorkspace: "development"},
+		{name: "flag overrides config", args: []string{"--dry-run=client", "--workspace", "override"}, wantWorkspace: "override"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var fetched []string
+			fetchRunWorkspace = func(_ *cobra.Command, _, _, name string) (tauworkspace.Workspace, error) {
+				fetched = append(fetched, name)
+				workspace := readyWorkspace()
+				workspace.Metadata.Name = name
+				workspace.Spec.Target.Namespace, workspace.Status.Target.ResolvedNamespace = "alpha", "alpha"
+				workspace.Spec.Queue, workspace.Status.Queue.LocalQueue = "jobqueue", "jobqueue"
+				return workspace, nil
+			}
+			cmd := newRunCmdWithConnectionFactory(func(*cobra.Command) runConnectionEnsurer { return &fakeRunConnectionEnsurer{} })
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs(append([]string{"--config", config}, tt.args...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("run: %v\nstderr:\n%s", err, stderr.String())
+			}
+			if len(fetched) == 0 || fetched[len(fetched)-1] != tt.wantWorkspace {
+				t.Fatalf("fetched workspaces = %v, want %q", fetched, tt.wantWorkspace)
+			}
+			for _, want := range []string{"namespace: alpha", workloadmeta.AnnotationWorkloadProfileName + ": research-1gpu"} {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("render missing %q:\n%s", want, stdout.String())
+				}
+			}
+		})
+	}
+}
+
 func TestOfflineSnapshotClientDryRunSkipsConnectionAndTauCluster(t *testing.T) {
 	dir := t.TempDir()
 	writeOfflineSnapshotRun(t, dir)

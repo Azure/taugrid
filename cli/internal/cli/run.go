@@ -189,7 +189,7 @@ See: tau run explain-config`,
 						targetOptions.workspace = discovered.Metadata.Name
 					}
 				}
-				if !activeWorkspace.Connected && targetOptions.workspace != "" && targetOptions.dryRun != "client" {
+				if !activeWorkspace.Connected && targetOptions.workspace != "" {
 					workspaceStatus, err := fetchRunWorkspace(
 						cmd,
 						targetOptions.kubeContext,
