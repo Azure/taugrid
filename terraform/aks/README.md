@@ -377,6 +377,47 @@ decommissioning with this grant-retention upgrade. If both assignment addresses
 already exist in state, stop and reconcile ownership with an authorized
 operator rather than overriding either state entry.
 
+## Local NVMe for hot volumes
+
+Set `local_nvme_enabled = true` to give workload profiles a node-local NVMe
+StorageClass for `hotVolume`. `gpu_vm_size` must have local NVMe disks; the
+default `Standard_NC24ads_A100_v4` has one. Terraform then:
+
+1. Fails, the first time the setting is turned on, if a
+   `localdisk.csi.acstor.io` driver is already registered in the cluster, for
+   example from Azure Container Storage. Only one copy of the driver can run per
+   cluster. Reuse that install's StorageClass in the profile instead.
+2. Installs the [Azure local-csi-driver](https://github.com/Azure/local-csi-driver)
+   Helm chart, pinned by `local_csi_driver_chart_version`, into `kube-system`.
+   Its node DaemonSet runs only on the GPU pool and never on AKS Flex nodes.
+   The driver stripes each node's NVMe disks into one LVM volume group.
+3. Creates the StorageClass `local` with `WaitForFirstConsumer`.
+
+Each GPU node then publishes a `CSIStorageCapacity` object for `local`, which
+kube-scheduler uses to place pods with hot volumes. Point a profile at it:
+
+```yaml
+hotVolume:
+  storageClassName: local
+  defaultSize: 500Gi
+  maxSize: 800Gi
+```
+
+Choose `maxSize` so that the hot-volume pods on one node fit in its NVMe
+capacity. Each volume is a logical volume of the requested size, so writes past
+it fail with `ENOSPC`. Data on the volume is lost when the pod is deleted or the
+VM is deallocated.
+
+Setting `local_nvme_enabled` back to `false` doesn't uninstall the driver. To
+remove it, first remove `hotVolume` from the profiles that use `local` and wait
+for their pods to finish, then run:
+
+```bash
+kubectl delete storageclass local
+helm uninstall local-csi-driver --namespace kube-system
+kubectl delete csidriver localdisk.csi.acstor.io
+```
+
 ## Optional workspace bootstrap
 
 Set `bootstrap_workspace` to create TauGrid's single v0 Entra-backed
