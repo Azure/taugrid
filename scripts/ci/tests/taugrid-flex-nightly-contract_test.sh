@@ -231,10 +231,10 @@ with tempfile.TemporaryDirectory() as temporary:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'printf "%s\\n" "$*" >>"$ROUTING_CALLS"\n'
-        'if [[ "$1" == "apply" ]]; then cat >>"$ROUTING_MANIFESTS"; fi\n'
         'if [[ "$1" == "get" ]]; then printf \'{"metadata":{"name":"%s",'
         '"uid":"11111111-1111-4111-8111-111111111111",'
-        '"labels":{"tau.azure.com/e2e-run":"42-1"}}}\\n\' "$3"; fi\n'
+        '"labels":{"tau.azure.com/workspace":"%s"}},'
+        '"spec":{"clusterQueue":"%s"}}\\n\' "$3" "$FLEX_NIGHTLY_WORKSPACE" "$FLEX_NIGHTLY_CLUSTER_QUEUE"; fi\n'
     )
     kubectl.chmod(0o755)
     for job in jobs:
@@ -257,7 +257,7 @@ with tempfile.TemporaryDirectory() as temporary:
         first_use = (
             "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
             if name == "preflight" else (
-                "kubectl create namespace" if name == "hardware_matrix" else "namespace="
+                'namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"'
             )
         )
         assert job.index(routing_source) < job.index(first_use), name
@@ -320,7 +320,7 @@ with tempfile.TemporaryDirectory() as temporary:
             continue
         inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
         script = textwrap.dedent(inline.group(1))
-        routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
+        routing = script[script.index('kubectl get namespace "${namespace}"'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
         routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
         routing = routing.replace("$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent))
         for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
@@ -347,7 +347,7 @@ with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
                 ["bash", "-c",
                  'set -euo pipefail\n'
-                 'namespace=taugrid-nightly-matrix-42-1\n'
+                 'namespace=taugrid-nightly-rdma\n'
                  f'bundle_dir="{directory}"\n'
                  'contract="$TEST_CONTRACT"\n' + routing],
                 env=environment,
@@ -356,24 +356,18 @@ with tempfile.TemporaryDirectory() as temporary:
             )
             assert result.returncode == 0, (name, workspace, result.stderr)
             actual = calls.read_text().splitlines()
-            assert actual[0] == "create namespace taugrid-nightly-matrix-42-1", (name, actual)
-            assert actual[1].startswith("label namespace taugrid-nightly-matrix-42-1 "), (name, actual)
-            assert f"tau.azure.com/workspace={workspace}" in actual[1].split(), (name, actual)
-            assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
-            expected_queues = 2 if name == "hardware_matrix" else 1
-            queue_start = 2
-            if name == "hardware_matrix":
-                assert actual[2] == "get namespace taugrid-nightly-matrix-42-1 --ignore-not-found -o json"
-                queue_start = 3
-                assert json.loads((directory / "namespace-owner.json").read_text())["run_id"] == "42-1"
-            assert actual[queue_start:] == ["apply -f -"] * expected_queues, (name, actual)
-            assert manifests.read_text().count(f"clusterQueue: {queue}\n") == expected_queues, name
+            assert actual == [
+                "get namespace taugrid-nightly-rdma -o json",
+                "get localqueue matrix-a100 -n taugrid-nightly-rdma -o json",
+                "get localqueue matrix-h200 -n taugrid-nightly-rdma -o json",
+            ], (name, actual)
+            assert not manifests.exists(), "nightly must not mutate platform-owned queues"
 
     matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
     assert "cancelTimeoutInMinutes: 30" in matrix
     cleanup_step = re.search(
         r"      - task: AzureCLI@2\n"
-        r"        displayName: Clean up owned hardware matrix namespace\n"
+        r"        displayName: Clean up owned hardware matrix workloads\n"
         r"(.*?)"
         r"      - task: PublishPipelineArtifact@1",
         matrix, re.DOTALL,
@@ -385,10 +379,54 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "taugrid-flex-nightly-cleanup.py" in cleanup_step.group(1)
     assert "owned-cleanup-status.json" in cleanup_step.group(1)
     assert "kubectl delete namespace" not in matrix
+    assert "kubectl create namespace" not in matrix
+    assert "kubectl label namespace" not in matrix
+    assert "cleanup-runs" in cleanup_step.group(1)
     cleanup_path = Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-cleanup.py"
     spec = importlib.util.spec_from_file_location("nightly_cleanup", cleanup_path)
     cleanup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cleanup)
+    original_run = cleanup.subprocess.run
+    cancellations = []
+    def fake_cancel(command, **kwargs):
+        cancellations.append(command)
+        assert kwargs["timeout"] == 1200
+        assert kwargs["check"] is True
+        return subprocess.CompletedProcess(command, 0)
+    cleanup.subprocess.run = fake_cancel
+    try:
+        assert cleanup.cleanup_runs("taugrid-nightly-rdma", "42-1", Path("/test/tau")) == "released"
+        assert [command[3] for command in cancellations] == [
+            "e2e-matrix-serve-42-1", "e2e-matrix-train-42-1",
+            "e2e-multisite-a100-42-1", "e2e-multisite-h200-42-1",
+            "e2e-multisite-dgx-spark-42-1",
+        ]
+        assert all(command[:3] == ["/test/tau", "run", "cancel"] for command in cancellations)
+        assert all(command[4:] == ["--namespace", "taugrid-nightly-rdma", "--teardown-timeout", "15m"] for command in cancellations)
+        for invalid in ("other", "42-1;delete"):
+            try:
+                cleanup.cleanup_runs("taugrid-nightly-rdma", invalid, Path("/test/tau"))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("invalid run identity accepted")
+        assert len(cancellations) == 5
+        cancellations.clear()
+        def failing_cancel(command, **kwargs):
+            cancellations.append(command)
+            if command[3] == "e2e-matrix-serve-42-1":
+                raise subprocess.CalledProcessError(1, command, stderr="compute still present")
+            return subprocess.CompletedProcess(command, 0)
+        cleanup.subprocess.run = failing_cancel
+        try:
+            cleanup.cleanup_runs("taugrid-nightly-rdma", "42-1", Path("/test/tau"))
+        except RuntimeError as error:
+            assert "compute still present" in str(error)
+        else:
+            raise AssertionError("failed compute cleanup passed")
+        assert len(cancellations) == 5, "one failure must not skip other owned runs"
+    finally:
+        cleanup.subprocess.run = original_run
     namespace = "taugrid-nightly-matrix-42-1"
     run_id = "42-1"
     uid = "11111111-1111-4111-8111-111111111111"

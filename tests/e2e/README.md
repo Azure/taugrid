@@ -371,13 +371,13 @@ the cluster again and requires the node capability signature to match the
 preflight snapshot. Active GPU requests are not compared because the cluster is
 shared and unrelated workloads may start or finish during the matrix run.
 
-The workload job creates one run-scoped namespace and one LocalQueue per
-hardware target. Namespace cleanup records the UID and run label, refuses PVCs,
-and sends a UID-preconditioned deletion. A separate `always()` cleanup task
-rechecks ownership after interruption, before artifact publication; the in-task
-trap remains for normal diagnostics and postflight capability comparison.
-Every cleanup API subprocess is bounded to 30 seconds and reports timeouts as
-errors; namespace disappearance polling has a separate 15-minute bound.
+The workload job uses the existing authorized namespace selected by
+`rdmaNamespace`, with platform-owned `matrix-<target>` LocalQueues and the IB
+queue. It verifies workspace identity and queue bindings without relabeling or
+deleting platform resources. A separate `always()` cleanup task cancels only
+the exact matrix and cross-site run names suffixed with the build/attempt ID,
+before artifact publication; the in-task trap also performs this cleanup and
+postflight capability comparison. Native cancellation waits for compute release.
 Every available target runs:
 
 | Target | Single GPU | Native multi-GPU | Cross-node |
@@ -398,7 +398,7 @@ cross-site GPU Job, and required IB RayJob is submitted through
 Go tests remain the evidence/assertion harness. Generated Tau configs, shipped
 source files, and submission logs are retained in the job's `tau-runs` artifact
 directory. Direct Kubernetes access remains for infrastructure inventory,
-run-scoped namespace/LocalQueue setup, diagnostics, and owned cleanup.
+namespace/LocalQueue contract checks, diagnostics, and owned cleanup.
 Missing Tau binaries or failed Tau submissions fail the test; they never fall
 back to raw Kubernetes workloads. Other E2E suites retain their original
 submission path unless `E2E_TAU_RUN=1` is explicitly selected.
@@ -460,7 +460,7 @@ Native Tau runs also require Ready platform-managed TauCluster profiles.
 Profiles use `team: research`, `lane: training`, mode `fixed`, the low classes
 above, and platform-owned `nodeSelector` entries matching the inventory's GPU
 selector and authoritative site. Namespace and LocalQueue authorization must
-include the generated matrix namespaces and their `matrix-<target>` queues.
+include the dedicated nightly namespace and its `matrix-<target>` queues.
 The pipeline never creates or edits these profiles or relaxes their policy.
 
 | Profile | Worker Pods | GPUs per worker | Placement |
@@ -512,10 +512,10 @@ For an existing equivalent platform-managed allocation, set the pipeline
 parameters `workspace`, `clusterQueue`, `a100Flavor`, and `h200Flavor`
 explicitly; `dgxFlavor` applies only when DGX Spark is enabled. Defaults retain
 the nightly workspace and shared v2 queue contract above. The hardware matrix
-labels only its newly created run namespace with the selected workspace identity
-and routes its LocalQueues to the selected ClusterQueue. The required RDMA job
-checks the existing namespace's workspace identity and LocalQueue binding
-without relabeling or deleting it. The workspace value must match that queue's
+and required RDMA job check the existing namespace's workspace identity and
+LocalQueue bindings without relabeling or deleting them. Each target's
+`matrix-<target>` LocalQueue must already bind its configured ClusterQueue.
+The workspace value must match that queue's
 namespace selector and be authorized to share its allocation. These
 parameters do not create or increase quota, relabel existing namespaces, or
 relax the required topology and hardware checks.
@@ -541,7 +541,8 @@ and workload tasks retain the configured deployment values.
 Serialize nightly runs; capacity checks are snapshots, not exclusive
 reservations. Existing GPU requests inform shape skips, while admission
 remains subject to shared queue contention and its approved preemption policy.
-The harness cleans up only its own run namespace.
+The harness cleans up only its own uniquely named workloads; the namespace,
+LocalQueues, and checkpoint PVC remain platform-owned.
 
 Create the pipeline in the AKS AI Runtime Azure DevOps project from
 `.pipelines/taugrid-flex-nightly.yml`. Configure `azureServiceConnection` in

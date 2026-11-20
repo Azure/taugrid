@@ -49,7 +49,7 @@ parameters:
     type: string
     default: $(FLEX_NIGHTLY_DGX_FLAVOR)
   - name: rdmaNamespace
-    displayName: Existing authorized IB checkpoint namespace
+    displayName: Existing authorized nightly namespace
     type: string
     default: $(FLEX_NIGHTLY_RDMA_NAMESPACE)
   - name: rdmaQueue
@@ -273,7 +273,11 @@ jobs:
 
             contract="$(Pipeline.Workspace)/taugrid-flex-hardware-contract/hardware-matrix.json"
             test -s "${contract}"
-            namespace="taugrid-nightly-matrix-$(Build.BuildId)-$(System.JobAttempt)"
+            namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"
+            if [[ -z "${namespace}" || "${namespace}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]Nightly requires an existing authorized namespace" >&2
+              exit 1
+            fi
             artifact_dir="$(Build.ArtifactStagingDirectory)/hardware-matrix"
             bundle_dir="${artifact_dir}/diagnostics"
             summary="${artifact_dir}/matrix-results.jsonl"
@@ -304,18 +308,13 @@ jobs:
                   gpu: .status.allocatable["nvidia.com/gpu"]
                 }]' >"${bundle_dir}/nodes.json" 2>&1
               if ! python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
-                cleanup "${namespace}" "$(Build.BuildId)-$(System.JobAttempt)" \
-                "${bundle_dir}/namespace-owner.json"; then
+                cleanup-runs "${namespace}" "$(Build.BuildId)-$(System.JobAttempt)" \
+                "$(Agent.TempDirectory)/tau"; then
                 cleanup_status=failed
-                cleanup_reason="namespace deletion command failed"
+                cleanup_reason="native workload cleanup failed"
                 rc=1
               fi
-              if kubectl get namespace "${namespace}" >/dev/null 2>&1; then
-                echo "##vso[task.logissue type=error]Nightly namespace ${namespace} still exists after cleanup"
-                cleanup_status=failed
-                cleanup_reason="nightly namespace still exists after cleanup"
-                rc=1
-              elif FLEX_NIGHTLY_CONTRACT_FILE="${postflight_contract}" \
+              if FLEX_NIGHTLY_CONTRACT_FILE="${postflight_contract}" \
                 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" cluster; then
                 if "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-preflight.sh" \
                   compare-capability "${contract}" "${postflight_contract}"; then
@@ -345,30 +344,16 @@ jobs:
             }
             trap cleanup EXIT
 
-            kubectl create namespace "${namespace}"
-            kubectl label namespace "${namespace}" \
-              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
-              tau.azure.com/gpu-queue=enabled \
-              "tau.azure.com/e2e-run=$(Build.BuildId)-$(System.JobAttempt)"
-            python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
-              record "${namespace}" "$(Build.BuildId)-$(System.JobAttempt)" \
-              "${bundle_dir}/namespace-owner.json"
+            kubectl get namespace "${namespace}" -o json |
+              jq -e --arg workspace "${FLEX_NIGHTLY_WORKSPACE}" \
+                '.metadata.labels["tau.azure.com/workspace"] == $workspace' >/dev/null
 
             while IFS= read -r target; do
               name="$(jq -r '.name' <<<"${target}")"
               queue="matrix-${name}"
               cluster_queue="$(jq -r '.cluster_queue' <<<"${target}")"
-              cat <<EOF | kubectl apply -f -
-            apiVersion: kueue.x-k8s.io/v1beta2
-            kind: LocalQueue
-            metadata:
-              name: ${queue}
-              namespace: ${namespace}
-              labels:
-                tau.azure.com/e2e-run: "$(Build.BuildId)-$(System.JobAttempt)"
-            spec:
-              clusterQueue: ${cluster_queue}
-            EOF
+              kubectl get localqueue "${queue}" -n "${namespace}" -o json |
+                jq -e --arg queue "${cluster_queue}" '.spec.clusterQueue == $queue' >/dev/null
             done < <(jq -c '.targets[] | select(.status != "disabled")' "${contract}")
 
             cd "$(Build.SourcesDirectory)/tests/e2e"
@@ -530,6 +515,7 @@ jobs:
             exit "${matrix_rc}"
         env:
           PROFILE: ${{ parameters.profile }}
+          FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
           FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
           FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
           FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}
@@ -551,7 +537,7 @@ jobs:
           H200_SCHEDULER_RECOVERY_NODE: $(AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE)
 
       - task: AzureCLI@2
-        displayName: Clean up owned hardware matrix namespace
+        displayName: Clean up owned hardware matrix workloads
         condition: always()
         timeoutInMinutes: 20
         inputs:
@@ -584,10 +570,11 @@ jobs:
               --overwrite-existing
             kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
             python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
-              cleanup "taugrid-nightly-matrix-$(Build.BuildId)-$(System.JobAttempt)" \
-              "$(Build.BuildId)-$(System.JobAttempt)" "${bundle_dir}/namespace-owner.json" \
+              cleanup-runs "${FLEX_NIGHTLY_RDMA_NAMESPACE}" \
+              "$(Build.BuildId)-$(System.JobAttempt)" "$(Agent.TempDirectory)/tau" \
               >"${bundle_dir}/owned-cleanup-status.json"
         env:
+          FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
