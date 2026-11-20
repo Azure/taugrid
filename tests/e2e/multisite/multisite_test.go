@@ -55,6 +55,7 @@ func TestConcurrentIndependentGPUWorkloadsAcrossSites(t *testing.T) {
 		gpuJob(namespace, queue, jobA, image, siteAKey, siteAValue),
 		gpuJob(namespace, queue, jobB, image, siteBKey, siteBValue),
 	} {
+		require.NoError(t, e2e.ConfigureWorkloadPriority(job))
 		_, err := client.BatchV1().Jobs(namespace).Create(tc.Ctx(), job, metav1.CreateOptions{})
 		require.NoError(t, err, "create Job %s", job.Name)
 		jobName := job.Name
@@ -100,6 +101,7 @@ func TestConcurrentGPUWorkloadsAcrossHardwareSites(t *testing.T) {
 		jobSites[jobName] = target.Site
 
 		job := gpuJob(namespace, queue, jobName, image, selectorKey, selectorValue)
+		require.NoError(t, e2e.ConfigureWorkloadPriority(job))
 		_, err := tc.KubeClient().BatchV1().Jobs(namespace).Create(tc.Ctx(), job, metav1.CreateOptions{})
 		require.NoError(t, err, "create Job %s", jobName)
 		t.Cleanup(func() {
@@ -344,7 +346,13 @@ func TestParseSimpleSelector(t *testing.T) {
 }
 
 func TestGPUJobContract(t *testing.T) {
+	t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", "aks-low-priority")
+	t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-sandbox-low")
 	job := gpuJob("nightly", "queue", "site-a", "ray:latest", "tau.azure.com/site", "site-a")
+	require.NoError(t, e2e.ConfigureWorkloadPriority(job))
+	require.Equal(t, "aks-low-priority", job.Labels["kueue.x-k8s.io/priority-class"])
+	require.Equal(t, "tau-sandbox-low", job.Spec.Template.Spec.PriorityClassName)
+	require.Equal(t, corev1.PreemptNever, *job.Spec.Template.Spec.PreemptionPolicy)
 
 	require.NotNil(t, job.Spec.Suspend)
 	require.True(t, *job.Spec.Suspend)

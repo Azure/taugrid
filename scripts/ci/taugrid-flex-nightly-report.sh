@@ -167,7 +167,7 @@ postflight_file="$(find_first postflight-status.json)"
 
   if [[ "${FLEX_NIGHTLY_RDMA_ENABLED:-false}" == "true" ||
     "${FLEX_NIGHTLY_RDMA_ENABLED:-false}" == "True" ]]; then
-    echo "## Optional H200 RDMA"
+    echo "## H200 InfiniBand conformance"
     echo
     echo "- Job outcome: **$(job_result "${RDMA_JOB_RESULT:-Unknown}")**."
     echo

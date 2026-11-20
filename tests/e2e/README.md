@@ -416,9 +416,25 @@ Matching pip environments reuse an installation within a Ray node, not across
 Pods. Downloads and extraction require multiple GiB per Pod; this
 repair does not establish a scratch-space reservation or peak-storage bound,
 hash-lock transitive downloads, or serialize overlapping runs.
-`rdmaConformance=true` independently adds the
-existing synthetic 16-GPU H200 FSDP/NCCL test with positive InfiniBand evidence;
-it is not part of the default hardware matrix.
+Every run also requires the synthetic 16-GPU H200 FSDP/NCCL test with positive
+InfiniBand evidence and no socket fallback, including the `smoke` profile.
+The legacy `rdmaConformance` parameter is accepted for compatibility but ignored:
+even `false` cannot disable this stage. It runs after matrix cleanup when
+preflight succeeded, including after a matrix failure, unless the run is canceled.
+Insufficient IB capacity fails or times out rather than passing without IB.
+
+All nightly GPU Jobs and RayJobs, including dependent fixtures, use the existing
+`aks-low-priority` Kueue WorkloadPriorityClass and `tau-sandbox-low` Kubernetes
+PriorityClass (both value 100). Ray heads, workers, submitters, and Job Pods use
+`preemptionPolicy: Never`. Preflight requires both classes with those values;
+the pipeline does not create them or change queue/preemption policy.
+Pod nonpreemption does not disable Kueue preemption: a selected ClusterQueue
+with `withinClusterQueue: LowerPriority` can still evict admitted workloads
+below priority 100. Managed medium/high workload priorities are 500/1000;
+unmanaged/default-priority workloads require a separate platform policy decision
+if strict Kueue nonpreemption is required.
+`E2E_WORKLOAD_PRIORITY_CLASS` and `E2E_POD_PRIORITY_CLASS` opt other E2E runs into
+the same priority propagation; unset values preserve their existing priorities.
 
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
@@ -441,7 +457,7 @@ For an existing equivalent platform-managed allocation, set the pipeline
 parameters `workspace`, `clusterQueue`, `a100Flavor`, and `h200Flavor`
 explicitly; `dgxFlavor` applies only when DGX Spark is enabled. Defaults retain
 the nightly workspace and shared v2 queue contract above. Both the hardware
-matrix and optional RDMA job label only their newly created run namespaces
+matrix and required RDMA job label only their newly created run namespaces
 with the selected workspace identity and route their LocalQueues to the
 selected ClusterQueue. The workspace value must match that queue's
 namespace selector and be authorized to share its allocation. These

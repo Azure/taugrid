@@ -60,11 +60,62 @@ from unittest.mock import patch
 pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
+rdma = next(job for job in jobs if job.splitlines()[0] == "h200_rdma")
+assert "dependsOn:\n      - preflight\n      - hardware_matrix\n" in rdma
+assert "condition: and(not(canceled()), eq(dependencies.preflight.result, 'Succeeded'))" in rdma
+assert "parameters.rdmaConformance" not in pipeline, "legacy false must not bypass IB or misreport it"
+assert "parameters.profile" not in rdma, "smoke and full must both require IB"
+assert 'FLEX_NIGHTLY_RDMA_ENABLED: "true"' in pipeline
+legacy = re.search(r"  - name: rdmaConformance\n(.*?)(?=  - name:)", pipeline, re.DOTALL)
+assert legacy and "default: true" in legacy.group(1)
+for name in ("hardware_matrix", "h200_rdma"):
+    job = next(job for job in jobs if job.splitlines()[0] == name)
+    for setting in (
+        "export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority",
+        "export E2E_POD_PRIORITY_CLASS=tau-sandbox-low",
+    ):
+        assert setting in job, (name, setting)
+        assert job.index(setting) < job.index("go test -v"), (name, setting)
+preflight = next(job for job in jobs if job.splitlines()[0] == "preflight")
+for resource in ("workloadpriorityclass aks-low-priority", "priorityclass tau-sandbox-low"):
+    assert f"kubectl get {resource} -o json" in preflight, resource
+assert preflight.count("jq -e '.value == 100'") == 2
 
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     binary = root / "bin"
     binary.mkdir()
+    priority_check = "kubectl get workloadpriorityclass" + preflight.split(
+        "kubectl get workloadpriorityclass", 1
+    )[1].split('artifact_dir=', 1)[0]
+    kubectl = binary / "kubectl"
+    kubectl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'if [[ "$2" == "$MISSING_CLASS" ]]; then exit 1; fi\n'
+        'if [[ "$2" == "workloadpriorityclass" ]]; then value="$WORKLOAD_VALUE"; '
+        'else value="$POD_VALUE"; fi\n'
+        'printf \'{"value":%s}\\n\' "$value"\n'
+    )
+    kubectl.chmod(0o755)
+    for missing, workload_value, pod_value, expected in (
+        ("", "100", "100", 0),
+        ("workloadpriorityclass", "100", "100", 1),
+        ("priorityclass", "100", "100", 1),
+        ("", "500", "100", 1),
+        ("", "100", "1000", 1),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", "set -euo pipefail\n" + priority_check],
+            env=dict(
+                os.environ, PATH=f"{binary}:{os.environ['PATH']}",
+                MISSING_CLASS=missing, WORKLOAD_VALUE=workload_value, POD_VALUE=pod_value,
+            ),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == expected, (missing, workload_value, pod_value, result.stderr)
+        if expected:
+            assert "Nightly requires" in result.stderr, result.stderr
     for command in ("az", "kubelogin"):
         stub = binary / command
         stub.write_text(
@@ -480,11 +531,9 @@ grep -Fq "lease_age_seconds" "$PREFLIGHT" ||
 grep -Fq "value: taugrid-gpu-topology" "$PIPELINE" ||
   fail "pipeline must require the authoritative TauGrid GPU topology"
 grep -Fq "name: rdmaConformance" "$PIPELINE" ||
-  fail "extended H200 RDMA conformance must remain explicitly selectable"
+  fail "legacy RDMA parameter must remain accepted for compatibility"
 grep -Fq "name: includeDGXSpark" "$PIPELINE" ||
   fail "DGX Spark execution must remain an explicit opt-in while the nodes are reserved"
-grep -Fq "default: false" "$PIPELINE" ||
-  fail "extended H200 RDMA conformance must be disabled by default"
 grep -Fq "TestRayServeGPU" "$PIPELINE" ||
   fail "hardware matrix must run Ray Serve online inference"
 grep -Fq "Ray Serve protobuf compatibility fix" "$PIPELINE" ||
@@ -509,7 +558,7 @@ grep -Fq "TestConcurrentGPUWorkloadsAcrossHardwareSites" \
   "${REPO_ROOT}/tests/e2e/multisite/multisite_test.go" ||
   fail "full profile must include concurrent hardware-site validation"
 grep -Fq "TestFineWebRayTrain16xH200IB" "$PIPELINE" ||
-  fail "optional H200 RDMA/NCCL conformance must remain available"
+  fail "required H200 RDMA/NCCL conformance must remain available"
 grep -Fq 'name: FINEWEB_CHECKPOINT_INTERVAL' "$PIPELINE" ||
   fail "short RDMA qualification must explicitly configure its checkpoint interval"
 grep -Fq 'value: "1"' "$PIPELINE" ||
@@ -533,7 +582,7 @@ grep -Fq 'PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]' "$PIPELINE" 
 grep -Fq 'MATRIX_JOB_RESULT: $[ dependencies.hardware_matrix.result ]' "$PIPELINE" ||
   fail "nightly report must retain matrix outcome after failures"
 grep -Fq 'RDMA_JOB_RESULT: $[ dependencies.h200_rdma.result ]' "$PIPELINE" ||
-  fail "nightly report must retain optional RDMA outcome"
+  fail "nightly report must retain required RDMA outcome"
 grep -Fq 'postflight-status.json' "$PIPELINE" ||
   fail "hardware matrix cleanup must record postflight status"
 [ "$(grep -Fc "done < <(jq -c '.targets[]' \"\${contract}\")" "$PIPELINE")" -eq 1 ] ||

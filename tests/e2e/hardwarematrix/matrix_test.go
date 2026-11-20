@@ -110,6 +110,7 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	require.NoError(t, err, "create matrix script ConfigMap")
 
 	rayJob := buildRayJob(cfg, workload, rayJobName, configMapName)
+	require.NoError(t, e2e.ConfigureWorkloadPriority(rayJob))
 	_, err = tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Create(
 		tc.Ctx(), rayJob, metav1.CreateOptions{})
 	require.NoError(t, err, "create %s RayJob", workload)
@@ -535,6 +536,21 @@ func TestBuildRayJobContract(t *testing.T) {
 				cfg.requiredTopology = "tau.azure.com/site"
 			}
 			job := buildRayJob(cfg, "train", trainRayJobName, trainRayJobName+"-script")
+			t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", "aks-low-priority")
+			t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-sandbox-low")
+			require.NoError(t, e2e.ConfigureWorkloadPriority(job))
+			require.Equal(t, "aks-low-priority", job.GetLabels()["kueue.x-k8s.io/priority-class"])
+			for _, path := range [][]string{
+				{"spec", "submitterPodTemplate", "spec"},
+				{"spec", "rayClusterSpec", "headGroupSpec", "template", "spec"},
+			} {
+				priority, _, err := unstructured.NestedString(job.Object, append(path, "priorityClassName")...)
+				require.NoError(t, err)
+				require.Equal(t, "tau-sandbox-low", priority)
+				policy, _, err := unstructured.NestedString(job.Object, append(path, "preemptionPolicy")...)
+				require.NoError(t, err)
+				require.Equal(t, "Never", policy)
+			}
 
 			runtimeEnvYAML, found, err := unstructured.NestedString(job.Object, "spec", "runtimeEnvYAML")
 			require.NoError(t, err)
@@ -559,6 +575,12 @@ func TestBuildRayJobContract(t *testing.T) {
 			require.True(t, found)
 			require.Len(t, workers, 1)
 			group := workers[0].(map[string]any)
+			priority, _, err := unstructured.NestedString(group, "template", "spec", "priorityClassName")
+			require.NoError(t, err)
+			require.Equal(t, "tau-sandbox-low", priority)
+			policy, _, err := unstructured.NestedString(group, "template", "spec", "preemptionPolicy")
+			require.NoError(t, err)
+			require.Equal(t, "Never", policy)
 			require.Equal(t, int64(workerCount), group["replicas"])
 			annotations, found, err := unstructured.NestedStringMap(
 				group, "template", "metadata", "annotations")

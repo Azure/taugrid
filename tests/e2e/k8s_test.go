@@ -34,11 +34,67 @@ func TestGVRFromObjectMapsTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gvrFromObject: %v", err)
 	}
+
 	if got.Group != "kueue.x-k8s.io" || got.Version != "v1beta2" || got.Resource != "topologies" {
 		t.Fatalf("gvrFromObject = %s, want kueue.x-k8s.io/v1beta2, Resource=topologies", got.String())
 	}
 }
 
+func TestApplyYAMLWorkloadPriority(t *testing.T) {
+	for _, priority := range []string{"", "aks-low-priority", "Invalid", "invalid\ninjection", strings.Repeat("x", 64)} {
+		t.Run(priority, func(t *testing.T) {
+			t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", priority)
+			t.Setenv("E2E_POD_PRIORITY_CLASS", priority)
+			var applied *unstructured.Unstructured
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				applied = &unstructured.Unstructured{}
+				if err := applied.UnmarshalJSON(data); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(data)
+			}))
+			defer server.Close()
+			client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = applyYAMLWithClient(context.Background(), client, []byte(`{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"test","namespace":"nightly","labels":{"kueue.x-k8s.io/priority-class":"existing"}},"spec":{"template":{"spec":{"priorityClassName":"existing","containers":[{"name":"worker","image":"test"}]}}}}`))
+			if priority != "" && priority != "aks-low-priority" {
+				if err == nil || applied != nil {
+					t.Fatalf("invalid class reached API: error=%v applied=%v", err, applied)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := priority
+			if expected == "" {
+				expected = "existing"
+			}
+			if applied.GetLabels()["kueue.x-k8s.io/priority-class"] != expected {
+				t.Fatalf("wrong workload priority: %v", applied.GetLabels())
+			}
+			podPriority, _, err := unstructured.NestedString(applied.Object, "spec", "template", "spec", "priorityClassName")
+			if err != nil || podPriority != expected {
+				t.Fatalf("wrong pod priority %q: %v", podPriority, err)
+			}
+			policy, found, err := unstructured.NestedString(applied.Object, "spec", "template", "spec", "preemptionPolicy")
+			if err != nil || (priority == "" && found) || (priority != "" && policy != "Never") {
+				t.Fatalf("wrong preemption policy %q: %v", policy, err)
+			}
+		})
+	}
+}
 func TestDeleteYAMLWithClientAndWaitDeletesInReverseAndWaitsForUID(t *testing.T) {
 	manifest := []byte(`apiVersion: v1
 kind: Namespace
