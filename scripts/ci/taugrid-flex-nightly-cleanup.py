@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -79,15 +80,48 @@ def run(action, namespace, run_id, owner_path):
     raise RuntimeError("owned namespace still exists after 15 minutes")
 
 
+def cleanup_runs(namespace, run_id, tau_binary):
+    if not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace):
+        raise RuntimeError("invalid nightly namespace")
+    if not re.fullmatch(r"[0-9]+-[0-9]+", run_id):
+        raise RuntimeError("invalid nightly run identity")
+    failures = []
+    for base in (
+        "e2e-matrix-serve", "e2e-matrix-train",
+        "e2e-multisite-a100", "e2e-multisite-h200", "e2e-multisite-dgx-spark",
+    ):
+        command = [
+            str(tau_binary), "run", "cancel", f"{base}-{run_id}",
+            "--namespace", namespace, "--teardown-timeout", "15m",
+        ]
+        for variable, flag in (
+            ("AI_RUNTIME_E2E_KUBE_CONTEXT", "--context"),
+            ("E2E_TAU_WORKSPACE", "--workspace"),
+            ("E2E_TAU_SYSTEM_NAMESPACE", "--system-namespace"),
+        ):
+            if value := os.environ.get(variable):
+                command.extend((flag, value))
+        try:
+            subprocess.run(command, capture_output=True, text=True, check=True, timeout=1200)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            failures.append(f"{base}-{run_id}: {error.stderr}")
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return "released"
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("record", "cleanup"))
+    parser.add_argument("action", choices=("record", "cleanup", "cleanup-runs"))
     parser.add_argument("namespace")
     parser.add_argument("run_id")
     parser.add_argument("owner_path", type=Path)
     args = parser.parse_args()
     try:
-        status = run(args.action, args.namespace, args.run_id, args.owner_path)
+        if args.action == "cleanup-runs":
+            status = cleanup_runs(args.namespace, args.run_id, args.owner_path)
+        else:
+            status = run(args.action, args.namespace, args.run_id, args.owner_path)
     except subprocess.TimeoutExpired as error:
         parser.exit(1, f"Nightly owned cleanup failed: kubectl timed out after {error.timeout} seconds\n")
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:

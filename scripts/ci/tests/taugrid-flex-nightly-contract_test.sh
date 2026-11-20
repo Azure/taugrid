@@ -60,11 +60,77 @@ from unittest.mock import patch
 pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
+rdma = next(job for job in jobs if job.splitlines()[0] == "h200_rdma")
+assert "dependsOn:\n      - preflight\n      - hardware_matrix\n" in rdma
+assert "condition: and(not(canceled()), eq(dependencies.preflight.result, 'Succeeded'))" in rdma
+assert "parameters.rdmaConformance" not in pipeline, "legacy false must not bypass IB or misreport it"
+assert "parameters.profile" not in rdma, "smoke and full must both require IB"
+assert 'FLEX_NIGHTLY_RDMA_ENABLED: "true"' in pipeline
+legacy = re.search(r"  - name: rdmaConformance\n(.*?)(?=  - name:)", pipeline, re.DOTALL)
+assert legacy and "default: true" in legacy.group(1)
+for name in ("hardware_matrix", "h200_rdma"):
+    job = next(job for job in jobs if job.splitlines()[0] == name)
+    for setting in (
+        "export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority",
+        "export E2E_POD_PRIORITY_CLASS=tau-nightly-low",
+    ):
+        assert setting in job, (name, setting)
+        assert job.index(setting) < job.index("go test -v"), (name, setting)
+    assert "export E2E_TAU_RUN=1" in job, name
+    assert 'export TAU_BINARY="$(Agent.TempDirectory)/tau"' in job, name
+    assert 'cd "$(Build.SourcesDirectory)/cli"\n          make build' in job, name
+    assert 'install -m 755 bin/tau "$(Agent.TempDirectory)/tau"' in job, name
+    assert "export E2E_TAU_CONFIG_DIR=" in job, name
+    assert 'export E2E_TAU_WORKSPACE="${FLEX_NIGHTLY_WORKSPACE}"' in job, name
+    assert "export E2E_TAU_SYSTEM_NAMESPACE=tau-platform" in job, name
+assert "kubectl create namespace" not in rdma, "IB must use an existing checkpoint namespace"
+assert "kubectl delete namespace" not in rdma, "IB must never delete a shared checkpoint namespace"
+assert 'run cancel "${rayjob}" --namespace "${namespace}"' in rdma
+assert "FINEWEB_CHECKPOINT_PVC: ${{ parameters.checkpointPVC }}" in rdma
+preflight = next(job for job in jobs if job.splitlines()[0] == "preflight")
+for resource in ("workloadpriorityclass aks-low-priority", "priorityclass tau-nightly-low"):
+    assert f"kubectl get {resource} -o json" in preflight, resource
+assert preflight.count("jq -e '.value == 100'") == 1
+assert '.value == -100 and .preemptionPolicy == "Never" and .globalDefault != true' in preflight
 
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     binary = root / "bin"
     binary.mkdir()
+    priority_check = "kubectl get workloadpriorityclass" + preflight.split(
+        "kubectl get workloadpriorityclass", 1
+    )[1].split('artifact_dir=', 1)[0]
+    kubectl = binary / "kubectl"
+    kubectl.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        'if [[ "$2" == "$MISSING_CLASS" ]]; then exit 1; fi\n'
+        'if [[ "$2" == "workloadpriorityclass" ]]; then value="$WORKLOAD_VALUE"; '
+        'else value="$POD_VALUE"; fi\n'
+        'printf \'{"value":%s,"preemptionPolicy":"%s","globalDefault":%s}\\n\' "$value" "$POD_PREEMPTION" "$GLOBAL_DEFAULT"\n'
+    )
+    kubectl.chmod(0o755)
+    for missing, workload_value, pod_value, pod_preemption, global_default, expected in (
+        ("", "100", "-100", "Never", "false", 0),
+        ("workloadpriorityclass", "100", "-100", "Never", "false", 1),
+        ("priorityclass", "100", "-100", "Never", "false", 1),
+        ("", "500", "-100", "Never", "false", 1),
+        ("", "100", "100", "Never", "false", 1),
+        ("", "100", "-100", "PreemptLowerPriority", "false", 1),
+        ("", "100", "-100", "Never", "true", 1),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", "set -euo pipefail\n" + priority_check],
+            env=dict(
+                os.environ, PATH=f"{binary}:{os.environ['PATH']}",
+                MISSING_CLASS=missing, WORKLOAD_VALUE=workload_value, POD_VALUE=pod_value,
+                POD_PREEMPTION=pod_preemption, GLOBAL_DEFAULT=global_default,
+            ),
+            capture_output=True, text=True,
+        )
+        assert result.returncode == expected, (missing, workload_value, pod_value, result.stderr)
+        if expected:
+            assert "Nightly requires" in result.stderr, result.stderr
     for command in ("az", "kubelogin"):
         stub = binary / command
         stub.write_text(
@@ -167,10 +233,10 @@ with tempfile.TemporaryDirectory() as temporary:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'printf "%s\\n" "$*" >>"$ROUTING_CALLS"\n'
-        'if [[ "$1" == "apply" ]]; then cat >>"$ROUTING_MANIFESTS"; fi\n'
         'if [[ "$1" == "get" ]]; then printf \'{"metadata":{"name":"%s",'
         '"uid":"11111111-1111-4111-8111-111111111111",'
-        '"labels":{"tau.azure.com/e2e-run":"42-1"}}}\\n\' "$3"; fi\n'
+        '"labels":{"tau.azure.com/workspace":"%s"}},'
+        '"spec":{"clusterQueue":"%s"}}\\n\' "$3" "$FLEX_NIGHTLY_WORKSPACE" "$FLEX_NIGHTLY_CLUSTER_QUEUE"; fi\n'
     )
     kubectl.chmod(0o755)
     for job in jobs:
@@ -192,7 +258,9 @@ with tempfile.TemporaryDirectory() as temporary:
         assert routing_source in job, name
         first_use = (
             "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
-            if name == "preflight" else "kubectl create namespace"
+            if name == "preflight" else (
+                'namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"'
+            )
         )
         assert job.index(routing_source) < job.index(first_use), name
         defaults = {
@@ -250,11 +318,11 @@ with tempfile.TemporaryDirectory() as temporary:
             )
             assert result.returncode == 0, (name, scenario, result.stderr)
             assert result.stdout.splitlines() == expected, (name, scenario, result.stdout, expected)
-        if name == "preflight":
+        if name in ("preflight", "h200_rdma"):
             continue
         inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
         script = textwrap.dedent(inline.group(1))
-        routing = script[script.index('kubectl create namespace'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
+        routing = script[script.index('kubectl get namespace "${namespace}"'):script.index('cd "$(Build.SourcesDirectory)/tests/e2e"')]
         routing = routing.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
         routing = routing.replace("$(Build.SourcesDirectory)", str(Path(sys.argv[1]).resolve().parent.parent))
         for workspace, queue in (("nightly", "tau-gpu-cq"), ("shared-workspace", "shared-queue")):
@@ -281,7 +349,7 @@ with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
                 ["bash", "-c",
                  'set -euo pipefail\n'
-                 'namespace=taugrid-nightly-matrix-42-1\n'
+                 'namespace=taugrid-nightly-rdma\n'
                  f'bundle_dir="{directory}"\n'
                  'contract="$TEST_CONTRACT"\n' + routing],
                 env=environment,
@@ -290,24 +358,18 @@ with tempfile.TemporaryDirectory() as temporary:
             )
             assert result.returncode == 0, (name, workspace, result.stderr)
             actual = calls.read_text().splitlines()
-            assert actual[0] == "create namespace taugrid-nightly-matrix-42-1", (name, actual)
-            assert actual[1].startswith("label namespace taugrid-nightly-matrix-42-1 "), (name, actual)
-            assert f"tau.azure.com/workspace={workspace}" in actual[1].split(), (name, actual)
-            assert "tau.azure.com/gpu-queue=enabled" in actual[1].split(), (name, actual)
-            expected_queues = 2 if name == "hardware_matrix" else 1
-            queue_start = 2
-            if name == "hardware_matrix":
-                assert actual[2] == "get namespace taugrid-nightly-matrix-42-1 --ignore-not-found -o json"
-                queue_start = 3
-                assert json.loads((directory / "namespace-owner.json").read_text())["run_id"] == "42-1"
-            assert actual[queue_start:] == ["apply -f -"] * expected_queues, (name, actual)
-            assert manifests.read_text().count(f"clusterQueue: {queue}\n") == expected_queues, name
+            assert actual == [
+                "get namespace taugrid-nightly-rdma -o json",
+                "get localqueue matrix-a100 -n taugrid-nightly-rdma -o json",
+                "get localqueue matrix-h200 -n taugrid-nightly-rdma -o json",
+            ], (name, actual)
+            assert not manifests.exists(), "nightly must not mutate platform-owned queues"
 
     matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
     assert "cancelTimeoutInMinutes: 30" in matrix
     cleanup_step = re.search(
         r"      - task: AzureCLI@2\n"
-        r"        displayName: Clean up owned hardware matrix namespace\n"
+        r"        displayName: Clean up owned hardware matrix workloads\n"
         r"(.*?)"
         r"      - task: PublishPipelineArtifact@1",
         matrix, re.DOTALL,
@@ -319,10 +381,65 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "taugrid-flex-nightly-cleanup.py" in cleanup_step.group(1)
     assert "owned-cleanup-status.json" in cleanup_step.group(1)
     assert "kubectl delete namespace" not in matrix
+    assert "kubectl create namespace" not in matrix
+    assert "kubectl label namespace" not in matrix
+    assert "cleanup-runs" in cleanup_step.group(1)
     cleanup_path = Path(sys.argv[1]).resolve().parent.parent / "scripts/ci/taugrid-flex-nightly-cleanup.py"
     spec = importlib.util.spec_from_file_location("nightly_cleanup", cleanup_path)
     cleanup = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cleanup)
+    original_run = cleanup.subprocess.run
+    cancellations = []
+    def fake_cancel(command, **kwargs):
+        cancellations.append(command)
+        assert kwargs["timeout"] == 1200
+        assert kwargs["check"] is True
+        return subprocess.CompletedProcess(command, 0)
+    cleanup.subprocess.run = fake_cancel
+    routing_environment = patch.dict(os.environ, {
+        "AI_RUNTIME_E2E_KUBE_CONTEXT": "nightly-context",
+        "E2E_TAU_WORKSPACE": "nightly",
+        "E2E_TAU_SYSTEM_NAMESPACE": "tau-platform",
+    })
+    routing_environment.start()
+    try:
+        assert cleanup.cleanup_runs("taugrid-nightly-rdma", "42-1", Path("/test/tau")) == "released"
+        assert [command[3] for command in cancellations] == [
+            "e2e-matrix-serve-42-1", "e2e-matrix-train-42-1",
+            "e2e-multisite-a100-42-1", "e2e-multisite-h200-42-1",
+            "e2e-multisite-dgx-spark-42-1",
+        ]
+        assert all(command[:3] == ["/test/tau", "run", "cancel"] for command in cancellations)
+        assert all(command[4:] == [
+            "--namespace", "taugrid-nightly-rdma", "--teardown-timeout", "15m",
+            "--context", "nightly-context", "--workspace", "nightly",
+            "--system-namespace", "tau-platform",
+        ] for command in cancellations)
+        for invalid in ("other", "42-1;delete"):
+            try:
+                cleanup.cleanup_runs("taugrid-nightly-rdma", invalid, Path("/test/tau"))
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError("invalid run identity accepted")
+        assert len(cancellations) == 5
+        cancellations.clear()
+        def failing_cancel(command, **kwargs):
+            cancellations.append(command)
+            if command[3] == "e2e-matrix-serve-42-1":
+                raise subprocess.CalledProcessError(1, command, stderr="compute still present")
+            return subprocess.CompletedProcess(command, 0)
+        cleanup.subprocess.run = failing_cancel
+        try:
+            cleanup.cleanup_runs("taugrid-nightly-rdma", "42-1", Path("/test/tau"))
+        except RuntimeError as error:
+            assert "compute still present" in str(error)
+        else:
+            raise AssertionError("failed compute cleanup passed")
+        assert len(cancellations) == 5, "one failure must not skip other owned runs"
+    finally:
+        cleanup.subprocess.run = original_run
+        routing_environment.stop()
     namespace = "taugrid-nightly-matrix-42-1"
     run_id = "42-1"
     uid = "11111111-1111-4111-8111-111111111111"
@@ -480,11 +597,9 @@ grep -Fq "lease_age_seconds" "$PREFLIGHT" ||
 grep -Fq "value: taugrid-gpu-topology" "$PIPELINE" ||
   fail "pipeline must require the authoritative TauGrid GPU topology"
 grep -Fq "name: rdmaConformance" "$PIPELINE" ||
-  fail "extended H200 RDMA conformance must remain explicitly selectable"
+  fail "legacy RDMA parameter must remain accepted for compatibility"
 grep -Fq "name: includeDGXSpark" "$PIPELINE" ||
   fail "DGX Spark execution must remain an explicit opt-in while the nodes are reserved"
-grep -Fq "default: false" "$PIPELINE" ||
-  fail "extended H200 RDMA conformance must be disabled by default"
 grep -Fq "TestRayServeGPU" "$PIPELINE" ||
   fail "hardware matrix must run Ray Serve online inference"
 grep -Fq "Ray Serve protobuf compatibility fix" "$PIPELINE" ||
@@ -509,7 +624,7 @@ grep -Fq "TestConcurrentGPUWorkloadsAcrossHardwareSites" \
   "${REPO_ROOT}/tests/e2e/multisite/multisite_test.go" ||
   fail "full profile must include concurrent hardware-site validation"
 grep -Fq "TestFineWebRayTrain16xH200IB" "$PIPELINE" ||
-  fail "optional H200 RDMA/NCCL conformance must remain available"
+  fail "required H200 RDMA/NCCL conformance must remain available"
 grep -Fq 'name: FINEWEB_CHECKPOINT_INTERVAL' "$PIPELINE" ||
   fail "short RDMA qualification must explicitly configure its checkpoint interval"
 grep -Fq 'value: "1"' "$PIPELINE" ||
@@ -533,7 +648,7 @@ grep -Fq 'PREFLIGHT_JOB_RESULT: $[ dependencies.preflight.result ]' "$PIPELINE" 
 grep -Fq 'MATRIX_JOB_RESULT: $[ dependencies.hardware_matrix.result ]' "$PIPELINE" ||
   fail "nightly report must retain matrix outcome after failures"
 grep -Fq 'RDMA_JOB_RESULT: $[ dependencies.h200_rdma.result ]' "$PIPELINE" ||
-  fail "nightly report must retain optional RDMA outcome"
+  fail "nightly report must retain required RDMA outcome"
 grep -Fq 'postflight-status.json' "$PIPELINE" ||
   fail "hardware matrix cleanup must record postflight status"
 [ "$(grep -Fc "done < <(jq -c '.targets[]' \"\${contract}\")" "$PIPELINE")" -eq 1 ] ||

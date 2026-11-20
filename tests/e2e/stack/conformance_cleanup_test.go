@@ -57,7 +57,9 @@ func deleteConformanceRayJob(ctx context.Context, kube kubernetes.Interface, dyn
 	switch name {
 	case rayJobName, rayJobNameGPU, rayJobNameTrain, rayJobNameTrainGPU, rayJobNameFineWeb, rayJobNameNanoGPT:
 	default:
-		return fmt.Errorf("refusing non-conformance RayJob name %q", name)
+		if !e2e.TauRunEnabled() || name != e2e.TauRunName(rayJobNameFineWeb) {
+			return fmt.Errorf("refusing non-conformance RayJob name %q", name)
+		}
 	}
 	jobs := dyn.Resource(e2e.RayJobGVR).Namespace(namespace)
 	var uid types.UID
