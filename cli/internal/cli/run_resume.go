@@ -55,6 +55,9 @@ For MultiKueue jobs, tau deletes the manager-cluster Job/RayJob and waits for
 the manager-side Workload finalizer proof before resubmitting. It never calls
 worker clusters directly during resume.
 
+When the config names no workspace, resume reuses the TauWorkspace recorded on
+the failed workload and applies that workspace's current routing and team.
+
 Requirements:
   - The workload must exist and be in a failed state.
   - --config is required (the original config cannot be recovered from
@@ -492,6 +495,9 @@ func runResumeCommand(
 	targetOptions.env = append(filtered, "TAU_RESUME_FROM="+plan.CheckpointDir)
 	targetOptions.nameFromConfig = true
 
+	if targetOptions.workspace == "" {
+		targetOptions.workspace = strings.TrimSpace(snap.Labels[workloadmeta.LabelWorkspace])
+	}
 	if targetOptions.workspace != "" {
 		currentWorkspace, err := hooks.workspace(cmd, routing.KubeContext, targetOptions.workspace)
 		if err != nil {
