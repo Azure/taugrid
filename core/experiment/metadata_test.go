@@ -4,6 +4,7 @@
 package experiment
 
 import (
+	"github.com/Azure/taugrid/core/version"
 	"github.com/Azure/taugrid/core/workloadmeta"
 	"strings"
 	"testing"
@@ -59,6 +60,28 @@ func TestMetadataKubernetesMetadata(t *testing.T) {
 	}
 	if annotations[AnnotationWorkspaceID] != "sample" || annotations[AnnotationResultScope] != "/data/projects/sample/runs" {
 		t.Fatalf("workspace lifecycle annotations: %+v", annotations)
+	}
+}
+
+func TestMetadataStampsProducingTauVersion(t *testing.T) {
+	originalVersion, originalCommit := version.Version, version.Commit
+	t.Cleanup(func() { version.Version, version.Commit = originalVersion, originalCommit })
+
+	for _, tc := range []struct {
+		name, version, commit, want string
+	}{
+		{name: "release", version: "v0.4.5", commit: "0123456789abcdef0123456789abcdef01234567", want: "v0.4.5"},
+		{name: "local build", version: "dev", commit: "0123456789abcdef0123456789abcdef01234567", want: "dev+0123456789ab"},
+		{name: "unknown commit", version: "dev", commit: "none", want: "dev"},
+		{name: "empty commit", version: "dev", commit: "", want: "dev"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			version.Version, version.Commit = tc.version, tc.commit
+			_, annotations := Metadata{RunID: "train-001", WorkloadKind: WorkloadKindJob}.KubernetesMetadata()
+			if got := annotations[AnnotationTauVersion]; got != tc.want {
+				t.Fatalf("%s = %q, want %q", AnnotationTauVersion, got, tc.want)
+			}
+		})
 	}
 }
 

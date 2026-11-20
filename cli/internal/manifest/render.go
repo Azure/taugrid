@@ -210,6 +210,7 @@ func Render(opts RenderOptions) ([]byte, error) {
 		CheckpointArtifact: opts.Manifest.Artifacts.Checkpoint,
 	}
 	opts.Annotations = mergeStringMaps(opts.Annotations, map[string]string{
+		workloadmeta.AnnotationPayloadDigest:         scriptDigest,
 		workloadmeta.AnnotationScriptPayloadDigest:   scriptDigest,
 		workloadmeta.AnnotationManifestPayloadDigest: manifestDigest,
 		workloadmeta.AnnotationCheckpointArtifact:    strings.TrimSpace(opts.Manifest.Artifacts.Checkpoint),
