@@ -102,6 +102,41 @@ func TestRenderPodPreemptionPolicy(t *testing.T) {
 	}
 }
 
+func TestRenderPreservesEmptyNodeSelectorValues(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		profile  map[string]string
+		explicit map[string]string
+	}{
+		{name: "profile", profile: map[string]string{"tau.azure.com/site": ""}},
+		{name: "explicit override", profile: map[string]string{"tau.azure.com/site": "default"}, explicit: map[string]string{"tau.azure.com/site": ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Render(Options{
+				Name: "selector-ray", Namespace: "tau", ScriptName: "train.py",
+				Script: []byte("print('ok')\n"), Workers: 2,
+				Profile: profile.Profile{NodeSelector: tc.profile}, NodeSelector: tc.explicit,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+			head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+			if head["nodeSelector"] != nil {
+				t.Fatalf("head inherited worker selectors: %v", head["nodeSelector"])
+			}
+			for _, raw := range cluster["workerGroupSpecs"].([]any) {
+				pod := raw.(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+				selector, _ := pod["nodeSelector"].(map[string]any)
+				value, present := selector["tau.azure.com/site"]
+				if !present || value != "" {
+					t.Fatalf("worker selector = %v, want present empty site value", selector)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "restricted-ray",

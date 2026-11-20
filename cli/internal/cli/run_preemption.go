@@ -4,37 +4,53 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	corev1 "k8s.io/api/core/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"sigs.k8s.io/yaml"
+	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 )
 
 func validateRenderedPodPreemptionPolicy(ctx context.Context, runner kubeRawRunner, manifest []byte, requested string) error {
 	if requested == "" {
 		return nil
 	}
-	var workload unstructured.Unstructured
-	if err := yaml.Unmarshal(manifest, &workload.Object); err != nil {
-		return fmt.Errorf("decode workload pod priority: %w", err)
+	decoder := k8syaml.NewYAMLOrJSONDecoder(bytes.NewReader(manifest), 4096)
+	found := false
+	for {
+		var workload unstructured.Unstructured
+		if err := decoder.Decode(&workload); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("decode workload pod priority: %w", err)
+		}
+		path := []string{"spec", "template", "spec", "priorityClassName"}
+		switch workload.GetKind() {
+		case "Job":
+		case "RayJob":
+			path = []string{"spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "priorityClassName"}
+		default:
+			continue
+		}
+		found = true
+		class, _, err := unstructured.NestedString(workload.Object, path...)
+		if err != nil {
+			return fmt.Errorf("read rendered pod priority class: %w", err)
+		}
+		if err := validatePodPreemptionPolicy(ctx, runner, class, requested); err != nil {
+			return err
+		}
 	}
-	path := []string{"spec", "template", "spec", "priorityClassName"}
-	switch workload.GetKind() {
-	case "Job":
-	case "RayJob":
-		path = []string{"spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "priorityClassName"}
-	default:
-		return fmt.Errorf("unsupported workload kind %q for pod preemption validation", workload.GetKind())
+	if !found {
+		return fmt.Errorf("no Job or RayJob found for pod preemption validation")
 	}
-	class, _, err := unstructured.NestedString(workload.Object, path...)
-	if err != nil {
-		return fmt.Errorf("read rendered pod priority class: %w", err)
-	}
-	return validatePodPreemptionPolicy(ctx, runner, class, requested)
+	return nil
 }
 
 func validatePodPreemptionPolicy(ctx context.Context, runner kubeRawRunner, class, requested string) error {

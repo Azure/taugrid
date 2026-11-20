@@ -1072,12 +1072,12 @@ func stringMapFromAnyMap(m map[string]any) map[string]string {
 func mergeSelectors(first, second map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range first {
-		if k != "" && v != "" {
+		if k != "" {
 			out[k] = v
 		}
 	}
 	for k, v := range second {
-		if k != "" && v != "" {
+		if k != "" {
 			out[k] = v
 		}
 	}

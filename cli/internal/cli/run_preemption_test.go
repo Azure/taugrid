@@ -6,6 +6,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,6 +22,63 @@ type preemptionPolicyRunner struct {
 	output string
 	err    error
 	calls  [][]string
+}
+
+func TestRenderedMultiNodeJobPreemptionPolicy(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "train.py")
+	if err := os.WriteFile(script, []byte("print('ok')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, policy := range []string{"Never", "PreemptLowerPriority"} {
+		t.Run(policy, func(t *testing.T) {
+			manifest, err := jobrender.Render(profile.Profile{
+				Runtime: profile.Runtime{Image: "registry.example.com/runtime:test"},
+			}, jobrender.Options{
+				Name: "multi-job", Namespace: "tau", ScriptPath: script,
+				Launcher: "torchrun", Nodes: 2, ProcessesPerNode: 1,
+				QueueName: "demo-queue", PriorityTier: "default", PodPreemptionPolicy: policy,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(manifest), "kind: Service") || !strings.Contains(string(manifest), "kind: Job") {
+				t.Fatalf("expected Service and Job stream:\n%s", manifest)
+			}
+			runner := &preemptionPolicyRunner{output: `{"metadata":{"name":"taugrid-default"},"preemptionPolicy":"` + policy + `"}`}
+			if err := validateRenderedPodPreemptionPolicy(context.Background(), runner, manifest, policy); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(runner.calls, [][]string{{"get", "priorityclass", "taugrid-default", "-o", "json"}}) {
+				t.Fatalf("unexpected class lookup: %v", runner.calls)
+			}
+			mismatch := "Never"
+			if policy == mismatch {
+				mismatch = "PreemptLowerPriority"
+			}
+			if err := validateRenderedPodPreemptionPolicy(context.Background(), runner, manifest, mismatch); err == nil || !strings.Contains(err.Error(), "Kubernetes requires these policies to match") {
+				t.Fatalf("expected mismatched rendered class rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestRenderedPreemptionPolicyRejectsInvalidWorkloadStream(t *testing.T) {
+	for _, tc := range []struct {
+		manifest string
+		calls    int
+	}{
+		{manifest: "apiVersion: v1\nkind: Service\n"},
+		{manifest: "apiVersion: v1\nkind: Service\n---\nspec: [\n"},
+		{manifest: "apiVersion: batch/v1\nkind: Job\nspec:\n  template:\n    spec:\n      priorityClassName: taugrid-default\n---\nspec: [\n", calls: 1},
+	} {
+		runner := &preemptionPolicyRunner{output: `{"metadata":{"name":"taugrid-default"},"preemptionPolicy":"Never"}`}
+		if err := validateRenderedPodPreemptionPolicy(context.Background(), runner, []byte(tc.manifest), "Never"); err == nil {
+			t.Fatalf("accepted workload stream %q", tc.manifest)
+		}
+		if len(runner.calls) != tc.calls {
+			t.Fatalf("unexpected class lookup: %v", runner.calls)
+		}
+	}
 }
 
 func TestRenderedPriorityTierPreemptionPolicy(t *testing.T) {
