@@ -14,6 +14,34 @@ import (
 )
 
 func TestRenderKindRayServiceFixture(t *testing.T) {
+	raw := renderKindRayServiceFixture(t)
+	path := os.Getenv("TAU_KIND_RAYSERVICE_MANIFEST")
+	if path == "" {
+		path = filepath.Join(t.TempDir(), "rayservice.yaml")
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKindRayServiceFixtureUsesSmokeSizedCPURequests(t *testing.T) {
+	object := decodeOne(t, renderKindRayServiceFixture(t))
+	cluster := getPath(t, object, "spec", "rayClusterConfig").(map[string]any)
+	templates := []map[string]any{
+		getPath(t, cluster, "headGroupSpec", "template").(map[string]any),
+		getPath(t, cluster, "workerGroupSpecs").([]any)[0].(map[string]any)["template"].(map[string]any),
+	}
+	for _, template := range templates {
+		container := getPath(t, template, "spec", "containers").([]any)[0].(map[string]any)
+		requests := container["resources"].(map[string]any)["requests"].(map[string]any)
+		if requests["cpu"] != "50m" {
+			t.Fatalf("%s cpu request = %v, want 50m", container["name"], requests["cpu"])
+		}
+	}
+}
+
+func renderKindRayServiceFixture(t *testing.T) []byte {
+	t.Helper()
 	p := distributedRayProfile()
 	p.Topology.WorkloadPriorityClassName = "kind-serve-priority"
 	p.Topology.PodPriorityClassName = "taugrid-train-default"
@@ -72,11 +100,9 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 				t.Fatalf("%s %s = %q, want 1", name, variable, env[variable])
 			}
 		}
-		if container["name"] == "ray-worker" {
-			container["resources"] = map[string]any{
-				"requests": map[string]any{"cpu": "50m", "memory": "512Mi"},
-				"limits":   map[string]any{"cpu": "1", "memory": "2Gi"},
-			}
+		container["resources"] = map[string]any{
+			"requests": map[string]any{"cpu": "50m", "memory": "512Mi"},
+			"limits":   map[string]any{"cpu": "1", "memory": "2Gi"},
 		}
 	}
 	delete(workerTemplate["spec"].(map[string]any), "affinity")
@@ -89,11 +115,5 @@ func TestRenderKindRayServiceFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := os.Getenv("TAU_KIND_RAYSERVICE_MANIFEST")
-	if path == "" {
-		path = filepath.Join(t.TempDir(), "rayservice.yaml")
-	}
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	return raw
 }
