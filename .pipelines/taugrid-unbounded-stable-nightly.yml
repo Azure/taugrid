@@ -49,15 +49,80 @@ jobs:
       - bash: scripts/ci/tests/taugrid-unbounded-stable-nightly-report_test.sh
         displayName: Validate nightly report
 
-  - job: build_images
-    displayName: Publish immutable nightly images
+  - job: build_controller_image
+    displayName: Publish immutable nightly controller image
     dependsOn: preflight
     timeoutInMinutes: 180
     steps:
       - checkout: self
 
       - task: AzureCLI@2
-        displayName: Build, publish, and verify deployment images
+        displayName: Build and publish controller image
+        inputs:
+          azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: scriptPath
+          scriptPath: scripts/ci/taugrid-unbounded-stable-build-image.sh
+          arguments: controller
+        env:
+          UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
+          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
+
+  - job: build_portal_image
+    displayName: Publish immutable nightly portal image
+    dependsOn: preflight
+    timeoutInMinutes: 180
+    steps:
+      - checkout: self
+
+      - task: AzureCLI@2
+        displayName: Build and publish portal image
+        inputs:
+          azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: scriptPath
+          scriptPath: scripts/ci/taugrid-unbounded-stable-build-image.sh
+          arguments: portal
+        env:
+          UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
+          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
+
+  - job: build_collector_image
+    displayName: Publish immutable nightly GPU collector image
+    dependsOn: preflight
+    timeoutInMinutes: 180
+    steps:
+      - checkout: self
+
+      - task: AzureCLI@2
+        displayName: Build and publish GPU collector image
+        inputs:
+          azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
+          scriptType: bash
+          scriptLocation: scriptPath
+          scriptPath: scripts/ci/taugrid-unbounded-stable-build-image.sh
+          arguments: collector
+        env:
+          UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
+          NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
+
+  - job: build_images
+    displayName: Publish immutable nightly images
+    dependsOn:
+      - build_controller_image
+      - build_portal_image
+      - build_collector_image
+    condition: always()
+    timeoutInMinutes: 15
+    variables:
+      CONTROLLER_IMAGE_JOB_RESULT: $[ dependencies.build_controller_image.result ]
+      PORTAL_IMAGE_JOB_RESULT: $[ dependencies.build_portal_image.result ]
+      COLLECTOR_IMAGE_JOB_RESULT: $[ dependencies.build_collector_image.result ]
+    steps:
+      - checkout: none
+
+      - task: AzureCLI@2
+        displayName: Verify deployment images
         inputs:
           azureSubscription: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_SERVICE_CONNECTION)
           scriptType: bash
@@ -77,36 +142,21 @@ jobs:
             require_value UNBOUNDED_STABLE_ACR_NAME
             require_value NIGHTLY_IMAGE_REPOSITORY_PREFIX
 
-            registry="${UNBOUNDED_STABLE_ACR_NAME}.azurecr.io"
-            image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"
             artifact_dir="$(Build.ArtifactStagingDirectory)/images"
             mkdir -p "${artifact_dir}"
 
-            az acr login --name "${UNBOUNDED_STABLE_ACR_NAME}"
-            builder="taugrid-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
-            docker buildx create --name "${builder}" --driver docker-container --use
-            trap 'docker buildx rm "${builder}" >/dev/null 2>&1 || true' EXIT
+            for result in \
+              "${CONTROLLER_IMAGE_JOB_RESULT}" \
+              "${PORTAL_IMAGE_JOB_RESULT}" \
+              "${COLLECTOR_IMAGE_JOB_RESULT}"; do
+              if [[ "${result}" != "Succeeded" ]]; then
+                echo "##vso[task.logissue type=error]An immutable image build did not succeed"
+                exit 1
+              fi
+            done
 
-            controller_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}"
-            portal_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/taugrid-portal:${image_tag}"
-            collector_image="${registry}/${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/gpu-metrics-collector:${image_tag}"
-
-            make -C images/tau-core-controller docker-push \
-              IMG="${controller_image}" \
-              TAG="${image_tag}" \
-              PLATFORMS=linux/amd64,linux/arm64
-            make -C images/taugrid-portal docker-push \
-              IMG="${portal_image}" \
-              TAG="${image_tag}" \
-              VERSION="${image_tag}" \
-              COMMIT="${BUILD_SOURCEVERSION}" \
-              DATE="$(git show -s --format=%cI "${BUILD_SOURCEVERSION}")" \
-              PLATFORMS=linux/amd64,linux/arm64
-            make -C images/gpu-metrics-collector docker-push \
-              ACR_REGISTRY="${registry}" \
-              PUSH_IMG="${collector_image}" \
-              TAG="${image_tag}" \
-              PLATFORMS=linux/amd64,linux/arm64
+            registry="${UNBOUNDED_STABLE_ACR_NAME}.azurecr.io"
+            image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"
 
             for image in \
               "${NIGHTLY_IMAGE_REPOSITORY_PREFIX}/tau-core-controller:${image_tag}" \
@@ -137,6 +187,9 @@ jobs:
         env:
           UNBOUNDED_STABLE_ACR_NAME: $(TAUGRID_UNBOUNDED_STABLE_ACR_NAME)
           NIGHTLY_IMAGE_REPOSITORY_PREFIX: $(TAUGRID_UNBOUNDED_STABLE_IMAGE_REPOSITORY_PREFIX)
+          CONTROLLER_IMAGE_JOB_RESULT: $(CONTROLLER_IMAGE_JOB_RESULT)
+          PORTAL_IMAGE_JOB_RESULT: $(PORTAL_IMAGE_JOB_RESULT)
+          COLLECTOR_IMAGE_JOB_RESULT: $(COLLECTOR_IMAGE_JOB_RESULT)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish immutable image contract
