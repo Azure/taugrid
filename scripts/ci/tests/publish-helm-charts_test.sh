@@ -239,14 +239,20 @@ export REMOTE_PACKAGE_DIR="${ISOLATED_REPO}/remote"
 import io
 import os
 from pathlib import Path
+import re
 import tarfile
-import yaml
 
 path = Path(os.environ["REMOTE_PACKAGE_DIR"]) / "tau-core-controller-0.3.0.tgz"
 with tarfile.open(path) as archive:
-    value = yaml.safe_load(archive.extractfile("tau-core-controller/Chart.yaml").read())
-value["annotations"]["org.opencontainers.image.revision"] = "d" * 40
-data = yaml.safe_dump(value).encode()
+    data = archive.extractfile("tau-core-controller/Chart.yaml").read()
+data, replacements = re.subn(
+    rb'(org\.opencontainers\.image\.revision:[ \t]*")[0-9a-f]{40}(")',
+    rb"\g<1>" + b"d" * 40 + rb"\g<2>",
+    data,
+    count=1,
+)
+if replacements != 1:
+    raise SystemExit("release revision annotation not found")
 with tarfile.open(path, "w:gz") as archive:
     member = tarfile.TarInfo("tau-core-controller/Chart.yaml")
     member.size = len(data)
