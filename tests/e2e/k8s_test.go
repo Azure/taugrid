@@ -34,11 +34,67 @@ func TestGVRFromObjectMapsTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gvrFromObject: %v", err)
 	}
+
 	if got.Group != "kueue.x-k8s.io" || got.Version != "v1beta2" || got.Resource != "topologies" {
 		t.Fatalf("gvrFromObject = %s, want kueue.x-k8s.io/v1beta2, Resource=topologies", got.String())
 	}
 }
 
+func TestApplyYAMLWorkloadPriority(t *testing.T) {
+	for _, priority := range []string{"", "aks-low-priority", "Invalid", "invalid\ninjection", strings.Repeat("x", 64)} {
+		t.Run(priority, func(t *testing.T) {
+			t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", priority)
+			t.Setenv("E2E_POD_PRIORITY_CLASS", priority)
+			var applied *unstructured.Unstructured
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				applied = &unstructured.Unstructured{}
+				if err := applied.UnmarshalJSON(data); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(data)
+			}))
+			defer server.Close()
+			client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = applyYAMLWithClient(context.Background(), client, []byte(`{"apiVersion":"batch/v1","kind":"Job","metadata":{"name":"test","namespace":"nightly","labels":{"kueue.x-k8s.io/priority-class":"existing"}},"spec":{"template":{"spec":{"priorityClassName":"existing","containers":[{"name":"worker","image":"test"}]}}}}`))
+			if priority != "" && priority != "aks-low-priority" {
+				if err == nil || applied != nil {
+					t.Fatalf("invalid class reached API: error=%v applied=%v", err, applied)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := priority
+			if expected == "" {
+				expected = "existing"
+			}
+			if applied.GetLabels()["kueue.x-k8s.io/priority-class"] != expected {
+				t.Fatalf("wrong workload priority: %v", applied.GetLabels())
+			}
+			podPriority, _, err := unstructured.NestedString(applied.Object, "spec", "template", "spec", "priorityClassName")
+			if err != nil || podPriority != expected {
+				t.Fatalf("wrong pod priority %q: %v", podPriority, err)
+			}
+			policy, found, err := unstructured.NestedString(applied.Object, "spec", "template", "spec", "preemptionPolicy")
+			if err != nil || (priority == "" && found) || (priority != "" && policy != "Never") {
+				t.Fatalf("wrong preemption policy %q: %v", policy, err)
+			}
+		})
+	}
+}
 func TestDeleteYAMLWithClientAndWaitDeletesInReverseAndWaitsForUID(t *testing.T) {
 	manifest := []byte(`apiVersion: v1
 kind: Namespace
@@ -250,6 +306,46 @@ func TestWaitForRayJobDeletedIgnoresUnrelatedNamespaceResourcesAndNeedsNoPodClie
 	}
 	if got := requests(); len(got) != 1 || got[0] != "GET /apis/ray.io/v1/namespaces/shared/rayjobs/e2e-nanogpt-large-gpu" {
 		t.Fatalf("fixed RayJob deletion wait made unexpected requests: %#v", got)
+	}
+}
+
+func TestWaitForRayJobClusterName(t *testing.T) {
+	for _, scenario := range []string{"delayed", "timeout", "forbidden"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				switch {
+				case scenario == "forbidden":
+					writeJSONResponse(w, http.StatusForbidden, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"access forbidden","reason":"Forbidden","code":403}`)
+				case scenario == "delayed" && calls > 1:
+					writeJSONResponse(w, http.StatusOK, `{"kind":"RayJob","apiVersion":"ray.io/v1","status":{"rayClusterName":"generated-cluster"}}`)
+				default:
+					writeJSONResponse(w, http.StatusOK, `{"kind":"RayJob","apiVersion":"ray.io/v1","status":{}}`)
+				}
+			}))
+			defer server.Close()
+			client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc := &TestContext{T: t, ctx: context.Background(), dynamicClient: client}
+			timeout := 50 * time.Millisecond
+			if scenario == "delayed" {
+				timeout = 5 * time.Second
+			}
+			name, err := tc.WaitForRayJobClusterName("nightly", "train", timeout)
+			if scenario == "delayed" {
+				if err != nil || name != "generated-cluster" {
+					t.Fatalf("name=%q err=%v", name, err)
+				}
+			} else if err == nil {
+				t.Fatal("missing cluster name unexpectedly accepted")
+			}
+			if scenario == "forbidden" && !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("API rejection not surfaced: %v", err)
+			}
+		})
 	}
 }
 

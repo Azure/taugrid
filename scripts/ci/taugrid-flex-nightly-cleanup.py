@@ -3,12 +3,16 @@
 # Licensed under the MIT License.
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import time
 import uuid
+
+CLEANUP_TIMEOUT_SECONDS = 960
 
 
 def kubectl(*arguments, input_text=None):
@@ -79,15 +83,63 @@ def run(action, namespace, run_id, owner_path):
     raise RuntimeError("owned namespace still exists after 15 minutes")
 
 
+def cleanup_runs(namespace, run_id, tau_binary, *, ib=False):
+    if not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace):
+        raise RuntimeError("invalid nightly namespace")
+    if not re.fullmatch(r"[0-9]+-[0-9]+", run_id):
+        raise RuntimeError("invalid nightly run identity")
+    bases = ("e2e-fineweb-16xh200-ib",) if ib else (
+        "e2e-matrix-serve", "e2e-matrix-train",
+        "e2e-multisite-a100", "e2e-multisite-h200", "e2e-multisite-dgx-spark",
+    )
+    deadline = time.monotonic() + CLEANUP_TIMEOUT_SECONDS
+
+    def cancel(base):
+        command = [
+            str(tau_binary), "run", "cancel", f"{base}-{run_id}",
+            "--namespace", namespace, "--teardown-timeout", "15m",
+        ]
+        for variable, flag in (
+            ("AI_RUNTIME_E2E_KUBE_CONTEXT", "--context"),
+            ("E2E_TAU_WORKSPACE", "--workspace"),
+            ("E2E_TAU_SYSTEM_NAMESPACE", "--system-namespace"),
+        ):
+            if value := os.environ.get(variable):
+                command.extend((flag, value))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return f"{base}-{run_id}: cleanup budget expired before cancellation"
+        try:
+            subprocess.run(command, capture_output=True, text=True, check=True, timeout=remaining)
+        except subprocess.TimeoutExpired:
+            return f"{base}-{run_id}: cleanup budget expired during cancellation"
+        except subprocess.CalledProcessError as error:
+            return f"{base}-{run_id}: {error.stderr}"
+        except OSError as error:
+            return f"{base}-{run_id}: {error}"
+        return None
+
+    with ThreadPoolExecutor(max_workers=len(bases)) as executor:
+        failures = [failure for failure in executor.map(cancel, bases) if failure]
+    if failures:
+        raise RuntimeError("; ".join(failures))
+    return "released"
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("record", "cleanup"))
+    parser.add_argument("action", choices=("record", "cleanup", "cleanup-runs", "cleanup-ib"))
     parser.add_argument("namespace")
     parser.add_argument("run_id")
     parser.add_argument("owner_path", type=Path)
     args = parser.parse_args()
     try:
-        status = run(args.action, args.namespace, args.run_id, args.owner_path)
+        if args.action in ("cleanup-runs", "cleanup-ib"):
+            status = cleanup_runs(
+                args.namespace, args.run_id, args.owner_path, ib=args.action == "cleanup-ib",
+            )
+        else:
+            status = run(args.action, args.namespace, args.run_id, args.owner_path)
     except subprocess.TimeoutExpired as error:
         parser.exit(1, f"Nightly owned cleanup failed: kubectl timed out after {error.timeout} seconds\n")
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:

@@ -176,6 +176,7 @@ func TestConformanceDeadlines(t *testing.T) {
 		_, err := boundedDuration(raw, 30*time.Minute, 90*time.Minute)
 		require.Error(t, err, raw)
 	}
+
 	d, err := boundedDuration("", 30*time.Minute, 90*time.Minute)
 	require.NoError(t, err)
 	require.Equal(t, 30*time.Minute, d)
@@ -184,6 +185,47 @@ func TestConformanceDeadlines(t *testing.T) {
 	require.Equal(t, 45*time.Minute, d)
 }
 
+func TestNightlyFixturePriority(t *testing.T) {
+	for _, fixture := range payloadFixtureCases() {
+		t.Run(fixture.fixture, func(t *testing.T) {
+			for key, value := range fixture.env {
+				t.Setenv(key, value)
+			}
+			t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", "aks-low-priority")
+			t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-nightly-low")
+			data, err := e2e.ReadFixtureWithSubstitutions(fixture.fixture)
+			require.NoError(t, err)
+			obj := &unstructured.Unstructured{}
+			require.NoError(t, yaml.Unmarshal(data, &obj.Object))
+			require.NoError(t, e2e.ConfigureWorkloadPriority(obj))
+			require.Equal(t, "aks-low-priority", obj.GetLabels()["kueue.x-k8s.io/priority-class"])
+			paths := [][]string{{"spec", "rayClusterSpec", "headGroupSpec", "template", "spec"}}
+			if _, found, err := unstructured.NestedMap(obj.Object, "spec", "submitterPodTemplate"); found {
+				require.NoError(t, err)
+				paths = append(paths, []string{"spec", "submitterPodTemplate", "spec"})
+			}
+			for _, path := range paths {
+				spec, found, err := unstructured.NestedMap(obj.Object, path...)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
+				require.Equal(t, "Never", spec["preemptionPolicy"])
+			}
+			groups, found, err := unstructured.NestedSlice(obj.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+			require.NoError(t, err)
+			require.True(t, found)
+			require.NotEmpty(t, groups)
+			for _, raw := range groups {
+				group := raw.(map[string]any)
+				spec, found, err := unstructured.NestedMap(group, "template", "spec")
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
+				require.Equal(t, "Never", spec["preemptionPolicy"])
+			}
+		})
+	}
+}
 func TestConformanceGoTestTimeoutInterface(t *testing.T) {
 	for _, tc := range []struct {
 		name, completion, admission, capture, goTimeout string

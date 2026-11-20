@@ -522,11 +522,20 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	})
 
 	requireGPUNodeKubeletProxyReachable(t, tc)
-	applyRayJobFixture(t, tc, "fineweb-rayjob-16xh200-ib.yaml", rayJobNameFineWeb)
+	finewebName := rayJobNameFineWeb
+	if e2e.TauRunEnabled() {
+		finewebName = e2e.TauRunName(rayJobNameFineWeb)
+		registerRayJobCleanup(t, "fineweb-rayjob-16xh200-ib.yaml", func() {
+			deleteRayJobFixtureAndWait(t, tc, "fineweb-rayjob-16xh200-ib.yaml", finewebName)
+		})
+		require.NoError(t, submitFineWebTauRun(t, tc, finewebName, workers, steps))
+	} else {
+		applyRayJobFixture(t, tc, "fineweb-rayjob-16xh200-ib.yaml", finewebName)
+	}
 
-	_, err = tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, rayJobNameFineWeb, admissionTimeout)
+	_, err = tc.WaitForWorkloadAdmittedByRayJob(stackNamespace, finewebName, admissionTimeout)
 	require.NoError(t, err, "Kueue should admit the 16-GPU FineWeb IB RayJob workload in one network domain")
-	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameFineWeb)
+	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, finewebName)
 	require.NoError(t, err)
 	headSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=head", cluster)
 	workerSelector := fmt.Sprintf("ray.io/cluster=%s,ray.io/node-type=worker", cluster)
@@ -534,7 +543,7 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	if recoveryNode := strings.TrimSpace(os.Getenv("FINEWEB_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
 		err = tc.RecoverSingleSchedulerBlockedGPUWorker(e2e.SchedulerRecoveryOptions{
 			Namespace:       stackNamespace,
-			WorkerSelector:  workerSelector + ",e2e-test=fineweb-16xh200-ib",
+			WorkerSelector:  workerSelector,
 			TargetNode:      recoveryNode,
 			ExpectedWorkers: workers,
 			Timeout:         15 * time.Minute,
@@ -556,9 +565,9 @@ func TestFineWebRayTrain16xH200IB(t *testing.T) {
 	requirePodsOnSelectedNodes(t, tc, workerSelector, os.Getenv("GPU_NODE_SELECTOR_KEY"), os.Getenv("GPU_NODE_SELECTOR_VALUE"),
 		"FineWeb Ray Train workers should run on the selected H200 nodes")
 
-	requireWorkersSplitEvenlyAcrossNodes(t, tc, workerSelector+",e2e-test=fineweb-16xh200-ib", 2, workers/2)
+	requireWorkersSplitEvenlyAcrossNodes(t, tc, workerSelector, 2, workers/2)
 
-	err = tc.WaitForRayJobStatus(stackNamespace, rayJobNameFineWeb, "SUCCEEDED", rayJobTimeout)
+	err = tc.WaitForRayJobStatus(stackNamespace, finewebName, "SUCCEEDED", rayJobTimeout)
 	require.NoError(t, err, "16-GPU FineWeb IB RayJob should reach SUCCEEDED status")
 
 	logs, err := tc.WaitForFullPodContainerLogsByLabelContaining(stackNamespace, headSelector, "ray-driver-log-offload", []string{

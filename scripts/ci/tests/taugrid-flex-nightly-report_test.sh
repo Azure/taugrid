@@ -85,7 +85,7 @@ grep -Fq 'Outcome: **skipped** - fewer than two hardware sites are available' "$
 grep -Fq 'Capability restoration: **failed** - capability differed from preflight' "$output" ||
   fail "report must render postflight capability failures"
 grep -Fq 'Job outcome: **SKIP**' "$output" ||
-  fail "report must render optional RDMA status"
+  fail "report must render RDMA status"
 grep -Fq '| fail | 1 |' "$output" ||
   fail "report must summarize structured E2E outcomes"
 

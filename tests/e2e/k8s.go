@@ -16,11 +16,14 @@ import (
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -379,6 +382,33 @@ func (tc *TestContext) WaitForRayJobDeleted(ns, name string, timeout time.Durati
 			return fmt.Errorf("timed out waiting for rayjob %s/%s to be deleted", ns, name)
 		case <-tc.ctx.Done():
 			return tc.ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (tc *TestContext) WaitForRayJobClusterName(ns, name string, timeout time.Duration) (string, error) {
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		job, err := tc.dynamicClient.Resource(RayJobGVR).Namespace(ns).Get(tc.ctx, name, metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("read RayJob %s/%s cluster name: %w", ns, name, err)
+		}
+		if err == nil {
+			clusterName, _, err := unstructured.NestedString(job.Object, "status", "rayClusterName")
+			if err != nil {
+				return "", fmt.Errorf("read RayJob %s/%s cluster name: %w", ns, name, err)
+			}
+			if clusterName != "" {
+				return clusterName, nil
+			}
+		}
+		select {
+		case <-tc.ctx.Done():
+			return "", fmt.Errorf("wait for RayJob %s/%s cluster name: %w", ns, name, tc.ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -1235,8 +1265,95 @@ func isPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
+func ConfigureWorkloadPriority(object runtime.Object) error {
+	workload := os.Getenv("E2E_WORKLOAD_PRIORITY_CLASS")
+	pod := os.Getenv("E2E_POD_PRIORITY_CLASS")
+	for variable, value := range map[string]string{
+		"E2E_WORKLOAD_PRIORITY_CLASS": workload,
+		"E2E_POD_PRIORITY_CLASS":      pod,
+	} {
+		if value == "" {
+			continue
+		}
+		if problems := validation.IsDNS1123Subdomain(value); len(problems) != 0 {
+			return fmt.Errorf("%s: invalid priority class %q: %s", variable, value, strings.Join(problems, "; "))
+		}
+		if problems := validation.IsValidLabelValue(value); len(problems) != 0 {
+			return fmt.Errorf("%s: invalid priority class label %q: %s", variable, value, strings.Join(problems, "; "))
+		}
+	}
+	if job, ok := object.(*batchv1.Job); ok {
+		if workload != "" {
+			if job.Labels == nil {
+				job.Labels = map[string]string{}
+			}
+			job.Labels["kueue.x-k8s.io/priority-class"] = workload
+		}
+		if pod != "" {
+			job.Spec.Template.Spec.PriorityClassName = pod
+			never := corev1.PreemptNever
+			job.Spec.Template.Spec.PreemptionPolicy = &never
+		}
+		return nil
+	}
+	obj, ok := object.(*unstructured.Unstructured)
+	if !ok || (obj.GetKind() != "RayJob" && obj.GetKind() != "Job") {
+		return nil
+	}
+	if workload != "" {
+		labels := obj.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		labels["kueue.x-k8s.io/priority-class"] = workload
+		obj.SetLabels(labels)
+	}
+	if pod == "" {
+		return nil
+	}
+	setPodPriority := func(fields ...string) error {
+		if err := unstructured.SetNestedField(obj.Object, pod, append(fields, "priorityClassName")...); err != nil {
+			return err
+		}
+		return unstructured.SetNestedField(obj.Object, string(corev1.PreemptNever), append(fields, "preemptionPolicy")...)
+	}
+	if obj.GetKind() == "Job" {
+		return setPodPriority("spec", "template", "spec")
+	}
+	if err := setPodPriority("spec", "rayClusterSpec", "headGroupSpec", "template", "spec"); err != nil {
+		return err
+	}
+	if _, found, err := unstructured.NestedMap(obj.Object, "spec", "submitterPodTemplate"); err != nil {
+		return err
+	} else if found {
+		if err := setPodPriority("spec", "submitterPodTemplate", "spec"); err != nil {
+			return err
+		}
+	}
+	groups, _, err := unstructured.NestedSlice(obj.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+	if err != nil {
+		return err
+	}
+	for i, raw := range groups {
+		group, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("RayJob worker group %d is not an object", i)
+		}
+		if err := unstructured.SetNestedField(group, pod, "template", "spec", "priorityClassName"); err != nil {
+			return err
+		}
+		if err := unstructured.SetNestedField(group, string(corev1.PreemptNever), "template", "spec", "preemptionPolicy"); err != nil {
+			return err
+		}
+	}
+	return unstructured.SetNestedSlice(obj.Object, groups, "spec", "rayClusterSpec", "workerGroupSpecs")
+}
+
 func applyYAMLWithClient(ctx context.Context, dynClient dynamic.Interface, yamlBytes []byte) error {
 	return forEachYAMLDocument(yamlBytes, func(obj *unstructured.Unstructured) error {
+		if err := ConfigureWorkloadPriority(obj); err != nil {
+			return err
+		}
 		gvr, err := gvrFromObject(obj)
 		if err != nil {
 			return err
