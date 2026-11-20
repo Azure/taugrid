@@ -7,6 +7,8 @@ set -euo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
 readonly REPO_ROOT
 readonly PIPELINE="${REPO_ROOT}/.pipelines/taugrid-unbounded-stable-nightly.yml"
+readonly IMAGE_BUILDER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-build-image.sh"
+readonly IMAGE_BUILDER_TEST="${REPO_ROOT}/scripts/ci/tests/taugrid-unbounded-stable-build-image_test.sh"
 readonly REPORTER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-report.sh"
 readonly RECOVER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-recover.sh"
 readonly SMOKE="${REPO_ROOT}/tests/e2e/cmd/taugrid-nightly-smoke/runner.go"
@@ -18,7 +20,24 @@ fail() {
   exit 1
 }
 
+job_block() {
+  local job="$1"
+  awk -v marker="  - job: ${job}" '
+    $0 == marker {
+      in_job = 1
+    }
+    in_job && $0 ~ /^  - (job|deployment): / && $0 != marker {
+      exit
+    }
+    in_job {
+      print
+    }
+  ' "$PIPELINE"
+}
+
 [ -f "$PIPELINE" ] || fail "pipeline is missing"
+[ -x "$IMAGE_BUILDER" ] || fail "nightly image builder must be executable"
+[ -x "$IMAGE_BUILDER_TEST" ] || fail "nightly image builder test must be executable"
 [ -x "$REPORTER" ] || fail "nightly report generator must be executable"
 [ -x "$RECOVER" ] || fail "nightly recovery helper must be executable"
 [ -f "$SMOKE" ] || fail "Tau-native nightly Go runner is missing"
@@ -55,13 +74,63 @@ for variable in \
 done
 
 grep -Fq 'image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"' "$PIPELINE" ||
-  fail "nightly images must use an immutable source-and-build tag"
-grep -Fq "tau-core-controller docker-push" "$PIPELINE" ||
+  fail "image verification must use an immutable source-and-build tag"
+grep -Fq 'image_tag="nightly-${BUILD_SOURCEVERSION:0:12}-${BUILD_BUILDID}"' "$IMAGE_BUILDER" ||
+  fail "nightly image builds must use an immutable source-and-build tag"
+for job in \
+  build_controller_image \
+  build_portal_image \
+  build_collector_image; do
+  block="$(job_block "$job")"
+  [[ -n "$block" ]] ||
+    fail "${job} must be an independent image build job"
+  grep -Fq "    dependsOn: preflight" <<<"$block" ||
+    fail "${job} must start after preflight without another image dependency"
+  grep -Fq "    timeoutInMinutes: 180" <<<"$block" ||
+    fail "${job} must retain the existing image build timeout"
+  case "$job" in
+    build_controller_image) component=controller ;;
+    build_portal_image) component=portal ;;
+    build_collector_image) component=collector ;;
+  esac
+  grep -Fq "scriptPath: scripts/ci/taugrid-unbounded-stable-build-image.sh" <<<"$block" ||
+    fail "${job} must use the reviewed nightly image builder"
+  grep -Fq "arguments: ${component}" <<<"$block" ||
+    fail "${job} must publish its assigned image"
+done
+
+verification_block="$(job_block build_images)"
+[[ -n "$verification_block" ]] ||
+  fail "image verification job is missing"
+for dependency in \
+  build_controller_image \
+  build_portal_image \
+  build_collector_image; do
+  grep -Fq "      - ${dependency}" <<<"$verification_block" ||
+    fail "image verification must depend on ${dependency}"
+done
+grep -Fq "    condition: always()" <<<"$verification_block" ||
+  fail "image verification must retain failures from independent builds"
+if grep -Fq "make -C images/" <<<"$verification_block"; then
+  fail "image verification must not serialize image builds"
+fi
+grep -Fq 'CONTROLLER_IMAGE_JOB_RESULT: $[ dependencies.build_controller_image.result ]' <<<"$verification_block" ||
+  fail "image verification must retain controller build failures"
+grep -Fq 'PORTAL_IMAGE_JOB_RESULT: $[ dependencies.build_portal_image.result ]' <<<"$verification_block" ||
+  fail "image verification must retain portal build failures"
+grep -Fq 'COLLECTOR_IMAGE_JOB_RESULT: $[ dependencies.build_collector_image.result ]' <<<"$verification_block" ||
+  fail "image verification must retain collector build failures"
+grep -Fq 'if [[ "${result}" != "Succeeded" ]]' <<<"$verification_block" ||
+  fail "image verification must fail when an independent build does not succeed"
+grep -Fq "tau-core-controller docker-push" "$IMAGE_BUILDER" ||
   fail "pipeline must publish the controller from current main"
-grep -Fq "taugrid-portal docker-push" "$PIPELINE" ||
+grep -Fq "taugrid-portal docker-push" "$IMAGE_BUILDER" ||
   fail "pipeline must publish the portal from current main"
-grep -Fq "gpu-metrics-collector docker-push" "$PIPELINE" ||
+grep -Fq "gpu-metrics-collector docker-push" "$IMAGE_BUILDER" ||
   fail "pipeline must publish the GPU collector from current main"
+if [[ "$(grep -Fc "PLATFORMS=linux/amd64,linux/arm64" "$IMAGE_BUILDER")" -ne 3 ]]; then
+  fail "every nightly image must publish amd64 and arm64"
+fi
 grep -Fq "az acr repository show" "$PIPELINE" ||
   fail "pipeline must verify published image digests"
 if grep -Fq "az aks check-acr" "$PIPELINE"; then
@@ -150,5 +219,7 @@ if grep -Eqi \
   "$PIPELINE"; then
   fail "pipeline must not contain internal infrastructure coordinates"
 fi
+
+"$IMAGE_BUILDER_TEST"
 
 echo "TauGrid unbounded-stable nightly contract tests passed"
