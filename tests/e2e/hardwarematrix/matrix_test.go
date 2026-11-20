@@ -133,7 +133,10 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 
 	admission, err := tc.WaitForWorkloadAdmittedByRayJob(cfg.namespace, rayJobName, 5*time.Minute)
 	require.NoError(t, err, "Kueue should admit %s matrix workload", workload)
-	requireTopologyAssignment(t, admission.Workload, cfg.workers)
+	rayJob, err := tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Get(
+		tc.Ctx(), rayJobName, metav1.GetOptions{})
+	require.NoError(t, err, "read admitted %s RayJob", workload)
+	requireTopologyAssignment(t, admission.Workload, rayJob, cfg.workers)
 	if e2e.TauRunEnabled() {
 		cfg.clusterName, err = tc.WaitForRayJobClusterName(cfg.namespace, rayJobName, 5*time.Minute)
 		require.NoError(t, err, "KubeRay should initialize the admitted RayJob cluster name")
@@ -433,9 +436,20 @@ func baseImageGuard(cfg matrixConfig) map[string]any {
 	}
 }
 
-func requireTopologyAssignment(t *testing.T, workload *unstructured.Unstructured, workers int) {
+func requireTopologyAssignment(t *testing.T, workload, rayJob *unstructured.Unstructured, workers int) {
 	t.Helper()
 	require.NotNil(t, workload)
+	require.NotNil(t, rayJob)
+	groups, found, err := unstructured.NestedSlice(rayJob.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+	require.NoError(t, err)
+	require.True(t, found, "admitted RayJob should contain workerGroupSpecs")
+	require.Len(t, groups, 1, "matrix RayJob should contain exactly one worker group")
+	group, ok := groups[0].(map[string]any)
+	require.True(t, ok, "RayJob worker group should be an object")
+	workerPodSet, found, err := unstructured.NestedString(group, "groupName")
+	require.NoError(t, err)
+	require.True(t, found, "RayJob worker group should contain groupName")
+	require.NotEmpty(t, workerPodSet)
 	assignments, found, err := unstructured.NestedSlice(
 		workload.Object, "status", "admission", "podSetAssignments")
 	require.NoError(t, err)
@@ -443,7 +457,7 @@ func requireTopologyAssignment(t *testing.T, workload *unstructured.Unstructured
 
 	for _, raw := range assignments {
 		assignment, ok := raw.(map[string]any)
-		if !ok || !strings.Contains(fmt.Sprint(assignment["name"]), "worker") {
+		if !ok || assignment["name"] != workerPodSet {
 			continue
 		}
 		topology, ok := assignment["topologyAssignment"].(map[string]any)
@@ -608,7 +622,7 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 					if workload == "serve" {
 						script = serveScript
 					}
-					job := e2e.RenderTauRunOffline(t, binary, matrixTauConfig(cfg, workload, "nightly-"+workload),
+					job := e2e.RenderTauRunOffline(t, binary, matrixTauConfig(cfg, workload, "e2e-matrix-"+workload+"-42-1"),
 						map[string][]byte{workload + "_gpu.py": []byte(script), "runtime_contract.py": []byte(runtimeContractScript)}, platform)
 					require.Equal(t, "RayJob", job.GetKind())
 					require.Equal(t, "aks-low-priority", job.GetLabels()["kueue.x-k8s.io/priority-class"])
@@ -621,6 +635,8 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 					require.Len(t, groups, 1)
 					group := groups[0].(map[string]any)
 					require.Equal(t, int64(count), group["replicas"])
+					admitted := matrixTopologyAdmission(t, group["groupName"].(string), count)
+					requireTopologyAssignment(t, admitted, job, count)
 					spec, _, err := unstructured.NestedMap(group, "template", "spec")
 					require.NoError(t, err)
 					require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
@@ -639,6 +655,37 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 			}
 		}
 	}
+}
+
+func matrixTopologyAdmission(t *testing.T, workerPodSet string, workers int) *unstructured.Unstructured {
+	t.Helper()
+	workload := &unstructured.Unstructured{}
+	data, err := json.Marshal(map[string]any{
+		"apiVersion": e2e.WorkloadGVR.GroupVersion().String(),
+		"kind":       "Workload",
+		"status": map[string]any{
+			"admission": map[string]any{
+				"podSetAssignments": []any{
+					map[string]any{"name": "head"},
+					map[string]any{
+						"name": "unrelated-workers",
+						"topologyAssignment": map[string]any{
+							"domains": []any{map[string]any{"count": workers + 1}},
+						},
+					},
+					map[string]any{
+						"name": workerPodSet,
+						"topologyAssignment": map[string]any{
+							"domains": []any{map[string]any{"count": workers}},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, workload.UnmarshalJSON(data))
+	return workload
 }
 
 func TestBuildRayJobContract(t *testing.T) {
@@ -703,6 +750,7 @@ func TestBuildRayJobContract(t *testing.T) {
 			require.True(t, found)
 			require.Len(t, workers, 1)
 			group := workers[0].(map[string]any)
+			requireTopologyAssignment(t, matrixTopologyAdmission(t, group["groupName"].(string), workerCount), job, workerCount)
 			priority, _, err := unstructured.NestedString(group, "template", "spec", "priorityClassName")
 			require.NoError(t, err)
 			require.Equal(t, "tau-nightly-low", priority)
