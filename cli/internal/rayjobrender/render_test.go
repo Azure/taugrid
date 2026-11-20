@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +22,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
+	"github.com/Azure/taugrid/cli/internal/storageprobe"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -268,7 +271,7 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 			t.Fatalf("RDMA init = %v", init)
 		}
 		workerEnv := fmt.Sprint(workerContainer["env"])
-		for _, want := range []string{"/opt/ib/lib:/usr/local/cuda/lib64", "IBV_DRIVERS_PATH", "/usr/lib/libibverbs"} {
+		for _, want := range []string{"/usr/local/cuda/lib64", "IBV_DRIVERS_PATH", "/usr/lib/libibverbs"} {
 			if !strings.Contains(workerEnv, want) {
 				t.Fatalf("RDMA env missing %q: %s", want, workerEnv)
 			}
@@ -281,6 +284,80 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 		if !strings.Contains(fmt.Sprint(workerPod["volumes"]), "ib-libs") || !strings.Contains(fmt.Sprint(workerPod["volumes"]), runconfig.DefaultRDMAShmSize) {
 			t.Fatalf("RDMA volumes = %v", workerPod["volumes"])
 		}
+	}
+}
+
+func TestRDMAWorkerPreservesLibrarySearchPath(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		env       map[string]string
+		inherited string
+		want      string
+	}{
+		{name: "image inherited", inherited: "/image/lib:/image/runtime", want: "/opt/ib/lib:/image/lib:/image/runtime"},
+		{name: "explicit config", env: map[string]string{"LD_LIBRARY_PATH": "/config/lib"}, inherited: "/image/lib", want: "/opt/ib/lib:/config/lib"},
+		{name: "unset", want: "/opt/ib/lib"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Render(Options{
+				Name: "rdma-path", Namespace: "tau", ScriptName: "train.py",
+				Script: []byte("print('ok')\n"), Workers: 1, Env: tc.env,
+				RDMA:            runconfig.NormalizedRDMA{Enabled: true},
+				TopologyOptions: topology.Options{QueueName: "jobqueue"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+			worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)
+			container := worker["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+			for _, raw := range container["env"].([]any) {
+				item := raw.(map[string]any)
+				if item["name"] == "LD_LIBRARY_PATH" && tc.env == nil {
+					t.Fatalf("renderer overrides inherited image library path with %v", item["value"])
+				}
+			}
+			if worker["metadata"].(map[string]any)["annotations"].(map[string]any)[rayOverwriteContainerCmdKey] != "true" {
+				t.Fatal("worker start command is not enabled")
+			}
+			rawCommand, _ := container["command"].([]any)
+			if len(rawCommand) != 3 {
+				t.Fatalf("missing worker bootstrap command: %v", container["command"])
+			}
+			cmd := exec.Command(fmt.Sprint(rawCommand[0]), fmt.Sprint(rawCommand[1]), fmt.Sprint(rawCommand[2]))
+			cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+tc.inherited)
+			for _, raw := range container["env"].([]any) {
+				item := raw.(map[string]any)
+				if item["name"] == "LD_LIBRARY_PATH" {
+					cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+fmt.Sprint(item["value"]))
+				}
+			}
+			cmd.Env = append(cmd.Env, `KUBERAY_GEN_RAY_START_CMD=printf '%s' "$LD_LIBRARY_PATH"`)
+			got, err := cmd.CombinedOutput()
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("worker library path=%q, err=%v, want %q", got, err, tc.want)
+			}
+			head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+			if strings.Contains(fmt.Sprint(head["command"]), "/opt/ib/lib") {
+				t.Fatal("head inherited RDMA bootstrap")
+			}
+		})
+	}
+}
+
+func TestRDMAWorkerKeepsHotVolumeStartupCheck(t *testing.T) {
+	o := hotVolumeOptions(1)
+	o.RDMA = runconfig.NormalizedRDMA{Enabled: true}
+	out, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	command := worker["containers"].([]any)[0].(map[string]any)["command"].([]any)
+	script := fmt.Sprint(command[2])
+	if !strings.HasPrefix(script, storageprobe.Script()) || !strings.Contains(script, `export LD_LIBRARY_PATH="/opt/ib/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`) {
+		t.Fatalf("RDMA worker lost hot-volume guard or inherited library path: %s", script)
 	}
 }
 

@@ -216,7 +216,9 @@ For direct RayJobs, `runtime.rdma.enabled: true` stages `libibverbs`,
 `librdmacm`, `libnl3`, and verbs providers into each worker using an
 `mcr.microsoft.com/azurelinux/base/core:3.0` init container. This requires
 package-repository access during pod startup. Workers mount the staged libraries,
-prepend `/opt/ib/lib` to `LD_LIBRARY_PATH`, set `IBV_DRIVERS_PATH`, and receive
+prepend `/opt/ib/lib` to `LD_LIBRARY_PATH` at worker startup while preserving
+the image's inherited path or the explicit `runtime.env` override, set
+`IBV_DRIVERS_PATH`, and receive
 32 GiB shared memory. Heads and runs without RDMA keep their existing behavior.
 This stages userspace libraries only; the platform must supply compatible RDMA
 devices and drivers.

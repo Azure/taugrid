@@ -82,6 +82,50 @@ runtime:
 	}
 }
 
+func TestRenderPreservesEmptyProfileSelectors(t *testing.T) {
+	raw := []byte("schema_version: 1\nname: selector-run\ncompute: {gpus: 1, workers: 1}\nruntime: {pip: [torch]}\n")
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{WorkloadKindJob, WorkloadKindRayJob} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/override=%t", kind, explicit), func(t *testing.T) {
+				p := profile.Profile{NodeSelector: map[string]string{"node-role.kubernetes.io/worker": ""}}
+				var override map[string]string
+				if explicit {
+					p.NodeSelector["node-role.kubernetes.io/worker"] = "default"
+					override = map[string]string{"node-role.kubernetes.io/worker": ""}
+				}
+				out, err := Render(RenderOptions{
+					Manifest: m, ManifestRaw: raw, ManifestFilename: "selector.yaml",
+					Namespace: "tau", WorkloadKind: kind, MainScript: []byte("print('ok')\n"),
+					TopologyProfile: &p, NodeSelector: override,
+					TopologyOptions: topology.Options{QueueName: "jobqueue"},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				workload := unmarshalLast(t, out)
+				var selector any
+				if kind == WorkloadKindJob {
+					selector = dig(workload, "spec", "template", "spec", "nodeSelector")
+				} else {
+					selector = dig(workload, "spec", "rayClusterSpec", "workerGroupSpecs", 0, "template", "spec", "nodeSelector")
+					if head := dig(workload, "spec", "rayClusterSpec", "headGroupSpec", "template", "spec", "nodeSelector"); head != nil {
+						t.Fatalf("head inherited worker selector: %v", head)
+					}
+				}
+				values, _ := selector.(map[string]any)
+				value, present := values["node-role.kubernetes.io/worker"]
+				if !present || value != "" {
+					t.Fatalf("selector=%v, want present empty worker label", values)
+				}
+			})
+		}
+	}
+}
+
 func TestRenderRejectsOversizedManagedLiteralEnvironment(t *testing.T) {
 	raw := []byte(`
 schema_version: 1

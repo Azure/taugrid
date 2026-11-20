@@ -393,7 +393,7 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 		"annotations": podAnnotations,
 	}
 	workerPodMetadata := podMetadata
-	if o.hotClaimSize != "" {
+	if o.hotClaimSize != "" || o.RDMA.Enabled {
 		workerPodAnnotations := map[string]any{rayOverwriteContainerCmdKey: "true"}
 		for k, v := range podAnnotations {
 			workerPodAnnotations[k] = v
@@ -510,6 +510,14 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 	}
 	if !isHead && o.hotClaimSize != "" {
 		container["command"] = []any{"bash", "-lc", hotWorkerStartScript()}
+	}
+	if !isHead && o.RDMA.Enabled {
+		start := ""
+		if o.hotClaimSize != "" {
+			start = storageprobe.Script()
+		}
+		start += "export LD_LIBRARY_PATH=\"/opt/ib/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nulimit -n \"${RAY_START_ULIMIT_OPEN_FILES:-65536}\"\nexec bash -c \"$KUBERAY_GEN_RAY_START_CMD\"\n"
+		container["command"] = []any{"bash", "-c", start}
 	}
 	if !isHead && o.RDMA.Enabled {
 		container["securityContext"] = map[string]any{
@@ -905,11 +913,6 @@ func envList(o Options, isHead bool) ([]any, error) {
 	}
 	if !isHead && o.RDMA.Enabled {
 		env["IBV_DRIVERS_PATH"] = "/usr/lib/libibverbs"
-		libraryPath := "/opt/ib/lib"
-		if existing := env["LD_LIBRARY_PATH"]; existing != "" {
-			libraryPath += ":" + existing
-		}
-		env["LD_LIBRARY_PATH"] = libraryPath
 	}
 	if !isHead && o.hotClaimSize != "" {
 		env[storage.HotRequireLocalEnv] = "1"

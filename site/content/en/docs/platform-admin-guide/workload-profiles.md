@@ -61,7 +61,8 @@ across all multi-node torchrun ranks, including ranks from different runs.
 
 An optional platform-owned `nodeSelector` map on each workload profile pins
 hardware or site labels, using Kubernetes label keys and values. Tau preserves
-it in the observed profile and applies it to every direct Job pod and Ray worker;
+it in the observed profile and applies it to every direct or managed Job pod and
+Ray worker, including selectors whose label value is the valid empty string;
 Ray heads retain their system-node placement. For dedicated nightly profiles,
 declare the target series and site here and activate the profiles through the
 platform's normal review process. Run-config `policy.node_selector` overrides
