@@ -57,6 +57,10 @@ package_charts() {
     cd "$SOURCE_ROOT"
     python3 "${CONTROL_ROOT}/scripts/ci/release_artifacts.py" validate-source
   )
+  if find "${SOURCE_ROOT}/charts" -type l -print -quit | grep -q .; then
+    echo "Release chart sources must not contain symbolic links." >&2
+    return 1
+  fi
 
   helm repo add \
     prometheus-community \
@@ -71,6 +75,10 @@ package_charts() {
       "${CONTROL_ROOT}/scripts/ci/vendor-taugrid-dependencies.sh" "$chart_path"
     else
       helm dependency build "$chart_path"
+    fi
+    if find "$chart_path" -type l -print -quit | grep -q .; then
+      echo "Release chart packages must not contain symbolic links." >&2
+      return 1
     fi
     helm lint "$chart_path"
     helm template test "$chart_path" > /dev/null
@@ -205,7 +213,18 @@ verify_archive() {
     --commit "$RELEASE_SOURCE_COMMIT" \
     --version "$RELEASE_VERSION" \
     --chart "$chart" \
-    --archive "$archive"
+    --archive "$archive" \
+    --expected "$package_dir/${chart}-$(chart_version "$package_dir" "$chart").tgz"
+}
+
+repository_digest() {
+  local repository="$1"
+  local version="$2"
+  az acr repository show \
+    --name "$ACR_NAME" \
+    --image "${repository}:${version}" \
+    --query digest \
+    --output tsv
 }
 
 publish_charts() {
@@ -230,8 +249,10 @@ publish_charts() {
   for chart in "${CHARTS[@]}"; do
     local chart_version
     local archive
+    local digest
     local repository
     local tags
+    local verified_digest
 
     chart_version=$(chart_version "$package_dir" "$chart")
     archive="${package_dir}/${chart}-${chart_version}.tgz"
@@ -239,7 +260,7 @@ publish_charts() {
     tags=$(repository_tags "$repository")
 
     if grep -Fxq "$chart_version" <<<"$tags"; then
-      local digest
+      digest=$(repository_digest "$repository" "$chart_version")
       mkdir -p "${WORK_ROOT}/${chart}-existing"
       helm pull \
         "oci://${ACR_NAME}.azurecr.io/${repository}" \
@@ -249,11 +270,11 @@ publish_charts() {
         "$package_dir" \
         "$chart" \
         "${WORK_ROOT}/${chart}-existing/${chart}-${chart_version}.tgz"
-      digest=$(az acr repository show \
-        --name "$ACR_NAME" \
-        --image "${repository}:${chart_version}" \
-        --query digest \
-        --output tsv)
+      verified_digest=$(repository_digest "$repository" "$chart_version")
+      if [[ "$verified_digest" != "$digest" ]]; then
+        echo "Immutable chart tag changed during verification: ${chart}:${chart_version}." >&2
+        return 1
+      fi
       record_publication "$chart" "$chart_version" "$repository" "$digest" true
       echo "Chart ${chart}:${chart_version} already exists with matching source provenance; reusing."
       continue
@@ -273,12 +294,7 @@ publish_charts() {
       "$archive" \
       "oci://${ACR_NAME}.azurecr.io/${REPOSITORY_NAME}/helm"
 
-    local digest
-    digest=$(az acr repository show \
-      --name "$ACR_NAME" \
-      --image "${repository}:${chart_version}" \
-      --query digest \
-      --output tsv)
+    digest=$(repository_digest "$repository" "$chart_version")
     if [[ -z "$digest" ]]; then
       echo "Published chart verification returned no digest for ${chart}:${chart_version}." >&2
       return 1
@@ -294,6 +310,11 @@ publish_charts() {
       "$chart" \
       "${WORK_ROOT}/${chart}-verified/${chart}-${chart_version}.tgz"
     cmp "$archive" "${WORK_ROOT}/${chart}-verified/${chart}-${chart_version}.tgz"
+    verified_digest=$(repository_digest "$repository" "$chart_version")
+    if [[ "$verified_digest" != "$digest" ]]; then
+      echo "Published chart tag changed during verification: ${chart}:${chart_version}." >&2
+      return 1
+    fi
     record_publication "$chart" "$chart_version" "$repository" "$digest" false
     echo "Published and verified ${chart}:${chart_version} at ${digest}"
   done

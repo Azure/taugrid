@@ -171,6 +171,28 @@ export TAUGRID_SOURCE_ROOT="$SOURCE_ROOT"
 PATH="${TEST_ROOT}/bin:${PATH}"
 export PATH
 
+ln -s ../../../../control "${SOURCE_ROOT}/charts/taugrid/control-link"
+(
+  cd "$SOURCE_ROOT"
+  git add charts/taugrid/control-link
+  git commit --quiet -m symlink
+)
+RELEASE_SOURCE_COMMIT=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
+if symlink_output=$(
+  "${CONTROL_ROOT}/scripts/ci/publish-helm-charts.sh" \
+    package "${TEST_ROOT}/symlink-packages" 2>&1
+); then
+  fail "symbolic link in release source unexpectedly packaged"
+fi
+assert_output_contains "$symlink_output" "must not contain symbolic links"
+rm "${SOURCE_ROOT}/charts/taugrid/control-link"
+(
+  cd "$SOURCE_ROOT"
+  git add -u charts/taugrid/control-link
+  git commit --quiet -m "remove symlink"
+)
+RELEASE_SOURCE_COMMIT=$(git -C "$SOURCE_ROOT" rev-parse HEAD)
+
 "${CONTROL_ROOT}/scripts/ci/publish-helm-charts.sh" package "$PACKAGE_DIR"
 [[ -s "${PACKAGE_DIR}/release-manifest.json" ]] ||
   fail "package must seal release metadata"

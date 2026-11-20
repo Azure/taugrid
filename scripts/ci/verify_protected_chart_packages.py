@@ -3,11 +3,13 @@
 # Licensed under the MIT License.
 
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import re
 import sys
+import tarfile
 
 CHARTS = ("tau-core-controller", "gpu-monitoring", "taugrid-core", "adx-mon", "taugrid")
 PRODUCT_CHARTS = ("tau-core-controller", "taugrid-core", "taugrid")
@@ -65,6 +67,30 @@ def load_release(directory, commit, version):
     }
 
 
+def archive_contents(path):
+    contents = {}
+    with tarfile.open(path, mode="r:gz") as archive:
+        for member in archive:
+            if (
+                member.name.startswith("/")
+                or ".." in Path(member.name).parts
+                or member.name in contents
+            ):
+                raise ValueError(f"unsafe or duplicate archive entry: {member.name}")
+            if member.isdir():
+                contents[member.name] = ("directory", member.mode)
+            elif member.isfile():
+                data = archive.extractfile(member).read()
+                contents[member.name] = (
+                    "file",
+                    member.mode,
+                    hashlib.sha256(data).hexdigest(),
+                )
+            else:
+                raise ValueError(f"unsupported archive entry: {member.name}")
+    return contents
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=("directory", "archive"))
@@ -73,6 +99,7 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--chart", choices=CHARTS)
     parser.add_argument("--archive", type=Path)
+    parser.add_argument("--expected", type=Path)
     args = parser.parse_args()
     release = load_release(args.directory, args.commit, args.version)
     verifier = load_release_artifacts()
@@ -82,9 +109,15 @@ def main():
                 raise ValueError("directory verification does not accept an archive")
             verifier.verify_directory(args.directory, release)
         else:
-            if args.chart is None or args.archive is None:
-                raise ValueError("archive verification requires a chart and archive")
+            if args.chart is None or args.archive is None or args.expected is None:
+                raise ValueError(
+                    "archive verification requires a chart, archive, and expected package"
+                )
             verifier.verify_chart(args.archive.read_bytes(), args.chart, release)
+            if archive_contents(args.archive) != archive_contents(args.expected):
+                raise ValueError(
+                    f"archive contents differ from sealed candidate: {args.chart}"
+                )
     except verifier.ReleaseError as error:
         raise ValueError(str(error)) from error
 
@@ -97,6 +130,7 @@ if __name__ == "__main__":
         ImportError,
         KeyError,
         OSError,
+        tarfile.TarError,
         TypeError,
         ValueError,
         json.JSONDecodeError,
