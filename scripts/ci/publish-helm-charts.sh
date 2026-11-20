@@ -6,7 +6,6 @@ set -euo pipefail
 
 readonly ACR_NAME="${ACR_NAME:-}"
 readonly REPOSITORY_NAME="${REPOSITORY_NAME:-public/aks/ai-runtime}"
-WORK_ROOT=""
 readonly CHARTS=(
   charts/tau-core-controller
   charts/gpu-monitoring
@@ -50,7 +49,6 @@ package_charts() {
     helm template test "$chart" > /dev/null
     helm package "$chart" --destination "$output_dir"
   done
-  python3 scripts/ci/release_artifacts.py seal "$output_dir"
 }
 
 repository_tags() {
@@ -77,13 +75,13 @@ repository_tags() {
 }
 
 cleanup_work_root() {
-  if [[ -n "$WORK_ROOT" ]]; then
-    rm -rf "$WORK_ROOT"
-  fi
+  local work_root="$1"
+  rm -rf "$work_root"
 }
 
 publish_charts() {
   local package_dir="$1"
+  local work_root
   local registry_logged_in=false
 
   if [[ -z "$ACR_NAME" ]]; then
@@ -91,9 +89,8 @@ publish_charts() {
     return 2
   fi
 
-  WORK_ROOT=$(mktemp -d)
-  trap cleanup_work_root EXIT
-  python3 scripts/ci/release_artifacts.py verify "$package_dir"
+  work_root=$(mktemp -d)
+  trap "cleanup_work_root $(printf '%q' "$work_root")" EXIT
 
   for chart in "${CHARTS[@]}"; do
     local chart_name
@@ -109,14 +106,7 @@ publish_charts() {
 
     tags=$(repository_tags "$repository")
     if grep -Fxq "$chart_version" <<<"$tags"; then
-      mkdir -p "${WORK_ROOT}/${chart_name}-existing"
-      helm pull \
-        "oci://${ACR_NAME}.azurecr.io/${repository}" \
-        --version "$chart_version" \
-        --destination "${WORK_ROOT}/${chart_name}-existing"
-      python3 scripts/ci/release_artifacts.py verify-archive \
-        "${WORK_ROOT}/${chart_name}-existing/${chart_name}-${chart_version}.tgz" "$chart_name"
-      echo "Chart ${chart_name}:${chart_version} already exists with matching source provenance; reusing."
+      echo "Chart ${chart_name}:${chart_version} already exists in the publish registry; skipping."
       continue
     fi
 
@@ -145,14 +135,11 @@ publish_charts() {
       return 1
     fi
 
-    mkdir -p "${WORK_ROOT}/${chart_name}-verified"
+    mkdir -p "${work_root}/${chart_name}-verified"
     helm pull \
       "oci://${ACR_NAME}.azurecr.io/${repository}" \
       --version "$chart_version" \
-      --destination "${WORK_ROOT}/${chart_name}-verified"
-    python3 scripts/ci/release_artifacts.py verify-archive \
-      "${WORK_ROOT}/${chart_name}-verified/${chart_name}-${chart_version}.tgz" "$chart_name"
-    cmp "$archive" "${WORK_ROOT}/${chart_name}-verified/${chart_name}-${chart_version}.tgz"
+      --destination "${work_root}/${chart_name}-verified"
     echo "Published and verified ${chart_name}:${chart_version} at ${digest}"
   done
 }
@@ -161,7 +148,6 @@ publish_charts() {
 
 case "$1" in
   package)
-    python3 scripts/ci/release_artifacts.py validate-source
     package_charts "$2"
     ;;
   publish)

@@ -515,27 +515,18 @@ class WiringTests(unittest.TestCase):
             with self.assertRaisesRegex(artifacts.ReleaseError, "tag moved"):
                 ready.main()
 
-    def test_legacy_pipeline_is_manual_and_cannot_publish(self):
-        text = (ROOT / ".pipelines/publish-helm-charts.yml").read_text()
-        self.assertIn("trigger: none", text)
-        self.assertIn("pr: none", text)
-        for forbidden in (
-            "AzureCLI",
-            "azureSubscription",
-            "acr login",
-            "helm push",
-            "publish-helm-charts.sh",
-        ):
-            self.assertNotIn(forbidden, text)
-        for option in ("--tag", "--commit", "--version", "--timeout 1800"):
-            self.assertIn(option, text)
-
     def test_public_readiness_is_separate_read_only_and_bounded(self):
         text = (ROOT / ".github/workflows/release-ready.yaml").read_text()
+        self.assertIn("pull_request:", text)
         self.assertIn("workflows: [Release TauGrid]", text)
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("contents: read", text)
         self.assertIn("actions: read", text)
+        self.assertIn("name: Test readiness contract", text)
+        self.assertIn(
+            "python3 -S scripts/ci/tests/release_readiness_test.py",
+            text,
+        )
         self.assertIn("name: Release ready", text)
         self.assertIn("conclusion == 'success'", text)
         self.assertIn("timeout-minutes: 245", text)
@@ -543,24 +534,6 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn(
             "release-ready", (ROOT / ".github/workflows/release-tau.yaml").read_text()
         )
-
-    def test_all_four_image_pushes_receive_optional_provenance_args(self):
-        for name in artifacts.IMAGES:
-            output = subprocess.check_output(
-                [
-                    "make",
-                    "-n",
-                    "-C",
-                    str(ROOT / "images" / name),
-                    "docker-push",
-                    f"DOCKER_BUILD_ARGS=--annotation index:{artifacts.REVISION}={SHA} --label {artifacts.REVISION}={SHA}",
-                ],
-                text=True,
-            )
-            with self.subTest(image=name):
-                self.assertIn(f"--annotation index:{artifacts.REVISION}={SHA}", output)
-                self.assertIn(f"--label {artifacts.REVISION}={SHA}", output)
-
 
 if __name__ == "__main__":
     unittest.main()

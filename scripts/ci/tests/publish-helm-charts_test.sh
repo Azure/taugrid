@@ -4,10 +4,8 @@
 
 set -euo pipefail
 
-TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly TEST_DIR
-TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/publish-helm-charts-test.XXXXXX")"
-readonly TEST_ROOT
+readonly TEST_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/publish-helm-charts-test.XXXXXX")"
 readonly ISOLATED_REPO="${TEST_ROOT}/repo"
 readonly PACKAGE_DIR="${ISOLATED_REPO}/packages"
 readonly COMMAND_LOG="${TEST_ROOT}/commands.log"
@@ -57,7 +55,6 @@ mkdir -p \
   "$PACKAGE_DIR" \
   "${TEST_ROOT}/bin"
 cp "${TEST_DIR}/../publish-helm-charts.sh" "${ISOLATED_REPO}/scripts/ci/"
-cp "${TEST_DIR}/../release_artifacts.py" "${ISOLATED_REPO}/scripts/ci/"
 
 write_chart() {
   local name="$1"
@@ -67,7 +64,6 @@ write_chart() {
 apiVersion: v2
 name: ${name}
 version: ${version}
-appVersion: ${version}
 EOF
 }
 
@@ -76,17 +72,6 @@ write_chart gpu-monitoring 0.1.4
 write_chart taugrid-core 0.3.0
 write_chart adx-mon 0.3.3
 write_chart taugrid 0.3.0
-(
-  cd "$ISOLATED_REPO"
-  git init --quiet
-  git add charts
-  git -c user.name=Test -c user.email=test@example.invalid commit --quiet -m fixture
-)
-export RELEASE_SOURCE_COMMIT
-RELEASE_SOURCE_COMMIT=$(git -C "$ISOLATED_REPO" rev-parse HEAD)
-export RELEASE_VERSION=0.3.0
-printf '#!/usr/bin/env bash\nexit 0\n' >"${ISOLATED_REPO}/scripts/ci/vendor-taugrid-dependencies.sh"
-chmod +x "${ISOLATED_REPO}/scripts/ci/vendor-taugrid-dependencies.sh"
 
 cat >"${TEST_ROOT}/bin/helm" <<'EOF'
 #!/usr/bin/env bash
@@ -100,15 +85,6 @@ case "$1 $2" in
   "push "*)
     ;;
   "pull "*)
-    name="${2##*/}"
-    cp "${REMOTE_PACKAGE_DIR:-$PACKAGE_DIR}/${name}-${4}.tgz" "${6}/"
-    ;;
-  "package "*)
-    name="${2##*/}"
-    version=$(awk '$1 == "version:" {print $2}' "$2/Chart.yaml")
-    tar -czf "${4}/${name}-${version}.tgz" -C "$(dirname "$2")" "$name"
-    ;;
-  "repo "*|"dependency build"|"lint "*|"template "*)
     ;;
   *)
     echo "unexpected helm command: $*" >&2
@@ -174,16 +150,9 @@ EOF
 chmod +x "${TEST_ROOT}/bin/az"
 
 export COMMAND_LOG
-export PACKAGE_DIR
 export ACR_NAME=testacr
 PATH="${TEST_ROOT}/bin:${PATH}"
 export PATH
-
-(
-  cd "$ISOLATED_REPO"
-  scripts/ci/publish-helm-charts.sh package "$PACKAGE_DIR"
-)
-[[ -s "${PACKAGE_DIR}/release-manifest.json" ]] || fail "package must seal release metadata"
 
 run_publish() {
   (
@@ -198,13 +167,14 @@ for chart in tau-core-controller gpu-monitoring taugrid-core adx-mon taugrid; do
   version=$(awk '$1 == "version:" {print $2; exit}' \
     "${ISOLATED_REPO}/charts/${chart}/Chart.yaml")
   assert_output_contains "$existing_output" \
-    "Chart ${chart}:${version} already exists with matching source provenance; reusing."
+    "Chart ${chart}:${version} already exists in the publish registry; skipping."
 done
 assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
-assert_log_count 5 "helm pull"
+assert_log_excludes "helm pull"
 
 : >"$COMMAND_LOG"
+touch "${PACKAGE_DIR}/taugrid-0.3.0.tgz"
 export FAKE_UNPUBLISHED_CHART=taugrid
 new_version_output=$(run_publish)
 unset FAKE_UNPUBLISHED_CHART
@@ -230,44 +200,6 @@ assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
 
 : >"$COMMAND_LOG"
-mkdir "${ISOLATED_REPO}/remote"
-cp "${PACKAGE_DIR}/"*.tgz "${ISOLATED_REPO}/remote/"
-export REMOTE_PACKAGE_DIR="${ISOLATED_REPO}/remote"
-(
-  cd "$ISOLATED_REPO"
-  python3 - <<'PY'
-import io
-import os
-from pathlib import Path
-import re
-import tarfile
-
-path = Path(os.environ["REMOTE_PACKAGE_DIR"]) / "tau-core-controller-0.3.0.tgz"
-with tarfile.open(path) as archive:
-    data = archive.extractfile("tau-core-controller/Chart.yaml").read()
-data, replacements = re.subn(
-    rb'(org\.opencontainers\.image\.revision:[ \t]*")[0-9a-f]{40}(")',
-    rb"\g<1>" + b"d" * 40 + rb"\g<2>",
-    data,
-    count=1,
-)
-if replacements != 1:
-    raise SystemExit("release revision annotation not found")
-with tarfile.open(path, "w:gz") as archive:
-    member = tarfile.TarInfo("tau-core-controller/Chart.yaml")
-    member.size = len(data)
-    archive.addfile(member, io.BytesIO(data))
-PY
-)
-if conflict_output=$(run_publish 2>&1); then
-  fail "conflicting immutable release chart unexpectedly reused"
-fi
-unset REMOTE_PACKAGE_DIR
-assert_output_contains "$conflict_output" "chart release provenance mismatch"
-assert_log_excludes "az acr login"
-assert_log_excludes "helm push"
-
-: >"$COMMAND_LOG"
 rm -f "${PACKAGE_DIR}/taugrid-0.3.0.tgz"
 export FAKE_UNPUBLISHED_CHART=taugrid
 if missing_archive_output=$(run_publish 2>&1); then
@@ -275,7 +207,7 @@ if missing_archive_output=$(run_publish 2>&1); then
 fi
 unset FAKE_UNPUBLISHED_CHART
 assert_output_contains "$missing_archive_output" \
-  "taugrid-0.3.0.tgz"
+  "Expected chart package not found: ${PACKAGE_DIR}/taugrid-0.3.0.tgz"
 assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
 

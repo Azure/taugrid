@@ -7,15 +7,10 @@ on:
     paths:
       - charts/**
       - scripts/ci/publish-helm-charts.sh
-      - scripts/ci/release_artifacts.py
-      - scripts/ci/verify-release-readiness.py
-      - scripts/ci/tests/release_readiness_test.py
       - scripts/ci/tests/publish-helm-charts_test.sh
       - scripts/ci/vendor-taugrid-dependencies.sh
       - scripts/ci/tests/vendor-taugrid-dependencies_test.sh
       - .github/workflows/ci-helm-charts.yml
-      - .github/workflows/release-ready.yaml
-      - .pipelines/publish-helm-charts.yml
   workflow_dispatch:
 
 concurrency:
@@ -34,9 +29,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Run chart publisher tests
-        run: |
-          python3 scripts/ci/tests/release_readiness_test.py
-          bash scripts/ci/tests/publish-helm-charts_test.sh
+        run: bash scripts/ci/tests/publish-helm-charts_test.sh
 
   detect:
     name: Detect changed charts
@@ -132,10 +125,8 @@ jobs:
         run: helm lint "${{ matrix.chart }}"
 
       - name: Install helm-unittest
-        env:
-          HELM_VERSION: ${{ matrix.helm_version }}
         run: |
-          if [[ "$HELM_VERSION" == 3.* ]]; then
+          if [[ "${{ matrix.helm_version }}" == 3.* ]]; then
             helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v1.1.2
           else
             helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest:1.1.2 --verify=false
