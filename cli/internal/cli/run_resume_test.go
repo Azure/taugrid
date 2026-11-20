@@ -350,6 +350,66 @@ func TestResumeObservesExistingWorkloadBeforeReplacementProfileApplicabilityFail
 	}
 }
 
+func TestResumeRecoversWorkspaceTeamFromFailedWorkload(t *testing.T) {
+	config := filepath.Join(t.TempDir(), "tau.yaml")
+	writeRunRoutingFile(t, config, "name: resume-job\n")
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.SetOut(io.Discard)
+	command.SetErr(io.Discard)
+	currentWorkspace := readyWorkspace()
+	currentWorkspace.Spec.TeamRef = &tauworkspace.ClusterObjectReference{Name: "research"}
+	resolved := testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 4)
+	resolved.Applicability.Namespaces = []string{"sample"}
+	resolved.LocalQueues = []profile.ResolvedLocalQueue{{Namespace: "sample", Name: "sample", ClusterQueue: "gpu-cq"}}
+	var selected unresolvedRunOptions
+	err := runResumeCommand(
+		command,
+		"resume-job",
+		resumeRouting{
+			ConfigPath:  config,
+			KubeContext: "test-context",
+			Namespace:   "sample",
+			TargetOptions: runDispatchOptions{
+				runDispatchInput: runDispatchInput{engine: "rayjob"},
+				runPayloadInput:  runPayloadInput{script: "train.py"},
+				runPlacement:     runPlacement{lane: "training"},
+			},
+		},
+		"",
+		"client",
+		true,
+		resumeCommandHooks{
+			fetchStatus: func(context.Context, string, string, string) (status.Snapshot, error) {
+				snapshot := failedJobSnapshot("resume-job")
+				snapshot.Labels = map[string]string{workloadmeta.LabelWorkspace: "sample"}
+				snapshot.Events = []status.Event{{Reason: "Evicted"}}
+				return snapshot, nil
+			},
+			fetchWorkspace: func(_ *cobra.Command, _, _, name string) (tauworkspace.Workspace, error) {
+				if name != "sample" {
+					t.Fatalf("workspace = %q, want sample", name)
+				}
+				return currentWorkspace, nil
+			},
+			resolveProfile: func(ctx context.Context, options unresolvedRunOptions) (unresolvedRunOptions, error) {
+				var err error
+				selected, err = selectRunWorkloadProfile(ctx, options, testRunProviderForResolved(t, 4, resolved))
+				return selected, err
+			},
+			executeTarget: func(*cobra.Command, resolvedRunTarget, string, runExperimentMetadata) error {
+				return nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if selected.workspace != "sample" || selected.team != "research" || selected.selectedWorkloadProfile == nil {
+		t.Fatalf("workspace=%q team=%q selected=%#v", selected.workspace, selected.team, selected.selectedWorkloadProfile)
+	}
+}
+
 func TestRunResumeReconstructsDottedJobName(t *testing.T) {
 	zeroGPUs := 0
 	config := filepath.Join(t.TempDir(), "tau.yaml")
