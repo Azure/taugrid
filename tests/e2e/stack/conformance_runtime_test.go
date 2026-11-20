@@ -192,7 +192,7 @@ func TestNightlyFixturePriority(t *testing.T) {
 				t.Setenv(key, value)
 			}
 			t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", "aks-low-priority")
-			t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-sandbox-low")
+			t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-nightly-low")
 			data, err := e2e.ReadFixtureWithSubstitutions(fixture.fixture)
 			require.NoError(t, err)
 			obj := &unstructured.Unstructured{}
@@ -208,7 +208,7 @@ func TestNightlyFixturePriority(t *testing.T) {
 				spec, found, err := unstructured.NestedMap(obj.Object, path...)
 				require.NoError(t, err)
 				require.True(t, found)
-				require.Equal(t, "tau-sandbox-low", spec["priorityClassName"])
+				require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
 				require.Equal(t, "Never", spec["preemptionPolicy"])
 			}
 			groups, found, err := unstructured.NestedSlice(obj.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
@@ -220,7 +220,7 @@ func TestNightlyFixturePriority(t *testing.T) {
 				spec, found, err := unstructured.NestedMap(group, "template", "spec")
 				require.NoError(t, err)
 				require.True(t, found)
-				require.Equal(t, "tau-sandbox-low", spec["priorityClassName"])
+				require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
 				require.Equal(t, "Never", spec["preemptionPolicy"])
 			}
 		})

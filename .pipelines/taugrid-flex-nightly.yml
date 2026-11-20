@@ -140,9 +140,9 @@ jobs:
                 echo "##vso[task.logissue type=error]Nightly requires WorkloadPriorityClass aks-low-priority with value 100" >&2
                 exit 1
               }
-            kubectl get priorityclass tau-sandbox-low -o json |
-              jq -e '.value == 100' >/dev/null || {
-                echo "##vso[task.logissue type=error]Nightly requires PriorityClass tau-sandbox-low with value 100" >&2
+            kubectl get priorityclass tau-nightly-low -o json |
+              jq -e '.value == -100 and .preemptionPolicy == "Never" and .globalDefault != true' >/dev/null || {
+                echo "##vso[task.logissue type=error]Nightly requires nondefault PriorityClass tau-nightly-low with value -100 and preemptionPolicy Never" >&2
                 exit 1
               }
 
@@ -380,7 +380,7 @@ jobs:
             export E2E_TAU_CONFIG_DIR="${artifact_dir}/tau-runs"
             mkdir -p "${E2E_TAU_CONFIG_DIR}"
             export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority
-            export E2E_POD_PRIORITY_CLASS=tau-sandbox-low
+            export E2E_POD_PRIORITY_CLASS=tau-nightly-low
             export MATRIX_NAMESPACE="${namespace}"
             export RAY_E2E_IMAGE
             export E2E_RESULT_FILE="${artifact_dir}/e2e-results.jsonl"
@@ -700,7 +700,7 @@ jobs:
             export E2E_TAU_CONFIG_DIR="$(Build.ArtifactStagingDirectory)/tau-runs"
             mkdir -p "${E2E_TAU_CONFIG_DIR}"
             export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority
-            export E2E_POD_PRIORITY_CLASS=tau-sandbox-low
+            export E2E_POD_PRIORITY_CLASS=tau-nightly-low
             export E2E_STACK_USE_ARGOCD_QUEUE=1
             export E2E_STACK_NAMESPACE="${namespace}"
             export E2E_STACK_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"

@@ -604,7 +604,7 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 						Mode: "fixed", Placement: placement, DefaultLocalQueue: cfg.queue,
 						NodeSelector: map[string]string{cfg.selectorKey: cfg.selectorValue, "tau.azure.com/site": cfg.site},
 						Priorities: profile.ProfilePriorities{
-							WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-sandbox-low",
+							WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-nightly-low",
 						},
 					}
 					script := trainScript
@@ -626,7 +626,7 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 					require.Equal(t, int64(count), group["replicas"])
 					spec, _, err := unstructured.NestedMap(group, "template", "spec")
 					require.NoError(t, err)
-					require.Equal(t, "tau-sandbox-low", spec["priorityClassName"])
+					require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
 					require.Equal(t, "Never", spec["preemptionPolicy"])
 					selector, _, err := unstructured.NestedStringMap(spec, "nodeSelector")
 					require.NoError(t, err)
@@ -668,7 +668,7 @@ func TestBuildRayJobContract(t *testing.T) {
 			}
 			job := buildRayJob(cfg, "train", trainRayJobName, trainRayJobName+"-script")
 			t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", "aks-low-priority")
-			t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-sandbox-low")
+			t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-nightly-low")
 			require.NoError(t, e2e.ConfigureWorkloadPriority(job))
 			require.Equal(t, "aks-low-priority", job.GetLabels()["kueue.x-k8s.io/priority-class"])
 			for _, path := range [][]string{
@@ -677,7 +677,7 @@ func TestBuildRayJobContract(t *testing.T) {
 			} {
 				priority, _, err := unstructured.NestedString(job.Object, append(path, "priorityClassName")...)
 				require.NoError(t, err)
-				require.Equal(t, "tau-sandbox-low", priority)
+				require.Equal(t, "tau-nightly-low", priority)
 				policy, _, err := unstructured.NestedString(job.Object, append(path, "preemptionPolicy")...)
 				require.NoError(t, err)
 				require.Equal(t, "Never", policy)
@@ -708,7 +708,7 @@ func TestBuildRayJobContract(t *testing.T) {
 			group := workers[0].(map[string]any)
 			priority, _, err := unstructured.NestedString(group, "template", "spec", "priorityClassName")
 			require.NoError(t, err)
-			require.Equal(t, "tau-sandbox-low", priority)
+			require.Equal(t, "tau-nightly-low", priority)
 			policy, _, err := unstructured.NestedString(group, "template", "spec", "preemptionPolicy")
 			require.NoError(t, err)
 			require.Equal(t, "Never", policy)

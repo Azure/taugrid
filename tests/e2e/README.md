@@ -434,10 +434,20 @@ preflight succeeded, including after a matrix failure, unless the run is cancele
 Insufficient IB capacity fails or times out rather than passing without IB.
 
 All nightly GPU Jobs and RayJobs, including dependent fixtures, use the existing
-`aks-low-priority` Kueue WorkloadPriorityClass and `tau-sandbox-low` Kubernetes
-PriorityClass (both value 100). Ray heads, workers, submitters, and Job Pods use
-`preemptionPolicy: Never`. Preflight requires both classes with those values;
-the pipeline does not create them or change queue/preemption policy.
+`aks-low-priority` Kueue WorkloadPriorityClass (value 100) and the dedicated
+`tau-nightly-low` Kubernetes PriorityClass (value -100, `globalDefault: false`,
+`preemptionPolicy: Never`). Ray heads, workers, submitters, and Job Pods use
+the matching `preemptionPolicy: Never`. Kubernetes rejects an explicit pod policy
+that differs from its PriorityClass; a pod field cannot override a preempting
+class. The nightly pod priority is below ordinary priority-zero pods.
+Preflight requires this exact contract. A platform owner must review and provision
+`.pipelines/taugrid-flex-nightly-priority.yaml` before activation; the pipeline
+does not create classes or change existing queue/preemption policy.
+The IB namespace must also have an approved pod-security contract admitting the
+worker's `IPC_LOCK` and `SYS_RESOURCE` capabilities. Baseline/restricted policy
+rejects those worker pods even when the RayJob itself passes server-side dry-run.
+Use a dedicated authorized nightly namespace with reviewed policy and storage;
+do not weaken a research namespace or reuse its PVC without authorization.
 Pod nonpreemption does not disable Kueue preemption: a selected ClusterQueue
 with `withinClusterQueue: LowerPriority` can still evict admitted workloads
 below priority 100. Managed medium/high workload priorities are 500/1000;

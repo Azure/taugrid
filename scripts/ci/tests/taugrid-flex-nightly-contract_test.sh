@@ -72,7 +72,7 @@ for name in ("hardware_matrix", "h200_rdma"):
     job = next(job for job in jobs if job.splitlines()[0] == name)
     for setting in (
         "export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority",
-        "export E2E_POD_PRIORITY_CLASS=tau-sandbox-low",
+        "export E2E_POD_PRIORITY_CLASS=tau-nightly-low",
     ):
         assert setting in job, (name, setting)
         assert job.index(setting) < job.index("go test -v"), (name, setting)
@@ -86,9 +86,10 @@ assert "kubectl delete namespace" not in rdma, "IB must never delete a shared ch
 assert 'run cancel "${rayjob}" --namespace "${namespace}"' in rdma
 assert "FINEWEB_CHECKPOINT_PVC: ${{ parameters.checkpointPVC }}" in rdma
 preflight = next(job for job in jobs if job.splitlines()[0] == "preflight")
-for resource in ("workloadpriorityclass aks-low-priority", "priorityclass tau-sandbox-low"):
+for resource in ("workloadpriorityclass aks-low-priority", "priorityclass tau-nightly-low"):
     assert f"kubectl get {resource} -o json" in preflight, resource
-assert preflight.count("jq -e '.value == 100'") == 2
+assert preflight.count("jq -e '.value == 100'") == 1
+assert '.value == -100 and .preemptionPolicy == "Never" and .globalDefault != true' in preflight
 
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
@@ -104,21 +105,24 @@ with tempfile.TemporaryDirectory() as temporary:
         'if [[ "$2" == "$MISSING_CLASS" ]]; then exit 1; fi\n'
         'if [[ "$2" == "workloadpriorityclass" ]]; then value="$WORKLOAD_VALUE"; '
         'else value="$POD_VALUE"; fi\n'
-        'printf \'{"value":%s}\\n\' "$value"\n'
+        'printf \'{"value":%s,"preemptionPolicy":"%s","globalDefault":%s}\\n\' "$value" "$POD_PREEMPTION" "$GLOBAL_DEFAULT"\n'
     )
     kubectl.chmod(0o755)
-    for missing, workload_value, pod_value, expected in (
-        ("", "100", "100", 0),
-        ("workloadpriorityclass", "100", "100", 1),
-        ("priorityclass", "100", "100", 1),
-        ("", "500", "100", 1),
-        ("", "100", "1000", 1),
+    for missing, workload_value, pod_value, pod_preemption, global_default, expected in (
+        ("", "100", "-100", "Never", "false", 0),
+        ("workloadpriorityclass", "100", "-100", "Never", "false", 1),
+        ("priorityclass", "100", "-100", "Never", "false", 1),
+        ("", "500", "-100", "Never", "false", 1),
+        ("", "100", "100", "Never", "false", 1),
+        ("", "100", "-100", "PreemptLowerPriority", "false", 1),
+        ("", "100", "-100", "Never", "true", 1),
     ):
         result = subprocess.run(
             ["bash", "-c", "set -euo pipefail\n" + priority_check],
             env=dict(
                 os.environ, PATH=f"{binary}:{os.environ['PATH']}",
                 MISSING_CLASS=missing, WORKLOAD_VALUE=workload_value, POD_VALUE=pod_value,
+                POD_PREEMPTION=pod_preemption, GLOBAL_DEFAULT=global_default,
             ),
             capture_output=True, text=True,
         )

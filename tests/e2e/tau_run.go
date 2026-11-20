@@ -39,7 +39,7 @@ func NightlyTauPolicy(namespace, queue, profile string) map[string]any {
 		"team":                    "research",
 		"lane":                    "training",
 		"workload_priority_class": "aks-low-priority",
-		"pod_priority_class":      "tau-sandbox-low",
+		"pod_priority_class":      "tau-nightly-low",
 		"pod_preemption_policy":   "Never",
 	}
 }
@@ -185,6 +185,9 @@ func RenderTauRunOffline(t *testing.T, binary string, config map[string]any, fil
 		if failure, ok := err.(*exec.ExitError); ok {
 			t.Fatalf("native Tau rendering: %v\n%s", err, failure.Stderr)
 		}
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "rendered.yaml"), output, 0600); err != nil {
 		t.Fatal(err)
 	}
 	obj := &unstructured.Unstructured{}

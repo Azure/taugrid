@@ -277,8 +277,10 @@ applicability. Do not combine a tier with
 For direct `engine: job` and `engine: rayjob` configs,
 `policy.pod_preemption_policy` accepts `Never` or `PreemptLowerPriority`.
 Tau sets `preemptionPolicy` on every generated Job pod and every Ray head and
-worker pod. Omitted or empty values leave the field absent. This setting is
-independent of priority-class selection and is not supported by managed workflows.
+worker pod. Omitted or empty values leave the field absent. Connected submissions
+require a named selected pod PriorityClass whose `preemptionPolicy` matches the
+requested value; Kubernetes rejects a pod policy that overrides the class.
+This setting is not supported by managed workflows.
 
 The exact-class fields remain available for operator-managed compatibility,
 but ordinary consumers should use the built-in tiers rather than creating

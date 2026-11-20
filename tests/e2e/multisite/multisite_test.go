@@ -371,7 +371,7 @@ func TestNativeTauCrossSiteRendering(t *testing.T) {
 		Name: "nightly.a100.1gpu", WorkerCount: 1, GPUsPerWorker: 1,
 		Mode: "fixed", Placement: profile.PlacementSameHost, DefaultLocalQueue: "matrix-a100",
 		NodeSelector: map[string]string{"tau.azure.com/gpu-class": "a100", "tau.azure.com/site": "site-a100"},
-		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-sandbox-low"},
+		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-nightly-low"},
 	}
 	job := e2e.RenderTauRunOffline(t, binary, crossSiteTauConfig("nightly", "matrix-a100", "nightly-site", "registry.example.com/ray:py3.12-ray2.58.0", "a100"),
 		map[string][]byte{"gpu_site.py": []byte("print('CUDA check')\n")}, platform)
@@ -380,7 +380,7 @@ func TestNativeTauCrossSiteRendering(t *testing.T) {
 	require.Equal(t, "aks-low-priority", job.GetLabels()["kueue.x-k8s.io/priority-class"])
 	spec, _, err := unstructured.NestedMap(job.Object, "spec", "template", "spec")
 	require.NoError(t, err)
-	require.Equal(t, "tau-sandbox-low", spec["priorityClassName"])
+	require.Equal(t, "tau-nightly-low", spec["priorityClassName"])
 	require.Equal(t, "Never", spec["preemptionPolicy"])
 	selector, _, err := unstructured.NestedStringMap(spec, "nodeSelector")
 	require.NoError(t, err)
@@ -389,11 +389,11 @@ func TestNativeTauCrossSiteRendering(t *testing.T) {
 
 func TestGPUJobContract(t *testing.T) {
 	t.Setenv("E2E_WORKLOAD_PRIORITY_CLASS", "aks-low-priority")
-	t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-sandbox-low")
+	t.Setenv("E2E_POD_PRIORITY_CLASS", "tau-nightly-low")
 	job := gpuJob("nightly", "queue", "site-a", "ray:latest", "tau.azure.com/site", "site-a")
 	require.NoError(t, e2e.ConfigureWorkloadPriority(job))
 	require.Equal(t, "aks-low-priority", job.Labels["kueue.x-k8s.io/priority-class"])
-	require.Equal(t, "tau-sandbox-low", job.Spec.Template.Spec.PriorityClassName)
+	require.Equal(t, "tau-nightly-low", job.Spec.Template.Spec.PriorityClassName)
 	require.Equal(t, corev1.PreemptNever, *job.Spec.Template.Spec.PreemptionPolicy)
 
 	require.NotNil(t, job.Spec.Suspend)

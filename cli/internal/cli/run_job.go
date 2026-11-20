@@ -364,6 +364,9 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
+		if err := validatePodPreemptionPolicy(ctx, kube.New(kubeContext), o.podPriorityClass, o.podPreemptionPolicy); err != nil {
+			return err
+		}
 		manifest, err = prepareGeneratedQueueTopology(
 			ctx,
 			kube.New(kubeContext),
