@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -324,23 +325,46 @@ func TestRDMAWorkerPreservesLibrarySearchPath(t *testing.T) {
 			if len(rawCommand) != 3 {
 				t.Fatalf("missing worker bootstrap command: %v", container["command"])
 			}
-			cmd := exec.Command(fmt.Sprint(rawCommand[0]), fmt.Sprint(rawCommand[1]), fmt.Sprint(rawCommand[2]))
-			cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+tc.inherited)
-			for _, raw := range container["env"].([]any) {
-				item := raw.(map[string]any)
-				if item["name"] == "LD_LIBRARY_PATH" {
-					cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+fmt.Sprint(item["value"]))
-				}
-			}
-			cmd.Env = append(cmd.Env, `KUBERAY_GEN_RAY_START_CMD=printf '%s' "$LD_LIBRARY_PATH"`)
-			got, err := cmd.CombinedOutput()
-			if err != nil || string(got) != tc.want {
-				t.Fatalf("worker library path=%q, err=%v, want %q", got, err, tc.want)
+			script := fmt.Sprint(rawCommand[2])
+			if rawCommand[0] != "bash" || rawCommand[1] != "-c" ||
+				!strings.Contains(script, `export LD_LIBRARY_PATH="/opt/ib/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`) ||
+				!strings.Contains(script, `exec bash -c "$KUBERAY_GEN_RAY_START_CMD"`) {
+				t.Fatalf("worker bootstrap does not preserve inherited library paths: %v", rawCommand)
 			}
 			head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
 			if strings.Contains(fmt.Sprint(head["command"]), "/opt/ib/lib") {
 				t.Fatal("head inherited RDMA bootstrap")
 			}
+			t.Run("POSIX bootstrap", func(t *testing.T) {
+				if runtime.GOOS == "windows" {
+					t.Skip("container bootstrap requires POSIX shell and resource-limit semantics")
+				}
+				bashPath, err := exec.LookPath("bash")
+				if err != nil {
+					t.Skip("bash not available")
+				}
+				cmd := exec.Command(bashPath, "-c", script)
+				for _, value := range os.Environ() {
+					key, _, _ := strings.Cut(value, "=")
+					if key != "LD_LIBRARY_PATH" && key != "KUBERAY_GEN_RAY_START_CMD" && key != "RAY_START_ULIMIT_OPEN_FILES" {
+						cmd.Env = append(cmd.Env, value)
+					}
+				}
+				if tc.inherited != "" {
+					cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+tc.inherited)
+				}
+				for _, raw := range container["env"].([]any) {
+					item := raw.(map[string]any)
+					if item["name"] == "LD_LIBRARY_PATH" {
+						cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+fmt.Sprint(item["value"]))
+					}
+				}
+				cmd.Env = append(cmd.Env, `KUBERAY_GEN_RAY_START_CMD=printf '%s' "$LD_LIBRARY_PATH"`)
+				got, err := cmd.CombinedOutput()
+				if err != nil || string(got) != tc.want {
+					t.Fatalf("worker library path=%q, err=%v, want %q", got, err, tc.want)
+				}
+			})
 		})
 	}
 }
