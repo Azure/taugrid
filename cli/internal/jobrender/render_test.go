@@ -54,6 +54,41 @@ func parseYAML(t *testing.T, b []byte) map[string]any {
 	return m
 }
 
+func TestRenderPodPreemptionPolicy(t *testing.T) {
+	for _, value := range []string{"", "Never", "PreemptLowerPriority", "Always"} {
+		t.Run(value, func(t *testing.T) {
+			p := trainProfile()
+			p.NodeSelector = map[string]string{"tau.azure.com/site": "nightly-site"}
+			out, err := Render(p, Options{
+				Name:                 "preemption-job",
+				Namespace:            "tau",
+				Command:              []string{"python", "-m", "train"},
+				PodPriorityClassName: "nightly-low",
+				PodPreemptionPolicy:  value,
+			})
+			if value == "Always" {
+				if err == nil || !strings.Contains(err.Error(), "policy.pod_preemption_policy") {
+					t.Fatalf("expected policy rejection, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			pod := parseYAML(t, out)["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+			if got, present := pod["preemptionPolicy"]; (value == "" && present) || (value != "" && got != value) {
+				t.Fatalf("preemptionPolicy = %v, present = %t, want %q", got, present, value)
+			}
+			if pod["priorityClassName"] != "nightly-low" {
+				t.Fatalf("pod priority = %v", pod["priorityClassName"])
+			}
+			if pod["nodeSelector"].(map[string]any)["tau.azure.com/site"] != "nightly-site" {
+				t.Fatalf("pod selectors = %v", pod["nodeSelector"])
+			}
+		})
+	}
+}
+
 func TestRender_HappyPath_Command(t *testing.T) {
 	out, err := Render(trainProfile(), Options{
 		Name:      "lora-7b-001",

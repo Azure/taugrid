@@ -45,9 +45,10 @@ type resolvedRunRayJobOptions struct {
 	runRayJobResources
 	runRayJobTuning
 
-	workingDir         string
-	workingDirExcludes []string
-	runtimePip         []string
+	workingDir              string
+	workingDirExcludes      []string
+	runtimePip              []string
+	ttlSecondsAfterFinished int64
 }
 
 type resolvedRunManagedWorkflowOptions struct {
@@ -133,6 +134,10 @@ func resolveRunJobOptions(o unresolvedRunOptions) resolvedRunJobOptions {
 }
 
 func resolveRunRayJobOptions(o unresolvedRunOptions) resolvedRunRayJobOptions {
+	var ttlSecondsAfterFinished int64
+	if o.ttlExplicit {
+		ttlSecondsAfterFinished = o.ttlSecondsAfterFinished
+	}
 	return resolvedRunRayJobOptions{
 		resolvedDirectRunOptions: resolveDirectRunOptions(o),
 		runRayJobResources:       o.runRayJobResources,
@@ -140,6 +145,7 @@ func resolveRunRayJobOptions(o unresolvedRunOptions) resolvedRunRayJobOptions {
 		workingDir:               o.workingDir.rayProjectPath(),
 		workingDirExcludes:       slices.Clone(o.workingDir.excludes),
 		runtimePip:               slices.Clone(o.runtimePip),
+		ttlSecondsAfterFinished:  ttlSecondsAfterFinished,
 	}
 }
 

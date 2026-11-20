@@ -9,6 +9,7 @@ type Profile struct {
 	Queue                 string
 	ExecutionTarget       ExecutionTarget
 	Topology              Topology
+	NodeSelector          map[string]string
 	Resources             Resources
 	Runtime               Runtime
 	ActiveDeadlineSeconds int64

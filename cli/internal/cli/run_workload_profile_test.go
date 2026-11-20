@@ -834,6 +834,17 @@ func TestRunSelectionAuthorizesReadyProfileForCustomWorkspaceNamespace(t *testin
 	options.namespace = "team-alpha"
 	options.team = "research"
 	options.lane = "training"
+	options.queue = "auto"
+	options.explicitPolicyFields = map[string]bool{"queue": true, "profile": true}
+	workspace := readyWorkspace()
+	workspace.Spec.Target.Namespace = "team-alpha"
+	workspace.Status.Target.ResolvedNamespace = "team-alpha"
+	workspace.Status.Queue.LocalQueue = "workspace-default"
+	workspace.Status.Queue.ClusterQueue = "gpu-cq"
+	options, err := applyWorkspaceDefaults(options, workspace, "nightly")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	selected, err := selectRunWorkloadProfile(
 		context.Background(),

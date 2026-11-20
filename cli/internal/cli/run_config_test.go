@@ -358,6 +358,7 @@ policy:
   profile: test-submit
   queue: training-queue
   namespace: ray
+  pod_preemption_policy: Never
   disable_default_priorities: true
 storage:
   data_pvc: training-nfs
@@ -370,6 +371,7 @@ storage:
 	for _, want := range []string{
 		"kind: Job",
 		"name: config-job",
+		"preemptionPolicy: Never",
 		"claimName: training-nfs",
 		"TAU_OUTPUT_DIR",
 		"/data/checkpoints/workflows/config-job",
@@ -784,6 +786,8 @@ func TestRunConfigRayJobDryRun(t *testing.T) {
 	if err := os.WriteFile(config, []byte(`name: config-ray
 engine: rayjob
 entrypoint: train.py
+run:
+  ttl_seconds_after_finished: 600
 runtime:
   image: example.com/research/ray:cuda13
   pip:
@@ -797,6 +801,7 @@ storage:
 policy:
   namespace: ray
   queue: team-a
+  pod_preemption_policy: Never
   disable_default_priorities: true
 experiment:
   project: NanoGPT FineWeb
@@ -810,6 +815,7 @@ experiment:
 	for _, want := range []string{
 		"kind: RayJob",
 		"name: config-ray",
+		"ttlSecondsAfterFinished: 600",
 		"kueue.x-k8s.io/queue-name: team-a",
 		"claimName: vision-lustre",
 		"image: example.com/research/ray:cuda13",
@@ -832,6 +838,9 @@ experiment:
 	}
 	if got := strings.Count(rendered, "serviceAccountName: tau-workload"); got != 2 {
 		t.Fatalf("GPU config RayJob dry-run serviceAccountName count=%d want head + worker (2):\n%s", got, rendered)
+	}
+	if got := strings.Count(rendered, "preemptionPolicy: Never"); got != 2 {
+		t.Fatalf("config RayJob preemptionPolicy count=%d want head + worker (2):\n%s", got, rendered)
 	}
 	for _, want := range []string{
 		"key: kubernetes.azure.com/mode",

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -68,6 +69,7 @@ type WorkloadProfile struct {
 	// +kubebuilder:validation:Enum=singleCluster;multiKueue
 	ExecutionTarget ExecutionTarget   `json:"executionTarget,omitempty" yaml:"executionTarget,omitempty"`
 	Priorities      ProfilePriorities `json:"priorities" yaml:"priorities"`
+	NodeSelector    map[string]string `json:"nodeSelector,omitempty" yaml:"nodeSelector,omitempty"`
 	HotVolume       *HotVolume        `json:"hotVolume,omitempty" yaml:"hotVolume,omitempty"`
 }
 
@@ -151,6 +153,7 @@ func NormalizeWorkloadProfile(in WorkloadProfile) WorkloadProfile {
 	out := in
 	out.Name = normalizeName(in.Name)
 	out.Description = strings.TrimSpace(in.Description)
+	out.NodeSelector = maps.Clone(in.NodeSelector)
 	out.Applicability.Teams = normalizeList(in.Applicability.Teams, normalizeLabel)
 	out.Applicability.Lanes = normalizeList(in.Applicability.Lanes, normalizeLabel)
 	out.Applicability.Namespaces = normalizeList(in.Applicability.Namespaces, normalizeName)
@@ -182,6 +185,9 @@ func ValidateWorkloadProfile(p WorkloadProfile) error {
 		return errors.New("workload profile must be normalized before validation")
 	}
 	if err := validateDNSName("name", p.Name); err != nil {
+		return err
+	}
+	if err := ValidateNodeSelector(p.NodeSelector); err != nil {
 		return err
 	}
 	for field, values := range map[string][]string{
@@ -315,6 +321,23 @@ func positiveQuantity(field, value string) (resource.Quantity, error) {
 		return resource.Quantity{}, fmt.Errorf("%s must be > 0, got %q", field, value)
 	}
 	return quantity, nil
+}
+
+func ValidateNodeSelector(selector map[string]string) error {
+	keys := make([]string, 0, len(selector))
+	for key := range selector {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if errs := validation.IsQualifiedName(key); len(errs) != 0 {
+			return fmt.Errorf("nodeSelector key %q is invalid: %s", key, strings.Join(errs, ", "))
+		}
+		if errs := validation.IsValidLabelValue(selector[key]); len(errs) != 0 {
+			return fmt.Errorf("nodeSelector[%q] value %q is invalid: %s", key, selector[key], strings.Join(errs, ", "))
+		}
+	}
+	return nil
 }
 
 func NormalizeAndValidateWorkloadProfile(in WorkloadProfile) (WorkloadProfile, error) {
@@ -500,6 +523,7 @@ func (p ResolvedWorkloadProfile) RenderProfile(namespace, team, lane string) (Pr
 		Lane:            lane,
 		Queue:           queue,
 		ExecutionTarget: normalized.ExecutionTarget,
+		NodeSelector:    maps.Clone(normalized.NodeSelector),
 		Topology: Topology{
 			Team:                      team,
 			Mode:                      normalized.Mode,
@@ -675,6 +699,7 @@ func containsOrGlobal(values []string, value string) bool {
 
 func (in *WorkloadProfile) DeepCopyInto(out *WorkloadProfile) {
 	*out = *in
+	out.NodeSelector = maps.Clone(in.NodeSelector)
 	out.Applicability.Teams = append([]string(nil), in.Applicability.Teams...)
 	out.Applicability.Lanes = append([]string(nil), in.Applicability.Lanes...)
 	out.Applicability.Namespaces = append([]string(nil), in.Applicability.Namespaces...)

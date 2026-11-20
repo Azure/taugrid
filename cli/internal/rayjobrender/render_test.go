@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
+	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +23,7 @@ import (
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/cli/internal/payload"
 	"github.com/Azure/taugrid/cli/internal/raylogoffload"
+	"github.com/Azure/taugrid/cli/internal/storageprobe"
 	"github.com/Azure/taugrid/core/envspec"
 	"github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
@@ -45,6 +49,96 @@ func decodeDocs(t *testing.T, data []byte) []map[string]any {
 		}
 	}
 	return docs
+}
+
+func TestRenderPodPreemptionPolicy(t *testing.T) {
+	for _, value := range []string{"", "Never", "PreemptLowerPriority", "Always"} {
+		t.Run(value, func(t *testing.T) {
+			out, err := Render(Options{
+				Name:          "preemption-ray",
+				Namespace:     "tau",
+				ScriptName:    "train.py",
+				Script:        []byte("print('ok')\n"),
+				Workers:       2,
+				GPUsPerWorker: 1,
+				Profile:       profile.Profile{NodeSelector: map[string]string{"tau.azure.com/site": "nightly-site"}},
+				TopologyOptions: topology.Options{
+					QueueName:            "jobqueue",
+					PodPriorityClassName: "nightly-low",
+					PodPreemptionPolicy:  value,
+				},
+			})
+			if value == "Always" {
+				if err == nil || !strings.Contains(err.Error(), "policy.pod_preemption_policy") {
+					t.Fatalf("expected policy rejection, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(out), "ib-libs") || strings.Contains(string(out), "IBV_DRIVERS_PATH") {
+				t.Fatal("non-RDMA run gained library staging")
+			}
+			spec := decodeDocs(t, out)[0]["spec"].(map[string]any)
+			if spec["submissionMode"] != "HTTPMode" || spec["submitterPodTemplate"] != nil {
+				t.Fatalf("expected HTTP submission without a submitter: %v", spec)
+			}
+			cluster := spec["rayClusterSpec"].(map[string]any)
+			groups := append([]any{cluster["headGroupSpec"]}, cluster["workerGroupSpecs"].([]any)...)
+			for _, raw := range groups {
+				group := raw.(map[string]any)
+				pod := group["template"].(map[string]any)["spec"].(map[string]any)
+				if got, present := pod["preemptionPolicy"]; (value == "" && present) || (value != "" && got != value) {
+					t.Fatalf("preemptionPolicy = %v, present = %t, want %q", got, present, value)
+				}
+				if pod["priorityClassName"] != "nightly-low" {
+					t.Fatalf("pod priority = %v", pod["priorityClassName"])
+				}
+				if group["groupName"] != nil && pod["nodeSelector"].(map[string]any)["tau.azure.com/site"] != "nightly-site" {
+					t.Fatalf("worker selectors = %v", pod["nodeSelector"])
+				}
+				if group["groupName"] == nil && pod["nodeSelector"] != nil {
+					t.Fatalf("head must not inherit worker selectors: %v", pod["nodeSelector"])
+				}
+			}
+		})
+	}
+}
+
+func TestRenderPreservesEmptyNodeSelectorValues(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		profile  map[string]string
+		explicit map[string]string
+	}{
+		{name: "profile", profile: map[string]string{"tau.azure.com/site": ""}},
+		{name: "explicit override", profile: map[string]string{"tau.azure.com/site": "default"}, explicit: map[string]string{"tau.azure.com/site": ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Render(Options{
+				Name: "selector-ray", Namespace: "tau", ScriptName: "train.py",
+				Script: []byte("print('ok')\n"), Workers: 2,
+				Profile: profile.Profile{NodeSelector: tc.profile}, NodeSelector: tc.explicit,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+			head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+			if head["nodeSelector"] != nil {
+				t.Fatalf("head inherited worker selectors: %v", head["nodeSelector"])
+			}
+			for _, raw := range cluster["workerGroupSpecs"].([]any) {
+				pod := raw.(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+				selector, _ := pod["nodeSelector"].(map[string]any)
+				value, present := selector["tau.azure.com/site"]
+				if !present || value != "" {
+					t.Fatalf("worker selector = %v, want present empty site value", selector)
+				}
+			}
+		})
+	}
 }
 
 func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
@@ -132,6 +226,7 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 		Workers:         2,
 		GPUsPerWorker:   8,
 		RDMA:            runconfig.NormalizedRDMA{Enabled: true},
+		Env:             map[string]string{"LD_LIBRARY_PATH": "/usr/local/cuda/lib64"},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 	})
 	if err != nil {
@@ -169,6 +264,124 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 		if got := len(workerResources[field].(map[string]any)); got != 3 {
 			t.Fatalf("worker %s=%v, want cpu, memory, and GPU only", field, workerResources[field])
 		}
+		if strings.Contains(fmt.Sprint(headPod), "inject-ib-libs") || strings.Contains(fmt.Sprint(headPod), "ib-libs") {
+			t.Fatal("head inherited worker RDMA library staging")
+		}
+		init := workerPod["initContainers"].([]any)[0].(map[string]any)
+		if init["name"] != "inject-ib-libs" || !strings.Contains(fmt.Sprint(init["command"]), "tdnf install -y libibverbs librdmacm libnl3") {
+			t.Fatalf("RDMA init = %v", init)
+		}
+		workerEnv := fmt.Sprint(workerContainer["env"])
+		for _, want := range []string{"/usr/local/cuda/lib64", "IBV_DRIVERS_PATH", "/usr/lib/libibverbs"} {
+			if !strings.Contains(workerEnv, want) {
+				t.Fatalf("RDMA env missing %q: %s", want, workerEnv)
+			}
+		}
+		for _, want := range []string{"/opt/ib/lib", "/usr/lib/libibverbs", "/etc/libibverbs.d"} {
+			if !strings.Contains(fmt.Sprint(workerContainer["volumeMounts"]), want) {
+				t.Fatalf("RDMA mounts missing %q: %v", want, workerContainer["volumeMounts"])
+			}
+		}
+		if !strings.Contains(fmt.Sprint(workerPod["volumes"]), "ib-libs") || !strings.Contains(fmt.Sprint(workerPod["volumes"]), runconfig.DefaultRDMAShmSize) {
+			t.Fatalf("RDMA volumes = %v", workerPod["volumes"])
+		}
+	}
+}
+
+func TestRDMAWorkerPreservesLibrarySearchPath(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		env       map[string]string
+		inherited string
+		want      string
+	}{
+		{name: "image inherited", inherited: "/image/lib:/image/runtime", want: "/opt/ib/lib:/image/lib:/image/runtime"},
+		{name: "explicit config", env: map[string]string{"LD_LIBRARY_PATH": "/config/lib"}, inherited: "/image/lib", want: "/opt/ib/lib:/config/lib"},
+		{name: "unset", want: "/opt/ib/lib"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Render(Options{
+				Name: "rdma-path", Namespace: "tau", ScriptName: "train.py",
+				Script: []byte("print('ok')\n"), Workers: 1, Env: tc.env,
+				RDMA:            runconfig.NormalizedRDMA{Enabled: true},
+				TopologyOptions: topology.Options{QueueName: "jobqueue"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+			worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)
+			container := worker["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+			for _, raw := range container["env"].([]any) {
+				item := raw.(map[string]any)
+				if item["name"] == "LD_LIBRARY_PATH" && tc.env == nil {
+					t.Fatalf("renderer overrides inherited image library path with %v", item["value"])
+				}
+			}
+			if worker["metadata"].(map[string]any)["annotations"].(map[string]any)[rayOverwriteContainerCmdKey] != "true" {
+				t.Fatal("worker start command is not enabled")
+			}
+			rawCommand, _ := container["command"].([]any)
+			if len(rawCommand) != 3 {
+				t.Fatalf("missing worker bootstrap command: %v", container["command"])
+			}
+			script := fmt.Sprint(rawCommand[2])
+			if rawCommand[0] != "bash" || rawCommand[1] != "-c" ||
+				!strings.Contains(script, `export LD_LIBRARY_PATH="/opt/ib/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`) ||
+				!strings.Contains(script, `exec bash -c "$KUBERAY_GEN_RAY_START_CMD"`) {
+				t.Fatalf("worker bootstrap does not preserve inherited library paths: %v", rawCommand)
+			}
+			head := cluster["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+			if strings.Contains(fmt.Sprint(head["command"]), "/opt/ib/lib") {
+				t.Fatal("head inherited RDMA bootstrap")
+			}
+			t.Run("POSIX bootstrap", func(t *testing.T) {
+				if runtime.GOOS == "windows" {
+					t.Skip("container bootstrap requires POSIX shell and resource-limit semantics")
+				}
+				bashPath, err := exec.LookPath("bash")
+				if err != nil {
+					t.Skip("bash not available")
+				}
+				cmd := exec.Command(bashPath, "-c", script)
+				for _, value := range os.Environ() {
+					key, _, _ := strings.Cut(value, "=")
+					if key != "LD_LIBRARY_PATH" && key != "KUBERAY_GEN_RAY_START_CMD" && key != "RAY_START_ULIMIT_OPEN_FILES" {
+						cmd.Env = append(cmd.Env, value)
+					}
+				}
+				if tc.inherited != "" {
+					cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+tc.inherited)
+				}
+				for _, raw := range container["env"].([]any) {
+					item := raw.(map[string]any)
+					if item["name"] == "LD_LIBRARY_PATH" {
+						cmd.Env = append(cmd.Env, "LD_LIBRARY_PATH="+fmt.Sprint(item["value"]))
+					}
+				}
+				cmd.Env = append(cmd.Env, `KUBERAY_GEN_RAY_START_CMD=printf '%s' "$LD_LIBRARY_PATH"`)
+				got, err := cmd.CombinedOutput()
+				if err != nil || string(got) != tc.want {
+					t.Fatalf("worker library path=%q, err=%v, want %q", got, err, tc.want)
+				}
+			})
+		})
+	}
+}
+
+func TestRDMAWorkerKeepsHotVolumeStartupCheck(t *testing.T) {
+	o := hotVolumeOptions(1)
+	o.RDMA = runconfig.NormalizedRDMA{Enabled: true}
+	out, err := Render(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := decodeDocs(t, out)[0]["spec"].(map[string]any)["rayClusterSpec"].(map[string]any)
+	worker := cluster["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	command := worker["containers"].([]any)[0].(map[string]any)["command"].([]any)
+	script := fmt.Sprint(command[2])
+	if !strings.HasPrefix(script, storageprobe.Script()) || !strings.Contains(script, `export LD_LIBRARY_PATH="/opt/ib/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`) {
+		t.Fatalf("RDMA worker lost hot-volume guard or inherited library path: %s", script)
 	}
 }
 
@@ -785,6 +998,39 @@ func TestRenderCustomOlderRayImageUsesOldProbeEndpoint(t *testing.T) {
 	}
 	if cluster["rayVersion"] != "2.39.0" {
 		t.Fatalf("rayVersion should match image tag, got %v", cluster["rayVersion"])
+	}
+}
+
+func TestRenderTTLOverride(t *testing.T) {
+	for _, ttl := range []int64{0, 600, -1, runconfig.MaxTTLSecondsAfterFinished + 1} {
+		t.Run(fmt.Sprint(ttl), func(t *testing.T) {
+			out, err := Render(Options{
+				Name:                    "ray-ttl",
+				Namespace:               "tau",
+				ScriptName:              "train.py",
+				Script:                  []byte("print('ok')\n"),
+				Workers:                 1,
+				TopologyOptions:         topology.Options{QueueName: "jobqueue"},
+				TTLSecondsAfterFinished: ttl,
+			})
+			if ttl < 0 || ttl > runconfig.MaxTTLSecondsAfterFinished {
+				if err == nil || !strings.Contains(err.Error(), "run.ttl_seconds_after_finished") {
+					t.Fatalf("expected TTL rejection, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ttl
+			if want == 0 {
+				want = 15
+			}
+			spec := decodeDocs(t, out)[0]["spec"].(map[string]any)
+			if fmt.Sprint(spec["ttlSecondsAfterFinished"]) != fmt.Sprint(want) {
+				t.Fatalf("TTL = %v, want %d", spec["ttlSecondsAfterFinished"], want)
+			}
+		})
 	}
 }
 

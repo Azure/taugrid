@@ -59,6 +59,16 @@ separate one-per-GPU-Node host-slot request: its ranks use distinct hosts while
 the selected placement keeps them in one fabric domain. That slot is exclusive
 across all multi-node torchrun ranks, including ranks from different runs.
 
+An optional platform-owned `nodeSelector` map on each workload profile pins
+hardware or site labels, using Kubernetes label keys and values. Tau preserves
+it in the observed profile and applies it to every direct or managed Job pod and
+Ray worker, including selectors whose label value is the valid empty string;
+Ray heads retain their system-node placement. For dedicated nightly profiles,
+declare the target series and site here and activate the profiles through the
+platform's normal review process. Run-config `policy.node_selector` overrides
+remain prohibited when selecting a workload profile. Selectors constrain eligible
+nodes but do not reserve capacity or guarantee distinct hosts.
+
 Delete old policy ConfigMaps, volume mounts, environment variables, and files
 only after every submitter uses a ready TauCluster profile. There is no
 compatibility fallback.

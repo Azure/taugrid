@@ -207,10 +207,21 @@ printf '%s@%s\n' "$SOURCE_REPOSITORY" "$SOURCE_DIGEST"
 ```
 
 `run.ttl_seconds_after_finished` is an optional retention period from 1 through
-2,147,483,647 seconds for a completed or failed direct Job. It maps to Kubernetes
-`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second default, or
-600 seconds for a Job with a hot-volume claim. The TTL starts only after every
-regular container has finished running.
+2,147,483,647 seconds for a completed or failed direct Job or RayJob. It maps to
+`spec.ttlSecondsAfterFinished`; omission keeps TauGrid's 28800-second Job default,
+600 seconds for a Job with a hot-volume claim, or 15 seconds for a RayJob.
+The Job TTL starts only after every regular container has finished running.
+
+For direct RayJobs, `runtime.rdma.enabled: true` stages `libibverbs`,
+`librdmacm`, `libnl3`, and verbs providers into each worker using an
+`mcr.microsoft.com/azurelinux/base/core:3.0` init container. This requires
+package-repository access during pod startup. Workers mount the staged libraries,
+prepend `/opt/ib/lib` to `LD_LIBRARY_PATH` at worker startup while preserving
+the image's inherited path or the explicit `runtime.env` override, set
+`IBV_DRIVERS_PATH`, and receive
+32 GiB shared memory. Heads and runs without RDMA keep their existing behavior.
+This stages userspace libraries only; the platform must supply compatible RDMA
+devices and drivers.
 
 Literal environment values are limited to 64 KiB each and 128 KiB in aggregate
 before workload creation. TauGrid's generated embedded-payload environment entries
@@ -264,6 +275,14 @@ profile remains authoritative for queue, resources, topology, and
 applicability. Do not combine a tier with
 `policy.workload_priority_class`, `policy.pod_priority_class`, or
 `policy.disable_default_priorities`.
+
+For direct `engine: job` and `engine: rayjob` configs,
+`policy.pod_preemption_policy` accepts `Never` or `PreemptLowerPriority`.
+Tau sets `preemptionPolicy` on every generated Job pod and every Ray head and
+worker pod. Omitted or empty values leave the field absent. Connected submissions
+require a named selected pod PriorityClass whose `preemptionPolicy` matches the
+requested value; Kubernetes rejects a pod policy that overrides the class.
+This setting is not supported by managed workflows.
 
 The exact-class fields remain available for operator-managed compatibility,
 but ordinary consumers should use the built-in tiers rather than creating

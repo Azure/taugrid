@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -577,7 +578,9 @@ func buildSchedulingMetadata(opts RenderOptions) (schedulingMetadata, error) {
 	if err := topology.ValidateGPUClassNodeSelector(plan.Labels[workloadmeta.LabelGPUClass], opts.NodeSelector); err != nil {
 		return schedulingMetadata{}, err
 	}
-	nodeSelector := mergeStringMaps(plan.NodeSelector, opts.NodeSelector)
+	nodeSelector := map[string]string{}
+	maps.Copy(nodeSelector, plan.NodeSelector)
+	maps.Copy(nodeSelector, opts.NodeSelector)
 
 	lane := opts.TopologyOptions.Lane
 	if lane == "" {
@@ -796,7 +799,7 @@ func renderMapEntries(values map[string]string, indent int) string {
 	spaces := strings.Repeat(" ", indent)
 	for _, k := range keys {
 		v := values[k]
-		if k == "" || v == "" {
+		if k == "" {
 			continue
 		}
 		fmt.Fprintf(&b, "%s%s: %s\n", spaces, k, quoteYAMLString(v))
