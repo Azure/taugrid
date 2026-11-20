@@ -232,6 +232,10 @@ spec:
                     name:
                       pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
                       type: string
+                    nodeSelector:
+                      additionalProperties:
+                        type: string
+                      type: object
                     placement:
                       enum:
                       - unconstrained
@@ -589,6 +593,10 @@ spec:
                         name:
                           pattern: ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$
                           type: string
+                        nodeSelector:
+                          additionalProperties:
+                            type: string
+                          type: object
                         placement:
                           enum:
                           - unconstrained

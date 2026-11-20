@@ -5,6 +5,7 @@ package topology
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 
@@ -170,6 +171,7 @@ type Options struct {
 	QueueName                       string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
+	PodPreemptionPolicy             string
 	PriorityTier                    string
 	DisableKueueTopologyAnnotations bool
 	DisableDefaultPriorities        bool
@@ -197,11 +199,27 @@ type Plan struct {
 	NodeSelector         map[string]string
 	QueueName            string
 	PodPriorityClassName string
+	PodPreemptionPolicy  string
+}
+
+func ValidatePodPreemptionPolicy(value string) error {
+	switch value {
+	case "", "Never", "PreemptLowerPriority":
+		return nil
+	default:
+		return fmt.Errorf("policy.pod_preemption_policy must be Never or PreemptLowerPriority (got %q)", value)
+	}
 }
 
 func Build(p profile.Profile, o Options) (Plan, error) {
+	if err := ValidatePodPreemptionPolicy(o.PodPreemptionPolicy); err != nil {
+		return Plan{}, err
+	}
+	if err := profile.ValidateNodeSelector(p.NodeSelector); err != nil {
+		return Plan{}, err
+	}
 	if p.Topology == (profile.Topology{}) && p.Lane == "" && !o.hasValues() {
-		return Plan{}, nil
+		return Plan{PodPreemptionPolicy: o.PodPreemptionPolicy, NodeSelector: maps.Clone(p.NodeSelector)}, nil
 	}
 	if o.PriorityTier != "" &&
 		(o.WorkloadPriorityClassName != "" || o.PodPriorityClassName != "" || o.DisableDefaultPriorities) {
@@ -223,6 +241,9 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	if err := spec.validate(p.Name); err != nil {
 		return Plan{}, err
 	}
+	if err := ValidateGPUClassNodeSelector(spec.gpuClass, p.NodeSelector); err != nil {
+		return Plan{}, err
+	}
 
 	plan := Plan{
 		Labels:       map[string]string{},
@@ -230,6 +251,7 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 		NodeSelector: map[string]string{},
 		QueueName:    spec.queueName(),
 	}
+	maps.Copy(plan.NodeSelector, p.NodeSelector)
 	if spec.gpuClass != "" {
 		plan.Labels[LabelGPUClass] = spec.gpuClass
 		if spec.gpuClass != GPUClassAny {
@@ -244,6 +266,7 @@ func Build(p profile.Profile, o Options) (Plan, error) {
 	}
 
 	plan.PodPriorityClassName = spec.podPriorityClassName
+	plan.PodPreemptionPolicy = o.PodPreemptionPolicy
 	if spec.mode == "elastic" && plan.PodPriorityClassName == "" {
 		plan.PodPriorityClassName = defaultElasticPodPriority
 	}

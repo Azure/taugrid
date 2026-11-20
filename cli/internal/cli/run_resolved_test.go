@@ -30,6 +30,18 @@ func TestResolveRunJobOptionsPreservesExplicitTTL(t *testing.T) {
 	}
 }
 
+func TestResolveRunRayJobOptionsPreservesOnlyExplicitTTL(t *testing.T) {
+	input := unresolvedRunOptions{}
+	input.ttlSecondsAfterFinished = 3600
+	if got := resolveRunRayJobOptions(input); got.ttlSecondsAfterFinished != 0 {
+		t.Fatalf("implicit workspace TTL changed Ray default: %d", got.ttlSecondsAfterFinished)
+	}
+	input.ttlExplicit = true
+	if got := resolveRunRayJobOptions(input); got.ttlSecondsAfterFinished != 3600 {
+		t.Fatalf("explicit Ray TTL = %d, want 3600", got.ttlSecondsAfterFinished)
+	}
+}
+
 func TestRunConfigMarksTTLExplicit(t *testing.T) {
 	ttl := int64(3600)
 	got, err := configToDispatch(runconfig.Config{Run: runconfig.Run{TTLSecondsAfterFinished: &ttl}}, "tau.yaml")

@@ -58,33 +58,34 @@ const projectArchiveFilename = "_tau_project.zip"
 const MaxProjectArchiveBytes = 45 << 10
 
 type Options struct {
-	Name               string
-	Namespace          string
-	ServiceAccountName string
-	ScriptName         string
-	Script             []byte
-	ProjectArchive     []byte
-	Image              string
-	Workers            int
-	GPUsPerWorker      int
-	Launcher           string
-	GPUResourceMode    string
-	MIGProfile         string
-	RuntimePip         []string
-	Env                map[string]string
-	EnvSecrets         []envspec.Var
-	RedactSecrets      bool
-	SecurityMode       string
-	RDMA               runconfig.NormalizedRDMA
-	DataPVC            string
-	Profile            profile.Profile
-	TopologyOptions    topology.Options
-	NodeSelector       map[string]string
-	Labels             map[string]string
-	Annotations        map[string]string
-	Resources          Resources
-	OutputDir          string
-	ArtifactPublish    artifactpublish.Runtime
+	Name                    string
+	Namespace               string
+	ServiceAccountName      string
+	ScriptName              string
+	Script                  []byte
+	ProjectArchive          []byte
+	Image                   string
+	Workers                 int
+	GPUsPerWorker           int
+	Launcher                string
+	GPUResourceMode         string
+	MIGProfile              string
+	RuntimePip              []string
+	Env                     map[string]string
+	EnvSecrets              []envspec.Var
+	RedactSecrets           bool
+	SecurityMode            string
+	RDMA                    runconfig.NormalizedRDMA
+	TTLSecondsAfterFinished int64
+	DataPVC                 string
+	Profile                 profile.Profile
+	TopologyOptions         topology.Options
+	NodeSelector            map[string]string
+	Labels                  map[string]string
+	Annotations             map[string]string
+	Resources               Resources
+	OutputDir               string
+	ArtifactPublish         artifactpublish.Runtime
 
 	CheckpointArtifact string
 	HotSize            string
@@ -418,6 +419,10 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	if err != nil {
 		return nil, err
 	}
+	if plan.PodPreemptionPolicy != "" {
+		headPod["preemptionPolicy"] = plan.PodPreemptionPolicy
+		workerPod["preemptionPolicy"] = plan.PodPreemptionPolicy
+	}
 
 	headStartParams := map[string]any{
 		"dashboard-host": "0.0.0.0",
@@ -452,10 +457,17 @@ func buildRayJob(o Options, plan topology.Plan, encodedPayload, payloadDigest st
 	if err != nil {
 		return nil, err
 	}
+	ttl := o.TTLSecondsAfterFinished
+	if ttl == 0 {
+		ttl = rayJobTTLSecondsAfterFinished
+	}
+	if ttl < 0 || ttl > runconfig.MaxTTLSecondsAfterFinished {
+		return nil, fmt.Errorf("run.ttl_seconds_after_finished must be between 1 and %d", runconfig.MaxTTLSecondsAfterFinished)
+	}
 	spec := map[string]any{
 		"suspend":                  true,
 		"shutdownAfterJobFinishes": true,
-		"ttlSecondsAfterFinished":  int64(rayJobTTLSecondsAfterFinished),
+		"ttlSecondsAfterFinished":  ttl,
 		"submissionMode":           "HTTPMode",
 		"entrypoint":               jobEntrypoint,
 		"rayClusterSpec": map[string]any{
@@ -551,6 +563,10 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 			payloadInitContainer(image, encodedPayload, payloadDigest),
 		}
 	}
+	if !isHead && o.RDMA.Enabled {
+		initContainers, _ := pod["initContainers"].([]any)
+		pod["initContainers"] = append([]any{rdmaLibrariesInitContainer()}, initContainers...)
+	}
 	if len(nodeSelector) > 0 {
 		pod["nodeSelector"] = nodeSelector
 	}
@@ -583,6 +599,33 @@ func buildPodSpec(o Options, image, containerName string, nodeSelector map[strin
 
 func hotWorkerStartScript() string {
 	return storageprobe.Script() + "ulimit -n \"${RAY_START_ULIMIT_OPEN_FILES:-65536}\"\nexec bash -lc \"$KUBERAY_GEN_RAY_START_CMD\"\n"
+}
+
+func rdmaLibrariesInitContainer() map[string]any {
+	return map[string]any{
+		"name":  "inject-ib-libs",
+		"image": "mcr.microsoft.com/azurelinux/base/core:3.0",
+		"command": []any{"/bin/sh", "-c", `set -eu
+tdnf install -y libibverbs librdmacm libnl3
+mkdir -p /ib/lib /ib/providers /ib/drivers
+cp -aP /usr/lib/libibverbs.so* /ib/lib/
+cp -aP /usr/lib/librdmacm.so* /ib/lib/
+cp -aP /usr/lib/libnl-3.so.200* /ib/lib/
+cp -aP /usr/lib/libnl-route-3.so.200* /ib/lib/
+cp -aL /usr/lib/libibverbs/* /ib/providers/
+cp -aP /etc/libibverbs.d/* /ib/drivers/
+ls -la /ib/lib /ib/providers /ib/drivers
+`},
+		"securityContext": map[string]any{
+			"runAsUser":                int64(0),
+			"runAsGroup":               int64(0),
+			"allowPrivilegeEscalation": false,
+			"seccompProfile":           map[string]any{"type": "RuntimeDefault"},
+		},
+		"volumeMounts": []any{
+			map[string]any{"name": "ib-libs", "mountPath": "/ib"},
+		},
+	}
 }
 
 func payloadInitContainer(image, encodedPayload, payloadDigest string) map[string]any {
@@ -860,6 +903,14 @@ func envList(o Options, isHead bool) ([]any, error) {
 	for k, v := range o.Env {
 		env[k] = v
 	}
+	if !isHead && o.RDMA.Enabled {
+		env["IBV_DRIVERS_PATH"] = "/usr/lib/libibverbs"
+		libraryPath := "/opt/ib/lib"
+		if existing := env["LD_LIBRARY_PATH"]; existing != "" {
+			libraryPath += ":" + existing
+		}
+		env["LD_LIBRARY_PATH"] = libraryPath
+	}
 	if !isHead && o.hotClaimSize != "" {
 		env[storage.HotRequireLocalEnv] = "1"
 	}
@@ -936,6 +987,11 @@ func volumes(o Options, isHead bool) []any {
 		data["emptyDir"] = map[string]any{}
 	}
 	vols := []any{}
+	shmSize := "16Gi"
+	if !isHead && o.RDMA.Enabled {
+		shmSize = runconfig.DefaultRDMAShmSize
+		vols = append(vols, map[string]any{"name": "ib-libs", "emptyDir": map[string]any{}})
+	}
 	if !isHead && workerNeedsSourcePayload(o) {
 		vols = append(vols, map[string]any{
 			"name":     "script",
@@ -954,7 +1010,7 @@ func volumes(o Options, isHead bool) []any {
 	return append(vols,
 		data,
 		hotVolume(o, isHead),
-		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": "16Gi"}},
+		map[string]any{"name": "dshm", "emptyDir": map[string]any{"medium": "Memory", "sizeLimit": shmSize}},
 	)
 }
 
@@ -971,6 +1027,13 @@ func hotVolume(o Options, isHead bool) map[string]any {
 
 func volumeMounts(o Options, isHead bool) []any {
 	mounts := []any{}
+	if !isHead && o.RDMA.Enabled {
+		mounts = append(mounts,
+			map[string]any{"name": "ib-libs", "mountPath": "/opt/ib/lib", "subPath": "lib", "readOnly": true},
+			map[string]any{"name": "ib-libs", "mountPath": "/usr/lib/libibverbs", "subPath": "providers", "readOnly": true},
+			map[string]any{"name": "ib-libs", "mountPath": "/etc/libibverbs.d", "subPath": "drivers", "readOnly": true},
+		)
+	}
 	if !isHead && workerNeedsSourcePayload(o) {
 		mounts = append(mounts,
 			map[string]any{"name": "script", "mountPath": payloadTargetDir, "readOnly": true},

@@ -270,6 +270,9 @@ func applySelectedWorkloadProfile(
 	}
 	for _, conflict := range conflicts {
 		explicit := strings.TrimSpace(conflict.explicit)
+		if conflict.key == "queue" && !o.workspaceQueueResolved && strings.EqualFold(explicit, "auto") {
+			continue
+		}
 		wasExplicit := policyFieldWasExplicit(o, conflict.key, explicit != "")
 		if conflict.key == "queue" && o.workspaceQueueResolved {
 			wasExplicit = true

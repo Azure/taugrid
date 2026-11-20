@@ -364,6 +364,9 @@ func executeRunJob(ctx context.Context, stdout, stderr io.Writer, request *runJo
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
+		if err := validateRenderedPodPreemptionPolicy(ctx, kube.New(kubeContext), manifest, o.podPreemptionPolicy); err != nil {
+			return err
+		}
 		manifest, err = prepareGeneratedQueueTopology(
 			ctx,
 			kube.New(kubeContext),
@@ -463,6 +466,7 @@ func resolvedRunTopologyFlags(o runPlacement) topologyFlags {
 		priorityTier:             o.priorityTier,
 		workloadPriorityClass:    o.workloadPriorityClass,
 		podPriorityClass:         o.podPriorityClass,
+		podPreemptionPolicy:      o.podPreemptionPolicy,
 		disableDefaultPriorities: o.disableDefaultPriorities,
 	}
 }

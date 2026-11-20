@@ -33,6 +33,7 @@ type topologyFlags struct {
 	priorityTier             string
 	workloadPriorityClass    string
 	podPriorityClass         string
+	podPreemptionPolicy      string
 	disableDefaultPriorities bool
 }
 
@@ -75,6 +76,7 @@ func (f topologyFlags) applyWithChangedAndWorkspaceQueue(o *jobrender.Options, c
 		PriorityTier:              f.priorityTier,
 		WorkloadPriorityClassName: f.workloadPriorityClass,
 		PodPriorityClassName:      f.podPriorityClass,
+		PodPreemptionPolicy:       f.podPreemptionPolicy,
 		DisableDefaultPriorities:  f.disableDefaultPriorities,
 	})
 	if changed("disable-default-priorities") {

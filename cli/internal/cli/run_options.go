@@ -53,6 +53,7 @@ type runPlacement struct {
 	priorityTier              string
 	workloadPriorityClass     string
 	podPriorityClass          string
+	podPreemptionPolicy       string
 	nodeSelectors             []string
 	clearNodeSelector         bool
 	disableDefaultPriorities  bool

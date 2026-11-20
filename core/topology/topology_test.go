@@ -58,6 +58,34 @@ func TestWithoutKueueTopologyAnnotations(t *testing.T) {
 	}
 }
 
+func TestBuildProfileNodeSelector(t *testing.T) {
+	p := topologyProfile()
+	p.NodeSelector = map[string]string{"tau.azure.com/site": "nightly-site"}
+	plan, err := Build(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.NodeSelector["tau.azure.com/site"] != "nightly-site" || plan.NodeSelector[NodeLabelGPUClass] != GPUClassA10080GB {
+		t.Fatalf("plan selectors = %v", plan.NodeSelector)
+	}
+	plan.NodeSelector["tau.azure.com/site"] = "changed"
+	if p.NodeSelector["tau.azure.com/site"] != "nightly-site" {
+		t.Fatal("plan shares profile selectors")
+	}
+	p.NodeSelector[NodeLabelGPUClass] = GPUClassH10080GB
+	if _, err := Build(p, Options{}); err == nil {
+		t.Fatal("accepted a selector conflicting with the topology GPU class")
+	}
+	p = profile.Profile{NodeSelector: map[string]string{"tau.azure.com/site": ""}}
+	plan, err = Build(p, Options{PodPreemptionPolicy: "Never"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, present := plan.NodeSelector["tau.azure.com/site"]; !present || value != "" || plan.PodPreemptionPolicy != "Never" {
+		t.Fatalf("selector-only plan = %v", plan)
+	}
+}
+
 func TestBuild_SameHostPlan(t *testing.T) {
 	plan, err := Build(topologyProfile(), Options{})
 	if err != nil {

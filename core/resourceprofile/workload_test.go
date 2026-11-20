@@ -67,6 +67,8 @@ func TestValidateWorkloadProfileCrossFields(t *testing.T) {
 		{"duplicate applicability", func(p *WorkloadProfile) { p.Applicability.Teams = []string{"research", "research"} }, "duplicate"},
 		{"missing priority", func(p *WorkloadProfile) { p.Priorities.PodPriorityClassName = "" }, "required unless"},
 		{"disabled with priority", func(p *WorkloadProfile) { p.Priorities.DisableDefaultPriorities = true }, "cannot be combined"},
+		{"invalid selector key", func(p *WorkloadProfile) { p.NodeSelector = map[string]string{"bad key": "h200"} }, "nodeSelector"},
+		{"invalid selector value", func(p *WorkloadProfile) { p.NodeSelector = map[string]string{"tau.azure.com/site": "bad value"} }, "nodeSelector"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,6 +220,7 @@ func TestProfileSetSnapshotRoundTripAndVersionRejection(t *testing.T) {
 
 func TestResolvedWorkloadProfileRenderProfile(t *testing.T) {
 	resolved := testResolvedProfile("research-1gpu")
+	resolved.NodeSelector = map[string]string{"tau.azure.com/site": "nightly-site"}
 	render, err := resolved.RenderProfile("alpha", "research", "training")
 	if err != nil {
 		t.Fatalf("RenderProfile() error = %v", err)
@@ -229,6 +232,18 @@ func TestResolvedWorkloadProfileRenderProfile(t *testing.T) {
 	}
 	if render.Topology.WorkloadPriorityClassName != "tau-default" || render.Topology.PodPriorityClassName != "tau-default" {
 		t.Fatalf("render priorities = %#v", render.Topology)
+	}
+	if render.NodeSelector["tau.azure.com/site"] != "nightly-site" {
+		t.Fatalf("render node selector = %v", render.NodeSelector)
+	}
+	render.NodeSelector["tau.azure.com/site"] = "changed"
+	var copied WorkloadProfile
+	resolved.WorkloadProfile.DeepCopyInto(&copied)
+	copied.NodeSelector["tau.azure.com/site"] = "copied"
+	normalized := NormalizeWorkloadProfile(resolved.WorkloadProfile)
+	normalized.NodeSelector["tau.azure.com/site"] = "normalized"
+	if resolved.NodeSelector["tau.azure.com/site"] != "nightly-site" {
+		t.Fatal("rendering, normalization or deepcopy shared the profile node selector")
 	}
 	clusterQueue, err := resolved.ClusterQueueFor("alpha", render.Queue)
 	if err != nil || clusterQueue != "gpu-cq" {

@@ -123,6 +123,7 @@ type Options struct {
 	PriorityTier                    string
 	WorkloadPriorityClassName       string
 	PodPriorityClassName            string
+	PodPreemptionPolicy             string
 	DisableKueueTopologyAnnotations bool
 	DisableDefaultPriorities        bool
 }
@@ -185,6 +186,7 @@ func Render(p profile.Profile, o Options) ([]byte, error) {
 		PriorityTier:                    o.PriorityTier,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
+		PodPreemptionPolicy:             o.PodPreemptionPolicy,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,
 		DisableDefaultPriorities:        o.DisableDefaultPriorities,
 	}
@@ -691,6 +693,9 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 	if topologyPlan.PodPriorityClassName != "" {
 		pod["priorityClassName"] = topologyPlan.PodPriorityClassName
 	}
+	if topologyPlan.PodPreemptionPolicy != "" {
+		pod["preemptionPolicy"] = topologyPlan.PodPreemptionPolicy
+	}
 	if o.ClearNodeSelector {
 		delete(pod, "nodeSelector")
 	}
@@ -702,7 +707,7 @@ func buildJob(p profile.Profile, o Options, image string, cmd []string, extraEnv
 			}
 		}
 		for k, v := range topologyPlan.NodeSelector {
-			if k != "" && v != "" {
+			if k != "" {
 				selector[k] = v
 			}
 		}
