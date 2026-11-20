@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Azure/taugrid/cli/internal/jobrender"
 	"github.com/Azure/taugrid/cli/internal/manifest"
 	"github.com/Azure/taugrid/cli/internal/metricsoffload"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -832,6 +833,36 @@ runtime:
 			}
 			if !strings.Contains(err.Error(), "rayjob-eval") || !strings.Contains(err.Error(), tc.wantSub) {
 				t.Fatalf("error should mention rayjob-eval and %q; got: %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestManagedWorkflowTopologyIntentLimitsCPULaneToCPURayJobs(t *testing.T) {
+	cases := []struct {
+		name         string
+		workloadKind string
+		gpus         int
+		wantErr      bool
+	}{
+		{name: "cpu-rayjob", workloadKind: manifest.WorkloadKindRayJob, gpus: 0},
+		{name: "gpu-rayjob", workloadKind: manifest.WorkloadKindRayJob, gpus: 1, wantErr: true},
+		{name: "job", workloadKind: manifest.WorkloadKindJob, gpus: 0, wantErr: true},
+		{name: "rayjob-eval", workloadKind: manifest.WorkloadKindRayJobEval, gpus: 0, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &manifest.Manifest{}
+			m.Compute.GPUs = tc.gpus
+			err := validateManagedWorkflowTopologyIntent(m, jobrender.Options{Lane: "cpu"}, tc.workloadKind)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("cpu lane on %s with compute.gpus=%d rejected: %v", tc.workloadKind, tc.gpus, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "lane=cpu") || !strings.Contains(err.Error(), "CPU-only --workload-kind=rayjob") {
+				t.Fatalf("cpu lane on %s with compute.gpus=%d error = %v", tc.workloadKind, tc.gpus, err)
 			}
 		})
 	}
