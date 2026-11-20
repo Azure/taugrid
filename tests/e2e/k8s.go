@@ -387,6 +387,33 @@ func (tc *TestContext) WaitForRayJobDeleted(ns, name string, timeout time.Durati
 	}
 }
 
+func (tc *TestContext) WaitForRayJobClusterName(ns, name string, timeout time.Duration) (string, error) {
+	tc, cancel := tc.WithTimeout(timeout)
+	defer cancel()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		job, err := tc.dynamicClient.Resource(RayJobGVR).Namespace(ns).Get(tc.ctx, name, metav1.GetOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("read RayJob %s/%s cluster name: %w", ns, name, err)
+		}
+		if err == nil {
+			clusterName, _, err := unstructured.NestedString(job.Object, "status", "rayClusterName")
+			if err != nil {
+				return "", fmt.Errorf("read RayJob %s/%s cluster name: %w", ns, name, err)
+			}
+			if clusterName != "" {
+				return clusterName, nil
+			}
+		}
+		select {
+		case <-tc.ctx.Done():
+			return "", fmt.Errorf("wait for RayJob %s/%s cluster name: %w", ns, name, tc.ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func rayJobTerminalFailure(jobStatus, deploymentStatus string) (bool, string) {
 	switch jobStatus {
 	case "FAILED", "STOPPED":

@@ -309,6 +309,46 @@ func TestWaitForRayJobDeletedIgnoresUnrelatedNamespaceResourcesAndNeedsNoPodClie
 	}
 }
 
+func TestWaitForRayJobClusterName(t *testing.T) {
+	for _, scenario := range []string{"delayed", "timeout", "forbidden"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				switch {
+				case scenario == "forbidden":
+					writeJSONResponse(w, http.StatusForbidden, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"access forbidden","reason":"Forbidden","code":403}`)
+				case scenario == "delayed" && calls > 1:
+					writeJSONResponse(w, http.StatusOK, `{"kind":"RayJob","apiVersion":"ray.io/v1","status":{"rayClusterName":"generated-cluster"}}`)
+				default:
+					writeJSONResponse(w, http.StatusOK, `{"kind":"RayJob","apiVersion":"ray.io/v1","status":{}}`)
+				}
+			}))
+			defer server.Close()
+			client, err := dynamic.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc := &TestContext{T: t, ctx: context.Background(), dynamicClient: client}
+			timeout := 50 * time.Millisecond
+			if scenario == "delayed" {
+				timeout = 5 * time.Second
+			}
+			name, err := tc.WaitForRayJobClusterName("nightly", "train", timeout)
+			if scenario == "delayed" {
+				if err != nil || name != "generated-cluster" {
+					t.Fatalf("name=%q err=%v", name, err)
+				}
+			} else if err == nil {
+				t.Fatal("missing cluster name unexpectedly accepted")
+			}
+			if scenario == "forbidden" && !strings.Contains(err.Error(), "forbidden") {
+				t.Fatalf("API rejection not surfaced: %v", err)
+			}
+		})
+	}
+}
+
 func TestManagerRayJobWaitFailuresNeverUsePodAPI(t *testing.T) {
 	t.Setenv("AI_RUNTIME_E2E_MANAGER_WORKLOAD_ONLY", "1")
 	dynamicClient, requests := managerDynamicClient(t)

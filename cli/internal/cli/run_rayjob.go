@@ -278,7 +278,7 @@ func executeRunRayJob(ctx context.Context, stdout, stderr io.Writer, request *ru
 	}
 	warnings = append(warnings, autoWarnings...)
 	if o.dryRun != "client" {
-		if err := validatePodPreemptionPolicy(ctx, runner, o.podPriorityClass, o.podPreemptionPolicy); err != nil {
+		if err := validateRenderedPodPreemptionPolicy(ctx, runner, rendered, o.podPreemptionPolicy); err != nil {
 			return err
 		}
 		rendered, err = prepareGeneratedQueueTopology(

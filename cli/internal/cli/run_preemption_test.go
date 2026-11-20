@@ -9,12 +9,56 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Azure/taugrid/cli/internal/jobrender"
+	"github.com/Azure/taugrid/cli/internal/rayjobrender"
+	"github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/topology"
 )
 
 type preemptionPolicyRunner struct {
 	output string
 	err    error
 	calls  [][]string
+}
+
+func TestRenderedPriorityTierPreemptionPolicy(t *testing.T) {
+	for _, tier := range []string{"default", "priority"} {
+		for _, engine := range []string{"job", "rayjob"} {
+			t.Run(engine+"/"+tier, func(t *testing.T) {
+				p := profile.Profile{Runtime: profile.Runtime{Image: "registry.example.com/runtime:test"}}
+				var manifest []byte
+				var err error
+				if engine == "job" {
+					manifest, err = jobrender.Render(p, jobrender.Options{
+						Name: "tier-job", Namespace: "nightly", Command: []string{"true"}, QueueName: "jobqueue",
+						PriorityTier: tier, PodPreemptionPolicy: "PreemptLowerPriority",
+					})
+				} else {
+					manifest, err = rayjobrender.Render(rayjobrender.Options{
+						Name: "tier-ray", Namespace: "nightly", ScriptName: "train.py", Script: []byte("print('ok')\n"),
+						Workers: 1, Profile: p, TopologyOptions: topology.Options{
+							PriorityTier: tier, PodPreemptionPolicy: "PreemptLowerPriority",
+						},
+					})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				class := "taugrid-" + tier
+				runner := &preemptionPolicyRunner{output: `{"metadata":{"name":"` + class + `"},"preemptionPolicy":"PreemptLowerPriority"}`}
+				if err := validateRenderedPodPreemptionPolicy(context.Background(), runner, manifest, "PreemptLowerPriority"); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(runner.calls, [][]string{{"get", "priorityclass", class, "-o", "json"}}) {
+					t.Fatalf("unexpected class lookup: %v", runner.calls)
+				}
+				if err := validateRenderedPodPreemptionPolicy(context.Background(), runner, manifest, "Never"); err == nil {
+					t.Fatal("mismatched rendered class policy accepted")
+				}
+			})
+		}
+	}
 }
 
 func (r *preemptionPolicyRunner) Raw(_ context.Context, args []string, _ []byte) (string, error) {

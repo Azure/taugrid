@@ -135,11 +135,8 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	require.NoError(t, err, "Kueue should admit %s matrix workload", workload)
 	requireTopologyAssignment(t, admission.Workload, cfg.workers)
 	if e2e.TauRunEnabled() {
-		job, err := tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Get(tc.Ctx(), rayJobName, metav1.GetOptions{})
-		require.NoError(t, err)
-		cfg.clusterName, _, err = unstructured.NestedString(job.Object, "status", "rayClusterName")
-		require.NoError(t, err)
-		require.NotEmpty(t, cfg.clusterName)
+		cfg.clusterName, err = tc.WaitForRayJobClusterName(cfg.namespace, rayJobName, 5*time.Minute)
+		require.NoError(t, err, "KubeRay should initialize the admitted RayJob cluster name")
 	}
 
 	if recoveryNode := strings.TrimSpace(os.Getenv("MATRIX_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
