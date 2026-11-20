@@ -37,24 +37,68 @@ class IncompleteRelease(ReleaseError):
     pass
 
 
+RELEASE_ASSETS = (
+    "LICENSE",
+    "SHA256SUMS",
+    "install.ps1",
+    "install.sh",
+    "tau-darwin-amd64",
+    "tau-darwin-arm64",
+    "tau-gen-darwin-amd64",
+    "tau-gen-darwin-arm64",
+    "tau-gen-linux-amd64",
+    "tau-gen-linux-arm64",
+    "tau-gen-windows-amd64.exe",
+    "tau-linux-amd64",
+    "tau-linux-arm64",
+    "tau-windows-amd64.exe",
+)
+SDK_VERSION = (
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:[A-Za-z0-9.]+)?"
+)
+WHEEL = re.compile(rf"tau-({SDK_VERSION})-py3-none-any\.whl")
+
+
+def sdk_wheel(commit):
+    source = git("show", f"{commit}:sdk/python/python/tau/__init__.py")
+    matches = re.findall(
+        rf'^__version__\s*=\s*"({SDK_VERSION})"\s*$',
+        source,
+        flags=re.MULTILINE,
+    )
+    if len(matches) != 1:
+        raise ReleaseError("tagged source must define one stable Tau SDK version")
+    return f"tau-{matches[0]}-py3-none-any.whl"
+
+
 class HTTP:
     def __init__(self, deadline):
         self.deadline = deadline
 
-    def get(self, url, *, token=None, missing=False):
+    def get(
+        self,
+        url,
+        *,
+        token=None,
+        missing=False,
+        accept=None,
+        max_size=64 * 1024 * 1024,
+    ):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise ReleaseError("release readiness deadline exceeded")
-        accept = ", ".join(
-            (
-                "application/vnd.oci.image.index.v1+json",
-                "application/vnd.docker.distribution.manifest.list.v2+json",
-                "application/vnd.oci.image.manifest.v1+json",
-                "application/vnd.docker.distribution.manifest.v2+json",
+        if accept is None:
+            accept = ", ".join(
+                (
+                    "application/vnd.oci.image.index.v1+json",
+                    "application/vnd.docker.distribution.manifest.list.v2+json",
+                    "application/vnd.oci.image.manifest.v1+json",
+                    "application/vnd.docker.distribution.manifest.v2+json",
+                )
             )
-        )
-        if urllib.parse.urlparse(url).hostname == "api.github.com":
-            accept = "application/vnd.github+json"
+            if urllib.parse.urlparse(url).hostname == "api.github.com":
+                accept = "application/vnd.github+json"
         headers = {"Accept": accept}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -72,7 +116,7 @@ class HTTP:
                     if not chunk:
                         return b"".join(chunks)
                     size += len(chunk)
-                    if size > 64 * 1024 * 1024:
+                    if size > max_size:
                         raise ReleaseError(f"response exceeds size limit: {url}")
                     chunks.append(chunk)
         except urllib.error.HTTPError as error:
@@ -108,72 +152,74 @@ class GitHub:
             raise ReleaseError("release tag returned an invalid source SHA")
         return ref["sha"], commit["sha"]
 
-    def verify_run(self, run, tag, commit):
-        if (
-            run["repository"]["full_name"] != self.repository
-            or run["head_repository"]["full_name"] != self.repository
-            or run["path"] != ".github/workflows/release-tau.yaml"
-            or run["event"] != "workflow_dispatch"
-            or run["head_branch"] != tag
-            or run["head_sha"] != commit
-            or run["display_title"] != f"Release TauGrid {tag}"
-            or run["status"] != "completed"
-            or run["conclusion"] != "success"
-        ):
-            raise ReleaseError(
-                "matching Release TauGrid workflow, including installer checks, must succeed"
-            )
-
-    def release(self, tag):
+    def release(self, tag, wheel):
+        if not WHEEL.fullmatch(wheel):
+            raise ReleaseError("invalid expected Tau SDK wheel name")
         release = self.get(f"releases/tags/{tag}")
-        if release["tag_name"] != tag or release["draft"] or release["prerelease"]:
-            raise ReleaseError("a published stable CLI release is required")
+        if (
+            release["tag_name"] != tag
+            or release["draft"]
+            or release["prerelease"]
+            or not release["published_at"]
+        ):
+            raise ReleaseError("a published stable GitHub release is required")
+        assets = release["assets"]
+        names = [asset["name"] for asset in assets]
+        if len(names) != len(set(names)):
+            raise ReleaseError("GitHub release contains duplicate asset names")
+        expected = set(RELEASE_ASSETS) | {wheel}
+        if set(names) != expected:
+            raise ReleaseError("GitHub release asset set does not match the contract")
+        by_name = {asset["name"]: asset for asset in assets}
+        for asset in assets:
+            expected_url = (
+                f"https://github.com/{self.repository}/releases/download/"
+                f"{urllib.parse.quote(tag, safe='')}/"
+                f"{urllib.parse.quote(asset['name'], safe='')}"
+            )
+            if (
+                asset["state"] != "uploaded"
+                or not isinstance(asset["size"], int)
+                or asset["size"] <= 0
+                or asset.get("browser_download_url") != expected_url
+                or not re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", str(asset.get("digest", ""))
+                )
+            ):
+                raise ReleaseError(f"invalid GitHub release asset: {asset['name']}")
+        checksum_asset = by_name["SHA256SUMS"]
+        checksum_bytes = self.http.get(
+            checksum_asset["browser_download_url"],
+            accept="application/octet-stream",
+            max_size=1024 * 1024,
+        )
+        if len(checksum_bytes) != checksum_asset["size"]:
+            raise ReleaseError("SHA256SUMS GitHub asset size mismatch")
+        checksum_digest = f"sha256:{hashlib.sha256(checksum_bytes).hexdigest()}"
+        if checksum_asset["digest"] != checksum_digest:
+            raise ReleaseError("SHA256SUMS GitHub asset digest mismatch")
+        try:
+            lines = checksum_bytes.decode("utf-8").splitlines()
+        except UnicodeDecodeError as error:
+            raise ReleaseError("SHA256SUMS must be UTF-8") from error
+        checksums = {}
+        for line in lines:
+            match = re.fullmatch(
+                r"([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._+-]*)", line
+            )
+            if not match or match[2] in checksums:
+                raise ReleaseError("invalid SHA256SUMS entry")
+            checksums[match[2]] = match[1]
+        expected_checksums = expected - {"SHA256SUMS"}
+        if set(checksums) != expected_checksums:
+            raise ReleaseError("SHA256SUMS asset set does not match the release")
+        for name in expected_checksums:
+            if by_name[name]["digest"] != f"sha256:{checksums[name]}":
+                raise ReleaseError(f"GitHub asset checksum mismatch: {name}")
         return release
 
-    def resolve(self, tag, run_id):
-        if run_id:
-            if not re.fullmatch(r"[1-9][0-9]*", run_id):
-                raise ReleaseError("invalid triggering workflow run ID")
-            run = self.get(f"actions/runs/{run_id}")
-            resolved_tag = run["head_branch"]
-            if tag and tag != resolved_tag:
-                raise ReleaseError("requested tag differs from triggering run")
-            tag = resolved_tag
-        elif not tag:
-            raise ReleaseError("a stable tag or triggering run ID is required")
+    def resolve(self, tag):
         identity = self.tag(tag)
-        commit = identity[1]
-        if run_id:
-            self.verify_run(run, tag, commit)
-        else:
-            found = False
-            for page in range(1, 6):
-                query = urllib.parse.urlencode(
-                    {
-                        "head_sha": commit,
-                        "event": "workflow_dispatch",
-                        "per_page": 100,
-                        "page": page,
-                    }
-                )
-                runs = self.get(f"actions/workflows/release-tau.yaml/runs?{query}")[
-                    "workflow_runs"
-                ]
-                for candidate in runs:
-                    if (
-                        candidate["head_branch"] == tag
-                        and candidate["conclusion"] == "success"
-                    ):
-                        self.verify_run(candidate, tag, commit)
-                        found = True
-                        break
-                if found or len(runs) < 100:
-                    break
-            if not found:
-                raise ReleaseError(
-                    "no successful CLI release workflow for this tag and source"
-                )
-        self.release(tag)
         return tag, identity
 
 
@@ -268,16 +314,16 @@ def wait_ready(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tag", default="")
-    parser.add_argument("--run-id", default="")
+    parser.add_argument("--tag", required=True)
     parser.add_argument("--commit", default="")
     parser.add_argument("--version", default="")
     parser.add_argument("--timeout", type=int, default=5400)
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--check-once", action="store_true")
+    parser.add_argument("--artifacts-only", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.timeout <= 14400 or not 1 <= args.interval <= 300:
-        raise ReleaseError(
+        parser.error(
             "timeout must be 1..14400 seconds; interval must be 1..300 seconds"
         )
     effective_timeout = min(args.timeout, 60) if args.check_once else args.timeout
@@ -288,7 +334,7 @@ def main():
         os.environ.get("GITHUB_REPOSITORY", "Azure/taugrid"),
         os.environ.get("GH_TOKEN"),
     )
-    tag, identity = github.resolve(args.tag, args.run_id)
+    tag, identity = github.resolve(args.tag)
     commit = identity[1]
     if args.commit and args.commit != commit:
         raise ReleaseError(
@@ -315,11 +361,23 @@ def main():
             )
     else:
         wait_ready(registry, release, deadline, args.interval, check_identity)
+    if not args.artifacts_only:
+        github.release(tag, sdk_wheel(commit))
+        check_identity()
+    if args.artifacts_only:
+        conclusion = (
+            "All four multi-platform images and all five Helm charts are publicly "
+            "available with matching release provenance."
+        )
+        heading = "Release artifacts ready"
+    else:
+        conclusion = (
+            "All four multi-platform images, all five Helm charts, and the published "
+            "GitHub release assets and checksums match the release contract."
+        )
+        heading = "Release ready"
     summary = (
-        f"## Release ready\n\nTag: `{tag}`\n\nSource: `{commit}`\n\n"
-        "All four multi-platform images and all five Helm charts are publicly available "
-        "with matching release provenance. The CLI release workflow, including installer "
-        "checks, succeeded.\n"
+        f"## {heading}\n\nTag: `{tag}`\n\nSource: `{commit}`\n\n{conclusion}\n"
     )
     print(summary)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

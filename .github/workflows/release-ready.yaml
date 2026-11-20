@@ -9,9 +9,6 @@ on:
       - scripts/ci/release_artifacts.py
       - scripts/ci/verify-release-readiness.py
       - scripts/ci/tests/release_readiness_test.py
-  workflow_run:
-    workflows: [Release TauGrid]
-    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -21,10 +18,9 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
-  group: release-readiness-${{ github.event.workflow_run.id || inputs.tag || github.event.pull_request.number }}
+  group: release-readiness-${{ inputs.tag || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
@@ -41,7 +37,7 @@ jobs:
 
   ready:
     name: Release ready
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 245
     steps:
@@ -55,9 +51,8 @@ jobs:
       - name: Wait for complete public distribution
         env:
           GH_TOKEN: ${{ github.token }}
-          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           python3 scripts/ci/verify-release-readiness.py \
-            --run-id "$TRIGGER_RUN_ID" --tag "$REQUESTED_TAG" --timeout 14400
+            --tag "$REQUESTED_TAG" --timeout 14400

@@ -74,27 +74,51 @@ def chart_package(name, metadata=None):
     return output.getvalue()
 
 
-def workflow_run():
+def published_release():
+    wheel = "tau-0.1.3-py3-none-any.whl"
+    names = set(ready.RELEASE_ASSETS) | {wheel}
+    payloads = {name: name.encode() for name in names - {"SHA256SUMS"}}
+    checksums = "".join(
+        f"{hashlib.sha256(payloads[name]).hexdigest()}  {name}\n"
+        for name in sorted(payloads)
+    ).encode()
+    payloads["SHA256SUMS"] = checksums
+    assets = [
+        {
+            "name": name,
+            "state": "uploaded",
+            "size": len(payloads[name]),
+            "digest": f"sha256:{hashlib.sha256(payloads[name]).hexdigest()}",
+            "url": f"https://api.github.com/assets/{name}",
+            "browser_download_url": (
+                f"https://github.com/Azure/taugrid/releases/download/v1.2.3/{name}"
+            ),
+        }
+        for name in sorted(names)
+    ]
     return {
-        "repository": {"full_name": "Azure/taugrid"},
-        "head_repository": {"full_name": "Azure/taugrid"},
-        "path": ".github/workflows/release-tau.yaml",
-        "event": "workflow_dispatch",
-        "head_branch": "v1.2.3",
-        "head_sha": SHA,
-        "display_title": "Release TauGrid v1.2.3",
-        "status": "completed",
-        "conclusion": "success",
-    }
+        "tag_name": "v1.2.3",
+        "draft": False,
+        "prerelease": False,
+        "published_at": "2026-01-01T00:00:00Z",
+        "assets": assets,
+    }, payloads
+
+
+class FakeHTTP:
+    def __init__(self, payloads):
+        self.payloads = payloads
+
+    def get(self, url, **kwargs):
+        return self.payloads[url.rsplit("/", 1)[-1]]
 
 
 class FakeGitHub(ready.GitHub):
     def __init__(self):
-        super().__init__(None, "Azure/taugrid", None)
-        self.run = workflow_run()
+        self.published, self.payloads = published_release()
+        super().__init__(FakeHTTP(self.payloads), "Azure/taugrid", None)
         self.ref = {"type": "tag", "sha": TAG_OBJECT}
         self.object = {"tag": "v1.2.3", "object": {"type": "commit", "sha": SHA}}
-        self.published = {"tag_name": "v1.2.3", "draft": False, "prerelease": False}
 
     def get(self, path):
         if path.startswith("git/ref/"):
@@ -103,17 +127,14 @@ class FakeGitHub(ready.GitHub):
             return self.object
         if path.startswith("releases/"):
             return self.published
-        if path.startswith("actions/workflows/"):
-            return {"workflow_runs": [self.run]}
-        return self.run
+        raise AssertionError(f"unexpected GitHub API path: {path}")
 
 
 class GateTests(unittest.TestCase):
-    def test_automatic_and_manual_success(self):
-        for tag, run_id in (("", "123"), ("v1.2.3", "")):
-            self.assertEqual(
-                FakeGitHub().resolve(tag, run_id), ("v1.2.3", (TAG_OBJECT, SHA))
-            )
+    def test_exact_tag_resolves_without_workflow_dependency(self):
+        self.assertEqual(
+            FakeGitHub().resolve("v1.2.3"), ("v1.2.3", (TAG_OBJECT, SHA))
+        )
 
     def test_only_stable_annotated_direct_commit_tags(self):
         github = FakeGitHub()
@@ -128,43 +149,101 @@ class GateTests(unittest.TestCase):
         with self.assertRaisesRegex(artifacts.ReleaseError, "directly"):
             github.tag("v1.2.3")
 
-    def test_untrusted_or_failed_workflow_cannot_open_gate(self):
-        changes = {
-            "path": ".github/workflows/other.yaml",
-            "head_sha": "d" * 40,
-            "head_branch": "main",
-            "status": "in_progress",
-            "conclusion": "failure",
-            "event": "push",
-            "repository": {"full_name": "fork/taugrid"},
-            "head_repository": {"full_name": "fork/taugrid"},
-            "display_title": "untrusted",
-        }
-        for field, value in changes.items():
-            with self.subTest(field=field):
-                github = FakeGitHub()
-                github.run[field] = value
-                with self.assertRaises(artifacts.ReleaseError):
-                    github.resolve("", "123")
-
-    def test_manual_requires_successful_cli_gate(self):
-        github = FakeGitHub()
-        github.run["conclusion"] = "failure"
-        with self.assertRaisesRegex(artifacts.ReleaseError, "no successful"):
-            github.resolve("v1.2.3", "")
+    def test_sdk_wheel_is_derived_from_tagged_source(self):
+        with patch.object(
+            ready,
+            "git",
+            return_value='name = "tau"\n__version__ = "0.1.3"\n',
+        ):
+            self.assertEqual(
+                ready.sdk_wheel(SHA), "tau-0.1.3-py3-none-any.whl"
+            )
+        for source in (
+            '__version__ = "dev"\n',
+            '__version__ = "0.1.3"\n__version__ = "0.1.4"\n',
+        ):
+            with patch.object(ready, "git", return_value=source):
+                with self.assertRaisesRegex(
+                    artifacts.ReleaseError, "one stable Tau SDK version"
+                ):
+                    ready.sdk_wheel(SHA)
 
     def test_published_stable_release_required(self):
-        for field in ("draft", "prerelease"):
+        for field, value in (
+            ("draft", True),
+            ("prerelease", True),
+            ("published_at", None),
+        ):
             github = FakeGitHub()
-            github.published[field] = True
+            github.published[field] = value
             with self.subTest(field=field), self.assertRaises(artifacts.ReleaseError):
-                github.resolve("v1.2.3", "")
+                github.release("v1.2.3", "tau-0.1.3-py3-none-any.whl")
+
+    def test_release_requires_exact_uploaded_asset_set_and_one_sdk_wheel(self):
+        github = FakeGitHub()
+        github.release("v1.2.3", "tau-0.1.3-py3-none-any.whl")
+        for mutation, message in (
+            (lambda assets: assets.pop(), "asset set"),
+            (
+                lambda assets: assets.append(dict(assets[0])),
+                "duplicate asset names",
+            ),
+            (
+                lambda assets: assets.__setitem__(
+                    0, {**assets[0], "state": "new"}
+                ),
+                "invalid GitHub release asset",
+            ),
+            (
+                lambda assets: assets.__setitem__(
+                    0, {**assets[0], "digest": None}
+                ),
+                "invalid GitHub release asset",
+            ),
+        ):
+            github = FakeGitHub()
+            mutation(github.published["assets"])
+            with self.subTest(message=message), self.assertRaisesRegex(
+                artifacts.ReleaseError, message
+            ):
+                github.release("v1.2.3", "tau-0.1.3-py3-none-any.whl")
+
+    def test_release_checksums_match_asset_digests(self):
+        github = FakeGitHub()
+        asset = next(
+            asset
+            for asset in github.published["assets"]
+            if asset["name"] == "tau-linux-amd64"
+        )
+        asset["digest"] = "sha256:" + "d" * 64
+        with self.assertRaisesRegex(artifacts.ReleaseError, "checksum mismatch"):
+            github.release("v1.2.3", "tau-0.1.3-py3-none-any.whl")
+
+        github = FakeGitHub()
+        checksum = next(
+            asset
+            for asset in github.published["assets"]
+            if asset["name"] == "SHA256SUMS"
+        )
+        checksum["digest"] = "sha256:" + "d" * 64
+        with self.assertRaisesRegex(artifacts.ReleaseError, "digest mismatch"):
+            github.release("v1.2.3", "tau-0.1.3-py3-none-any.whl")
+
+        github = FakeGitHub()
+        github.payloads["SHA256SUMS"] += b"invalid\n"
+        checksum = next(
+            asset
+            for asset in github.published["assets"]
+            if asset["name"] == "SHA256SUMS"
+        )
+        checksum["digest"] = (
+            "sha256:" + hashlib.sha256(github.payloads["SHA256SUMS"]).hexdigest()
+        )
+        checksum["size"] = len(github.payloads["SHA256SUMS"])
+        with self.assertRaisesRegex(artifacts.ReleaseError, "invalid SHA256SUMS"):
+            github.release("v1.2.3", "tau-0.1.3-py3-none-any.whl")
 
     def test_moved_tag_and_requested_source_are_rejected(self):
-        github = FakeGitHub()
-        github.object["object"]["sha"] = "d" * 40
-        with self.assertRaises(artifacts.ReleaseError):
-            github.resolve("", "123")
         with patch.object(
             ready.GitHub, "resolve", return_value=("v1.2.3", (TAG_OBJECT, SHA))
         ):
@@ -449,6 +528,10 @@ class WiringTests(unittest.TestCase):
             self.assertEqual(ready.entrypoint(), 1)
         with patch.object(ready, "main"):
             self.assertEqual(ready.entrypoint(), 0)
+        with patch.object(sys, "argv", ["verify", "--tag", "v1.2.3", "--timeout", "0"]):
+            with self.assertRaises(SystemExit) as error:
+                ready.main()
+            self.assertEqual(error.exception.code, 2)
 
     def test_check_once_wiring_does_not_poll(self):
         registry = PollTests.Registry(("tau",))
@@ -461,6 +544,11 @@ class WiringTests(unittest.TestCase):
             patch.object(ready, "GitHub", return_value=FakeGitHub()),
             patch.object(ready, "Registry", return_value=registry),
             patch.object(ready, "metadata", return_value=release()),
+            patch.object(
+                ready,
+                "sdk_wheel",
+                return_value="tau-0.1.3-py3-none-any.whl",
+            ),
             patch.object(ready, "git", side_effect=[TAG_OBJECT, SHA]),
         ):
             with self.assertRaisesRegex(ready.IncompleteRelease, "image/tau"):
@@ -486,6 +574,11 @@ class WiringTests(unittest.TestCase):
                     patch.object(ready, "GitHub", return_value=FakeGitHub()),
                     patch.object(ready, "Registry", return_value=registry),
                     patch.object(ready, "metadata", return_value=release()),
+                    patch.object(
+                        ready,
+                        "sdk_wheel",
+                        return_value="tau-0.1.3-py3-none-any.whl",
+                    ),
                     patch.object(ready, "git", side_effect=[TAG_OBJECT, SHA]),
                 ):
                     if succeeds:
@@ -499,6 +592,41 @@ class WiringTests(unittest.TestCase):
                         ):
                             ready.main()
                         self.assertFalse(summary.exists())
+
+    def test_artifacts_only_skips_github_release(self):
+        github = FakeGitHub()
+        with (
+            tempfile.TemporaryDirectory() as work,
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "verify",
+                    "--tag",
+                    "v1.2.3",
+                    "--commit",
+                    SHA,
+                    "--artifacts-only",
+                ],
+            ),
+            patch.dict(
+                os.environ, {"GITHUB_STEP_SUMMARY": str(Path(work) / "summary")}
+            ),
+            patch.object(ready, "GitHub", return_value=github),
+            patch.object(ready, "Registry", return_value=PollTests.Registry()),
+            patch.object(ready, "metadata", return_value=release()),
+            patch.object(ready, "git", side_effect=[TAG_OBJECT, SHA]),
+            patch.object(
+                github,
+                "release",
+                side_effect=AssertionError("release must not be queried"),
+            ),
+        ):
+            ready.main()
+            self.assertIn(
+                "## Release artifacts ready",
+                (Path(work) / "summary").read_text(),
+            )
 
     def test_entrypoint_rechecks_remote_tag_after_polling(self):
         github = FakeGitHub()
@@ -518,22 +646,22 @@ class WiringTests(unittest.TestCase):
     def test_public_readiness_is_separate_read_only_and_bounded(self):
         text = (ROOT / ".github/workflows/release-ready.yaml").read_text()
         self.assertIn("pull_request:", text)
-        self.assertIn("workflows: [Release TauGrid]", text)
         self.assertIn("workflow_dispatch:", text)
         self.assertIn("contents: read", text)
-        self.assertIn("actions: read", text)
+        self.assertNotIn("workflow_run:", text)
+        self.assertNotIn("actions: read", text)
         self.assertIn("name: Test readiness contract", text)
         self.assertIn(
             "python3 -S scripts/ci/tests/release_readiness_test.py",
             text,
         )
         self.assertIn("name: Release ready", text)
-        self.assertIn("conclusion == 'success'", text)
         self.assertIn("timeout-minutes: 245", text)
         self.assertIn("--timeout 14400", text)
-        self.assertNotIn(
-            "release-ready", (ROOT / ".github/workflows/release-tau.yaml").read_text()
-        )
+        self.assertNotIn("--run-id", text)
+        verifier = (CI / "verify-release-readiness.py").read_text()
+        self.assertNotIn("release-tau.yaml", verifier)
+        self.assertNotIn("actions/workflows", verifier)
 
 if __name__ == "__main__":
     unittest.main()
