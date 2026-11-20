@@ -66,7 +66,20 @@ def load_release(directory, commit, version):
     }
 
 
-def archive_contents(path):
+def normalized_chart(data, name):
+    if name in PRODUCT_CHARTS:
+        return data
+    revision = re.compile(
+        rb"^  " + re.escape(b"org.opencontainers.image.revision") + rb":.*\n?",
+        re.MULTILINE,
+    )
+    normalized, replacements = revision.subn(b"", data, count=1)
+    if replacements != 1:
+        raise ValueError(f"release revision annotation not found: {name}")
+    return normalized
+
+
+def archive_contents(path, chart):
     contents = {}
     with tarfile.open(path, mode="r:gz") as archive:
         for member in archive:
@@ -80,6 +93,8 @@ def archive_contents(path):
                 contents[member.name] = ("directory", member.mode)
             elif member.isfile():
                 data = archive.extractfile(member).read()
+                if member.name == f"{chart}/Chart.yaml":
+                    data = normalized_chart(data, chart)
                 contents[member.name] = (
                     "file",
                     member.mode,
@@ -113,7 +128,9 @@ def main():
                     "archive verification requires a chart, archive, and expected package"
                 )
             verifier.verify_chart(args.archive.read_bytes(), args.chart, release)
-            if archive_contents(args.archive) != archive_contents(args.expected):
+            if archive_contents(args.archive, args.chart) != archive_contents(
+                args.expected, args.chart
+            ):
                 raise ValueError(
                     f"archive contents differ from sealed candidate: {args.chart}"
                 )

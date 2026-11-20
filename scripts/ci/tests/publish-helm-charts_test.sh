@@ -108,6 +108,10 @@ case "$1 $2" in
   "push "*)
     ;;
   "pull "*)
+    grep -Fq "az acr login" "$COMMAND_LOG" || {
+      echo "registry login required before Helm pull" >&2
+      exit 1
+    }
     name="${2##*/}"
     cp "${REMOTE_PACKAGE_DIR:-$PACKAGE_DIR}/${name}-${4}.tgz" "${6}/"
     ;;
@@ -211,9 +215,9 @@ for chart in tau-core-controller gpu-monitoring taugrid-core adx-mon taugrid; do
   assert_output_contains "$existing_output" \
     "Chart ${chart}:0.3.0 already exists with matching source provenance; reusing."
 done
-assert_log_excludes "az acr login"
 assert_log_excludes "helm push"
 assert_log_count 5 "helm pull"
+assert_log_count 1 "az acr login"
 
 : >"$COMMAND_LOG"
 export FAKE_UNPUBLISHED_CHART=taugrid
@@ -266,6 +270,38 @@ from pathlib import Path
 import re
 import tarfile
 
+path = Path(os.environ["REMOTE_PACKAGE_DIR"]) / "gpu-monitoring-0.3.0.tgz"
+with tarfile.open(path) as archive:
+    members = []
+    for member in archive:
+        content = archive.extractfile(member).read() if member.isfile() else None
+        if member.name == "gpu-monitoring/Chart.yaml":
+            content, replacements = re.subn(
+                rb'(org\.opencontainers\.image\.revision:[ \t]*")[0-9a-f]{40}(")',
+                rb"\g<1>" + b"c" * 40 + rb"\g<2>",
+                content,
+                count=1,
+            )
+            if replacements != 1:
+                raise SystemExit("release revision annotation not found")
+            member.size = len(content)
+        members.append((member, content))
+with tarfile.open(path, "w:gz") as archive:
+    for member, content in members:
+        archive.addfile(member, io.BytesIO(content) if content is not None else None)
+PY
+independent_output=$(run_publish)
+assert_output_contains "$independent_output" \
+  "Chart gpu-monitoring:0.3.0 already exists with matching source provenance; reusing."
+assert_log_count 1 "az acr login"
+
+python3 - <<'PY'
+import io
+import os
+from pathlib import Path
+import re
+import tarfile
+
 path = Path(os.environ["REMOTE_PACKAGE_DIR"]) / "tau-core-controller-0.3.0.tgz"
 with tarfile.open(path) as archive:
     data = archive.extractfile("tau-core-controller/Chart.yaml").read()
@@ -282,12 +318,13 @@ with tarfile.open(path, "w:gz") as archive:
     member.size = len(data)
     archive.addfile(member, io.BytesIO(data))
 PY
+: >"$COMMAND_LOG"
 if conflict_output=$(run_publish 2>&1); then
   fail "conflicting immutable release chart unexpectedly reused"
 fi
 unset REMOTE_PACKAGE_DIR
 assert_output_contains "$conflict_output" "chart release provenance mismatch"
-assert_log_excludes "az acr login"
+assert_log_count 1 "az acr login"
 assert_log_excludes "helm push"
 
 echo "publish-helm-charts tests passed"

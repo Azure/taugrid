@@ -71,6 +71,25 @@ class ValidateReleaseSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not on main"):
             validate_release_source.validate(self.source, "v1.2.5", off_main)
 
+    def test_rejects_nested_and_misnamed_annotated_tags(self):
+        run(self.author, "git", "tag", "-a", "v1.2.6", "v1.2.3", "-m", "nested")
+        run(self.author, "git", "push", "origin", "v1.2.6")
+        with self.assertRaisesRegex(ValueError, "directly"):
+            validate_release_source.validate(self.source, "v1.2.6", self.commit)
+
+        run(self.author, "git", "tag", "-a", "v9.9.9", "-m", "misnamed")
+        tag_object = subprocess.run(
+            ("git", "rev-parse", "refs/tags/v9.9.9"),
+            cwd=self.author,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        run(self.author, "git", "update-ref", "refs/tags/v1.2.7", tag_object)
+        run(self.author, "git", "push", "origin", "refs/tags/v1.2.7")
+        with self.assertRaisesRegex(ValueError, "name"):
+            validate_release_source.validate(self.source, "v1.2.7", self.commit)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,6 +33,25 @@ def git(source, *arguments):
         raise ValueError(message) from None
 
 
+def annotated_tag(source, tag):
+    headers = {}
+    for line in git(source, "cat-file", "-p", f"refs/tags/{tag}").splitlines():
+        if not line:
+            break
+        key, separator, value = line.partition(" ")
+        if separator and key in ("object", "type", "tag"):
+            require(key not in headers, f"duplicate annotated tag {key}")
+            headers[key] = value
+    require(headers.get("tag") == tag, "annotated tag name must match requested tag")
+    require(
+        headers.get("type") == "commit",
+        "annotated tag must directly name its release commit",
+    )
+    target = headers.get("object", "")
+    require(SHA.fullmatch(target) is not None, "annotated tag target must be a full SHA")
+    return target
+
+
 def validate(source, tag, source_commit):
     source = source.resolve()
     require(source.is_dir(), "release source directory does not exist")
@@ -45,7 +64,7 @@ def validate(source, tag, source_commit):
         f"+refs/tags/{tag}:refs/tags/{tag}")
     require(git(source, "cat-file", "-t", f"refs/tags/{tag}") == "tag",
             f"{tag} must be an annotated tag")
-    tag_commit = git(source, "rev-parse", f"{tag}^{{commit}}")
+    tag_commit = annotated_tag(source, tag)
     checkout_commit = git(source, "rev-parse", "HEAD^{commit}")
     require(tag_commit == source_commit,
             f"{tag} points to {tag_commit}, not {source_commit}")

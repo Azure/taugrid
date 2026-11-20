@@ -212,6 +212,7 @@ vendor_taugrid_dependencies() {
   local repository
   local local_chart
   local local_version
+  local source_charts_dir
   local dependencies
   local dependency_line=0
 
@@ -223,13 +224,14 @@ vendor_taugrid_dependencies() {
 
   rm -rf "$vendor_dir"
   mkdir -p "$vendor_dir"
+  source_charts_dir="$(cd -- "$(dirname -- "$chart_dir")" && pwd)"
 
   dependencies="$(helm dependency list "$chart_dir")"
   while read -r name version repository _; do
     dependency_line=$((dependency_line + 1))
     [[ "$dependency_line" -eq 1 || -z "$name" ]] && continue
 
-    local_chart="${REPO_ROOT}/charts/${name}"
+    local_chart="${source_charts_dir}/${name}"
     if [[ -f "${local_chart}/Chart.yaml" ]]; then
       local_version=$(awk '$1 == "version:" { print $2; exit }' "${local_chart}/Chart.yaml")
       if [[ "$local_version" != "$version" ]]; then

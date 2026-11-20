@@ -246,6 +246,13 @@ publish_charts() {
   trap cleanup_work_root EXIT
   : >"${WORK_ROOT}/publication.tsv"
 
+  ensure_registry_login() {
+    if [[ "$registry_logged_in" == false ]]; then
+      az acr login --name "$ACR_NAME"
+      registry_logged_in=true
+    fi
+  }
+
   for chart in "${CHARTS[@]}"; do
     local chart_version
     local archive
@@ -262,6 +269,7 @@ publish_charts() {
     if grep -Fxq "$chart_version" <<<"$tags"; then
       digest=$(repository_digest "$repository" "$chart_version")
       mkdir -p "${WORK_ROOT}/${chart}-existing"
+      ensure_registry_login
       helm pull \
         "oci://${ACR_NAME}.azurecr.io/${repository}" \
         --version "$chart_version" \
@@ -285,11 +293,7 @@ publish_charts() {
       return 1
     fi
 
-    if [[ "$registry_logged_in" == false ]]; then
-      az acr login --name "$ACR_NAME"
-      registry_logged_in=true
-    fi
-
+    ensure_registry_login
     helm push \
       "$archive" \
       "oci://${ACR_NAME}.azurecr.io/${REPOSITORY_NAME}/helm"
