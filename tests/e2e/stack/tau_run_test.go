@@ -96,7 +96,7 @@ func TestNativeTauFineWebRendering(t *testing.T) {
 	platform := profile.WorkloadProfile{
 		Name: "nightly.h200.ib", WorkerCount: 16, GPUsPerWorker: 1,
 		Mode: "fixed", Placement: profile.PlacementSameNetworkDomain, DefaultLocalQueue: stackLargeGPUQueueForRun(),
-		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "nd-h200-v5", "tau.azure.com/site": "site-h200"},
+		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "nd-h200-v5", "tau.azure.com/site": "test-site"},
 		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-nightly-low"},
 	}
 	job := e2e.RenderTauRunOffline(t, binary, fineWebTauConfig("nightly-ib", 16, 2, "checkpoint"),

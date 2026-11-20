@@ -156,7 +156,7 @@ tests:
           workerCount: 1
           nodeSelector:
             kueue.azure.com/gpu-series: nd-h200-v5
-            tau.azure.com/site: site-h200
+            tau.azure.com/site: test-site
           mode: fixed
           placement: unconstrained
           defaultLocalQueue: site-queue
@@ -175,4 +175,4 @@ tests:
           path: spec.workloadProfiles[0].nodeSelector
           value:
             kueue.azure.com/gpu-series: nd-h200-v5
-            tau.azure.com/site: site-h200
+            tau.azure.com/site: test-site
