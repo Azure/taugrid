@@ -61,6 +61,12 @@ func SubmitTauRun(t *testing.T, ctx context.Context, config map[string]any, file
 	if kubeContext := os.Getenv("AI_RUNTIME_E2E_KUBE_CONTEXT"); kubeContext != "" {
 		args = append(args, "--context", kubeContext)
 	}
+	if workspace := os.Getenv("E2E_TAU_WORKSPACE"); workspace != "" {
+		args = append(args, "--workspace", workspace)
+	}
+	if systemNamespace := os.Getenv("E2E_TAU_SYSTEM_NAMESPACE"); systemNamespace != "" {
+		args = append(args, "--system-namespace", systemNamespace)
+	}
 	command := exec.CommandContext(submission, binary, args...)
 	command.Dir = directory
 	output, err := command.CombinedOutput()
@@ -84,6 +90,12 @@ func CancelTauRun(ctx context.Context, namespace, name string) error {
 	args := []string{"run", "cancel", name, "--namespace", namespace, "--teardown-timeout", "15m"}
 	if kubeContext := os.Getenv("AI_RUNTIME_E2E_KUBE_CONTEXT"); kubeContext != "" {
 		args = append(args, "--context", kubeContext)
+	}
+	if workspace := os.Getenv("E2E_TAU_WORKSPACE"); workspace != "" {
+		args = append(args, "--workspace", workspace)
+	}
+	if systemNamespace := os.Getenv("E2E_TAU_SYSTEM_NAMESPACE"); systemNamespace != "" {
+		args = append(args, "--system-namespace", systemNamespace)
 	}
 	output, err := exec.CommandContext(cleanup, binary, args...).CombinedOutput()
 	if err != nil {

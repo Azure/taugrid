@@ -81,6 +81,8 @@ for name in ("hardware_matrix", "h200_rdma"):
     assert 'cd "$(Build.SourcesDirectory)/cli"\n          make build' in job, name
     assert 'install -m 755 bin/tau "$(Agent.TempDirectory)/tau"' in job, name
     assert "export E2E_TAU_CONFIG_DIR=" in job, name
+    assert 'export E2E_TAU_WORKSPACE="${FLEX_NIGHTLY_WORKSPACE}"' in job, name
+    assert "export E2E_TAU_SYSTEM_NAMESPACE=tau-platform" in job, name
 assert "kubectl create namespace" not in rdma, "IB must use an existing checkpoint namespace"
 assert "kubectl delete namespace" not in rdma, "IB must never delete a shared checkpoint namespace"
 assert 'run cancel "${rayjob}" --namespace "${namespace}"' in rdma
@@ -394,6 +396,12 @@ with tempfile.TemporaryDirectory() as temporary:
         assert kwargs["check"] is True
         return subprocess.CompletedProcess(command, 0)
     cleanup.subprocess.run = fake_cancel
+    routing_environment = patch.dict(os.environ, {
+        "AI_RUNTIME_E2E_KUBE_CONTEXT": "nightly-context",
+        "E2E_TAU_WORKSPACE": "nightly",
+        "E2E_TAU_SYSTEM_NAMESPACE": "tau-platform",
+    })
+    routing_environment.start()
     try:
         assert cleanup.cleanup_runs("taugrid-nightly-rdma", "42-1", Path("/test/tau")) == "released"
         assert [command[3] for command in cancellations] == [
@@ -402,7 +410,11 @@ with tempfile.TemporaryDirectory() as temporary:
             "e2e-multisite-dgx-spark-42-1",
         ]
         assert all(command[:3] == ["/test/tau", "run", "cancel"] for command in cancellations)
-        assert all(command[4:] == ["--namespace", "taugrid-nightly-rdma", "--teardown-timeout", "15m"] for command in cancellations)
+        assert all(command[4:] == [
+            "--namespace", "taugrid-nightly-rdma", "--teardown-timeout", "15m",
+            "--context", "nightly-context", "--workspace", "nightly",
+            "--system-namespace", "tau-platform",
+        ] for command in cancellations)
         for invalid in ("other", "42-1;delete"):
             try:
                 cleanup.cleanup_runs("taugrid-nightly-rdma", invalid, Path("/test/tau"))
@@ -427,6 +439,7 @@ with tempfile.TemporaryDirectory() as temporary:
         assert len(cancellations) == 5, "one failure must not skip other owned runs"
     finally:
         cleanup.subprocess.run = original_run
+        routing_environment.stop()
     namespace = "taugrid-nightly-matrix-42-1"
     run_id = "42-1"
     uid = "11111111-1111-4111-8111-111111111111"

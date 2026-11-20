@@ -491,6 +491,22 @@ and merging the pipeline source. Old default-priority workspace profiles do
 not satisfy this contract. Offline native rendering validates the Tau path;
 an earlier direct-Kubernetes hardware run is not evidence for this conversion.
 
+`FLEX_NIGHTLY_WORKSPACE` must name a Ready TauWorkspace in `tau-platform`
+whose resolved target is exactly `rdmaNamespace`. Submission and cancellation
+both pass that workspace and system namespace explicitly; they must not
+autodiscover another primary workspace. Matrix and cross-site configs use
+`policy.queue: auto` so the authoritative profile selects its LocalQueue
+instead of conflicting with the workspace default. The IB config explicitly
+uses `rdmaQueue`, which must also match the workspace default.
+
+A namespace label alone does not establish a valid workspace. The controller
+requires UID-bound namespace ownership/adoption and reconciles the workspace
+label even when `createNamespace: false`. Platform owners must approve a
+coherent dedicated workspace, namespace ownership, and ClusterQueue namespace
+selector contract before activation. Do not repoint an existing researcher
+workspace, weaken its queue selector, or create another team allocation merely
+to bypass this prerequisite.
+
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
 defect on the replacement H200 node. The 16-GPU H200 tests bind one pending worker only

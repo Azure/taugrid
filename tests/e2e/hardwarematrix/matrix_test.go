@@ -222,7 +222,7 @@ func matrixTauConfig(cfg matrixConfig, workload, name string) map[string]any {
 			"worker_cpu_request": "1", "worker_memory_request": "4Gi",
 			"worker_cpu_limit": "2", "worker_memory_limit": "8Gi",
 		},
-		"policy": e2e.NightlyTauPolicy(cfg.namespace, cfg.queue,
+		"policy": e2e.NightlyTauPolicy(cfg.namespace, "auto",
 			fmt.Sprintf("nightly.%s.%dgpu", cfg.target, cfg.workers)),
 		"execution": map[string]any{"launcher": "ray-train", "allow_nccl_override": true},
 	}

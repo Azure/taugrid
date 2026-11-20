@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -93,6 +94,13 @@ def cleanup_runs(namespace, run_id, tau_binary):
             str(tau_binary), "run", "cancel", f"{base}-{run_id}",
             "--namespace", namespace, "--teardown-timeout", "15m",
         ]
+        for variable, flag in (
+            ("AI_RUNTIME_E2E_KUBE_CONTEXT", "--context"),
+            ("E2E_TAU_WORKSPACE", "--workspace"),
+            ("E2E_TAU_SYSTEM_NAMESPACE", "--system-namespace"),
+        ):
+            if value := os.environ.get(variable):
+                command.extend((flag, value))
         try:
             subprocess.run(command, capture_output=True, text=True, check=True, timeout=1200)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:

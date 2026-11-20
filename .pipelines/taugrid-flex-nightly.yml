@@ -272,6 +272,8 @@ jobs:
             source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
             contract="$(Pipeline.Workspace)/taugrid-flex-hardware-contract/hardware-matrix.json"
+            export E2E_TAU_WORKSPACE="${FLEX_NIGHTLY_WORKSPACE}"
+            export E2E_TAU_SYSTEM_NAMESPACE=tau-platform
             test -s "${contract}"
             namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"
             if [[ -z "${namespace}" || "${namespace}" == '$('* ]]; then
@@ -575,6 +577,8 @@ jobs:
               >"${bundle_dir}/owned-cleanup-status.json"
         env:
           FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
+          E2E_TAU_WORKSPACE: ${{ parameters.workspace }}
+          E2E_TAU_SYSTEM_NAMESPACE: tau-platform
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
           FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
           FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
@@ -656,6 +660,8 @@ jobs:
               fi
             done
             namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"
+            export E2E_TAU_WORKSPACE="${FLEX_NIGHTLY_WORKSPACE}"
+            export E2E_TAU_SYSTEM_NAMESPACE=tau-platform
             rayjob="e2e-fineweb-16xh200-ib-$(Build.BuildId)-$(System.JobAttempt)"
             cleanup() {
               rc=$?
@@ -664,6 +670,7 @@ jobs:
               kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" -o wide \
                 >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1
               "$(Agent.TempDirectory)/tau" run cancel "${rayjob}" --namespace "${namespace}" \
+                --workspace "${E2E_TAU_WORKSPACE}" --system-namespace "${E2E_TAU_SYSTEM_NAMESPACE}" \
                 --teardown-timeout 15m || rc=1
               exit "${rc}"
             }

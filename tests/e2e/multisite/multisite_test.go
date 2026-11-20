@@ -147,7 +147,7 @@ func crossSiteTauConfig(namespace, queue, name, image, target string) map[string
 		"name": name, "engine": "job", "entrypoint": "gpu_site.py",
 		"runtime": map[string]any{"image": image},
 		"compute": map[string]any{"gpus": 1, "cpu_request": "1"},
-		"policy":  e2e.NightlyTauPolicy(namespace, queue, "nightly."+target+".1gpu"),
+		"policy":  e2e.NightlyTauPolicy(namespace, "auto", "nightly."+target+".1gpu"),
 		"run":     map[string]any{"ttl_seconds_after_finished": 300},
 	}
 }
