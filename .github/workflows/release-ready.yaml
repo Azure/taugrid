@@ -1,0 +1,58 @@
+name: Release readiness
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-ready.yaml
+      - scripts/ci/release_artifacts.py
+      - scripts/ci/verify-release-readiness.py
+      - scripts/ci/tests/release_readiness_test.py
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable annotated release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-readiness-${{ inputs.tag || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Test readiness contract
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Run readiness and provenance tests
+        run: python3 -S scripts/ci/tests/release_readiness_test.py
+
+  ready:
+    name: Release ready
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 245
+    steps:
+      - name: Check out trusted verifier with release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Wait for complete public distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/verify-release-readiness.py \
+            --tag "$REQUESTED_TAG" --timeout 14400
