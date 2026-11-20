@@ -1,0 +1,44 @@
+name: Release readiness
+
+on:
+  workflow_run:
+    workflows: [Release TauGrid]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published stable annotated release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-readiness-${{ github.event.workflow_run.id || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  ready:
+    name: Release ready
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 245
+    steps:
+      - name: Check out trusted verifier with release history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Wait for complete public distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/verify-release-readiness.py \
+            --run-id "$TRIGGER_RUN_ID" --tag "$REQUESTED_TAG" --timeout 14400
