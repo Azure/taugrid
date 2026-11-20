@@ -208,7 +208,7 @@ jobs:
     displayName: Ray Serve and Ray Train hardware matrix
     dependsOn: preflight
     timeoutInMinutes: 300
-    cancelTimeoutInMinutes: 30
+    cancelTimeoutInMinutes: 45
     steps:
       - checkout: self
 
@@ -597,6 +597,7 @@ jobs:
       - hardware_matrix
     condition: and(not(canceled()), eq(dependencies.preflight.result, 'Succeeded'))
     timeoutInMinutes: 90
+    cancelTimeoutInMinutes: 30
     steps:
       - checkout: self
 
@@ -662,16 +663,13 @@ jobs:
             namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"
             export E2E_TAU_WORKSPACE="${FLEX_NIGHTLY_WORKSPACE}"
             export E2E_TAU_SYSTEM_NAMESPACE=tau-platform
-            rayjob="e2e-fineweb-16xh200-ib-$(Build.BuildId)-$(System.JobAttempt)"
             cleanup() {
               rc=$?
               trap - EXIT
               set +e
-              kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" -o wide \
-                >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1
-              "$(Agent.TempDirectory)/tau" run cancel "${rayjob}" --namespace "${namespace}" \
-                --workspace "${E2E_TAU_WORKSPACE}" --system-namespace "${E2E_TAU_SYSTEM_NAMESPACE}" \
-                --teardown-timeout 15m || rc=1
+              kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" \
+                --request-timeout=30s -o wide \
+                >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1 || rc=1
               exit "${rc}"
             }
             trap cleanup EXIT
@@ -730,6 +728,50 @@ jobs:
           FINEWEB_TRAIN_STEPS: $(FINEWEB_TRAIN_STEPS)
           FINEWEB_CHECKPOINT_INTERVAL: $(FINEWEB_CHECKPOINT_INTERVAL)
           FINEWEB_RAYJOB_TIMEOUT_MINUTES: $(FINEWEB_RAYJOB_TIMEOUT_MINUTES)
+
+      - task: AzureCLI@2
+        displayName: Clean up owned IB workload
+        condition: always()
+        timeoutInMinutes: 20
+        inputs:
+          azureSubscription: $(azureServiceConnection)
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            set -euo pipefail
+            mkdir -p "$(Build.ArtifactStagingDirectory)"
+            if [[ -z "${FLEX_NIGHTLY_SUBSCRIPTION_ID:-}" ||
+                  "${FLEX_NIGHTLY_SUBSCRIPTION_ID}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]FLEX_NIGHTLY_SUBSCRIPTION_ID must be configured" >&2
+              exit 1
+            fi
+            az account set --subscription "${FLEX_NIGHTLY_SUBSCRIPTION_ID}"
+            tools_dir="$(Agent.TempDirectory)/taugrid-nightly-tools"
+            mkdir -p "${tools_dir}"
+            if ! command -v kubelogin >/dev/null 2>&1; then
+              az aks install-cli \
+                --install-location "${tools_dir}/kubectl" \
+                --kubelogin-install-location "${tools_dir}/kubelogin"
+            fi
+            export PATH="${tools_dir}:${PATH}"
+            export KUBECONFIG="$(Agent.TempDirectory)/flex-kubeconfig"
+            az aks get-credentials \
+              --resource-group "${FLEX_NIGHTLY_RESOURCE_GROUP}" \
+              --name "${FLEX_NIGHTLY_CLUSTER_NAME}" \
+              --file "${KUBECONFIG}" \
+              --overwrite-existing
+            kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
+            python3 "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-cleanup.py" \
+              cleanup-ib "${FLEX_NIGHTLY_RDMA_NAMESPACE}" \
+              "$(Build.BuildId)-$(System.JobAttempt)" "$(Agent.TempDirectory)/tau" \
+              >"$(Build.ArtifactStagingDirectory)/owned-ib-cleanup-status.json"
+        env:
+          FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
+          E2E_TAU_WORKSPACE: ${{ parameters.workspace }}
+          E2E_TAU_SYSTEM_NAMESPACE: tau-platform
+          FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)
+          FLEX_NIGHTLY_RESOURCE_GROUP: $(AKS_AI_RUNTIME_FLEX_RESOURCE_GROUP)
+          FLEX_NIGHTLY_CLUSTER_NAME: $(AKS_AI_RUNTIME_FLEX_CLUSTER_NAME)
 
       - task: PublishPipelineArtifact@1
         displayName: Publish H200 RDMA diagnostics

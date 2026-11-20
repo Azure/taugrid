@@ -55,6 +55,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 from unittest.mock import patch
 
 pipeline = Path(sys.argv[1]).read_text()
@@ -85,7 +86,7 @@ for name in ("hardware_matrix", "h200_rdma"):
     assert "export E2E_TAU_SYSTEM_NAMESPACE=tau-platform" in job, name
 assert "kubectl create namespace" not in rdma, "IB must use an existing checkpoint namespace"
 assert "kubectl delete namespace" not in rdma, "IB must never delete a shared checkpoint namespace"
-assert 'run cancel "${rayjob}" --namespace "${namespace}"' in rdma
+assert "cleanup-ib" in rdma
 assert "FINEWEB_CHECKPOINT_PVC: ${{ parameters.checkpointPVC }}" in rdma
 preflight = next(job for job in jobs if job.splitlines()[0] == "preflight")
 for resource in ("workloadpriorityclass aks-low-priority", "priorityclass tau-nightly-low"):
@@ -366,7 +367,7 @@ with tempfile.TemporaryDirectory() as temporary:
             assert not manifests.exists(), "nightly must not mutate platform-owned queues"
 
     matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
-    assert "cancelTimeoutInMinutes: 30" in matrix
+    assert "cancelTimeoutInMinutes: 45" in matrix
     cleanup_step = re.search(
         r"      - task: AzureCLI@2\n"
         r"        displayName: Clean up owned hardware matrix workloads\n"
@@ -392,7 +393,7 @@ with tempfile.TemporaryDirectory() as temporary:
     cancellations = []
     def fake_cancel(command, **kwargs):
         cancellations.append(command)
-        assert kwargs["timeout"] == 1200
+        assert 0 < kwargs["timeout"] <= 960
         assert kwargs["check"] is True
         return subprocess.CompletedProcess(command, 0)
     cleanup.subprocess.run = fake_cancel
@@ -404,11 +405,11 @@ with tempfile.TemporaryDirectory() as temporary:
     routing_environment.start()
     try:
         assert cleanup.cleanup_runs("taugrid-nightly-rdma", "42-1", Path("/test/tau")) == "released"
-        assert [command[3] for command in cancellations] == [
+        assert sorted(command[3] for command in cancellations) == sorted([
             "e2e-matrix-serve-42-1", "e2e-matrix-train-42-1",
             "e2e-multisite-a100-42-1", "e2e-multisite-h200-42-1",
             "e2e-multisite-dgx-spark-42-1",
-        ]
+        ])
         assert all(command[:3] == ["/test/tau", "run", "cancel"] for command in cancellations)
         assert all(command[4:] == [
             "--namespace", "taugrid-nightly-rdma", "--teardown-timeout", "15m",
@@ -440,6 +441,118 @@ with tempfile.TemporaryDirectory() as temporary:
     finally:
         cleanup.subprocess.run = original_run
         routing_environment.stop()
+    fake_tau = binary / "tau"
+    fake_tau.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys, time\n"
+        "with open(os.environ['FAKE_TAU_CALLS'], 'a') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "time.sleep(float(os.environ.get('FAKE_TAU_SLEEP', '0')))\n"
+        "if sys.argv[3] == os.environ.get('FAKE_TAU_FAILURE'):\n"
+        "    sys.stderr.write('compute still present\\n')\n"
+        "    sys.exit(1)\n"
+    )
+    fake_tau.chmod(0o755)
+    for scenario, delay, failed_run in (
+        ("released", "0", ""),
+        ("command-failure", "0", "e2e-matrix-serve-42-1"),
+        ("budget-expired", "3", ""),
+    ):
+        calls = root / f"real-cleanup-{scenario}.jsonl"
+        environment = {
+            "FAKE_TAU_CALLS": str(calls),
+            "FAKE_TAU_SLEEP": delay,
+            "FAKE_TAU_FAILURE": failed_run,
+            "E2E_TAU_WORKSPACE": "shared-workspace",
+            "E2E_TAU_SYSTEM_NAMESPACE": "tau-platform",
+            "AI_RUNTIME_E2E_KUBE_CONTEXT": "",
+        }
+        started = time.monotonic()
+        with patch.dict(os.environ, environment), patch.object(cleanup, "CLEANUP_TIMEOUT_SECONDS", 1):
+            try:
+                result = cleanup.cleanup_runs("shared-namespace", "42-1", fake_tau)
+            except RuntimeError as error:
+                assert scenario != "released", error
+                expected_error = "budget expired" if scenario == "budget-expired" else "compute still present"
+                assert expected_error in str(error), error
+            else:
+                assert scenario == "released" and result == "released"
+        assert time.monotonic() - started < 3, "cleanup must respect its shared budget"
+        actual = [json.loads(line) for line in calls.read_text().splitlines()]
+        assert {command[2] for command in actual} == {
+            "e2e-matrix-serve-42-1", "e2e-matrix-train-42-1",
+            "e2e-multisite-a100-42-1", "e2e-multisite-h200-42-1",
+            "e2e-multisite-dgx-spark-42-1",
+        }, "a stalled or failed cancellation must not starve later owned runs"
+        assert all(command[:2] == ["run", "cancel"] for command in actual)
+        assert all("--namespace" in command and "shared-namespace" in command for command in actual)
+
+    ib_cleanup_step = re.search(
+        r"      - task: AzureCLI@2\n"
+        r"        displayName: Clean up owned IB workload\n"
+        r"(.*?)"
+        r"      - task: PublishPipelineArtifact@1",
+        rdma, re.DOTALL,
+    )
+    assert ib_cleanup_step, "IB cancellation must not depend on the execution trap"
+    assert "cancelTimeoutInMinutes: 30" in rdma
+    assert "condition: always()" in ib_cleanup_step.group(1)
+    assert "timeoutInMinutes: 20" in ib_cleanup_step.group(1)
+    assert "cleanup-ib" in ib_cleanup_step.group(1)
+    assert "owned-ib-cleanup-status.json" in ib_cleanup_step.group(1)
+    assert "--teardown-timeout" not in rdma, "the diagnostics trap must not consume cancellation grace"
+    inline = re.search(
+        r"          inlineScript: \|\n(.*?)        env:\n", ib_cleanup_step.group(1), re.DOTALL,
+    )
+    script = textwrap.dedent(inline.group(1))
+    for scenario, failed_run in (
+        ("canceled-execution", ""),
+        ("failed-execution", ""),
+        ("cancellation-failure", "e2e-fineweb-16xh200-ib-42-1"),
+    ):
+        directory = root / scenario
+        agent = directory / "agent"
+        artifact = directory / "artifacts"
+        agent.mkdir(parents=True)
+        (agent / "tau").symlink_to(fake_tau)
+        calls = directory / "ib-calls.jsonl"
+        environment = dict(
+            os.environ,
+            PATH=f"{binary}:{os.environ['PATH']}",
+            AUTH_CALLS=str(directory / "auth-calls"),
+            EXPECTED_ARTIFACT_DIR=str(artifact),
+            FAIL_COMMAND="",
+            FLEX_NIGHTLY_SUBSCRIPTION_ID="test-subscription",
+            FLEX_NIGHTLY_RESOURCE_GROUP="test-resource-group",
+            FLEX_NIGHTLY_CLUSTER_NAME="test-cluster",
+            FLEX_NIGHTLY_RDMA_NAMESPACE="shared-namespace",
+            E2E_TAU_WORKSPACE="shared-workspace",
+            E2E_TAU_SYSTEM_NAMESPACE="tau-platform",
+            AI_RUNTIME_E2E_KUBE_CONTEXT="",
+            FAKE_TAU_CALLS=str(calls),
+            FAKE_TAU_SLEEP="0",
+            FAKE_TAU_FAILURE=failed_run,
+        )
+        expanded = script.replace("$(Build.SourcesDirectory)", str(cleanup_path.parents[2]))
+        expanded = expanded.replace("$(Build.ArtifactStagingDirectory)", str(artifact))
+        expanded = expanded.replace("$(Agent.TempDirectory)", str(agent))
+        expanded = expanded.replace("$(Build.BuildId)", "42").replace("$(System.JobAttempt)", "1")
+        result = subprocess.run(
+            ["bash", "-c", expanded], env=environment, capture_output=True, text=True, timeout=5,
+        )
+        assert (result.returncode == 0) == (scenario != "cancellation-failure"), (scenario, result.stderr)
+        actual = [json.loads(line) for line in calls.read_text().splitlines()]
+        assert len(actual) == 1
+        assert actual[0] == [
+            "run", "cancel", "e2e-fineweb-16xh200-ib-42-1",
+            "--namespace", "shared-namespace", "--teardown-timeout", "15m",
+            "--workspace", "shared-workspace", "--system-namespace", "tau-platform",
+        ]
+        if result.returncode == 0:
+            status = json.loads((artifact / "owned-ib-cleanup-status.json").read_text())
+            assert status == {"action": "cleanup-ib", "status": "released"}
+        else:
+            assert "compute still present" in result.stderr
     namespace = "taugrid-nightly-matrix-42-1"
     run_id = "42-1"
     uid = "11111111-1111-4111-8111-111111111111"

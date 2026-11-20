@@ -378,6 +378,11 @@ deleting platform resources. A separate `always()` cleanup task cancels only
 the exact matrix and cross-site run names suffixed with the build/attempt ID,
 before artifact publication; the in-task trap also performs this cleanup and
 postflight capability comparison. Native cancellation waits for compute release.
+All named runs receive concurrent cancellation attempts under a shared 16-minute
+cleanup deadline; a stalled or failed attempt does not skip the remaining runs.
+The cleanup task allows 20 minutes including authentication. The matrix job
+allows 45 minutes cancellation grace for the in-task cleanup and independent
+cleanup task; deadline expiry is a failure, never a successful release.
 Every available target runs:
 
 | Target | Single GPU | Native multi-GPU | Cross-node |
@@ -481,7 +486,11 @@ must already be Bound, writable, and ReadWriteMany in that namespace. Configure
 `nightly.h200.ib` for this namespace/queue. Tau mounts the claim at `/data` and
 the IB job writes a fresh run-specific checkpoint beneath
 `/data/checkpoints/nightly/<run-name>`. Cleanup cancels only the run-specific
-RayJob, preserving the namespace, claim, and checkpoint. Runtime RDMA setup
+RayJob, preserving the namespace, claim, and checkpoint. A separate `always()`
+task performs IB cancellation with a 20-minute task limit and 30-minute job
+cancellation grace. Its shared cleanup deadline is 16 minutes. The execution
+trap only captures diagnostics, so interruption cannot consume the cancellation
+budget waiting for teardown inside that trap. Runtime RDMA setup
 stages libibverbs/providers in worker Pods; the existing positive `NET/IB`,
 no `NET/Socket`, 8+8 placement, FSDP steps, and checkpoint-byte assertions remain.
 
