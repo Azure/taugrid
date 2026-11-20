@@ -29,7 +29,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/operator:v0.3.0
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/operator:v0.4.1
 
   - it: uses explicit image tag when set
     template: operator/deployment.yaml
@@ -175,15 +175,39 @@ tests:
       - isNull:
           path: spec.template.spec.containers[0].readinessProbe
 
-  - it: ClusterRole has read-only RBAC permissions
+  - it: ClusterRole can manage the ingestor RBAC that adx-mon v0.4 reconciles
     template: operator/clusterrole.yaml
     asserts:
       - contains:
           path: rules
           content:
             apiGroups: [rbac.authorization.k8s.io]
-            resources: [clusterroles, clusterrolebindings]
-            verbs: [get, list, watch]
+            resources: [clusterroles, clusterrolebindings, roles, rolebindings]
+            verbs: [get, list, watch, create, update, delete]
+
+  - it: ClusterRole holds pods patch so it can grant it to the ingestor Role
+    template: operator/clusterrole.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods]
+            verbs: [get, list, watch, create, update, patch, delete]
+
+  - it: ClusterRole holds the status and finalizer updates it grants to the ingestor ClusterRole
+    template: operator/clusterrole.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [adx-mon.azure.com]
+            resources:
+              - functions/status
+              - managementcommands/status
+              - summaryrules/status
+              - functions/finalizers
+            verbs: [update]
 
   - it: ClusterRole has events create/patch for controller-runtime
     template: operator/clusterrole.yaml

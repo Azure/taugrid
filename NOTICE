@@ -10,8 +10,8 @@ First-party frontend source is maintained separately in portal/frontend.
 
 ===============================================================================
 
-Component: Azure/adx-mon v0.3.0
-Source: https://github.com/Azure/adx-mon/tree/v0.3.0
+Component: Azure/adx-mon v0.4.1
+Source: https://github.com/Azure/adx-mon/tree/v0.4.1
 Included material: CRD manifests under charts/adx-mon/crds and derived build
 instructions in images/adx-mon/Dockerfile.collector.
 
