@@ -34,7 +34,7 @@ source "${REPO_ROOT}/scripts/lib/kind.sh"
 # shellcheck source=../../lib/image-specs.sh
 source "${REPO_ROOT}/scripts/lib/image-specs.sh"
 
-[[ "$(taugrid_image_names)" == $'tau\ntaugrid-portal\ntau-core-controller\ntaugrid-metrics-collector' ]]
+[[ "$(taugrid_image_names)" == $'tau\ntaugrid-portal\ntau-core-controller\ntaugrid-metrics-collector\ngpu-metrics-collector' ]]
 taugrid_image_spec taugrid-portal
 [[ "${TAUGRID_IMAGE_REPOSITORY}" == taugrid-portal ]]
 [[ "${TAUGRID_IMAGE_DOCKERFILE}" == images/taugrid-portal/Dockerfile ]]
