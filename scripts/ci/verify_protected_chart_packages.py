@@ -8,7 +8,6 @@ import importlib.util
 import json
 from pathlib import Path
 import re
-import sys
 import tarfile
 
 CHARTS = ("tau-core-controller", "gpu-monitoring", "taugrid-core", "adx-mon", "taugrid")
