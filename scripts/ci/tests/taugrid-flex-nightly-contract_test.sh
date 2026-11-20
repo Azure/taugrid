@@ -76,6 +76,15 @@ for name in ("hardware_matrix", "h200_rdma"):
     ):
         assert setting in job, (name, setting)
         assert job.index(setting) < job.index("go test -v"), (name, setting)
+    assert "export E2E_TAU_RUN=1" in job, name
+    assert 'export TAU_BINARY="$(Agent.TempDirectory)/tau"' in job, name
+    assert 'cd "$(Build.SourcesDirectory)/cli"\n          make build' in job, name
+    assert 'install -m 755 bin/tau "$(Agent.TempDirectory)/tau"' in job, name
+    assert "export E2E_TAU_CONFIG_DIR=" in job, name
+assert "kubectl create namespace" not in rdma, "IB must use an existing checkpoint namespace"
+assert "kubectl delete namespace" not in rdma, "IB must never delete a shared checkpoint namespace"
+assert 'run cancel "${rayjob}" --namespace "${namespace}"' in rdma
+assert "FINEWEB_CHECKPOINT_PVC: ${{ parameters.checkpointPVC }}" in rdma
 preflight = next(job for job in jobs if job.splitlines()[0] == "preflight")
 for resource in ("workloadpriorityclass aks-low-priority", "priorityclass tau-sandbox-low"):
     assert f"kubectl get {resource} -o json" in preflight, resource
@@ -243,7 +252,9 @@ with tempfile.TemporaryDirectory() as temporary:
         assert routing_source in job, name
         first_use = (
             "scripts/ci/taugrid-flex-nightly-preflight.sh cluster"
-            if name == "preflight" else "kubectl create namespace"
+            if name == "preflight" else (
+                "kubectl create namespace" if name == "hardware_matrix" else "namespace="
+            )
         )
         assert job.index(routing_source) < job.index(first_use), name
         defaults = {
@@ -301,7 +312,7 @@ with tempfile.TemporaryDirectory() as temporary:
             )
             assert result.returncode == 0, (name, scenario, result.stderr)
             assert result.stdout.splitlines() == expected, (name, scenario, result.stdout, expected)
-        if name == "preflight":
+        if name in ("preflight", "h200_rdma"):
             continue
         inline = re.search(r"          inlineScript: \|\n(.*?)        env:\n", job, re.DOTALL)
         script = textwrap.dedent(inline.group(1))

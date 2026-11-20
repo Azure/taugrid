@@ -48,6 +48,18 @@ parameters:
     displayName: DGX Spark ResourceFlavor
     type: string
     default: $(FLEX_NIGHTLY_DGX_FLAVOR)
+  - name: rdmaNamespace
+    displayName: Existing authorized IB checkpoint namespace
+    type: string
+    default: $(FLEX_NIGHTLY_RDMA_NAMESPACE)
+  - name: rdmaQueue
+    displayName: Existing IB LocalQueue
+    type: string
+    default: $(FLEX_NIGHTLY_RDMA_QUEUE)
+  - name: checkpointPVC
+    displayName: Existing writable shared IB checkpoint PVC
+    type: string
+    default: $(FLEX_NIGHTLY_CHECKPOINT_PVC)
 
 pool:
   name: 1es-aks-ai-runtime-ado-eastus2
@@ -217,6 +229,13 @@ jobs:
           artifact: taugrid-flex-hardware-contract
           path: $(Pipeline.Workspace)/taugrid-flex-hardware-contract
 
+      - bash: |
+          set -euo pipefail
+          cd "$(Build.SourcesDirectory)/cli"
+          make build
+          install -m 755 bin/tau "$(Agent.TempDirectory)/tau"
+        displayName: Build Tau workload executor from this revision
+
       - task: AzureCLI@2
         displayName: Run topology-aware hardware matrix
         inputs:
@@ -355,6 +374,11 @@ jobs:
             cd "$(Build.SourcesDirectory)/tests/e2e"
             export AI_RUNTIME_E2E=1
             export E2E_HARDWARE_MATRIX=1
+            export E2E_TAU_RUN=1
+            export TAU_BINARY="$(Agent.TempDirectory)/tau"
+            export E2E_TAU_RUN_ID="$(Build.BuildId)-$(System.JobAttempt)"
+            export E2E_TAU_CONFIG_DIR="${artifact_dir}/tau-runs"
+            mkdir -p "${E2E_TAU_CONFIG_DIR}"
             export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority
             export E2E_POD_PRIORITY_CLASS=tau-sandbox-low
             export MATRIX_NAMESPACE="${namespace}"
@@ -457,16 +481,6 @@ jobs:
                     started_at:$started_at
                   }' \
                   >>"${summary}"
-                kubectl delete rayjobs.ray.io \
-                  -n "${namespace}" \
-                  -l "tau.azure.com/e2e-hardware-matrix=${target}" \
-                  --ignore-not-found \
-                  --wait=true \
-                  --timeout=10m || matrix_rc=1
-                kubectl wait --for=delete pod \
-                  -n "${namespace}" \
-                  -l "tau.azure.com/e2e-hardware-matrix=${target}" \
-                  --timeout=10m || matrix_rc=1
               done
             }
 
@@ -606,6 +620,13 @@ jobs:
           version: 1.27.4-1
           goDownloadUrl: https://aka.ms/golang/release/latest
 
+      - bash: |
+          set -euo pipefail
+          cd "$(Build.SourcesDirectory)/cli"
+          make build
+          install -m 755 bin/tau "$(Agent.TempDirectory)/tau"
+        displayName: Build Tau workload executor from this revision
+
       - task: AzureCLI@2
         displayName: Run synthetic H200 InfiniBand conformance
         inputs:
@@ -641,42 +662,49 @@ jobs:
 
             source "$(Build.SourcesDirectory)/scripts/ci/taugrid-flex-nightly-routing.sh"
 
-            namespace="taugrid-nightly-rdma-$(Build.BuildId)-$(System.JobAttempt)"
+            for value in "${FLEX_NIGHTLY_RDMA_NAMESPACE}" "${FLEX_NIGHTLY_RDMA_QUEUE}" "${FINEWEB_CHECKPOINT_PVC}"; do
+              if [[ -z "${value}" || "${value}" == '$('* ]]; then
+                echo "##vso[task.logissue type=error]Tau IB requires configured existing namespace, LocalQueue, and checkpoint PVC" >&2
+                exit 1
+              fi
+            done
+            namespace="${FLEX_NIGHTLY_RDMA_NAMESPACE}"
+            rayjob="e2e-fineweb-16xh200-ib-$(Build.BuildId)-$(System.JobAttempt)"
             cleanup() {
               rc=$?
               trap - EXIT
               set +e
               kubectl get rayjobs,rayclusters,workloads,pods -n "${namespace}" -o wide \
                 >"$(Build.ArtifactStagingDirectory)/rdma-resources.txt" 2>&1
-              kubectl delete namespace "${namespace}" --ignore-not-found --wait=true --timeout=15m
+              "$(Agent.TempDirectory)/tau" run cancel "${rayjob}" --namespace "${namespace}" \
+                --teardown-timeout 15m || rc=1
               exit "${rc}"
             }
             trap cleanup EXIT
 
-            kubectl create namespace "${namespace}"
-            kubectl label namespace "${namespace}" \
-              "tau.azure.com/workspace=${FLEX_NIGHTLY_WORKSPACE}" \
-              tau.azure.com/gpu-queue=enabled
-            cat <<EOF | kubectl apply -f -
-            apiVersion: kueue.x-k8s.io/v1beta2
-            kind: LocalQueue
-            metadata:
-              name: h200
-              namespace: ${namespace}
-            spec:
-              clusterQueue: ${FLEX_NIGHTLY_CLUSTER_QUEUE}
-            EOF
+            kubectl get namespace "${namespace}" -o json |
+              jq -e --arg workspace "${FLEX_NIGHTLY_WORKSPACE}" \
+                '.metadata.labels["tau.azure.com/workspace"] == $workspace' >/dev/null
+            kubectl get localqueue "${FLEX_NIGHTLY_RDMA_QUEUE}" -n "${namespace}" -o json |
+              jq -e --arg queue "${FLEX_NIGHTLY_CLUSTER_QUEUE}" '.spec.clusterQueue == $queue' >/dev/null
+            kubectl get pvc "${FINEWEB_CHECKPOINT_PVC}" -n "${namespace}" -o json |
+              jq -e '.status.phase == "Bound" and (.spec.accessModes | index("ReadWriteMany") != null)' >/dev/null
 
             cd "$(Build.SourcesDirectory)/tests/e2e"
             export AI_RUNTIME_E2E=1
             export E2E_GPU=1
             export E2E_FINEWEB=1
+            export E2E_TAU_RUN=1
+            export TAU_BINARY="$(Agent.TempDirectory)/tau"
+            export E2E_TAU_RUN_ID="$(Build.BuildId)-$(System.JobAttempt)"
+            export E2E_TAU_CONFIG_DIR="$(Build.ArtifactStagingDirectory)/tau-runs"
+            mkdir -p "${E2E_TAU_CONFIG_DIR}"
             export E2E_WORKLOAD_PRIORITY_CLASS=aks-low-priority
             export E2E_POD_PRIORITY_CLASS=tau-sandbox-low
             export E2E_STACK_USE_ARGOCD_QUEUE=1
             export E2E_STACK_NAMESPACE="${namespace}"
-            export E2E_STACK_QUEUE=h200
-            export E2E_STACK_LARGE_GPU_QUEUE=h200
+            export E2E_STACK_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"
+            export E2E_STACK_LARGE_GPU_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"
             export GPU_NODE_SELECTOR_KEY=kueue.azure.com/gpu-series
             export GPU_NODE_SELECTOR_VALUE=nd-h200-v5
             export RAY_SUBMITTER_NODE_SELECTOR_KEY=kubernetes.azure.com/mode
@@ -695,6 +723,9 @@ jobs:
             go test -v -count=1 -timeout 75m \
               -run '^TestFineWebRayTrain16xH200IB$' ./stack/
         env:
+          FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
+          FLEX_NIGHTLY_RDMA_QUEUE: ${{ parameters.rdmaQueue }}
+          FINEWEB_CHECKPOINT_PVC: ${{ parameters.checkpointPVC }}
           FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
           FLEX_NIGHTLY_CLUSTER_QUEUE: ${{ parameters.clusterQueue }}
           FLEX_NIGHTLY_SUBSCRIPTION_ID: $(AKS_AI_RUNTIME_FLEX_SUBSCRIPTION_ID)

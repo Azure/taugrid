@@ -157,6 +157,7 @@ func topologyOptionsFromSubmit(o jobrender.Options) runtopology.Options {
 		PriorityTier:                    o.PriorityTier,
 		WorkloadPriorityClassName:       o.WorkloadPriorityClassName,
 		PodPriorityClassName:            o.PodPriorityClassName,
+		PodPreemptionPolicy:             o.PodPreemptionPolicy,
 		DisableKueueTopologyAnnotations: o.DisableKueueTopologyAnnotations,
 		DisableDefaultPriorities:        o.DisableDefaultPriorities,
 	}

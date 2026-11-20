@@ -47,6 +47,61 @@ func decodeDocs(t *testing.T, data []byte) []map[string]any {
 	return docs
 }
 
+func TestRenderPodPreemptionPolicy(t *testing.T) {
+	for _, value := range []string{"", "Never", "PreemptLowerPriority", "Always"} {
+		t.Run(value, func(t *testing.T) {
+			out, err := Render(Options{
+				Name:          "preemption-ray",
+				Namespace:     "tau",
+				ScriptName:    "train.py",
+				Script:        []byte("print('ok')\n"),
+				Workers:       2,
+				GPUsPerWorker: 1,
+				Profile:       profile.Profile{NodeSelector: map[string]string{"tau.azure.com/site": "nightly-site"}},
+				TopologyOptions: topology.Options{
+					QueueName:            "jobqueue",
+					PodPriorityClassName: "nightly-low",
+					PodPreemptionPolicy:  value,
+				},
+			})
+			if value == "Always" {
+				if err == nil || !strings.Contains(err.Error(), "policy.pod_preemption_policy") {
+					t.Fatalf("expected policy rejection, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(out), "ib-libs") || strings.Contains(string(out), "IBV_DRIVERS_PATH") {
+				t.Fatal("non-RDMA run gained library staging")
+			}
+			spec := decodeDocs(t, out)[0]["spec"].(map[string]any)
+			if spec["submissionMode"] != "HTTPMode" || spec["submitterPodTemplate"] != nil {
+				t.Fatalf("expected HTTP submission without a submitter: %v", spec)
+			}
+			cluster := spec["rayClusterSpec"].(map[string]any)
+			groups := append([]any{cluster["headGroupSpec"]}, cluster["workerGroupSpecs"].([]any)...)
+			for _, raw := range groups {
+				group := raw.(map[string]any)
+				pod := group["template"].(map[string]any)["spec"].(map[string]any)
+				if got, present := pod["preemptionPolicy"]; (value == "" && present) || (value != "" && got != value) {
+					t.Fatalf("preemptionPolicy = %v, present = %t, want %q", got, present, value)
+				}
+				if pod["priorityClassName"] != "nightly-low" {
+					t.Fatalf("pod priority = %v", pod["priorityClassName"])
+				}
+				if group["groupName"] != nil && pod["nodeSelector"].(map[string]any)["tau.azure.com/site"] != "nightly-site" {
+					t.Fatalf("worker selectors = %v", pod["nodeSelector"])
+				}
+				if group["groupName"] == nil && pod["nodeSelector"] != nil {
+					t.Fatalf("head must not inherit worker selectors: %v", pod["nodeSelector"])
+				}
+			}
+		})
+	}
+}
+
 func TestRenderRestrictedSecurityCoversRayPods(t *testing.T) {
 	out, err := Render(Options{
 		Name:          "restricted-ray",
@@ -132,6 +187,7 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 		Workers:         2,
 		GPUsPerWorker:   8,
 		RDMA:            runconfig.NormalizedRDMA{Enabled: true},
+		Env:             map[string]string{"LD_LIBRARY_PATH": "/usr/local/cuda/lib64"},
 		TopologyOptions: topology.Options{QueueName: "jobqueue"},
 	})
 	if err != nil {
@@ -168,6 +224,27 @@ func TestRenderRDMAAppliesRuntimeAndNetworkTopologyToWorkersOnly(t *testing.T) {
 	for _, field := range []string{"requests", "limits"} {
 		if got := len(workerResources[field].(map[string]any)); got != 3 {
 			t.Fatalf("worker %s=%v, want cpu, memory, and GPU only", field, workerResources[field])
+		}
+		if strings.Contains(fmt.Sprint(headPod), "inject-ib-libs") || strings.Contains(fmt.Sprint(headPod), "ib-libs") {
+			t.Fatal("head inherited worker RDMA library staging")
+		}
+		init := workerPod["initContainers"].([]any)[0].(map[string]any)
+		if init["name"] != "inject-ib-libs" || !strings.Contains(fmt.Sprint(init["command"]), "tdnf install -y libibverbs librdmacm libnl3") {
+			t.Fatalf("RDMA init = %v", init)
+		}
+		workerEnv := fmt.Sprint(workerContainer["env"])
+		for _, want := range []string{"/opt/ib/lib:/usr/local/cuda/lib64", "IBV_DRIVERS_PATH", "/usr/lib/libibverbs"} {
+			if !strings.Contains(workerEnv, want) {
+				t.Fatalf("RDMA env missing %q: %s", want, workerEnv)
+			}
+		}
+		for _, want := range []string{"/opt/ib/lib", "/usr/lib/libibverbs", "/etc/libibverbs.d"} {
+			if !strings.Contains(fmt.Sprint(workerContainer["volumeMounts"]), want) {
+				t.Fatalf("RDMA mounts missing %q: %v", want, workerContainer["volumeMounts"])
+			}
+		}
+		if !strings.Contains(fmt.Sprint(workerPod["volumes"]), "ib-libs") || !strings.Contains(fmt.Sprint(workerPod["volumes"]), runconfig.DefaultRDMAShmSize) {
+			t.Fatalf("RDMA volumes = %v", workerPod["volumes"])
 		}
 	}
 }
@@ -785,6 +862,39 @@ func TestRenderCustomOlderRayImageUsesOldProbeEndpoint(t *testing.T) {
 	}
 	if cluster["rayVersion"] != "2.39.0" {
 		t.Fatalf("rayVersion should match image tag, got %v", cluster["rayVersion"])
+	}
+}
+
+func TestRenderTTLOverride(t *testing.T) {
+	for _, ttl := range []int64{0, 600, -1, runconfig.MaxTTLSecondsAfterFinished + 1} {
+		t.Run(fmt.Sprint(ttl), func(t *testing.T) {
+			out, err := Render(Options{
+				Name:                    "ray-ttl",
+				Namespace:               "tau",
+				ScriptName:              "train.py",
+				Script:                  []byte("print('ok')\n"),
+				Workers:                 1,
+				TopologyOptions:         topology.Options{QueueName: "jobqueue"},
+				TTLSecondsAfterFinished: ttl,
+			})
+			if ttl < 0 || ttl > runconfig.MaxTTLSecondsAfterFinished {
+				if err == nil || !strings.Contains(err.Error(), "run.ttl_seconds_after_finished") {
+					t.Fatalf("expected TTL rejection, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ttl
+			if want == 0 {
+				want = 15
+			}
+			spec := decodeDocs(t, out)[0]["spec"].(map[string]any)
+			if fmt.Sprint(spec["ttlSecondsAfterFinished"]) != fmt.Sprint(want) {
+				t.Fatalf("TTL = %v, want %d", spec["ttlSecondsAfterFinished"], want)
+			}
+		})
 	}
 }
 

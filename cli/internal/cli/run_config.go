@@ -192,6 +192,7 @@ func configToDispatch(c runconfig.Config, configPath string) (unresolvedRunOptio
 	o.workloadProfileSnapshot = configRelativePath(baseDir, c.Policy.WorkloadProfileSnapshot)
 	o.workloadPriorityClass = c.Policy.WorkloadPriorityClass
 	o.podPriorityClass = c.Policy.PodPriorityClass
+	o.podPreemptionPolicy = c.Policy.PodPreemptionPolicy
 	o.nodeSelectors = mapToKeyValueList(c.Policy.NodeSelector)
 	o.clearNodeSelector = c.Policy.ClearNodeSelector
 	o.explicitPolicyFields = map[string]bool{

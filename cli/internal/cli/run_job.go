@@ -463,6 +463,7 @@ func resolvedRunTopologyFlags(o runPlacement) topologyFlags {
 		priorityTier:             o.priorityTier,
 		workloadPriorityClass:    o.workloadPriorityClass,
 		podPriorityClass:         o.podPriorityClass,
+		podPreemptionPolicy:      o.podPreemptionPolicy,
 		disableDefaultPriorities: o.disableDefaultPriorities,
 	}
 }

@@ -392,6 +392,16 @@ requests and report its hostname/device. Train requires every rank to initialize
 the collective, execute optimizer steps on CUDA, and report rank-zero evidence
 that a non-empty checkpoint was serialized. Durable remote checkpoint upload is
 covered only by storage-backed extended workloads.
+The pipeline builds `tau` from the checked-out revision. Every matrix RayJob,
+cross-site GPU Job, and required IB RayJob is submitted through
+`tau run --config <generated tau.yaml>`, not direct Kubernetes create/apply.
+Go tests remain the evidence/assertion harness. Generated Tau configs, shipped
+source files, and submission logs are retained in the job's `tau-runs` artifact
+directory. Direct Kubernetes access remains for infrastructure inventory,
+run-scoped namespace/LocalQueue setup, diagnostics, and owned cleanup.
+Missing Tau binaries or failed Tau submissions fail the test; they never fall
+back to raw Kubernetes workloads. Other E2E suites retain their original
+submission path unless `E2E_TAU_RUN=1` is explicitly selected.
 Kueue TAS assignments and observed pod placement must match the requested
 same-host or same-site/spread contract. A separate test requires available
 hardware targets to be Running concurrently on distinct authoritative sites.
@@ -436,6 +446,41 @@ if strict Kueue nonpreemption is required.
 `E2E_WORKLOAD_PRIORITY_CLASS` and `E2E_POD_PRIORITY_CLASS` opt other E2E runs into
 the same priority propagation; unset values preserve their existing priorities.
 
+Native Tau runs also require Ready platform-managed TauCluster profiles.
+Profiles use `team: research`, `lane: training`, mode `fixed`, the low classes
+above, and platform-owned `nodeSelector` entries matching the inventory's GPU
+selector and authoritative site. Namespace and LocalQueue authorization must
+include the generated matrix namespaces and their `matrix-<target>` queues.
+The pipeline never creates or edits these profiles or relaxes their policy.
+
+| Profile | Worker Pods | GPUs per worker | Placement |
+|---------|-------------|-----------------|-----------|
+| `nightly.a100.1gpu`, `nightly.h200.1gpu` | 1 | 1 | same-host |
+| `nightly.a100.8gpu`, `nightly.h200.8gpu` | 8 | 1 | same-host |
+| `nightly.a100.16gpu`, `nightly.h200.16gpu` | 16 | 1 | same-site |
+| `nightly.dgx-spark.1gpu` | 1 | 1 | same-host |
+| `nightly.dgx-spark.2gpu` | 2 | 1 | same-site |
+| `nightly.h200.ib` | 16 | 1 | same-network-domain |
+
+The IB stage uses an existing authorized namespace and LocalQueue instead of
+creating/deleting a namespace containing checkpoint storage. Configure
+`FLEX_NIGHTLY_RDMA_NAMESPACE`, `FLEX_NIGHTLY_RDMA_QUEUE`, and
+`FLEX_NIGHTLY_CHECKPOINT_PVC` (manual overrides: `rdmaNamespace`, `rdmaQueue`,
+`checkpointPVC`). The queue must bind to the selected ClusterQueue; the PVC
+must already be Bound, writable, and ReadWriteMany in that namespace. Configure
+`nightly.h200.ib` for this namespace/queue. Tau mounts the claim at `/data` and
+the IB job writes a fresh run-specific checkpoint beneath
+`/data/checkpoints/nightly/<run-name>`. Cleanup cancels only the run-specific
+RayJob, preserving the namespace, claim, and checkpoint. Runtime RDMA setup
+stages libibverbs/providers in worker Pods; the existing positive `NET/IB`,
+no `NET/Socket`, 8+8 placement, FSDP steps, and checkpoint-byte assertions remain.
+
+Activation requires deploying the compatible Tau controller/CRD (including
+profile `nodeSelector`), registering these profiles and existing IB resources,
+and merging the pipeline source. Old default-priority workspace profiles do
+not satisfy this contract. Offline native rendering validates the Tau path;
+an earlier direct-Kubernetes hardware run is not evidence for this conversion.
+
 The optional `AKS_AI_RUNTIME_FLEX_NIGHTLY_GPU_BINDING_WORKAROUND_NODE` pipeline
 variable enables a narrowly guarded recovery for the current managed-scheduler
 defect on the replacement H200 node. The 16-GPU H200 tests bind one pending worker only
@@ -456,10 +501,11 @@ overlay deliberately does not publish the environment-specific DGX selector.
 For an existing equivalent platform-managed allocation, set the pipeline
 parameters `workspace`, `clusterQueue`, `a100Flavor`, and `h200Flavor`
 explicitly; `dgxFlavor` applies only when DGX Spark is enabled. Defaults retain
-the nightly workspace and shared v2 queue contract above. Both the hardware
-matrix and required RDMA job label only their newly created run namespaces
-with the selected workspace identity and route their LocalQueues to the
-selected ClusterQueue. The workspace value must match that queue's
+the nightly workspace and shared v2 queue contract above. The hardware matrix
+labels only its newly created run namespace with the selected workspace identity
+and routes its LocalQueues to the selected ClusterQueue. The required RDMA job
+checks the existing namespace's workspace identity and LocalQueue binding
+without relabeling or deleting it. The workspace value must match that queue's
 namespace selector and be authorized to share its allocation. These
 parameters do not create or increase quota, relabel existing namespaces, or
 relax the required topology and hardware checks.

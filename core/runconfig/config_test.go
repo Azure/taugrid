@@ -47,6 +47,37 @@ policy:
 	}
 }
 
+func TestPodPreemptionPolicy(t *testing.T) {
+	for _, engine := range []string{EngineJob, EngineRayJob} {
+		for _, value := range []string{"", "Never", "PreemptLowerPriority", "never", "Always", " Never "} {
+			t.Run(engine+"/"+value, func(t *testing.T) {
+				raw := fmt.Sprintf("engine: %s\npolicy:\n  pod_preemption_policy: %q\n", engine, value)
+				cfg, err := parse([]byte(raw), "tau.yaml")
+				valid := value == "" || value == "Never" || value == "PreemptLowerPriority"
+				if !valid {
+					if err == nil || !strings.Contains(err.Error(), "policy.pod_preemption_policy") {
+						t.Fatalf("expected policy rejection, got %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cfg.Policy.PodPreemptionPolicy != value {
+					t.Fatalf("policy = %q, want %q", cfg.Policy.PodPreemptionPolicy, value)
+				}
+				if err := cfg.ValidateExecution(engine); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+	cfg := Config{Policy: Policy{PodPreemptionPolicy: "Never"}, Workflow: Workflow{File: "workflow.yaml"}}
+	if err := cfg.ValidateExecution(EngineJob); err == nil || !strings.Contains(err.Error(), "requires direct Job or RayJob dispatch") {
+		t.Fatalf("expected managed workflow rejection, got %v", err)
+	}
+}
+
 func TestValidateDirectRejectsNegativeJobGPUCount(t *testing.T) {
 	negative := -1
 	cfg := Config{Compute: Compute{GPUs: &negative}}
@@ -207,8 +238,8 @@ run:
 			}
 		})
 	}
-	if err := (Config{Run: Run{TTLSecondsAfterFinished: cfg.Run.TTLSecondsAfterFinished}}).ValidateExecution(EngineRayJob); err == nil || !strings.Contains(err.Error(), "requires engine: job") {
-		t.Fatalf("expected RayJob TTL rejection, got %v", err)
+	if err := (Config{Run: Run{TTLSecondsAfterFinished: cfg.Run.TTLSecondsAfterFinished}}).ValidateExecution(EngineRayJob); err != nil {
+		t.Fatalf("validate RayJob TTL: %v", err)
 	}
 }
 

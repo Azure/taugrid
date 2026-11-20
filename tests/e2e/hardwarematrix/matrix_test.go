@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
+	profile "github.com/Azure/taugrid/core/resourceprofile"
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/Azure/taugrid/tests/e2e/results"
 )
@@ -58,6 +59,7 @@ type matrixConfig struct {
 	expectedHosts    int
 	expectedPerHost  int
 	requiredTopology string
+	clusterName      string
 }
 
 func TestMain(m *testing.M) {
@@ -83,6 +85,9 @@ func TestRayTrainGPU(t *testing.T) {
 func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	t.Helper()
 	cfg := configFromEnv(t)
+	if e2e.TauRunEnabled() {
+		rayJobName = e2e.TauRunName(rayJobName)
+	}
 	tc := e2e.NewTestContext(t, context.Background())
 	tc.RecordOutcomeAs(fmt.Sprintf("%s/%s/%dgpu", workload, cfg.target, cfg.workers))
 
@@ -94,34 +99,48 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	})
 
 	cleanupMatrixResources(t, tc, cfg.namespace, rayJobName)
-	configMapName := rayJobName + "-script"
-	_, err := tc.KubeClient().CoreV1().ConfigMaps(cfg.namespace).Create(tc.Ctx(), &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: configMapName,
-			Labels: map[string]string{
-				"tau.azure.com/e2e-hardware-matrix": cfg.target,
-			},
-		},
-		Data: map[string]string{
-			workload + "_gpu.py":  script,
-			"runtime_contract.py": runtimeContractScript,
-		},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err, "create matrix script ConfigMap")
-
-	rayJob := buildRayJob(cfg, workload, rayJobName, configMapName)
-	require.NoError(t, e2e.ConfigureWorkloadPriority(rayJob))
-	_, err = tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Create(
-		tc.Ctx(), rayJob, metav1.CreateOptions{})
-	require.NoError(t, err, "create %s RayJob", workload)
-
 	t.Cleanup(func() {
 		cleanupMatrixResources(t, tc, cfg.namespace, rayJobName)
 	})
+	var err error
+	if e2e.TauRunEnabled() {
+		require.NoError(t, e2e.SubmitTauRun(t, tc.Ctx(), matrixTauConfig(cfg, workload, rayJobName), map[string][]byte{
+			workload + "_gpu.py":  []byte(script),
+			"runtime_contract.py": []byte(runtimeContractScript),
+		}))
+	} else {
+		configMapName := rayJobName + "-script"
+		_, err = tc.KubeClient().CoreV1().ConfigMaps(cfg.namespace).Create(tc.Ctx(), &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: configMapName,
+				Labels: map[string]string{
+					"tau.azure.com/e2e-hardware-matrix": cfg.target,
+				},
+			},
+			Data: map[string]string{
+				workload + "_gpu.py":  script,
+				"runtime_contract.py": runtimeContractScript,
+			},
+		}, metav1.CreateOptions{})
+		require.NoError(t, err, "create matrix script ConfigMap")
+
+		rayJob := buildRayJob(cfg, workload, rayJobName, configMapName)
+		require.NoError(t, e2e.ConfigureWorkloadPriority(rayJob))
+		_, err = tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Create(
+			tc.Ctx(), rayJob, metav1.CreateOptions{})
+		require.NoError(t, err, "create %s RayJob", workload)
+	}
 
 	admission, err := tc.WaitForWorkloadAdmittedByRayJob(cfg.namespace, rayJobName, 5*time.Minute)
 	require.NoError(t, err, "Kueue should admit %s matrix workload", workload)
 	requireTopologyAssignment(t, admission.Workload, cfg.workers)
+	if e2e.TauRunEnabled() {
+		job, err := tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(cfg.namespace).Get(tc.Ctx(), rayJobName, metav1.GetOptions{})
+		require.NoError(t, err)
+		cfg.clusterName, _, err = unstructured.NestedString(job.Object, "status", "rayClusterName")
+		require.NoError(t, err)
+		require.NotEmpty(t, cfg.clusterName)
+	}
 
 	if recoveryNode := strings.TrimSpace(os.Getenv("MATRIX_SCHEDULER_RECOVERY_NODE")); recoveryNode != "" {
 		require.Equal(t, "h200", cfg.target, "scheduler recovery is restricted to the verified H200 target")
@@ -158,13 +177,55 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 		success = "SUCCESS: Ray Train completed on every GPU worker"
 		logMarkers = []string{"MATRIX_TRAIN_RESULT=", success}
 	}
-	_, err = tc.WaitForFullPodLogsByLabelContaining(
-		cfg.namespace,
-		fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName),
-		logMarkers,
-		2*time.Minute,
-	)
+	if e2e.TauRunEnabled() {
+		_, err = tc.WaitForFullPodContainerLogsByLabelContaining(
+			cfg.namespace,
+			"ray.io/node-type=head,ray.io/cluster="+cfg.clusterName,
+			"ray-driver-log-offload", logMarkers, 3*time.Minute)
+	} else {
+		_, err = tc.WaitForFullPodLogsByLabelContaining(
+			cfg.namespace,
+			fmt.Sprintf("batch.kubernetes.io/job-name=%s", rayJobName),
+			logMarkers,
+			2*time.Minute,
+		)
+	}
 	require.NoError(t, err, "%s submitter logs should contain the success sentinel", workload)
+}
+
+func matrixTauConfig(cfg matrixConfig, workload, name string) map[string]any {
+	return map[string]any{
+		"name":   name,
+		"engine": "rayjob",
+		"run": map[string]any{
+			"entrypoint":                 workload + "_gpu.py",
+			"working_dir":                ".",
+			"ttl_seconds_after_finished": 600,
+		},
+		"runtime": map[string]any{
+			"image": cfg.image,
+			"pip":   []string{cfg.torchSpec},
+			"env": map[string]string{
+				"MATRIX_WORKERS":         strconv.Itoa(cfg.workers),
+				"MATRIX_RAY_VERSION":     cfg.rayVersion,
+				"MATRIX_TORCH_SPEC":      cfg.torchSpec,
+				"MATRIX_TORCH_INDEX_URL": cfg.torchIndexURL,
+				"NCCL_IB_DISABLE":        "1",
+				"PIP_INDEX_URL":          cfg.torchIndexURL,
+			},
+		},
+		"compute": map[string]any{
+			"workers":          cfg.workers,
+			"gpus_per_worker":  1,
+			"head_cpu_request": "1", "head_memory_request": "4Gi",
+			"head_cpu_limit": "2", "head_memory_limit": "8Gi",
+			"worker_cpu_request": "1", "worker_memory_request": "4Gi",
+			"worker_cpu_limit": "2", "worker_memory_limit": "8Gi",
+		},
+		"policy": e2e.NightlyTauPolicy(cfg.namespace, cfg.queue,
+			fmt.Sprintf("nightly.%s.%dgpu", cfg.target, cfg.workers)),
+		"execution": map[string]any{"launcher": "ray-train", "allow_nccl_override": true},
+	}
 }
 
 func matrixEnabled() bool {
@@ -448,6 +509,10 @@ func eligibleForSchedulerRecovery(workers, expectedPerHost int, state e2e.Schedu
 
 func cleanupMatrixResources(t *testing.T, tc *e2e.TestContext, namespace, rayJobName string) {
 	t.Helper()
+	if e2e.TauRunEnabled() {
+		require.NoError(t, e2e.CancelTauRun(tc.Ctx(), namespace, rayJobName))
+		return
+	}
 	propagation := metav1.DeletePropagationForeground
 	err := tc.DynamicClient().Resource(e2e.RayJobGVR).Namespace(namespace).Delete(
 		tc.Ctx(), rayJobName, metav1.DeleteOptions{PropagationPolicy: &propagation})
@@ -461,6 +526,9 @@ func cleanupMatrixResources(t *testing.T, tc *e2e.TestContext, namespace, rayJob
 }
 
 func matrixWorkerSelector(cfg matrixConfig, workload string) string {
+	if cfg.clusterName != "" {
+		return "ray.io/node-type=worker,ray.io/cluster=" + cfg.clusterName
+	}
 	return fmt.Sprintf(
 		"ray.io/node-type=worker,tau.azure.com/e2e-hardware-matrix=%s,tau.azure.com/e2e-matrix-workload=%s",
 		cfg.target,
@@ -511,6 +579,69 @@ func rayVersion(t *testing.T, image string) string {
 	match := rayVersionPattern.FindStringSubmatch(image)
 	require.Len(t, match, 2, "RAY_E2E_IMAGE must include a rayX.Y.Z version or RAY_E2E_VERSION must be set")
 	return match[1]
+}
+
+func TestNativeTauMatrixRendering(t *testing.T) {
+	binary := e2e.BuildTauForTest(t)
+	for target, counts := range map[string][]int{"a100": {1, 8, 16}, "h200": {1, 8, 16}, "dgx-spark": {1, 2}} {
+		for _, count := range counts {
+			for _, workload := range []string{"serve", "train"} {
+				t.Run(fmt.Sprintf("%s/%dgpu/%s", target, count, workload), func(t *testing.T) {
+					cfg := matrixConfig{
+						namespace: "nightly", queue: "matrix-" + target, target: target,
+						site: "site-" + target, selectorKey: "tau.azure.com/gpu-class", selectorValue: target,
+						image: "registry.example.com/ray:py3.12-ray2.58.0", rayVersion: "2.58.0",
+						torchSpec: "torch==2.7.1", torchIndexURL: "https://download.pytorch.org/whl/cu128",
+						workers: count,
+					}
+					placement := profile.PlacementSameHost
+					if count == 16 || (target == "dgx-spark" && count == 2) {
+						placement = profile.PlacementSameSite
+					}
+					platform := profile.WorkloadProfile{
+						Name:        fmt.Sprintf("nightly.%s.%dgpu", target, count),
+						WorkerCount: int32(count), GPUsPerWorker: 1,
+						Mode: "fixed", Placement: placement, DefaultLocalQueue: cfg.queue,
+						NodeSelector: map[string]string{cfg.selectorKey: cfg.selectorValue, "tau.azure.com/site": cfg.site},
+						Priorities: profile.ProfilePriorities{
+							WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-sandbox-low",
+						},
+					}
+					script := trainScript
+					if workload == "serve" {
+						script = serveScript
+					}
+					job := e2e.RenderTauRunOffline(t, binary, matrixTauConfig(cfg, workload, "nightly-"+workload),
+						map[string][]byte{workload + "_gpu.py": []byte(script), "runtime_contract.py": []byte(runtimeContractScript)}, platform)
+					require.Equal(t, "RayJob", job.GetKind())
+					require.Equal(t, "aks-low-priority", job.GetLabels()["kueue.x-k8s.io/priority-class"])
+					ttl, found, err := unstructured.NestedInt64(job.Object, "spec", "ttlSecondsAfterFinished")
+					require.NoError(t, err)
+					require.True(t, found)
+					require.Equal(t, int64(600), ttl)
+					groups, _, err := unstructured.NestedSlice(job.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
+					require.NoError(t, err)
+					require.Len(t, groups, 1)
+					group := groups[0].(map[string]any)
+					require.Equal(t, int64(count), group["replicas"])
+					spec, _, err := unstructured.NestedMap(group, "template", "spec")
+					require.NoError(t, err)
+					require.Equal(t, "tau-sandbox-low", spec["priorityClassName"])
+					require.Equal(t, "Never", spec["preemptionPolicy"])
+					selector, _, err := unstructured.NestedStringMap(spec, "nodeSelector")
+					require.NoError(t, err)
+					require.Equal(t, platform.NodeSelector, selector)
+					annotations, _, err := unstructured.NestedStringMap(group, "template", "metadata", "annotations")
+					require.NoError(t, err)
+					expectedTopology := "kubernetes.io/hostname"
+					if placement == profile.PlacementSameSite {
+						expectedTopology = "tau.azure.com/site"
+					}
+					require.Equal(t, expectedTopology, annotations["kueue.x-k8s.io/podset-required-topology"])
+				})
+			}
+		}
+	}
 }
 
 func TestBuildRayJobContract(t *testing.T) {

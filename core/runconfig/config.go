@@ -19,6 +19,7 @@ import (
 	"github.com/Azure/taugrid/core/experiment"
 	"github.com/Azure/taugrid/core/exptelemetry"
 	offloadcontract "github.com/Azure/taugrid/core/metricsoffload"
+	"github.com/Azure/taugrid/core/topology"
 	"github.com/distribution/reference"
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -280,6 +281,7 @@ type Policy struct {
 	WorkloadProfileSnapshot  string            `yaml:"workload_profile_snapshot"`
 	WorkloadPriorityClass    string            `yaml:"workload_priority_class"`
 	PodPriorityClass         string            `yaml:"pod_priority_class"`
+	PodPreemptionPolicy      string            `yaml:"pod_preemption_policy"`
 	NodeSelector             map[string]string `yaml:"node_selector"`
 	ClearNodeSelector        bool              `yaml:"clear_node_selector"`
 	DisableDefaultPriorities *bool             `yaml:"disable_default_priorities"`
@@ -506,6 +508,9 @@ func (p managedConfigProjection) config() Config {
 }
 
 func (c Config) ValidateDirect() error {
+	if err := topology.ValidatePodPreemptionPolicy(c.Policy.PodPreemptionPolicy); err != nil {
+		return err
+	}
 	if c.Compute.GPUs != nil && *c.Compute.GPUs < 0 {
 		return fmt.Errorf("compute.gpus must be >= 0")
 	}
@@ -979,6 +984,12 @@ func (c Config) ValidateExecution(engine string) error {
 	if err != nil {
 		return err
 	}
+	if err := topology.ValidatePodPreemptionPolicy(c.Policy.PodPreemptionPolicy); err != nil {
+		return err
+	}
+	if c.Policy.PodPreemptionPolicy != "" && (c.Workflow.File != "" || c.LooksLikeManagedWorkflow()) {
+		return fmt.Errorf("policy.pod_preemption_policy requires direct Job or RayJob dispatch")
+	}
 	if err := ValidateContainerWorkingDir(c.Runtime.WorkingDir); err != nil {
 		return err
 	}
@@ -993,10 +1004,7 @@ func (c Config) ValidateExecution(engine string) error {
 			)
 		}
 		if c.Workflow.File != "" || c.LooksLikeManagedWorkflow() {
-			return fmt.Errorf("run.ttl_seconds_after_finished requires direct Job dispatch and cannot be used with workflow.file")
-		}
-		if engine != "job" {
-			return fmt.Errorf("run.ttl_seconds_after_finished requires engine: job")
+			return fmt.Errorf("run.ttl_seconds_after_finished requires direct Job or RayJob dispatch and cannot be used with workflow.file")
 		}
 	}
 	if strings.TrimSpace(c.Runtime.WorkingDir) != "" {

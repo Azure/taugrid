@@ -17,6 +17,7 @@ func ApplyTopologyOptions(o *Options, top topology.Options) {
 	o.PriorityTier = top.PriorityTier
 	o.WorkloadPriorityClassName = top.WorkloadPriorityClassName
 	o.PodPriorityClassName = top.PodPriorityClassName
+	o.PodPreemptionPolicy = top.PodPreemptionPolicy
 	o.DisableKueueTopologyAnnotations = top.DisableKueueTopologyAnnotations
 	o.DisableDefaultPriorities = top.DisableDefaultPriorities
 }
