@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100"
+ font-family="Inter, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+<defs>
+ <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#4b5563"/></marker>
+ <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="white"/>
+<text x="900.0" y="1086" text-anchor="middle" font-size="13" fill="#6b7280">TauGrid #278: capacity-aware Kueue admission. Red marks everything the design adds.</text>
+<rect x="20" y="20" width="1760" height="270" rx="12" fill="none" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="36" y="44" font-size="16" font-weight="700" fill="#6b7280">1 · CONFIGURATION — once per cluster (platform engineer)</text>
+<rect x="20" y="305" width="1760" height="520" rx="12" fill="none" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="36" y="329" font-size="16" font-weight="700" fill="#6b7280">2 · REQUEST PATH — every run</text>
+<rect x="20" y="840" width="1760" height="215" rx="12" fill="none" stroke="#d1d5db" stroke-width="1.5"/>
+<text x="36" y="864" font-size="16" font-weight="700" fill="#6b7280">3 · BOUNDING AND CLEANUP</text>
+<rect x="40" y="60" width="330" height="138" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="52" y="86" font-weight="700" fill="#111827">TauCluster</text>
+<text x="52" y="105" fill="#374151" font-weight="400">managementMode: Reconcile</text>
+<text x="52" y="124" fill="#374151" font-weight="400">queues.ownership: Adopt</text>
+<text x="52" y="143" fill="#dc2626" font-weight="700">queues.provisioning:</text>
+<text x="52" y="162" fill="#dc2626" font-weight="700">  ownership: External|Adopt|Manage</text>
+<text x="52" y="181" fill="#dc2626" font-weight="700">  configs: class, validUntil, retry</text>
+<rect x="400" y="60" width="350" height="119" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="412" y="86" font-weight="700" fill="#111827">TauGrid cluster controller</text>
+<text x="412" y="105" fill="#374151" font-weight="400">reconcileDiscoveredGPUFlavors</text>
+<text x="412" y="124" fill="#dc2626" font-weight="700">reconcileCapacityProvisioning</text>
+<text x="412" y="143" fill="#dc2626" font-weight="700">  Manage: create + repair (SSA)</text>
+<text x="412" y="162" fill="#dc2626" font-weight="700">  refuses unlabeled: OwnershipConflict</text>
+<rect x="820" y="60" width="300" height="119" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 4"/>
+<text x="832" y="86" font-weight="700" fill="#111827">Kueue capacity wiring</text>
+<text x="832" y="105" fill="#dc2626" font-weight="700">ProvisioningRequestConfig</text>
+<text x="832" y="124" fill="#dc2626" font-weight="700">  best-effort-atomic-scale-up</text>
+<text x="832" y="143" fill="#dc2626" font-weight="700">AdmissionCheck taugrid-cas-gpu</text>
+<text x="832" y="162" fill="#dc2626" font-weight="700">  provisioning-request controller</text>
+<rect x="1190" y="60" width="230" height="100" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="1202" y="86" font-weight="700" fill="#111827">Profile observer</text>
+<text x="1202" y="105" fill="#374151" font-weight="400">ExecutionReady</text>
+<text x="1202" y="124" fill="#dc2626" font-weight="700">ProvisioningReady</text>
+<text x="1202" y="143" fill="#dc2626" font-weight="700">  fails Required closed</text>
+<rect x="1455" y="60" width="300" height="176" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="1467" y="86" font-weight="700" fill="#111827">Workload profile gpu-a100-8</text>
+<text x="1467" y="105" fill="#374151" font-weight="400">defaultLocalQueue: gpu-a100</text>
+<text x="1467" y="124" fill="#374151" font-weight="400">workerCount 4, gpusPerWorker 8</text>
+<text x="1467" y="143" fill="#dc2626" font-weight="700">capacity:</text>
+<text x="1467" y="162" fill="#dc2626" font-weight="700">  provisioning: Required</text>
+<text x="1467" y="181" fill="#dc2626" font-weight="700">  gatedFlavors: [a100-scale]</text>
+<text x="1467" y="200" fill="#dc2626" font-weight="700">  admissionDeadline: 30m</text>
+<text x="1467" y="219" fill="#dc2626" font-weight="700">  onDeadline: Fail</text>
+<path d="M 750 107.6 L 820 107.6" fill="none" stroke="#dc2626" stroke-width="2.2"  marker-end="url(#ar)"/>
+<rect x="754" y="86" width="53.2" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="759" y="100" font-size="13" fill="#dc2626" font-style="italic">Manage</text>
+<path d="M 370 115.2 L 400 107.6" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 1455 112.8 L 1420 90.0" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 1190 100.0 L 1120 107.6" fill="none" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="1124" y="76" width="67.6" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="1129" y="90" font-size="13" fill="#dc2626" font-style="italic">verifies</text>
+<rect x="40" y="345" width="230" height="81" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="52" y="371" font-weight="700" fill="#111827">Researcher: tau run</text>
+<text x="52" y="390" fill="#374151" font-weight="400">tau.yaml: profile gpu-a100-8</text>
+<text x="52" y="409" fill="#374151" font-weight="400">no new fields</text>
+<rect x="305" y="345" width="270" height="119" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="3" stroke-dasharray=""/>
+<text x="317" y="371" font-weight="700" fill="#7f1d1d">tau CLI preflight (layer 1)</text>
+<text x="317" y="390" fill="#7f1d1d" font-weight="400">profile ProvisioningReady?</text>
+<text x="317" y="409" fill="#7f1d1d" font-weight="400">gang ≤ pool max_count?</text>
+<text x="317" y="428" fill="#7f1d1d" font-weight="400">no: error now, no quota held</text>
+<text x="317" y="447" fill="#7f1d1d" font-weight="400">--skip-capacity-preflight</text>
+<rect x="610" y="345" width="340" height="119" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="622" y="371" font-weight="700" fill="#111827">RayJob (suspended, queue label)</text>
+<text x="622" y="390" fill="#374151" font-weight="400">head ×1, workers ×4</text>
+<text x="622" y="409" fill="#dc2626" font-weight="700">annotations:</text>
+<text x="622" y="428" fill="#dc2626" font-weight="700">  tau.azure.com/admission-deadline</text>
+<text x="622" y="447" fill="#dc2626" font-weight="700">  terminal-reason / -message / -at</text>
+<rect x="985" y="345" width="290" height="100" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="997" y="371" font-weight="700" fill="#111827">Kueue Workload</text>
+<text x="997" y="390" fill="#374151" font-weight="400">podSets: head ×1, workers ×4</text>
+<text x="997" y="409" fill="#374151" font-weight="400">QuotaReserved → Admitted</text>
+<text x="997" y="428" fill="#dc2626" font-weight="700">spec.active=false at deadline</text>
+<rect x="1330" y="345" width="420" height="138" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="1342" y="371" font-weight="700" fill="#111827">LocalQueue → ClusterQueue gpu-a100</text>
+<text x="1342" y="390" fill="#374151" font-weight="400">quota: 32 GPU on a100-scale</text>
+<text x="1342" y="409" fill="#374151" font-weight="400">queueingStrategy: BestEffortFIFO</text>
+<text x="1342" y="428" fill="#dc2626" font-weight="700">admissionChecksStrategy:</text>
+<text x="1342" y="447" fill="#dc2626" font-weight="700">  taugrid-cas-gpu</text>
+<text x="1342" y="466" fill="#dc2626" font-weight="700">  onFlavors: [a100-scale]</text>
+<path d="M 270 385.5 L 305 404.5" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 575 404.5 L 610 404.5" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 950 386.65 L 985 380.0" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 1275 380.0 L 1330 393.3" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 970.0 179 L 970.0 318 L 1456.0 318 L 1456.0 345" fill="none" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="6 4" marker-end="url(#ar)"/>
+<rect x="980.0" y="300" width="211.6" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="985.0" y="314" font-size="13" fill="#dc2626" font-style="italic">attached to the ClusterQueue</text>
+<rect x="1330" y="620" width="420" height="100" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 4"/>
+<text x="1342" y="646" font-weight="700" fill="#111827">ProvisioningRequest</text>
+<text x="1342" y="665" fill="#374151" font-weight="400">created by Kueue, owned by Workload</text>
+<text x="1342" y="684" fill="#374151" font-weight="400">workers podSet only (onFlavors)</text>
+<text x="1342" y="703" fill="#374151" font-weight="400">whole gang: 4 × 8 GPU</text>
+<rect x="900" y="620" width="350" height="100" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 4"/>
+<text x="912" y="646" font-weight="700" fill="#111827">AKS Cluster Autoscaler</text>
+<text x="912" y="665" fill="#374151" font-weight="400">atomic: all 4 nodes or none</text>
+<text x="912" y="684" fill="#374151" font-weight="400">Provisioned / Failed / BookingExpired</text>
+<text x="912" y="703" fill="#374151" font-weight="400">AKS: CapacityIsNotFound forever</text>
+<rect x="470" y="620" width="320" height="100" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="482" y="646" font-weight="700" fill="#111827">Admitted → unsuspend</text>
+<text x="482" y="665" fill="#374151" font-weight="400">head on system pool (ungated)</text>
+<text x="482" y="684" fill="#374151" font-weight="400">workers start together</text>
+<text x="482" y="703" fill="#374151" font-weight="400">on the booked GPU nodes</text>
+<rect x="40" y="620" width="360" height="100" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="3" stroke-dasharray=""/>
+<text x="52" y="646" font-weight="700" fill="#7f1d1d">tau run status --watch</text>
+<text x="52" y="665" fill="#7f1d1d" font-weight="400">phase: Capacity provisioning</text>
+<text x="52" y="684" fill="#7f1d1d" font-weight="400">attempt, elapsed, time to deadline</text>
+<text x="52" y="703" fill="#7f1d1d" font-weight="400">reason from owner annotations</text>
+<path d="M 1540.0 483 L 1540.0 620" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<rect x="1548.0" y="542.5" width="146.8" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="1553.0" y="556.5" font-size="13" fill="#4b5563" font-style="italic">AdmissionCheck → PR</text>
+<path d="M 1330 660.0 L 1250 660.0" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<path d="M 900 660.0 L 790 660.0" fill="none" stroke="#4b5563" stroke-width="1.6"  marker-end="url(#ag)"/>
+<rect x="796" y="638.0" width="89.2" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="801" y="652.0" font-size="13" fill="#4b5563" font-style="italic">Provisioned</text>
+<path d="M 644.0 464 L 644.0 585 L 220.0 585 L 220.0 620" fill="none" stroke="#4b5563" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ag)"/>
+<rect x="230.0" y="567" width="226.0" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="235.0" y="581" font-size="13" fill="#4b5563" font-style="italic">status reads annotations first</text>
+<rect x="1330" y="880" width="420" height="100" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 4"/>
+<text x="1342" y="906" font-weight="700" fill="#111827">Native bound (layer 2)</text>
+<text x="1342" y="925" fill="#374151" font-weight="400">ValidUntilSeconds: 900</text>
+<text x="1342" y="944" fill="#374151" font-weight="400">retryStrategy: backoffLimitCount 1</text>
+<text x="1342" y="963" fill="#374151" font-weight="400">exhausted: Kueue deactivates</text>
+<rect x="680" y="880" width="540" height="119" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="3" stroke-dasharray=""/>
+<text x="692" y="906" font-weight="700" fill="#7f1d1d">Admission deadline controller (layer 3)</text>
+<text x="692" y="925" fill="#7f1d1d" font-weight="400">deadline = first QuotaReserved + 30m, written once</text>
+<text x="692" y="944" fill="#7f1d1d" font-weight="400">① write terminal-reason on the RayJob</text>
+<text x="692" y="963" fill="#7f1d1d" font-weight="400">② Workload spec.active=false (optimistic lock)</text>
+<text x="692" y="982" fill="#7f1d1d" font-weight="400">TTL: delete the suspended owner</text>
+<rect x="40" y="880" width="600" height="138" rx="8" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="52" y="906" font-weight="700" fill="#111827">Legend</text>
+<text x="52" y="925" fill="#374151" font-weight="400"></text>
+<text x="52" y="944" fill="#374151" font-weight="400"></text>
+<text x="52" y="963" fill="#374151" font-weight="400"></text>
+<text x="52" y="982" fill="#374151" font-weight="400"></text>
+<text x="52" y="1001" fill="#374151" font-weight="400"></text>
+<path d="M 1540.0 720 L 1540.0 880" fill="none" stroke="#4b5563" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ag)"/>
+<rect x="1548.0" y="791.0" width="175.6" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="1553.0" y="805.0" font-size="13" fill="#4b5563" font-style="italic">Failed / BookingExpired</text>
+<path d="M 1075.0 720 L 1075.0 880" fill="none" stroke="#4b5563" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ag)"/>
+<rect x="1083.0" y="791.0" width="139.6" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="1088.0" y="805.0" font-size="13" fill="#4b5563" font-style="italic">CapacityIsNotFound</text>
+<path d="M 1193.0 880 L 1193.0 860 L 1290 860 L 1290 595 L 1231.5 595 L 1231.5 445" fill="none" stroke="#dc2626" stroke-width="2.2"  marker-end="url(#ar)"/>
+<rect x="1296" y="516" width="146.8" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="1301" y="530" font-size="13" fill="#dc2626" font-style="italic">② spec.active=false</text>
+<path d="M 744.8 880 L 744.8 860 L 845 860 L 845 600 L 865.0 600 L 865.0 464" fill="none" stroke="#dc2626" stroke-width="2.2"  marker-end="url(#ar)"/>
+<rect x="851" y="786" width="154.0" height="19" rx="4" fill="white" opacity="0.92"/>
+<text x="856" y="800" font-size="13" fill="#dc2626" font-style="italic">① reason, TTL delete</text>
+<rect x="56" y="911" width="44" height="22" rx="5" fill="#fee2e2" stroke="#dc2626" stroke-width="3" stroke-dasharray=""/>
+<text x="114" y="927" fill="#111827">New TauGrid component</text>
+<rect x="56" y="941" width="44" height="22" rx="5" fill="#ffffff" stroke="#dc2626" stroke-width="2.2" stroke-dasharray="7 4"/>
+<text x="114" y="957" fill="#111827">Upstream Kueue / CA piece, newly created or enabled</text>
+<rect x="56" y="971" width="44" height="22" rx="5" fill="#f3f4f6" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray=""/>
+<text x="114" y="987" fill="#111827">Existing, unchanged (red text = new field on it)</text>
+<text x="56" y="1016" fill="#dc2626" font-weight="700">red text</text>
+<text x="126" y="1016" fill="#111827">= field added by the design</text>
+</svg>
