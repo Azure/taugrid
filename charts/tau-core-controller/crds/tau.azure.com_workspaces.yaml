@@ -158,6 +158,7 @@ spec:
                   - resource
                   type: object
                 maxItems: 256
+                nullable: true
                 type: array
                 x-kubernetes-list-map-keys:
                 - flavor

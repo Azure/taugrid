@@ -242,6 +242,9 @@ func TestCRDManifestsPinWorkspaceContract(t *testing.T) {
 	if _, ok := teamSpecProps["quota"]; !ok {
 		t.Fatal("TauTeam spec schema missing quota")
 	}
+	if !teamSpecProps["quota"].Nullable || !props["quota"].Nullable {
+		t.Fatal("TauTeam and TauWorkspace spec.quota must be nullable so server-side apply can empty a keyed list")
+	}
 	teamStatusProps := teamVersion.Schema.OpenAPIV3Schema.Properties["status"].Properties
 	for _, field := range []string{"phase", "cohort", "cohortUID", "conditions"} {
 		if _, ok := teamStatusProps[field]; !ok {
@@ -307,6 +310,17 @@ func TestTauClusterCRDContract(t *testing.T) {
 	if profiles.XListType == nil || *profiles.XListType != "map" ||
 		len(profiles.XListMapKeys) != 1 || profiles.XListMapKeys[0] != "name" {
 		t.Fatalf("spec.workloadProfiles list semantics = type %v keys %v, want map/name", profiles.XListType, profiles.XListMapKeys)
+	}
+	queueProps := specProps["queues"].Properties
+	for path, list := range map[string]apiextensionsv1.JSONSchemaProps{
+		"workloadProfiles":         profiles,
+		"queues.resourceFlavors":   queueProps["resourceFlavors"],
+		"queues.clusterQueues":     queueProps["clusterQueues"],
+		"queues.sharedLocalQueues": queueProps["sharedLocalQueues"],
+	} {
+		if !list.Nullable {
+			t.Fatalf("spec.%s must be nullable so server-side apply can empty a keyed list", path)
+		}
 	}
 	profileProps := profiles.Items.Schema.Properties
 	for _, field := range []string{"name", "description", "applicability", "gpusPerWorker", "workerCount", "mode", "placement", "defaultLocalQueue", "executionTarget", "priorities"} {
