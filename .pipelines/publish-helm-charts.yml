@@ -1,16 +1,27 @@
-trigger:
-  batch: true
-  branches:
-    include:
-      - main
-  paths:
-    include:
-      - charts/**
-      - scripts/ci/publish-helm-charts.sh
-      - scripts/ci/vendor-taugrid-dependencies.sh
-      - .pipelines/publish-helm-charts.yml
-
+trigger: none
 pr: none
+
+parameters:
+  - name: releaseTag
+    displayName: Existing annotated TauGrid release tag
+    type: string
+    default: ""
+  - name: releaseSourceCommit
+    displayName: Exact TauGrid release source SHA
+    type: string
+    default: ""
+  - name: releaseVersion
+    displayName: TauGrid release version
+    type: string
+    default: ""
+
+resources:
+  repositories:
+    - repository: releaseSource
+      type: github
+      endpoint: taugrid
+      name: Azure/taugrid
+      ref: refs/heads/main
 
 variables:
   - name: REPOSITORY_NAME
@@ -19,32 +30,135 @@ variables:
     value: aks ai runtime - prod
 
 stages:
-  - stage: PublishHelmCharts
-    displayName: Publish Helm charts
+  - stage: PublishReleaseHelmCharts
+    displayName: Publish protected release Helm charts
     jobs:
-      - job: publish_charts
-        displayName: Validate, package, and publish
+      - job: package_charts
+        displayName: Validate and package without publication credentials
         pool:
           name: 1es-aks-ai-runtime-ado-eastus2
         steps:
           - checkout: self
+            path: s/control
+            fetchDepth: 1
+            fetchTags: false
+            persistCredentials: false
+
+          - checkout: releaseSource
+            path: s/release
+            fetchDepth: 0
+            fetchTags: true
+            persistCredentials: false
 
           - bash: |
               set -euo pipefail
-              scripts/ci/publish-helm-charts.sh package \
-                "$(Build.ArtifactStagingDirectory)/helm"
-            displayName: Validate and package charts
+
+              release_tag="${RELEASE_TAG:-}"
+              release_source_commit="${RELEASE_SOURCE_COMMIT:-}"
+              release_version="${RELEASE_VERSION:-}"
+              test "$release_tag" != ""
+              test "$release_source_commit" != ""
+              test "$release_version" != ""
+              test "$release_version" = "${release_tag#v}"
+              test "$BUILD_SOURCEBRANCH" = refs/heads/main
+              git -C "$(Pipeline.Workspace)/s/control" fetch --force origin \
+                +refs/heads/main:refs/remotes/origin/main
+              control_commit="$(git -C "$(Pipeline.Workspace)/s/control" rev-parse HEAD^{commit})"
+              test "$control_commit" = "$BUILD_SOURCEVERSION"
+              test "$control_commit" = \
+                "$(git -C "$(Pipeline.Workspace)/s/control" rev-parse origin/main^{commit})"
+              python3 "$(Pipeline.Workspace)/s/control/scripts/ci/validate_release_source.py" \
+                --source "$(Pipeline.Workspace)/s/release" \
+                --tag "$release_tag" \
+                --source-commit "$release_source_commit"
+            displayName: Validate protected control and release source
+            env:
+              RELEASE_TAG: ${{ parameters.releaseTag }}
+              RELEASE_SOURCE_COMMIT: ${{ parameters.releaseSourceCommit }}
+              RELEASE_VERSION: ${{ parameters.releaseVersion }}
+
+          - bash: |
+              set -euo pipefail
+              "$(Pipeline.Workspace)/s/control/scripts/ci/publish-helm-charts.sh" \
+                package "$(Build.ArtifactStagingDirectory)/helm"
+            displayName: Package sealed release charts
+            workingDirectory: $(Pipeline.Workspace)/s/control
+            env:
+              RELEASE_TAG: ${{ parameters.releaseTag }}
+              RELEASE_SOURCE_COMMIT: ${{ parameters.releaseSourceCommit }}
+              RELEASE_VERSION: ${{ parameters.releaseVersion }}
+              TAUGRID_SOURCE_ROOT: $(Pipeline.Workspace)/s/release
+
+          - task: PublishPipelineArtifact@1
+            displayName: Transfer sealed chart packages
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/helm
+              artifact: release-helm
+              publishLocation: pipeline
+
+      - job: publish_charts
+        displayName: Publish from protected control
+        dependsOn: package_charts
+        pool:
+          name: 1es-aks-ai-runtime-ado-eastus2
+        steps:
+          - checkout: self
+            path: s/control
+            fetchDepth: 1
+            fetchTags: false
+            persistCredentials: false
+
+          - bash: |
+              set -euo pipefail
+
+              release_tag="${RELEASE_TAG:-}"
+              release_source_commit="${RELEASE_SOURCE_COMMIT:-}"
+              release_version="${RELEASE_VERSION:-}"
+              test "$release_tag" != ""
+              test "$release_source_commit" != ""
+              test "$release_version" != ""
+              test "$release_version" = "${release_tag#v}"
+              test "$BUILD_SOURCEBRANCH" = refs/heads/main
+              git -C "$(Pipeline.Workspace)/s/control" fetch --force origin \
+                +refs/heads/main:refs/remotes/origin/main
+              control_commit="$(git -C "$(Pipeline.Workspace)/s/control" rev-parse HEAD^{commit})"
+              test "$control_commit" = "$BUILD_SOURCEVERSION"
+              test "$control_commit" = \
+                "$(git -C "$(Pipeline.Workspace)/s/control" rev-parse origin/main^{commit})"
+            displayName: Revalidate protected control
+            env:
+              RELEASE_TAG: ${{ parameters.releaseTag }}
+              RELEASE_SOURCE_COMMIT: ${{ parameters.releaseSourceCommit }}
+              RELEASE_VERSION: ${{ parameters.releaseVersion }}
+
+          - task: DownloadPipelineArtifact@2
+            displayName: Download sealed chart packages
+            inputs:
+              artifact: release-helm
+              path: $(Pipeline.Workspace)/release-helm
 
           - task: AzureCLI@2
-            displayName: Publish and verify charts
+            displayName: Publish and verify sealed charts
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
               scriptLocation: inlineScript
+              workingDirectory: $(Pipeline.Workspace)/s/control
               inlineScript: |
                 set -euo pipefail
-                scripts/ci/publish-helm-charts.sh publish \
-                  "$(Build.ArtifactStagingDirectory)/helm"
+                "$(Pipeline.Workspace)/s/control/scripts/ci/publish-helm-charts.sh" \
+                  publish "$(Pipeline.Workspace)/release-helm"
             env:
               ACR_NAME: $(ACR_NAME)
               REPOSITORY_NAME: $(REPOSITORY_NAME)
+              RELEASE_TAG: ${{ parameters.releaseTag }}
+              RELEASE_SOURCE_COMMIT: ${{ parameters.releaseSourceCommit }}
+              RELEASE_VERSION: ${{ parameters.releaseVersion }}
+              PUBLICATION_STATUS_PATH: $(Build.ArtifactStagingDirectory)/publication/publication.json
+
+          - task: PublishPipelineArtifact@1
+            displayName: Publish chart publication status
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/publication
+              artifact: taugrid-chart-publication
+              publishLocation: pipeline
