@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1@sha256:8cbcec825ea146632d907d4e35d3f4914fafcb26b62f0b3eb7b37f33fe9c4e1f AS microsoft-go
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1@sha256:beab7184dddd56cb4fb652a2e9affb25ce377d85f30a7c14eed0e65a7b315c4e AS microsoft-go
 
 ARG MICROSOFT_GO_COMMIT=38d00402d139f69e0f5533f297788cd4df60898a
 
@@ -21,7 +21,7 @@ RUN git init \
     && GOROOT_BOOTSTRAP=/usr/local/go ./make.bash \
     && ../bin/go version | grep -F "go1.27.4"
 
-FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1@sha256:8cbcec825ea146632d907d4e35d3f4914fafcb26b62f0b3eb7b37f33fe9c4e1f AS builder
+FROM mcr.microsoft.com/oss/go/microsoft/golang:1.27.4-1@sha256:beab7184dddd56cb4fb652a2e9affb25ce377d85f30a7c14eed0e65a7b315c4e AS builder
 
 COPY --from=microsoft-go /tmp/microsoft-go/go /usr/local/microsoft-go
 ENV GOROOT=/usr/local/microsoft-go \
