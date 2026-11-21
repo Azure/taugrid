@@ -339,6 +339,8 @@ jobs:
                     --overwrite-existing
                   kubelogin convert-kubeconfig --kubeconfig "${KUBECONFIG}" --login azurecli
                   kubectl --context unbounded-stable version
+                  scripts/ci/taugrid-managed-control-plane-preflight.sh unbounded-stable |
+                    tee "${diagnostics_dir}/managed-control-plane-preflight.txt"
 
                   release_state="$(
                     TAUGRID_RELEASE="${TAUGRID_RELEASE}" \
@@ -387,6 +389,8 @@ jobs:
                     --timeout 20m
                     --wait
                     --atomic
+                    --set "components.kueue.enabled=false"
+                    --set "components.kuberayOperator.enabled=false"
                     --set-string "tau-core-controller.image.repository=${registry}/${repository_prefix}/tau-core-controller"
                     --set-string "tau-core-controller.image.tag=${image_tag}"
                     --set-string "tau-core-controller.image.digest="
@@ -446,6 +450,8 @@ jobs:
                     recover_failed_deployment "post-install readiness validation failed"
                     exit 1
                   fi
+                  scripts/ci/taugrid-managed-control-plane-preflight.sh unbounded-stable |
+                    tee "${diagnostics_dir}/managed-control-plane-postflight.txt"
 
                   smoke_run_name="taugrid-nightly-${BUILD_BUILDID}-${SYSTEM_JOBATTEMPT:-1}"
                   if ! "${tools_dir}/taugrid-nightly-smoke" \

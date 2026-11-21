@@ -11,6 +11,8 @@ readonly IMAGE_BUILDER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-build-i
 readonly IMAGE_BUILDER_TEST="${REPO_ROOT}/scripts/ci/tests/taugrid-unbounded-stable-build-image_test.sh"
 readonly REPORTER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-report.sh"
 readonly RECOVER="${REPO_ROOT}/scripts/ci/taugrid-unbounded-stable-nightly-recover.sh"
+readonly MANAGED_PREFLIGHT="${REPO_ROOT}/scripts/ci/taugrid-managed-control-plane-preflight.sh"
+readonly MANAGED_PREFLIGHT_TEST="${REPO_ROOT}/scripts/ci/tests/taugrid-managed-control-plane-preflight_test.sh"
 readonly SMOKE="${REPO_ROOT}/tests/e2e/cmd/taugrid-nightly-smoke/runner.go"
 readonly SMOKE_TEST="${REPO_ROOT}/tests/e2e/cmd/taugrid-nightly-smoke/runner_test.go"
 readonly RECOVER_TEST="${REPO_ROOT}/scripts/ci/tests/taugrid-unbounded-stable-nightly-recover_test.sh"
@@ -40,6 +42,8 @@ job_block() {
 [ -x "$IMAGE_BUILDER_TEST" ] || fail "nightly image builder test must be executable"
 [ -x "$REPORTER" ] || fail "nightly report generator must be executable"
 [ -x "$RECOVER" ] || fail "nightly recovery helper must be executable"
+[ -x "$MANAGED_PREFLIGHT" ] || fail "managed control-plane preflight must be executable"
+[ -x "$MANAGED_PREFLIGHT_TEST" ] || fail "managed control-plane preflight test must be executable"
 [ -f "$SMOKE" ] || fail "Tau-native nightly Go runner is missing"
 [ -f "$SMOKE_TEST" ] || fail "Tau-native nightly Go runner tests are missing"
 [ -x "$RECOVER_TEST" ] || fail "nightly recovery fixture must be executable"
@@ -149,6 +153,15 @@ grep -Fq "cli/bin/tau \"\${install_args[@]}\" --dry-run" "$PIPELINE" ||
   fail "deployment must render the exact upgrade before mutation"
 grep -Fq "cli/bin/tau \"\${install_args[@]}\"" "$PIPELINE" ||
   fail "deployment must use the supported TauGrid install path"
+grep -Fq -- '--set "components.kueue.enabled=false"' "$PIPELINE" ||
+  fail "nightly must not install or own managed Kueue"
+grep -Fq -- '--set "components.kuberayOperator.enabled=false"' "$PIPELINE" ||
+  fail "nightly must not install or own managed KubeRay"
+[ "$(grep -Fc 'taugrid-managed-control-plane-preflight.sh unbounded-stable' "$PIPELINE")" -eq 2 ] ||
+  fail "managed Kueue and KubeRay must pass preflight and postflight readiness checks"
+if grep -Eq -- '--take-ownership|kubectl .*(label|annotate|delete).*crd' "$PIPELINE" "$MANAGED_PREFLIGHT"; then
+  fail "nightly must never adopt, relabel, or delete externally managed CRDs"
+fi
 grep -Fq -- "--atomic" "$PIPELINE" ||
   fail "deployment must request rollback after Helm failure"
 grep -Fq "tau cluster validate installation" "$PIPELINE" ||
@@ -221,5 +234,6 @@ if grep -Eqi \
 fi
 
 "$IMAGE_BUILDER_TEST"
+"$MANAGED_PREFLIGHT_TEST"
 
 echo "TauGrid unbounded-stable nightly contract tests passed"
