@@ -12,7 +12,9 @@ import (
 	"time"
 )
 
-const sampleExposition = `DCGM_FI_DEV_ECC_DBE_VOL_TOTAL{gpu="0"} 0
+const sampleExposition = `# HELP DCGM_FI_DEV_ECC_DBE_VOL_TOTAL Total double-bit ECC errors
+# TYPE DCGM_FI_DEV_ECC_DBE_VOL_TOTAL counter
+DCGM_FI_DEV_ECC_DBE_VOL_TOTAL{gpu="0",UUID="GPU-abc",device="nvidia0",modelName="NVIDIA H200",Hostname="gpu-node"} 0
 `
 
 func statusFor(t *testing.T, res ScrapeResult, name string) TargetStatus {
@@ -48,6 +50,113 @@ func TestScrapeReportsSuccessfulTarget(t *testing.T) {
 	}
 	if got.Err != "" {
 		t.Errorf("expected empty error, got %q", got.Err)
+	}
+}
+
+func TestScrapeRejectsRequiredTargetWithoutValidMetrics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		body        string
+		wantErrText []string
+	}{
+		{
+			name:        "malformed",
+			body:        "not prometheus data\n",
+			wantErrText: []string{"dcgm-exporter", "line 1", "parsing value"},
+		},
+		{
+			name:        "empty",
+			body:        "",
+			wantErrText: []string{"dcgm-exporter", "no valid metrics"},
+		},
+		{
+			name:        "comments only",
+			body:        "# HELP DCGM_FI_DEV_GPU_UTIL GPU utilization\n# TYPE DCGM_FI_DEV_GPU_UTIL gauge\n",
+			wantErrText: []string{"dcgm-exporter", "no valid metrics"},
+		},
+		{
+			name: "mixed valid and invalid",
+			body: sampleExposition + "not prometheus data\n",
+			wantErrText: []string{
+				"dcgm-exporter",
+				"line 4",
+				"parsing value",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+
+			s := New([]ScrapeTarget{{
+				Name:                  "dcgm-exporter",
+				URL:                   srv.URL + "/metrics",
+				Required:              true,
+				AvailabilityCondition: "DcgmExporterUnavailable",
+			}})
+			res, err := s.Scrape(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(res.Metrics) != 0 {
+				t.Fatalf("expected no metrics from failed target, got %d", len(res.Metrics))
+			}
+			got := statusFor(t, res, "dcgm-exporter")
+			if got.OK {
+				t.Fatal("required target without wholly valid metrics must not report OK")
+			}
+			for _, text := range tc.wantErrText {
+				if !strings.Contains(got.Err, text) {
+					t.Errorf("error %q does not contain %q", got.Err, text)
+				}
+			}
+		})
+	}
+}
+
+func TestScrapeSkipsMalformedOptionalTarget(t *testing.T) {
+	t.Parallel()
+
+	required := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(sampleExposition))
+	}))
+	defer required.Close()
+
+	optional := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not prometheus data\n"))
+	}))
+	defer optional.Close()
+
+	s := New([]ScrapeTarget{
+		{
+			Name:                  "dcgm-exporter",
+			URL:                   required.URL + "/metrics",
+			Required:              true,
+			AvailabilityCondition: "DcgmExporterUnavailable",
+		},
+		{Name: "node-exporter", URL: optional.URL + "/metrics"},
+	})
+	res, err := s.Scrape(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !statusFor(t, res, "dcgm-exporter").OK {
+		t.Fatal("valid required target must remain healthy")
+	}
+	if statusFor(t, res, "node-exporter").OK {
+		t.Fatal("malformed optional target must be skipped as a failed scrape")
+	}
+	if len(res.Metrics) != 1 {
+		t.Fatalf("expected only the required target metric, got %d", len(res.Metrics))
 	}
 }
 

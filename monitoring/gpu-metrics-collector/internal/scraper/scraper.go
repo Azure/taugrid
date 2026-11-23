@@ -172,14 +172,20 @@ func (s *Scraper) scrapeTarget(ctx context.Context, target ScrapeTarget) ([]Metr
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
-	return parseExposition(resp.Body)
+	metrics, err := parseExposition(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("target %q exposition: %w", target.Name, err)
+	}
+	return metrics, nil
 }
 
 func parseExposition(r io.Reader) ([]Metric, error) {
 	var metrics []Metric
 	scanner := bufio.NewScanner(r)
+	lineNumber := 0
 
 	for scanner.Scan() {
+		lineNumber++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -187,12 +193,18 @@ func parseExposition(r io.Reader) ([]Metric, error) {
 
 		m, err := parseLine(line)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("line %d: %w", lineNumber, err)
 		}
 		metrics = append(metrics, m)
 	}
 
-	return metrics, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(metrics) == 0 {
+		return nil, errors.New("no valid metrics")
+	}
+	return metrics, nil
 }
 
 func parseLine(line string) (Metric, error) {
