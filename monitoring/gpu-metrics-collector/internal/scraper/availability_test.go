@@ -14,7 +14,7 @@ import (
 
 const sampleExposition = `# HELP DCGM_FI_DEV_ECC_DBE_VOL_TOTAL Total double-bit ECC errors
 # TYPE DCGM_FI_DEV_ECC_DBE_VOL_TOTAL counter
-DCGM_FI_DEV_ECC_DBE_VOL_TOTAL{gpu="0",UUID="GPU-abc",device="nvidia0",modelName="NVIDIA H200",Hostname="gpu-node"} 0
+DCGM_FI_DEV_ECC_DBE_VOL_TOTAL{gpu="0",UUID="GPU-abc",device="gpu0",modelName="accelerator-model",Hostname="gpu-node"} 0
 `
 
 func statusFor(t *testing.T, res ScrapeResult, name string) TargetStatus {
