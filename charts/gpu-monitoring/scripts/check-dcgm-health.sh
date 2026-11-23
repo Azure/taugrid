@@ -135,18 +135,31 @@ function finish_incident() {
   incidents++
   if (incident !~ /^Detected XID 43 for GPU [0-9]+(, Detected XID 43 for GPU [0-9]+)*$/) {
     rejected++
+  } else {
+    entity_incidents++
   }
   incident = ""
   incident_system = ""
+}
+function finish_entity() {
+  finish_incident()
+  if (entity && entity_incidents == 0) {
+    missing++
+  }
+  entity = 0
+  errors = 0
+  entity_incidents = 0
 }
 BEGIN {
   groups = 0
   entities = 0
   incidents = 0
   rejected = 0
+  missing = 0
   malformed = 0
   entity = 0
   errors = 0
+  entity_incidents = 0
 }
 {
   raw = trim($0)
@@ -165,20 +178,18 @@ BEGIN {
   right = trim($3)
 
   if (tolower(left) == "overall health" || tolower(right) ~ /^overall health:[[:space:]]*/) {
-    finish_incident()
+    finish_entity()
     next
   }
 
   if (left != "" && right == "" && left !~ /^-> /) {
-    finish_incident()
+    finish_entity()
     groups++
-    entity = 0
-    errors = 0
     next
   }
 
   if (left ~ /^-> [0-9]+$/) {
-    finish_incident()
+    finish_entity()
     if (right == "Warning") {
       entities++
       entity = 1
@@ -215,7 +226,7 @@ BEGIN {
   }
 
   if (left != "" && right == "Warning") {
-    finish_incident()
+    finish_entity()
     entities++
     entity = 1
     errors = 1
@@ -235,9 +246,9 @@ BEGIN {
   }
 }
 END {
-  finish_incident()
-  printf "groups=%d entities=%d incidents=%d rejected=%d malformed=%d", groups, entities, incidents, rejected, malformed
-  exit !(entities > 0 && incidents > 0 && rejected == 0 && malformed == 0)
+  finish_entity()
+  printf "groups=%d entities=%d incidents=%d rejected=%d missing=%d malformed=%d", groups, entities, incidents, rejected, missing, malformed
+  exit !(entities > 0 && incidents > 0 && rejected == 0 && missing == 0 && malformed == 0)
 }')"; then
       echo "dcgm health warning tolerated: all incidents are retained XID 43 application faults (${warning_summary})"
     else

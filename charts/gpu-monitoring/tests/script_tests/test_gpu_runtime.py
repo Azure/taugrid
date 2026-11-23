@@ -249,7 +249,8 @@ class GpuRuntimeTests(ScriptTestCase):
             "all incidents are retained XID 43 application faults", tolerated
         )
         self.assertIn(
-            "groups=1 entities=2 incidents=2 rejected=0 malformed=0", tolerated
+            "groups=1 entities=2 incidents=2 rejected=0 missing=0 malformed=0",
+            tolerated,
         )
         self.assertIn("dcgm health watches enabled", tolerated)
         self.assertEqual(
@@ -273,6 +274,53 @@ class GpuRuntimeTests(ScriptTestCase):
             self.dcgm_command_log.read_text().splitlines(),
         )
         self.enable_dcgm_watches()
+
+        missing_entity_warnings = (
+            (
+                "second entity without incident before EOF",
+                xid43_warning.replace(
+                    "|       -> Errors           |                                                  |\n"
+                    "|          -> PCIe system   | Warning                                          |\n"
+                    "|                           | Detected XID 43 for GPU 3                         |\n",
+                    "",
+                ),
+            ),
+            (
+                "first entity without incident before next entity",
+                xid43_warning.replace(
+                    "|       -> Errors           |                                                  |\n"
+                    "|          -> PCIe system   | Warning                                          |\n"
+                    "|                           | Detected XID 43 for GPU 0                         |\n",
+                    "",
+                ),
+            ),
+            (
+                "entity without incident before next group",
+                xid43_warning.replace(
+                    "|       -> Errors           |                                                  |\n"
+                    "|          -> PCIe system   | Warning                                          |\n"
+                    "|                           | Detected XID 43 for GPU 3                         |\n",
+                    "| Memory                    |                                                  |\n",
+                ),
+            ),
+        )
+        for label, warning_output in missing_entity_warnings:
+            with self.subTest(warning=label):
+                self.dcgm_command_log.unlink(missing_ok=True)
+                result = self.run_script(
+                    "check-dcgm-health.sh",
+                    expected=1,
+                    env={
+                        "NPD_DCGM_REQUIRED": "1",
+                        "DCGMI_HEALTH_OUTPUT": warning_output,
+                    },
+                )
+                self.assertIn("rejected Warning incident set", result)
+                self.assertIn("missing=1", result)
+                self.assertEqual(
+                    ["health -c"],
+                    self.dcgm_command_log.read_text().splitlines(),
+                )
 
         rejected_warnings = (
             (
