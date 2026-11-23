@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/azurelinux/base/nodejs:24.22@sha256:1c87a74ac10b0ad7711bcc862fa6a2b13e6a4db96d3a026dbb7fcf8486d57ba3 AS frontend
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/azurelinux/base/nodejs:24.22@sha256:a3fb051354a72cdaa1dac3ee9c4f74a0a4f903bd3da4152547a7bd4151a6e4eb AS frontend
 
 WORKDIR /app/portal/frontend
 COPY portal/frontend/package.json portal/frontend/package-lock.json portal/frontend/.npmrc ./
