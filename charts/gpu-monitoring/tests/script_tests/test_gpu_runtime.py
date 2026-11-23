@@ -221,6 +221,99 @@ class GpuRuntimeTests(ScriptTestCase):
         )
         self.assertIn("returned no result", empty)
 
+    def test_dcgm_health_tolerates_only_xid43_warning_incidents(self):
+        self.enable_dcgm_watches()
+        xid43_warning = """\
++---------------------------+--------------------------------------------------+
+| Health Monitor Report                                                        |
++===========================+==================================================+
+| Overall Health            | Warning                                          |
+| GPU                       |                                                  |
+|    -> 0                   | Warning                                          |
+|       -> Errors           |                                                  |
+|          -> PCIe system   | Warning                                          |
+|                           | Detected XID 43 for GPU 0                         |
+|    -> 3                   | Warning                                          |
+|       -> Errors           |                                                  |
+|          -> PCIe system   | Warning                                          |
+|                           | Detected XID 43 for GPU 3                         |
++---------------------------+--------------------------------------------------+"""
+        tolerated = self.run_script(
+            "check-dcgm-health.sh",
+            env={
+                "NPD_DCGM_REQUIRED": "1",
+                "DCGMI_HEALTH_OUTPUT": xid43_warning,
+            },
+        )
+        self.assertIn(
+            "all incidents are retained XID 43 application faults", tolerated
+        )
+        self.assertIn(
+            "groups=1 entities=2 incidents=2 rejected=0 malformed=0", tolerated
+        )
+        self.assertIn("dcgm health watches enabled", tolerated)
+        self.assertEqual(
+            ["health -c", "health -f"],
+            self.dcgm_command_log.read_text().splitlines(),
+        )
+
+        self.dcgm_command_log.unlink()
+        missing_watch = self.run_script(
+            "check-dcgm-health.sh",
+            expected=1,
+            env={
+                "NPD_DCGM_REQUIRED": "1",
+                "DCGMI_HEALTH_OUTPUT": xid43_warning,
+                "DCGMI_PARTIAL_WATCHES_AFTER_CHECK": "1",
+            },
+        )
+        self.assertIn("dcgm health watches are not fully enabled", missing_watch)
+        self.assertEqual(
+            ["health -c", "health -f"],
+            self.dcgm_command_log.read_text().splitlines(),
+        )
+        self.enable_dcgm_watches()
+
+        rejected_warnings = (
+            (
+                "mixed XID 43 and another warning",
+                xid43_warning.replace(
+                    "Detected XID 43 for GPU 3",
+                    "Detected XID 43 for GPU 3, Detected XID 79 for GPU 3",
+                ),
+            ),
+            (
+                "another XID",
+                xid43_warning.replace(
+                    "Detected XID 43 for GPU 3",
+                    "Detected XID 79 for GPU 3",
+                ),
+            ),
+            (
+                "malformed incident",
+                xid43_warning.replace(
+                    "|          -> PCIe system   | Warning",
+                    "|          PCIe system      | Warning",
+                ),
+            ),
+        )
+        for label, warning_output in rejected_warnings:
+            with self.subTest(warning=label):
+                self.dcgm_command_log.unlink(missing_ok=True)
+                result = self.run_script(
+                    "check-dcgm-health.sh",
+                    expected=1,
+                    env={
+                        "NPD_DCGM_REQUIRED": "1",
+                        "DCGMI_HEALTH_OUTPUT": warning_output,
+                    },
+                )
+                self.assertIn("rejected Warning incident set", result)
+                self.assertEqual(
+                    ["health -c"],
+                    self.dcgm_command_log.read_text().splitlines(),
+                )
+
     def test_dcgm_health_accepts_only_one_recognized_healthy_row(self):
         self.enable_dcgm_watches()
         valid_outputs = (
