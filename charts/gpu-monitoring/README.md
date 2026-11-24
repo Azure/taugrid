@@ -341,13 +341,15 @@ because the other host wrappers enter PID 1's mount namespace.
 
 NPD evaluates the configured watches with `health -c`. The script parses
 `Overall Health` because DCGM returns process status zero for Healthy, Warning,
-and Failure. It accepts exactly one well-formed DCGM table row whose label is
-`Overall Health` and status is Healthy, then verifies the
+and Failure. It accepts exactly one well-formed DCGM table result whose status
+is Healthy, or a Warning whose complete incident set contains only retained
+`Detected XID 43` application faults. All accepted results then verify the
 complete watch mask with `health -f` in the same invocation before returning
-healthy; duplicates, conflicts, Warning, Failure, empty, unknown, and partial
-mask results all fail closed. Initialization performs the same full-mask
-verification after its 60-second warmup. A read-only liveness probe also
-verifies the full watch mask with `health -f`.
+healthy. Duplicates, conflicts, Failure, unknown warnings, other or mixed XIDs,
+empty or malformed output, and partial mask results all fail closed.
+Initialization performs the same full-mask verification after its 60-second
+warmup. A read-only liveness probe also verifies the full watch mask with
+`health -f`.
 `nv-hostengine` restarts discard watches, so loss of any required watch restarts
 the NPD container. Its startup wrapper detects the missing mask and runs the same
 set, verify, and warmup script before starting NPD again. On ordinary pod
