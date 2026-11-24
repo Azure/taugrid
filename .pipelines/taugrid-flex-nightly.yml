@@ -280,6 +280,10 @@ jobs:
               echo "##vso[task.logissue type=error]Nightly requires an existing authorized namespace" >&2
               exit 1
             fi
+            if [[ -z "${FLEX_NIGHTLY_RDMA_QUEUE}" || "${FLEX_NIGHTLY_RDMA_QUEUE}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]Nightly requires an existing workspace LocalQueue" >&2
+              exit 1
+            fi
             artifact_dir="$(Build.ArtifactStagingDirectory)/hardware-matrix"
             bundle_dir="${artifact_dir}/diagnostics"
             summary="${artifact_dir}/matrix-results.jsonl"
@@ -350,13 +354,8 @@ jobs:
               jq -e --arg workspace "${FLEX_NIGHTLY_WORKSPACE}" \
                 '.metadata.labels["tau.azure.com/workspace"] == $workspace' >/dev/null
 
-            while IFS= read -r target; do
-              name="$(jq -r '.name' <<<"${target}")"
-              queue="matrix-${name}"
-              cluster_queue="$(jq -r '.cluster_queue' <<<"${target}")"
-              kubectl get localqueue "${queue}" -n "${namespace}" -o json |
-                jq -e --arg queue "${cluster_queue}" '.spec.clusterQueue == $queue' >/dev/null
-            done < <(jq -c '.targets[] | select(.status != "disabled")' "${contract}")
+            kubectl get localqueue "${FLEX_NIGHTLY_RDMA_QUEUE}" -n "${namespace}" -o json |
+              jq -e --arg queue "${FLEX_NIGHTLY_CLUSTER_QUEUE}" '.spec.clusterQueue == $queue' >/dev/null
 
             cd "$(Build.SourcesDirectory)/tests/e2e"
             export AI_RUNTIME_E2E=1
@@ -518,6 +517,7 @@ jobs:
         env:
           PROFILE: ${{ parameters.profile }}
           FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
+          FLEX_NIGHTLY_RDMA_QUEUE: ${{ parameters.rdmaQueue }}
           FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
           FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
           FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}

@@ -345,6 +345,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 ROUTING_MANIFESTS=str(manifests),
                 FLEX_NIGHTLY_WORKSPACE=workspace,
                 FLEX_NIGHTLY_CLUSTER_QUEUE=queue,
+                FLEX_NIGHTLY_RDMA_QUEUE="jobqueue",
                 TEST_CONTRACT=str(contract),
             )
             result = subprocess.run(
@@ -361,12 +362,14 @@ with tempfile.TemporaryDirectory() as temporary:
             actual = calls.read_text().splitlines()
             assert actual == [
                 "get namespace taugrid-nightly-rdma -o json",
-                "get localqueue matrix-a100 -n taugrid-nightly-rdma -o json",
-                "get localqueue matrix-h200 -n taugrid-nightly-rdma -o json",
+                "get localqueue jobqueue -n taugrid-nightly-rdma -o json",
             ], (name, actual)
             assert not manifests.exists(), "nightly must not mutate platform-owned queues"
 
     matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
+    assert 'FLEX_NIGHTLY_RDMA_QUEUE: ${{ parameters.rdmaQueue }}' in matrix
+    assert 'get localqueue "${FLEX_NIGHTLY_RDMA_QUEUE}"' in matrix
+    assert 'queue="matrix-${name}"' not in matrix
     assert "cancelTimeoutInMinutes: 45" in matrix
     cleanup_step = re.search(
         r"      - task: AzureCLI@2\n"
