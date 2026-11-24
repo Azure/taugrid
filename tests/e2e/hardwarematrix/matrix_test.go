@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -83,6 +84,48 @@ func authoritativeMatrixProfile(totalGPUs int) (matrixProfile, bool) {
 		return matrixProfile{"azure.research.large-memory.2node", "large-memory", 2, 8, profile.PlacementSameNetworkDomain}, true
 	default:
 		return matrixProfile{}, false
+	}
+}
+
+func TestAuthoritativeMatrixProfilesMatchTauClusterCatalog(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", "charts", "tau-core-controller", "values.yaml"))
+	require.NoError(t, err)
+
+	var values struct {
+		TauCluster struct {
+			WorkloadProfiles []struct {
+				Name          string `yaml:"name"`
+				GPUsPerWorker int    `yaml:"gpusPerWorker"`
+				WorkerCount   int    `yaml:"workerCount"`
+				Placement     string `yaml:"placement"`
+				Applicability struct {
+					Lanes []string `yaml:"lanes"`
+				} `yaml:"applicability"`
+			} `yaml:"workloadProfiles"`
+		} `yaml:"tauCluster"`
+	}
+	require.NoError(t, yaml.Unmarshal(contents, &values))
+
+	catalog := make(map[string]matrixProfile, len(values.TauCluster.WorkloadProfiles))
+	for _, item := range values.TauCluster.WorkloadProfiles {
+		lane := ""
+		if len(item.Applicability.Lanes) == 1 {
+			lane = item.Applicability.Lanes[0]
+		}
+		catalog[item.Name] = matrixProfile{
+			name:          item.Name,
+			lane:          lane,
+			workerPods:    item.WorkerCount,
+			gpusPerWorker: item.GPUsPerWorker,
+			placement:     item.Placement,
+		}
+	}
+
+	for _, totalGPUs := range []int{1, 2, 8, 16} {
+		selected, found := authoritativeMatrixProfile(totalGPUs)
+		require.True(t, found)
+		require.Equal(t, catalog[selected.name], selected)
+		require.Equal(t, totalGPUs, selected.workerPods*selected.gpusPerWorker)
 	}
 }
 
