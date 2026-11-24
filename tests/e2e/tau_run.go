@@ -44,6 +44,16 @@ func NightlyTauPolicy(namespace, queue, profile string) map[string]any {
 	}
 }
 
+func GovernedTauPolicy(namespace, queue, profile, lane string) map[string]any {
+	return map[string]any{
+		"namespace": namespace,
+		"queue":     queue,
+		"profile":   profile,
+		"team":      "research",
+		"lane":      lane,
+	}
+}
+
 func SubmitTauRun(t *testing.T, ctx context.Context, config map[string]any, files map[string][]byte) error {
 	t.Helper()
 	binary := strings.TrimSpace(os.Getenv("TAU_BINARY"))
