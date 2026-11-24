@@ -133,7 +133,7 @@ function finish_incident() {
   }
   incident = normalize(incident)
   incidents++
-  if (incident !~ /^Detected XID 43 for GPU [0-9]+(, Detected XID 43 for GPU [0-9]+)*$/) {
+  if (incident !~ /^Detected XID 43 for GPU [0-9]+(, Detected XID 43 for GPU [0-9]+)* Please consult the documentation for details of this XID\.$/) {
     rejected++
   } else {
     entity_incidents++

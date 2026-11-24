@@ -232,11 +232,13 @@ class GpuRuntimeTests(ScriptTestCase):
 |    -> 0                   | Warning                                          |
 |       -> Errors           |                                                  |
 |          -> PCIe system   | Warning                                          |
-|                           | Detected XID 43 for GPU 0                         |
+|                           | Detected XID 43 for GPU 0 Please consult the      |
+|                           | documentation for details of this XID.           |
 |    -> 3                   | Warning                                          |
 |       -> Errors           |                                                  |
 |          -> PCIe system   | Warning                                          |
-|                           | Detected XID 43 for GPU 3                         |
+|                           | Detected XID 43 for GPU 3 Please consult the      |
+|                           | documentation for details of this XID.           |
 +---------------------------+--------------------------------------------------+"""
         tolerated = self.run_script(
             "check-dcgm-health.sh",
@@ -281,7 +283,8 @@ class GpuRuntimeTests(ScriptTestCase):
                 xid43_warning.replace(
                     "|       -> Errors           |                                                  |\n"
                     "|          -> PCIe system   | Warning                                          |\n"
-                    "|                           | Detected XID 43 for GPU 3                         |\n",
+                    "|                           | Detected XID 43 for GPU 3 Please consult the      |\n"
+                    "|                           | documentation for details of this XID.           |\n",
                     "",
                 ),
             ),
@@ -290,7 +293,8 @@ class GpuRuntimeTests(ScriptTestCase):
                 xid43_warning.replace(
                     "|       -> Errors           |                                                  |\n"
                     "|          -> PCIe system   | Warning                                          |\n"
-                    "|                           | Detected XID 43 for GPU 0                         |\n",
+                    "|                           | Detected XID 43 for GPU 0 Please consult the      |\n"
+                    "|                           | documentation for details of this XID.           |\n",
                     "",
                 ),
             ),
@@ -299,7 +303,8 @@ class GpuRuntimeTests(ScriptTestCase):
                 xid43_warning.replace(
                     "|       -> Errors           |                                                  |\n"
                     "|          -> PCIe system   | Warning                                          |\n"
-                    "|                           | Detected XID 43 for GPU 3                         |\n",
+                    "|                           | Detected XID 43 for GPU 3 Please consult the      |\n"
+                    "|                           | documentation for details of this XID.           |\n",
                     "| Memory                    |                                                  |\n",
                 ),
             ),
