@@ -18,6 +18,11 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+const (
+	fineWebRayWorkerPods = 2
+	fineWebGPUsPerPod    = 8
+)
+
 func submitFineWebTauRun(t *testing.T, tc *e2e.TestContext, name string, workers, steps int) error {
 	t.Helper()
 	pvc := os.Getenv("FINEWEB_CHECKPOINT_PVC")
@@ -28,11 +33,17 @@ func submitFineWebTauRun(t *testing.T, tc *e2e.TestContext, name string, workers
 	if err != nil {
 		return err
 	}
-	config := fineWebTauConfig(name, workers, steps, pvc)
+	config, err := fineWebTauConfig(name, workers, steps, pvc)
+	if err != nil {
+		return err
+	}
 	return e2e.SubmitTauRun(t, tc.Ctx(), config, map[string][]byte{"fineweb_ray_train.py": script})
 }
 
-func fineWebTauConfig(name string, workers, steps int, pvc string) map[string]any {
+func fineWebTauConfig(name string, workers, steps int, pvc string) (map[string]any, error) {
+	if workers != fineWebRayWorkerPods*fineWebGPUsPerPod {
+		return nil, fmt.Errorf("FineWeb requires %d logical training workers for the %dx%d GPU Ray shape", fineWebRayWorkerPods*fineWebGPUsPerPod, fineWebRayWorkerPods, fineWebGPUsPerPod)
+	}
 	checkpoint := "/data/checkpoints/nightly/" + name
 	interval := os.Getenv("FINEWEB_CHECKPOINT_INTERVAL")
 	if interval == "" {
@@ -60,23 +71,24 @@ func fineWebTauConfig(name string, workers, steps int, pvc string) map[string]an
 			},
 		},
 		"compute": map[string]any{
-			"workers": workers, "gpus_per_worker": 1,
+			"workers": fineWebRayWorkerPods, "gpus_per_worker": fineWebGPUsPerPod,
 			"head_cpu_request": "2", "head_memory_request": "8Gi",
 			"worker_cpu_request": "4", "worker_memory_request": "48Gi",
 		},
 		"policy":    e2e.NightlyTauPolicy(stackNamespace, stackLargeGPUQueueForRun(), "nightly.h200.ib"),
 		"storage":   map[string]any{"data_pvc": pvc, "output": checkpoint},
 		"execution": map[string]any{"launcher": "ray-train", "allow_nccl_override": true},
-	}
+	}, nil
 }
 
 func TestFineWebTauConfig(t *testing.T) {
 	t.Setenv("RAY_E2E_IMAGE", "registry.example.com/ray:py3.12-ray2.58.0")
 	t.Setenv("FINEWEB_CHECKPOINT_INTERVAL", "")
-	cfg := fineWebTauConfig("nightly-ib-42", 16, 2, "checkpoint")
+	cfg, err := fineWebTauConfig("nightly-ib-42", 16, 2, "checkpoint")
+	require.NoError(t, err)
 	require.Equal(t, true, cfg["runtime"].(map[string]any)["rdma"].(map[string]any)["enabled"])
-	require.Equal(t, 16, cfg["compute"].(map[string]any)["workers"])
-	require.Equal(t, 1, cfg["compute"].(map[string]any)["gpus_per_worker"])
+	require.Equal(t, 2, cfg["compute"].(map[string]any)["workers"])
+	require.Equal(t, 8, cfg["compute"].(map[string]any)["gpus_per_worker"])
 	require.Equal(t, "Never", cfg["policy"].(map[string]any)["pod_preemption_policy"])
 	env := cfg["runtime"].(map[string]any)["env"].(map[string]string)
 	require.Equal(t, "1", env["FINEWEB_CHECKPOINT_INTERVAL"])
@@ -84,8 +96,11 @@ func TestFineWebTauConfig(t *testing.T) {
 	require.NotContains(t, env, "NCCL_IB_DISABLE")
 	require.Equal(t, "checkpoint", cfg["storage"].(map[string]any)["data_pvc"])
 	t.Setenv("FINEWEB_CHECKPOINT_INTERVAL", "2")
-	configured := fineWebTauConfig("nightly-ib-43", 16, 4, "checkpoint")
+	configured, err := fineWebTauConfig("nightly-ib-43", 16, 4, "checkpoint")
+	require.NoError(t, err)
 	require.Equal(t, "2", configured["runtime"].(map[string]any)["env"].(map[string]string)["FINEWEB_CHECKPOINT_INTERVAL"])
+	_, err = fineWebTauConfig("nightly-ib-invalid", 8, 2, "checkpoint")
+	require.ErrorContains(t, err, "requires 16 logical training workers")
 }
 
 func TestNativeTauFineWebRendering(t *testing.T) {
@@ -94,22 +109,29 @@ func TestNativeTauFineWebRendering(t *testing.T) {
 	script, err := os.ReadFile("fixtures/fineweb_ray_train.py")
 	require.NoError(t, err)
 	platform := profile.WorkloadProfile{
-		Name: "nightly.h200.ib", WorkerCount: 16, GPUsPerWorker: 1,
+		Name: "nightly.h200.ib", WorkerCount: 2, GPUsPerWorker: 8,
 		Mode: "fixed", Placement: profile.PlacementSameNetworkDomain, DefaultLocalQueue: stackLargeGPUQueueForRun(),
 		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "nd-h200-v5", "tau.azure.com/site": "test-site"},
 		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-nightly-low"},
 	}
-	job := e2e.RenderTauRunOffline(t, binary, fineWebTauConfig("nightly-ib", 16, 2, "checkpoint"),
+	config, err := fineWebTauConfig("nightly-ib", 16, 2, "checkpoint")
+	require.NoError(t, err)
+	job := e2e.RenderTauRunOffline(t, binary, config,
 		map[string][]byte{"fineweb_ray_train.py": script}, platform)
 	require.Equal(t, "RayJob", job.GetKind())
 	groups, _, err := unstructured.NestedSlice(job.Object, "spec", "rayClusterSpec", "workerGroupSpecs")
 	require.NoError(t, err)
 	require.Len(t, groups, 1)
 	group := groups[0].(map[string]any)
-	require.Equal(t, int64(16), group["replicas"])
+	require.Equal(t, int64(2), group["replicas"])
 	spec, _, err := unstructured.NestedMap(group, "template", "spec")
 	require.NoError(t, err)
 	require.Equal(t, "Never", spec["preemptionPolicy"])
+	containers, _, err := unstructured.NestedSlice(spec, "containers")
+	require.NoError(t, err)
+	resources := containers[0].(map[string]any)["resources"].(map[string]any)
+	requests := resources["requests"].(map[string]any)
+	require.Equal(t, int64(8), requests["nvidia.com/gpu"])
 	annotations, _, err := unstructured.NestedStringMap(group, "template", "metadata", "annotations")
 	require.NoError(t, err)
 	require.Equal(t, "tau.azure.com/network-domain", annotations["kueue.x-k8s.io/podset-required-topology"])
