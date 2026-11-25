@@ -34,14 +34,11 @@ func TauRunName(name string) string {
 func NightlyTauPolicy(namespace, queue, profile string) map[string]any {
 	profile, lane := authoritativeNightlyProfile(profile)
 	return map[string]any{
-		"namespace":               namespace,
-		"queue":                   queue,
-		"profile":                 profile,
-		"team":                    "research",
-		"lane":                    lane,
-		"workload_priority_class": "aks-low-priority",
-		"pod_priority_class":      "tau-nightly-low",
-		"pod_preemption_policy":   "Never",
+		"namespace": namespace,
+		"queue":     queue,
+		"profile":   profile,
+		"team":      "research",
+		"lane":      lane,
 	}
 }
 

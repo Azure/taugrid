@@ -89,7 +89,9 @@ func TestFineWebTauConfig(t *testing.T) {
 	require.Equal(t, true, cfg["runtime"].(map[string]any)["rdma"].(map[string]any)["enabled"])
 	require.Equal(t, 2, cfg["compute"].(map[string]any)["workers"])
 	require.Equal(t, 8, cfg["compute"].(map[string]any)["gpus_per_worker"])
-	require.Equal(t, "Never", cfg["policy"].(map[string]any)["pod_preemption_policy"])
+	require.NotContains(t, cfg["policy"].(map[string]any), "pod_preemption_policy")
+	require.NotContains(t, cfg["policy"].(map[string]any), "workload_priority_class")
+	require.NotContains(t, cfg["policy"].(map[string]any), "pod_priority_class")
 	env := cfg["runtime"].(map[string]any)["env"].(map[string]string)
 	require.Equal(t, "1", env["FINEWEB_CHECKPOINT_INTERVAL"])
 	require.Equal(t, "/data/checkpoints/nightly/nightly-ib-42", env["FINEWEB_CHECKPOINT_DIR"])
@@ -113,7 +115,9 @@ func TestNightlyTauPolicyUsesAuthoritativeProfiles(t *testing.T) {
 		policy := e2e.NightlyTauPolicy("research", "jobqueue", legacy)
 		require.Equal(t, expected[0], policy["profile"])
 		require.Equal(t, expected[1], policy["lane"])
-		require.Equal(t, "Never", policy["pod_preemption_policy"])
+		require.NotContains(t, policy, "pod_preemption_policy")
+		require.NotContains(t, policy, "workload_priority_class")
+		require.NotContains(t, policy, "pod_priority_class")
 	}
 }
 
@@ -123,10 +127,10 @@ func TestNativeTauFineWebRendering(t *testing.T) {
 	script, err := os.ReadFile("fixtures/fineweb_ray_train.py")
 	require.NoError(t, err)
 	platform := profile.WorkloadProfile{
-		Name: "nightly.h200.ib", WorkerCount: 2, GPUsPerWorker: 8,
+		Name: "azure.research.large-memory.2node", WorkerCount: 2, GPUsPerWorker: 8,
 		Mode: "fixed", Placement: profile.PlacementSameNetworkDomain, DefaultLocalQueue: stackLargeGPUQueueForRun(),
 		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "nd-h200-v5", "tau.azure.com/site": "test-site"},
-		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "aks-low-priority", PodPriorityClassName: "tau-nightly-low"},
+		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "taugrid-default", PodPriorityClassName: "taugrid-default"},
 	}
 	config, err := fineWebTauConfig("nightly-ib", 16, 2, "checkpoint")
 	require.NoError(t, err)
@@ -140,7 +144,7 @@ func TestNativeTauFineWebRendering(t *testing.T) {
 	require.Equal(t, int64(2), group["replicas"])
 	spec, _, err := unstructured.NestedMap(group, "template", "spec")
 	require.NoError(t, err)
-	require.Equal(t, "Never", spec["preemptionPolicy"])
+	require.NotContains(t, spec, "preemptionPolicy")
 	containers, _, err := unstructured.NestedSlice(spec, "containers")
 	require.NoError(t, err)
 	resources := containers[0].(map[string]any)["resources"].(map[string]any)

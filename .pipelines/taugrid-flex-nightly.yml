@@ -360,7 +360,7 @@ jobs:
             cd "$(Build.SourcesDirectory)/tests/e2e"
             export AI_RUNTIME_E2E=1
             export E2E_HARDWARE_MATRIX=1
-            export E2E_TAU_RUN=1
+            unset E2E_TAU_RUN
             export TAU_BINARY="$(Agent.TempDirectory)/tau"
             export E2E_TAU_RUN_ID="$(Build.BuildId)-$(System.JobAttempt)"
             export E2E_TAU_CONFIG_DIR="${artifact_dir}/tau-runs"
@@ -382,7 +382,7 @@ jobs:
               target="$(jq -r '.name' <<<"${target_json}")"
               selector="$(jq -r '.selector' <<<"${target_json}")"
               site="$(jq -r '.expected_site' <<<"${target_json}")"
-              queue="matrix-${target}"
+              queue="${FLEX_NIGHTLY_RDMA_QUEUE}"
               status="$(jq -r '.status' <<<"${target_json}")"
 
               shape_available=false
@@ -487,7 +487,7 @@ jobs:
             available_targets="$(jq -c '[.targets[] | select(.status == "available") | {name,selector,site:.expected_site}]' "${contract}")"
             if [[ "$(jq 'length' <<<"${available_targets}")" -ge 2 ]]; then
               export E2E_MULTISITE_NAMESPACE="${namespace}"
-              export E2E_MULTISITE_QUEUE_PREFIX=matrix
+              export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"
               export E2E_MULTISITE_TARGETS_JSON="${available_targets}"
               cross_site_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               if go test -v -count=1 -timeout 25m \

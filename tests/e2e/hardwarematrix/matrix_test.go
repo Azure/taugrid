@@ -120,13 +120,22 @@ func TestAuthoritativeMatrixProfilesMatchTauClusterCatalog(t *testing.T) {
 			placement:     item.Placement,
 		}
 	}
-
 	for _, totalGPUs := range []int{1, 2, 8, 16} {
 		selected, found := authoritativeMatrixProfile(totalGPUs)
 		require.True(t, found)
 		require.Equal(t, catalog[selected.name], selected)
 		require.Equal(t, totalGPUs, selected.workerPods*selected.gpusPerWorker)
 	}
+}
+
+func TestNightlyPipelinePreservesDirectHardwareRouting(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", ".pipelines", "taugrid-flex-nightly.yml"))
+	require.NoError(t, err)
+	pipeline := string(contents)
+	require.Contains(t, pipeline, "unset E2E_TAU_RUN")
+	require.Contains(t, pipeline, `queue="${FLEX_NIGHTLY_RDMA_QUEUE}"`)
+	require.Contains(t, pipeline, `export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"`)
+	require.NotContains(t, pipeline, "E2E_MULTISITE_QUEUE_PREFIX=matrix")
 }
 
 func TestMain(m *testing.M) {

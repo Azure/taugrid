@@ -90,7 +90,7 @@ func TestConcurrentGPUWorkloadsAcrossHardwareSites(t *testing.T) {
 	tc := e2e.NewTestContext(t, context.Background())
 
 	namespace := requireEnv(t, "E2E_MULTISITE_NAMESPACE")
-	queuePrefix := requireEnv(t, "E2E_MULTISITE_QUEUE_PREFIX")
+	queue := requireEnv(t, "E2E_MULTISITE_QUEUE")
 	image := requireEnv(t, "RAY_E2E_IMAGE")
 	targets := requireHardwareSiteTargets(t)
 	require.GreaterOrEqual(t, len(targets), 2, "at least two available hardware sites are required")
@@ -102,7 +102,6 @@ func TestConcurrentGPUWorkloadsAcrossHardwareSites(t *testing.T) {
 		if e2e.TauRunEnabled() {
 			jobName = e2e.TauRunName(jobName)
 		}
-		queue := queuePrefix + "-" + dnsLabel(target.Name)
 		jobSites[jobName] = target.Site
 
 		if e2e.TauRunEnabled() {
