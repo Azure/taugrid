@@ -77,7 +77,12 @@ for name in ("hardware_matrix", "h200_rdma"):
     ):
         assert setting in job, (name, setting)
         assert job.index(setting) < job.index("go test -v"), (name, setting)
-    assert "export E2E_TAU_RUN=1" in job, name
+    if name == "hardware_matrix":
+        assert "unset E2E_TAU_RUN" in job, name
+        assert 'queue="${FLEX_NIGHTLY_RDMA_QUEUE}"' in job, name
+        assert 'export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"' in job, name
+    else:
+        assert "export E2E_TAU_RUN=1" in job, name
     assert 'export TAU_BINARY="$(Agent.TempDirectory)/tau"' in job, name
     assert 'cd "$(Build.SourcesDirectory)/cli"\n          make build' in job, name
     assert 'install -m 755 bin/tau "$(Agent.TempDirectory)/tau"' in job, name
