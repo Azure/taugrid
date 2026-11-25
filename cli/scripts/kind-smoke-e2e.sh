@@ -533,7 +533,6 @@ kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get work
 retained_ray_uid="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')"
 "$TAU_BIN" cluster uninstall \
   --yes \
-  --drain-queue=false \
   --release "$TAUGRID_RELEASE" \
   --namespace "$TAUGRID_NAMESPACE" \
   --context "$KUBE_CONTEXT" \
