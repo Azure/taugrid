@@ -78,7 +78,7 @@ run az aks get-credentials \
   --overwrite-existing
 
 step "2. Install TauGrid"
-run tau cluster install "${CHART_ARGS[@]}" --context "$CLUSTER" \
+run tau cluster install "${CHART_ARGS[@]}" --mode helm --context "$CLUSTER" \
   --wait=false --atomic=false
 run tau cluster validate installation --context "$CLUSTER"
 

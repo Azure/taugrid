@@ -21,7 +21,6 @@ import (
 )
 
 func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
-	stubForceConflicts(t, false)
 	var got []string
 	var upgrades int
 	installFakeHelm(t, func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
@@ -35,7 +34,7 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		"--context", "aks-dev",
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
-		"--set-string", "kuberay-operator.labels.environment=dev")
+		"--set-string", "taugrid-core.portal.serviceAccount.name=tau-portal-dev")
 	if err != nil {
 		t.Fatalf("install errored: %v\n%s", err, out)
 	}
@@ -50,21 +49,26 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 		"--dependency-update",
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.gpu.flavors[0].resources[0].nominalQuota=8",
-		"--set-string", "kuberay-operator.labels.environment=dev",
+		"--set-string", "taugrid-core.portal.serviceAccount.name=tau-portal-dev",
+		"--set", "installation.mode=managed",
+		"--set", "components.kueue.enabled=false",
+		"--set", "components.kuberayOperator.enabled=false",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("helm args:\n got: %#v\nwant: %#v", got, want)
 	}
-	if upgrades != 2 {
-		t.Fatalf("fresh install invoked Helm upgrade %d times, want CRD/control-plane bootstrap plus queue-policy upgrade", upgrades)
+	if upgrades != 1 {
+		t.Fatalf("managed install invoked Helm upgrade %d times, want one TauGrid release operation", upgrades)
 	}
 	if !strings.Contains(out, "TauGrid installation plan") {
 		t.Fatalf("install output missing plan:\n%s", out)
 	}
 	for _, want := range []string{
-		"Helm wait:  bootstrap only (Tau readiness validation still runs after queue policy)",
+		"Mode:       managed",
+		"Operators:  AKS microsoft.kueue and microsoft.kuberay extensions",
+		"Helm wait:  disabled (Tau component-aware readiness validation still runs)",
 		"Rollback:   disabled",
-		"Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal",
+		"Defaults:   tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal",
 		"Opt-in:     Stellar, lifecycle recorder, image prewarm",
 		"tau workspace create --system-namespace tau-system --principal-name <external-group-or-team> --apply",
 		"kubectl get workspaces.tau.azure.com -n tau-system",
@@ -88,7 +92,6 @@ func TestClusterInstallInvokesPinnedHelmRelease(t *testing.T) {
 }
 
 func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
-	stubForceConflicts(t, false)
 	stubRollbackOnFailure(t, true)
 	var calls [][]string
 	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
@@ -96,7 +99,7 @@ func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 		return nil
 	})
 
-	out, err := runCluster(t, "install", "--wait", "--atomic", "--timeout", "45s")
+	out, err := runCluster(t, "install", "--mode", "helm", "--wait", "--atomic", "--timeout", "45s")
 	if err != nil {
 		t.Fatalf("install errored: %v\n%s", err, out)
 	}
@@ -114,7 +117,7 @@ func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 			t.Fatalf("Helm 4 should receive --rollback-on-failure, not deprecated --atomic: %#v", args)
 		}
 	}
-	for _, want := range []string{"Helm wait:  enabled for both passes", "Rollback:   enabled (implies Helm watcher wait)"} {
+	for _, want := range []string{"Helm wait:  enabled", "Rollback:   enabled (implies Helm watcher wait)"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("install plan missing %q:\n%s", want, out)
 		}
@@ -122,7 +125,6 @@ func TestClusterInstallWaitAndRollbackAreOptIn(t *testing.T) {
 }
 
 func TestClusterInstallAtomicUsesHelm3Spelling(t *testing.T) {
-	stubForceConflicts(t, false)
 	stubRollbackOnFailure(t, false)
 	var got []string
 	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
@@ -138,6 +140,17 @@ func TestClusterInstallAtomicUsesHelm3Spelling(t *testing.T) {
 	}
 }
 
+func TestClusterInstallRejectsUnknownModeBeforeHelm(t *testing.T) {
+	installFakeHelm(t, func(context.Context, io.Reader, io.Writer, io.Writer, []string) error {
+		t.Fatal("Helm must not run for an invalid mode")
+		return nil
+	})
+	_, err := runCluster(t, "install", "--mode", "external")
+	if err == nil || !strings.Contains(err.Error(), `--mode must be "managed" or "helm"`) {
+		t.Fatalf("invalid mode error = %v", err)
+	}
+}
+
 func TestClusterInstallBootstrapsFreshReleaseWithoutQueuePolicy(t *testing.T) {
 	var calls [][]string
 	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
@@ -145,7 +158,7 @@ func TestClusterInstallBootstrapsFreshReleaseWithoutQueuePolicy(t *testing.T) {
 		return nil
 	})
 
-	if _, err := runCluster(t, "install"); err != nil {
+	if _, err := runCluster(t, "install", "--mode", "helm"); err != nil {
 		t.Fatalf("install errored: %v", err)
 	}
 	if len(calls) != 2 {
@@ -176,6 +189,7 @@ func TestClusterInstallResetsValuesButKeepsRequestedOverrides(t *testing.T) {
 	})
 
 	if _, err := runCluster(t, "install",
+		"--mode", "helm",
 		"--values", "cluster.yaml",
 		"--set", "baselineQueue.enabled=false"); err != nil {
 		t.Fatalf("install errored: %v", err)
@@ -209,11 +223,85 @@ func TestClusterInstallExistingReleaseSkipsBootstrap(t *testing.T) {
 	t.Cleanup(func() { runHelmCommand = original })
 	installFakeInstallationValidation(t)
 
-	if _, err := runCluster(t, "install"); err != nil {
+	if _, err := runCluster(t, "install", "--mode", "helm"); err != nil {
 		t.Fatalf("install errored: %v", err)
 	}
 	if upgrades != 1 {
 		t.Fatalf("existing release invoked Helm upgrade %d times, want 1", upgrades)
+	}
+}
+
+func TestClusterInstallAdoptsLegacyExternalOperatorsAsManaged(t *testing.T) {
+	original := runHelmCommand
+	var upgrades int
+	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
+		switch {
+		case len(args) > 0 && args[0] == "list":
+			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"tau-system"}]`)
+		case len(args) > 1 && args[0] == "get" && args[1] == "values":
+			_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false}}}`)
+		case len(args) > 0 && args[0] == "template":
+		default:
+			upgrades++
+		}
+		return nil
+	}
+	t.Cleanup(func() { runHelmCommand = original })
+	installFakeInstallationValidation(t)
+
+	if _, err := runCluster(t, "install"); err != nil {
+		t.Fatalf("managed upgrade errored: %v", err)
+	}
+	if upgrades != 1 {
+		t.Fatalf("managed upgrade invoked Helm %d times, want one in-place upgrade", upgrades)
+	}
+}
+
+func TestClusterInstallRejectsUnsafeModeMigrationBeforeMutation(t *testing.T) {
+	original := runHelmCommand
+	var mutations int
+	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
+		switch {
+		case len(args) > 0 && args[0] == "list":
+			_, _ = io.WriteString(out, `[{"name":"taugrid","namespace":"tau-system"}]`)
+		case len(args) > 1 && args[0] == "get" && args[1] == "values":
+			_, _ = io.WriteString(out, `{}`)
+		default:
+			mutations++
+		}
+		return nil
+	}
+	t.Cleanup(func() { runHelmCommand = original })
+	installFakeInstallationValidation(t)
+
+	_, err := runCluster(t, "install")
+	if err == nil || !strings.Contains(err.Error(), "cannot change operator ownership mode from helm to managed in place") {
+		t.Fatalf("migration error = %v", err)
+	}
+	if mutations != 0 {
+		t.Fatalf("unsafe mode migration attempted %d mutations", mutations)
+	}
+}
+
+func TestClusterInstallManagedSupportsExternalPolicy(t *testing.T) {
+	var got []string
+	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+		got = append([]string(nil), args...)
+		return nil
+	})
+
+	if _, err := runCluster(t, "install", "--set", "baselineQueue.enabled=false"); err != nil {
+		t.Fatalf("managed external-policy install errored: %v", err)
+	}
+	for _, pair := range [][2]string{
+		{"--set", "baselineQueue.enabled=false"},
+		{"--set", "installation.mode=managed"},
+		{"--set", "components.kueue.enabled=false"},
+		{"--set", "components.kuberayOperator.enabled=false"},
+	} {
+		if !containsArgPair(got, pair[0], pair[1]) {
+			t.Fatalf("managed external-policy args missing %v: %#v", pair, got)
+		}
 	}
 }
 
@@ -328,6 +416,9 @@ func TestClusterInstallDryRunRendersOffline(t *testing.T) {
 		"--kube-context", "aks-dev",
 		"--dependency-update",
 		"--values", "cluster.yaml",
+		"--set", "installation.mode=managed",
+		"--set", "components.kueue.enabled=false",
+		"--set", "components.kuberayOperator.enabled=false",
 	}
 	if !reflect.DeepEqual(calls[0], want) {
 		t.Fatalf("dry-run helm args:\n got: %#v\nwant: %#v", calls[0], want)
@@ -453,7 +544,7 @@ func TestClusterUninstallRequiresConfirmation(t *testing.T) {
 
 func TestClusterUninstallUsesHelm(t *testing.T) {
 	var got []string
-	installFakeHelm(t, func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
+	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata), func(_ context.Context, _ io.Reader, _, _ io.Writer, args []string) error {
 		got = append([]string(nil), args...)
 		return nil
 	})
@@ -577,8 +668,12 @@ func installFakeInstallationValidation(t *testing.T) {
 	t.Helper()
 	originalWait := waitForTauGridInstallation
 	originalRunner := newInstallationCheckRunner
+	originalPreflight := runOperatorOwnershipPreflight
 	newInstallationCheckRunner = func(string) installationcheck.Runner {
 		return emptyInstallationRunner{}
+	}
+	runOperatorOwnershipPreflight = func(context.Context, installationcheck.Runner, clusterInstallSpec, bool) error {
+		return nil
 	}
 	waitForTauGridInstallation = func(context.Context, installationcheck.Runner, installationcheck.Options) (installationcheck.Report, error) {
 		return readyInstallationReport(), nil
@@ -586,6 +681,7 @@ func installFakeInstallationValidation(t *testing.T) {
 	t.Cleanup(func() {
 		waitForTauGridInstallation = originalWait
 		newInstallationCheckRunner = originalRunner
+		runOperatorOwnershipPreflight = originalPreflight
 	})
 }
 

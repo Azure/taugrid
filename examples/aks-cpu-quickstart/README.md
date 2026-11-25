@@ -212,6 +212,7 @@ setup begins.
 
 ```bash
 tau cluster install \
+  --mode helm \
   --context tau-cpu-quickstart
 ```
 
@@ -321,6 +322,7 @@ curl --fail --silent --show-error --output /dev/null \
   || { echo "portal tag '$STELLAR_TAG' does not resolve; pick a current one"; exit 1; }
 
 tau cluster install \
+  --mode helm \
   --context tau-cpu-quickstart \
   --set taugrid-core.stellar.enabled=true \
   --set taugrid-core.stellar.source=local \
@@ -539,7 +541,7 @@ port-forwards will not work).
 Portal is enabled by default in `tau-system`. Enable KueueViz and point the Portal at this example's workspace during install:
 
 ```bash
-tau cluster install --context "$CLUSTER" \
+tau cluster install --mode helm --context "$CLUSTER" \
   --set kueue.enableKueueViz=true \
   --set-string taugrid-core.portal.workloadNamespace=taugrid-default \
   --set-string taugrid-core.portal.kueueviz.namespace=tau-system \

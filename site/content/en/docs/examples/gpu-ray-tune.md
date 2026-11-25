@@ -277,6 +277,7 @@ Install and validate the checked-in chart:
 
 ```bash
 tau cluster install \
+  --mode helm \
   --chart "$TAUGRID_ROOT/charts/taugrid" \
   --wait \
   --atomic \

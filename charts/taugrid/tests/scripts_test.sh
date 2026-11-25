@@ -188,6 +188,47 @@ helm template namespace-check "$TEST_CHART_DIR" \
   --include-crds >"$default_manifest"
 assert_namespaces "$default_manifest" custom-system kube-system
 
+managed_manifest="$TEST_ROOT/managed-custom-namespace.yaml"
+helm template namespace-check "$TEST_CHART_DIR" \
+  --namespace custom-system \
+  --include-crds \
+  --set installation.mode=managed \
+  --set components.kueue.enabled=false \
+  --set components.kuberayOperator.enabled=false >"$managed_manifest"
+if grep -Eq '^(  name: .*\.(kueue\.x-k8s\.io|ray\.io)|kind: (MutatingWebhookConfiguration|ValidatingWebhookConfiguration))$' "$managed_manifest"; then
+  fail "managed mode rendered operator CRDs or webhooks"
+fi
+if grep -Eq $'^Deployment\t(namespace-check-kueue-controller-manager|kuberay-operator)\t' < <(render_namespaces "$managed_manifest"); then
+  fail "managed mode rendered self-managed operator deployments"
+fi
+grep -Fq $'Deployment\ttau-core-controller\tcustom-system' < <(render_namespaces "$managed_manifest") ||
+  fail "managed mode did not render the Tau controller"
+
+managed_external_policy="$TEST_ROOT/managed-external-policy.yaml"
+helm template namespace-check "$TEST_CHART_DIR" \
+  --namespace custom-system \
+  --set installation.mode=managed \
+  --set components.kueue.enabled=false \
+  --set components.kuberayOperator.enabled=false \
+  --set baselineQueue.enabled=false >"$managed_external_policy"
+if grep -Eq '^kind: (ClusterQueue|ResourceFlavor|PriorityClass|WorkloadPriorityClass|Topology)$' "$managed_external_policy"; then
+  fail "managed mode with external policy rendered TauGrid baseline policy"
+fi
+
+if helm template namespace-check "$TEST_CHART_DIR" \
+  --set installation.mode=managed >"$TEST_ROOT/invalid-managed.yaml" 2>"$TEST_ROOT/invalid-managed.err"; then
+  fail "managed mode accepted self-managed operator dependencies"
+fi
+grep -Fq 'installation.mode=managed requires components.kueue.enabled=false' "$TEST_ROOT/invalid-managed.err" ||
+  fail "managed ownership refusal did not explain the Kueue conflict"
+
+if helm template namespace-check "$TEST_CHART_DIR" \
+  --set components.kueue.enabled=false >"$TEST_ROOT/invalid-helm.yaml" 2>"$TEST_ROOT/invalid-helm.err"; then
+  fail "helm mode accepted disabled Kueue ownership"
+fi
+grep -Fq 'installation.mode=helm requires components.kueue.enabled=true' "$TEST_ROOT/invalid-helm.err" ||
+  fail "Helm ownership refusal did not explain the Kueue requirement"
+
 for required in \
   'name: multikueueclusters.kueue.x-k8s.io' \
   'name: multikueueconfigs.kueue.x-k8s.io' \

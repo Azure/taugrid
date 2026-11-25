@@ -6,7 +6,13 @@ description: TauGrid distribution chart configurable values
 
 {{< maturity status="ga" reviewed="2026-08-18" >}}
 
-This page documents the Helm values accepted by `tau cluster install`. The distribution chart bundles Kueue, KubeRay, the Tau core controller, GPU monitoring, the `taugrid-core` services chart, and a portable baseline queue into a single versioned release. Portal is enabled by default for the operator quickstart; Stellar, lifecycle recorder, and image prewarm remain disabled until the platform opts in.
+This page documents the Helm values accepted by `tau cluster install`. The
+explicit `--mode managed|helm` contract determines operator ownership. Managed
+mode is the preferred AKS default and renders no Kueue or KubeRay operator
+CRDs, controllers, or webhooks. Helm mode is the a-la-carte self-managed path
+and keeps those dependencies in the TauGrid release. Portal is enabled by
+default; Stellar, lifecycle recorder, and image prewarm remain disabled until
+the platform opts in.
 
 Print this reference from your terminal:
 
@@ -14,7 +20,27 @@ Print this reference from your terminal:
 tau cluster explain-values
 ```
 
-The Helm release namespace is the only namespace setting for TauGrid system workloads and Services. `tau cluster install` defaults it to `tau-system`; `--namespace <name>` moves the Kueue, KubeRay, Tau controller, Portal, GPU monitoring, and other enabled first-party workloads together. The first-party charts follow their Helm release namespace, and the deprecated `gpu-monitoring.namespace` override must remain empty. Cluster-scoped resources remain cluster-scoped, and Kueue keeps its Kubernetes API aggregation binding in `kube-system`.
+The Helm release namespace is the only namespace setting for TauGrid-owned
+system workloads and Services. `tau cluster install` defaults it to
+`tau-system`. In Helm mode, Kueue and KubeRay follow that namespace. In managed
+mode, their namespaces and lifecycle remain extension-owned. The first-party
+charts follow the TauGrid release namespace, and the deprecated
+`gpu-monitoring.namespace` override must remain empty.
+
+## Ownership matrix
+
+| Resource | `managed` | `helm` |
+| --- | --- | --- |
+| Kueue APIs, controller, webhooks, upgrades, removal | `microsoft.kueue` extension | TauGrid Helm release |
+| KubeRay APIs, controller, webhooks, upgrades, removal | `microsoft.kuberay` extension | TauGrid Helm release |
+| Tau APIs and `tau-core-controller` | TauGrid Helm release | TauGrid Helm release |
+| `taugrid-gpu-topology` | `tau-core-controller` | `tau-core-controller` |
+| Baseline queue and priority policy | TauGrid Helm release unless `baselineQueue.enabled=false` | TauGrid Helm release unless `baselineQueue.enabled=false` |
+| TauWorkspace queues and workload intent | Tau controllers | Tau controllers |
+
+`baselineQueue.enabled=false` supports platform-composed GitOps policy without
+creating a third operator mode. TauGrid uninstall never removes extension-owned
+operators or policy that the release did not render.
 
 ## MultiKueue capability
 
@@ -22,7 +48,7 @@ The Helm release namespace is the only namespace setting for TauGrid system work
 | --- | --- | --- | --- |
 | `kueue.aksExtension.enableMultiKueue` | bool | `true` | Install the pinned Kueue MultiKueue controller capability |
 
-The standard installation includes MultiKueue API/controller support and
+Helm mode includes pinned MultiKueue API/controller support and
 read-only prerequisite observation. Operators separately create worker
 credentials, AdmissionChecks, MultiKueueConfigs, MultiKueueClusters, dedicated
 queues, and profiles. `TauCluster.status.conditions[MultiKueueReady]` reports
@@ -30,14 +56,19 @@ the health of those actual operator-owned prerequisites. See
 [Multi-cluster execution](../../platform-admin-guide/multicluster/) before publishing a
 MultiKueue profile.
 
+Managed mode follows the service-versioned extension feature set. MultiKueue
+availability can differ from Helm mode; verify the installed extension before
+creating MultiKueue resources.
+
 ## Components
 
-Toggle sub-charts with `components.<key>.enabled`:
+The CLI sets the operator component switches from `--mode`; they are not an
+independent ownership interface:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `components.kueue.enabled` | `true` | Kueue job scheduler |
-| `components.kuberayOperator.enabled` | `true` | KubeRay operator |
+| `components.kueue.enabled` | mode-derived | `false` in managed mode; `true` in Helm mode |
+| `components.kuberayOperator.enabled` | mode-derived | `false` in managed mode; `true` in Helm mode |
 | `components.tauCoreController.enabled` | `true` | Tau core controller (TauWorkspace, TauCluster) |
 | `components.taugridCore.enabled` | `true` | Include the services chart, including the default Portal |
 | `components.gpuMonitoring.enabled` | unset | GPU monitoring follows `components.tauCoreController.enabled` until explicitly set |
@@ -153,8 +184,8 @@ The remaining top-level keys pass values directly to embedded sub-charts:
 
 | Prefix | Sub-chart | Common overrides |
 | --- | --- | --- |
-| `kueue.*` | Kueue v0.18 | `controllerManager.manager.image`, `managerConfig` |
-| `kuberay-operator.*` | KubeRay v1.6 | `image`, `configuration`, `podAnnotations` |
+| `kueue.*` | Helm-mode Kueue v0.19 | `controllerManager.manager.image`, `managerConfig` |
+| `kuberay-operator.*` | Helm-mode KubeRay v1.7 | `image`, `configuration`, `podAnnotations` |
 | `tau-core-controller.*` | Tau controller | `image`, `tauCluster.nodeLabelRules` |
 | `taugrid-core.*` | Services chart | `prewarm.enabled`, `stellar.enabled`, `portal.enabled` |
 | `gpu-monitoring.*` | GPU monitoring | `gpuSkus`, `daemonset`, `metricsCollector`, `namespace` |

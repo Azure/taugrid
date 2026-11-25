@@ -132,6 +132,52 @@ func TestCheckSkipsDisabledComponents(t *testing.T) {
 	}
 }
 
+func TestCheckValidatesManagedOperatorDeployments(t *testing.T) {
+	runner := readyRunner()
+	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
+		output: `{"items":[
+				{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+			]}`,
+	}
+	runner["get deployments --all-namespaces --selector app.kubernetes.io/name=kueue --output=json"] = fakeResponse{
+		output: `{"items":[
+				{"metadata":{"name":"kueue-controller-manager","namespace":"kueue-system","generation":1,"labels":{"helm.sh/chart":"kueue-0.19.10-aks.0.9.5"},"annotations":{"meta.helm.sh/release-name":"aks-kueue","meta.helm.sh/release-namespace":"kueue-system"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+			]}`,
+	}
+	runner["get deployments --all-namespaces --selector app.kubernetes.io/name=kuberay-operator --output=json"] = fakeResponse{
+		output: `{"items":[
+				{"metadata":{"name":"kuberay-operator","namespace":"kuberay-system","generation":1,"labels":{"helm.sh/chart":"kuberay-operator-1.7.0-aks.0.1.3"},"annotations":{"meta.helm.sh/release-name":"kuberay","meta.helm.sh/release-namespace":"kuberay-system"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+			]}`,
+	}
+	opts := testOptions()
+	opts.DisabledComponents = []Component{ComponentKueue, ComponentKubeRay}
+	opts.ExternalComponentOwners = map[Component]ExternalComponentOwner{
+		ComponentKueue: {
+			Release:               "aks-kueue",
+			Namespace:             "kueue-system",
+			CompatibleChartPrefix: "kueue-0.19.",
+		},
+		ComponentKubeRay: {
+			Release:               "kuberay",
+			Namespace:             "kuberay-system",
+			CompatibleChartPrefix: "kuberay-operator-1.7.",
+		},
+	}
+
+	report := Check(context.Background(), runner, opts)
+	if !report.Ready() {
+		t.Fatalf("managed operators blocked readiness:\n%s", report.Summary())
+	}
+	for _, want := range []string{
+		"PASS  Kueue",
+		"PASS  KubeRay",
+	} {
+		if !strings.Contains(report.Summary(), want) {
+			t.Fatalf("managed readiness summary missing %q:\n%s", want, report.Summary())
+		}
+	}
+}
+
 func TestCheckSkipsDisabledPortalWithoutReadingItsDeployment(t *testing.T) {
 	runner := readyRunner()
 	opts := testOptions()
@@ -275,6 +321,11 @@ func TestDisabledComponentsReadsChartSwitches(t *testing.T) {
 			name:   "only portal disabled",
 			values: `{"taugrid-core":{"portal":{"enabled":false}}}`,
 			want:   []Component{ComponentPortal},
+		},
+		{
+			name:   "external baseline policy",
+			values: `{"baselineQueue":{"enabled":false}}`,
+			want:   []Component{ComponentBaselineQueue},
 		},
 		{
 			name:   "shorthand bool leaves the subchart installed",

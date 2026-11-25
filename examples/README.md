@@ -43,6 +43,7 @@ Standalone Tau example pages should include the same status block near the top:
 
 | Example | Status | Intended use |
 | --- | --- | --- |
+| [`aks-managed-extensions`](./aks-managed-extensions/) | `operator runbook` | Preferred AKS ownership path: explicitly provisions and verifies `microsoft.kueue` and `microsoft.kuberay`, then installs only TauGrid-owned APIs, controllers, and policy. |
 | [`aks-cpu-quickstart`](./aks-cpu-quickstart/) | `operator runbook` | Creates a new CPU-only AKS cluster and runs `az aks create`, `tau cluster install`, a real CPU PyTorch RayJob, and live Stellar metrics. Creates billable Azure resources. |
 | [`aks-gpu-quickstart`](./aks-gpu-quickstart/) | `operator runbook` | GPU counterpart to `aks-cpu-quickstart` on a single A100 node, including the AKS device plugin and MIG configuration issues. Verifies CUDA execution with evidence a CPU cannot produce. Creates expensive billable Azure resources. |
 | [`market-policy`](./market-policy/) | `production-shaped` | Trains the exact compact actor-critic rendered in the documentation, requires CUDA on TauGrid, and exports browser-ready policy/value weights. |

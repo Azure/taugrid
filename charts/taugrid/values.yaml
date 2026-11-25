@@ -5,6 +5,9 @@ global:
       database: ""
       clientID: ""
 
+installation:
+  mode: helm
+
 components:
   kueue:
     enabled: true

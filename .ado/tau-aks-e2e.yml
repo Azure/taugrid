@@ -167,6 +167,7 @@ stages:
                     EOF
 
                     tau cluster install \
+                      --mode helm \
                       --chart charts/taugrid \
                       --context "${KUBE_CONTEXT}" \
                       --values "${values_file}" \

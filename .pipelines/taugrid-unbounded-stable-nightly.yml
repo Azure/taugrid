@@ -378,6 +378,7 @@ jobs:
 
                   install_args=(
                     cluster install
+                    --mode helm
                     --context unbounded-stable
                     --release "${TAUGRID_RELEASE}"
                     --namespace "${TAUGRID_SYSTEM_NAMESPACE}"

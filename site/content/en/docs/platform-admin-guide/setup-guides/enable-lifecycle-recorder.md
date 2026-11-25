@@ -116,7 +116,7 @@ name exactly.
 Upgrade the single umbrella release with the complete canonical values file:
 
 ```bash
-tau cluster install --context <context> --version <taugrid-release-version> \
+tau cluster install --mode <current-mode> --context <context> --version <taugrid-release-version> \
   --values <platform-values.yaml>
 
 # adx-mon reconciles ManagementCommands asynchronously, exposing no

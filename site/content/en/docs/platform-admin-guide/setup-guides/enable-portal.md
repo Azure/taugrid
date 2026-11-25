@@ -34,7 +34,7 @@ Install or upgrade TauGrid with the cluster's complete values file, then verify 
 
 ```bash
 export TAU_SYSTEM_NAMESPACE=tau-system
-tau cluster install --context <context> --namespace "$TAU_SYSTEM_NAMESPACE" --values <platform-values.yaml>
+tau cluster install --mode <current-mode> --context <context> --namespace "$TAU_SYSTEM_NAMESPACE" --values <platform-values.yaml>
 kubectl --context <context> --namespace "$TAU_SYSTEM_NAMESPACE" rollout status deployment/tau-portal --timeout=180s
 kubectl --context <context> --namespace "$TAU_SYSTEM_NAMESPACE" get service/tau-portal serviceaccount/tau-portal
 kubectl --context <context> --namespace "$TAU_SYSTEM_NAMESPACE" port-forward service/tau-portal 18080:80
@@ -81,7 +81,7 @@ taugrid-core:
 ```
 
 ```bash
-tau cluster install --context <context> --version <taugrid-release-version> \
+tau cluster install --mode <current-mode> --context <context> --version <taugrid-release-version> \
   --namespace "$TAU_SYSTEM_NAMESPACE" \
   --values <platform-values.yaml>
 kubectl -n "$TAU_SYSTEM_NAMESPACE" rollout status deploy/tau-portal --timeout=180s
@@ -320,7 +320,7 @@ Render the exact chart with the complete file and review it before applying:
 ```bash
 helm template taugrid <exact-chart-path-or-reference> --namespace "$TAU_SYSTEM_NAMESPACE" \
   --values <platform-values.yaml>
-tau cluster install --context <context> --version <release-containing-this-feature> \
+tau cluster install --mode <current-mode> --context <context> --version <release-containing-this-feature> \
   --namespace "$TAU_SYSTEM_NAMESPACE" --values <platform-values.yaml>
 ```
 

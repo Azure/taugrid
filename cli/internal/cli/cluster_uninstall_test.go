@@ -31,7 +31,6 @@ func recordHelm(calls *[][]string) helmCommandRunner {
 }
 
 func TestClusterUninstallDrainsQueueBeforeUninstall(t *testing.T) {
-	stubForceConflicts(t, false)
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata), recordHelm(&calls))
 
@@ -81,6 +80,23 @@ func TestClusterUninstallExposesWaitAndTimeoutEscapeHatch(t *testing.T) {
 	}
 	if !containsArgPair(calls[0], "--timeout", "45s") {
 		t.Fatalf("custom timeout missing: %#v", calls[0])
+	}
+}
+
+func TestClusterUninstallManagedLeavesExtensionsOwned(t *testing.T) {
+	var calls [][]string
+	values := `{"installation":{"mode":"managed"},"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false}},"baselineQueue":{"enabled":false}}`
+	installFakeHelmWithRelease(t, installedRelease(values, deployedMetadata), recordHelm(&calls))
+
+	out, err := runCluster(t, "uninstall", "--yes")
+	if err != nil {
+		t.Fatalf("managed uninstall errored: %v\n%s", err, out)
+	}
+	if len(calls) != 1 || calls[0][0] != "uninstall" {
+		t.Fatalf("managed uninstall calls = %#v, want TauGrid release uninstall only", calls)
+	}
+	if !strings.Contains(out, "will not remove AKS managed extensions") {
+		t.Fatalf("managed uninstall output omitted extension ownership:\n%s", out)
 	}
 }
 
@@ -142,6 +158,12 @@ func TestClusterUninstallSkipsDrain(t *testing.T) {
 
 			if _, err := runCluster(t, append([]string{"uninstall", "--yes"}, tc.args...)...); err != nil {
 				t.Fatalf("uninstall errored: %v", err)
+			}
+			if name == "release absent" {
+				if len(calls) != 0 {
+					t.Fatalf("repeated uninstall mutated Helm: %#v", calls)
+				}
+				return
 			}
 			if len(calls) != 1 || calls[0][0] != "uninstall" {
 				t.Fatalf("want uninstall only, got: %#v", calls)
@@ -221,19 +243,16 @@ func TestClusterUninstallGuidanceOmitsDisabledTopology(t *testing.T) {
 	}
 }
 
-func TestClusterUninstallReportsSkipWhenValuesUnreadable(t *testing.T) {
+func TestClusterUninstallRefusesUnreadableOwnership(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, releaseFixture{Release: defaultTauGridRelease, Metadata: deployedMetadata}, recordHelm(&calls))
 
 	out, err := runCluster(t, "uninstall", "--yes")
-	if err != nil {
-		t.Fatalf("uninstall errored: %v\n%s", err, out)
+	if err == nil || !strings.Contains(err.Error(), "refusing uninstall without affirmative operator ownership") {
+		t.Fatalf("uninstall ownership error = %v\n%s", err, out)
 	}
-	if len(calls) != 1 || calls[0][0] != "uninstall" {
-		t.Fatalf("unreadable values must skip the drain: %#v", calls)
-	}
-	if !strings.Contains(out, "skipping the queue drain") {
-		t.Fatalf("a skipped drain must be reported:\n%s", out)
+	if len(calls) != 0 {
+		t.Fatalf("unreadable ownership must not mutate Helm: %#v", calls)
 	}
 }
 

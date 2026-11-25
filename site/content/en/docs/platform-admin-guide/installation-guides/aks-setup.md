@@ -15,6 +15,11 @@ Use it after deciding you want AKS specifically; if you already have a
 Kubernetes cluster of any kind, go straight back to
 [step 2 of Getting started on Kubernetes](../kubernetes/#2-prepare-a-kubernetes-cluster).
 
+AKS should use `tau cluster install --mode managed`, which is also the CLI
+default. The `microsoft.kueue` and `microsoft.kuberay` extensions own operator
+APIs, controllers, webhooks, upgrades, and removal. TauGrid owns its APIs,
+`tau-core-controller`, workspace intent, and optional queue policy.
+
 ## Prerequisites
 
 - An Azure subscription and the `az` CLI, logged in, with permission to create
@@ -26,6 +31,12 @@ Kubernetes cluster of any kind, go straight back to
 - For the Terraform path: Terraform 1.9+ and Azure credentials usable by the
   AzureRM provider.
 - For the GPU Terraform path: regional quota for the target GPU VM SKU.
+
+The Tau CLI validates extension ownership and compatible Kueue 0.19.x and
+KubeRay 1.7.x lines, but it does not create Azure extension resources. Use the
+checked-in
+[`examples/aks-managed-extensions`](https://github.com/Azure/taugrid/tree/main/examples/aks-managed-extensions)
+runbook to provision and wait for both extensions before installation.
 
 ## Choose a path
 
@@ -102,6 +113,22 @@ az aks get-credentials --resource-group <rg> --name <cluster-name>
 export TAU_CONTEXT="<kubeconfig-context>"
 kubectl --context "$TAU_CONTEXT" get nodes
 ```
+
+Provision and verify the managed operators, then install TauGrid:
+
+```bash
+export TAU_EXTENSIONS_RG="<resource-group>"
+export TAU_EXTENSIONS_CLUSTER="<cluster-name>"
+./examples/aks-managed-extensions/install.sh
+```
+
+For platform-composed queue policy, pass
+`--set baselineQueue.enabled=false`. This is not a third operator path: the
+extensions still own Kueue and KubeRay while GitOps owns only the queue policy.
+
+Use `--mode helm` only when the platform deliberately chooses full
+self-managed lifecycle ownership. Helm mode refuses extension-owned CRDs and
+controllers rather than overlapping them.
 
 Confirm the cluster meets the
 [Kubernetes cluster prerequisites](../kubernetes/#2-prepare-a-kubernetes-cluster)

@@ -60,7 +60,7 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	original := runHelmCommand
 	runHelmCommand = func(_ context.Context, _ io.Reader, out, _ io.Writer, args []string) error {
 		helmArgs = append([]string(nil), args...)
-		_, _ = io.WriteString(out, `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false},"taugridCore":{"enabled":false}}}`)
+		_, _ = io.WriteString(out, `{"installation":{"mode":"managed"},"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":false},"tauCoreController":{"enabled":false},"taugridCore":{"enabled":false}}}`)
 		return nil
 	}
 	t.Cleanup(func() { runHelmCommand = original })
@@ -81,6 +81,11 @@ func TestClusterValidateInstallationSkipsDisabledComponents(t *testing.T) {
 	}
 	if !slices.Equal(got.DisabledComponents, []installationcheck.Component{installationcheck.ComponentKueue, installationcheck.ComponentKubeRay, installationcheck.ComponentTauCore, installationcheck.ComponentPortal}) {
 		t.Fatalf("disabled components = %v, want all disabled readiness components", got.DisabledComponents)
+	}
+	if len(got.ExternalComponentOwners) != 2 ||
+		got.ExternalComponentOwners[installationcheck.ComponentKueue].Release != managedKueueRelease ||
+		got.ExternalComponentOwners[installationcheck.ComponentKubeRay].Release != managedKubeRayRelease {
+		t.Fatalf("external component owners = %v, want managed operators", got.ExternalComponentOwners)
 	}
 }
 

@@ -1,0 +1,18 @@
+{{- if not (has .Values.installation.mode (list "managed" "helm")) }}
+{{- fail "installation.mode must be managed or helm" }}
+{{- end }}
+{{- if eq .Values.installation.mode "managed" }}
+{{- if .Values.components.kueue.enabled }}
+{{- fail "installation.mode=managed requires components.kueue.enabled=false because the AKS extension owns Kueue" }}
+{{- end }}
+{{- if .Values.components.kuberayOperator.enabled }}
+{{- fail "installation.mode=managed requires components.kuberayOperator.enabled=false because the AKS extension owns KubeRay" }}
+{{- end }}
+{{- else }}
+{{- if not .Values.components.kueue.enabled }}
+{{- fail "installation.mode=helm requires components.kueue.enabled=true because the TauGrid release owns Kueue" }}
+{{- end }}
+{{- if not .Values.components.kuberayOperator.enabled }}
+{{- fail "installation.mode=helm requires components.kuberayOperator.enabled=true because the TauGrid release owns KubeRay" }}
+{{- end }}
+{{- end }}

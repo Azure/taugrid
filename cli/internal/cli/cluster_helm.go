@@ -36,21 +36,9 @@ var helmUpgradeHelp = func(ctx context.Context) ([]byte, error) {
 	return exec.CommandContext(ctx, helm, "upgrade", "--help").Output()
 }
 
-var helmSupportsForceConflicts = sync.OnceValue(func() bool {
-	return probeHelmForceConflicts(context.Background())
-})
-
 var helmSupportsRollbackOnFailure = sync.OnceValue(func() bool {
 	return probeHelmRollbackOnFailure(context.Background())
 })
-
-func probeHelmForceConflicts(ctx context.Context) bool {
-	out, err := helmUpgradeHelp(ctx)
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(out), "--force-conflicts")
-}
 
 func probeHelmRollbackOnFailure(ctx context.Context) bool {
 	out, err := helmUpgradeHelp(ctx)
@@ -58,14 +46,6 @@ func probeHelmRollbackOnFailure(ctx context.Context) bool {
 		return false
 	}
 	return strings.Contains(string(out), "--rollback-on-failure")
-}
-
-// third-party webhooks away from system namespaces. Helm 4 defaults to
-func appendForceConflicts(args []string) []string {
-	if !helmSupportsForceConflicts() {
-		return args
-	}
-	return append(args, "--server-side=true", "--force-conflicts")
 }
 
 func appendRollbackOnFailure(args []string) []string {

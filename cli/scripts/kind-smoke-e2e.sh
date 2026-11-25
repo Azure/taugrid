@@ -447,6 +447,7 @@ done
 
 install_taugrid() {
   "$TAU_BIN" cluster install \
+  --mode helm \
   --chart "$REPO_ROOT/charts/taugrid" \
   --version 0.4.8 \
   --release "$TAUGRID_RELEASE" \
