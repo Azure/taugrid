@@ -133,6 +133,29 @@ func TestHelmOwnershipPreflightAcceptsReleaseOwnedUpgrade(t *testing.T) {
 	}
 }
 
+func TestHelmOwnershipPreflightAcceptsUntrackedDependencyCRDOnUpgrade(t *testing.T) {
+	runner := managedOwnershipRunner()
+	for key, value := range runner {
+		value = strings.ReplaceAll(value, `"namespace":"kueue-system"`, `"namespace":"tau-system"`)
+		value = strings.ReplaceAll(value, `"namespace":"kuberay-system"`, `"namespace":"tau-system"`)
+		value = strings.ReplaceAll(value, `"meta.helm.sh/release-name":"aks-kueue"`, `"meta.helm.sh/release-name":"taugrid"`)
+		value = strings.ReplaceAll(value, `"meta.helm.sh/release-name":"kuberay"`, `"meta.helm.sh/release-name":"taugrid"`)
+		value = strings.ReplaceAll(value, `"meta.helm.sh/release-namespace":"kueue-system"`, `"meta.helm.sh/release-namespace":"tau-system"`)
+		value = strings.ReplaceAll(value, `"meta.helm.sh/release-namespace":"kuberay-system"`, `"meta.helm.sh/release-namespace":"tau-system"`)
+		runner[key] = value
+	}
+	runner["get customresourcedefinition rayclusters.ray.io --ignore-not-found --output=json"] =
+		`{"metadata":{"name":"rayclusters.ray.io","annotations":{"controller-gen.kubebuilder.io/version":"v0.16.5"}}}`
+	spec := clusterInstallSpec{
+		Mode:      operatorModeHelm,
+		Release:   defaultTauGridRelease,
+		Namespace: defaultTauGridNamespace,
+	}
+	if err := operatorOwnershipPreflight(context.Background(), runner, spec, true); err != nil {
+		t.Fatalf("untracked dependency CRD upgrade preflight failed: %v", err)
+	}
+}
+
 func TestInstalledOperatorModeMigrationContract(t *testing.T) {
 	for name, tc := range map[string]struct {
 		values string

@@ -96,7 +96,7 @@ func installedOperatorModeForValues(values []byte) (string, error) {
 	return operatorModeHelm, nil
 }
 
-func operatorOwnershipPreflight(ctx context.Context, runner installationcheck.Runner, spec clusterInstallSpec, _ bool) error {
+func operatorOwnershipPreflight(ctx context.Context, runner installationcheck.Runner, spec clusterInstallSpec, releaseExists bool) error {
 	components := []struct {
 		name                string
 		selector            string
@@ -137,7 +137,7 @@ func operatorOwnershipPreflight(ctx context.Context, runner installationcheck.Ru
 			}
 			continue
 		}
-		if err := validateHelmOperator(component.name, deployments, crd, crdFound, spec.Release, spec.Namespace); err != nil {
+		if err := validateHelmOperator(component.name, deployments, crd, crdFound, spec.Release, spec.Namespace, releaseExists); err != nil {
 			return err
 		}
 	}
@@ -205,17 +205,22 @@ func validateManagedOperator(name string, deployments ownedDeploymentList, crd o
 	return nil
 }
 
-func validateHelmOperator(name string, deployments ownedDeploymentList, crd ownedMetadata, crdFound bool, release, namespace string) error {
+func validateHelmOperator(name string, deployments ownedDeploymentList, crd ownedMetadata, crdFound bool, release, namespace string, releaseExists bool) error {
 	for _, deployment := range deployments.Items {
 		if helmOwnerMatches(deployment.Metadata, release, namespace) {
 			continue
 		}
 		return fmt.Errorf("helm mode refuses foreign %s controller ownership at %s/%s; remove it through its current owner or use --mode managed only for verified AKS extensions", name, deployment.Metadata.Namespace, deployment.Metadata.Name)
 	}
-	if crdFound && !helmOwnerMatches(crd, release, namespace) {
-		return fmt.Errorf("helm mode refuses foreign %s CRD ownership on %s; do not use force-conflicts to transfer Helm ownership", name, crd.Name)
+	if !crdFound || helmOwnerMatches(crd, release, namespace) {
+		return nil
 	}
-	return nil
+	crdRelease := crd.Annotations["meta.helm.sh/release-name"]
+	crdNamespace := crd.Annotations["meta.helm.sh/release-namespace"]
+	if releaseExists && crdRelease == "" && crdNamespace == "" && len(deployments.Items) == 1 {
+		return nil
+	}
+	return fmt.Errorf("helm mode refuses foreign %s CRD ownership on %s; do not use force-conflicts to transfer Helm ownership", name, crd.Name)
 }
 
 func requireHelmOwner(resource string, metadata ownedMetadata, release, namespace string) error {
