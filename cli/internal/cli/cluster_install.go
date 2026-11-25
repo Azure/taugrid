@@ -26,6 +26,7 @@ const (
 	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
 	operatorModeManaged        = "managed"
 	operatorModeHelm           = "helm"
+	operatorModeLegacyPartial  = "legacy-partial"
 )
 
 type clusterInstallSpec struct {

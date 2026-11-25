@@ -156,6 +156,24 @@ func TestHelmOwnershipPreflightAcceptsUntrackedDependencyCRDOnUpgrade(t *testing
 	}
 }
 
+func TestHelmOwnershipPreflightAcceptsRetainedDependencyCRDsOnReinstall(t *testing.T) {
+	runner := managedOwnershipRunner()
+	runner["get deployments --all-namespaces --selector app.kubernetes.io/name=kueue --output=json"] = `{"items":[]}`
+	runner["get deployments --all-namespaces --selector app.kubernetes.io/name=kuberay-operator --output=json"] = `{"items":[]}`
+	runner["get customresourcedefinition clusterqueues.kueue.x-k8s.io --ignore-not-found --output=json"] =
+		`{"metadata":{"name":"clusterqueues.kueue.x-k8s.io","annotations":{"controller-gen.kubebuilder.io/version":"v0.16.5"}}}`
+	runner["get customresourcedefinition rayclusters.ray.io --ignore-not-found --output=json"] =
+		`{"metadata":{"name":"rayclusters.ray.io","annotations":{"controller-gen.kubebuilder.io/version":"v0.16.5"}}}`
+	spec := clusterInstallSpec{
+		Mode:      operatorModeHelm,
+		Release:   defaultTauGridRelease,
+		Namespace: defaultTauGridNamespace,
+	}
+	if err := operatorOwnershipPreflight(context.Background(), runner, spec, false); err != nil {
+		t.Fatalf("retained dependency CRD reinstall preflight failed: %v", err)
+	}
+}
+
 func TestInstalledOperatorModeMigrationContract(t *testing.T) {
 	for name, tc := range map[string]struct {
 		values string
@@ -195,5 +213,13 @@ func TestInstalledOperatorModeMigrationContract(t *testing.T) {
 				t.Fatalf("mode = %q, err = %v, want %q", got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestInstalledOperatorModeForUninstallAcceptsLegacyPartialOwnership(t *testing.T) {
+	values := []byte(`{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":true}}}`)
+	mode, err := installedOperatorModeForUninstallValues(values)
+	if err != nil || mode != operatorModeLegacyPartial {
+		t.Fatalf("uninstall mode = %q, err = %v, want %q", mode, err, operatorModeLegacyPartial)
 	}
 }

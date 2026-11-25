@@ -77,7 +77,7 @@ objects before uninstalling the controller.`,
 				fmt.Fprintf(cmd.OutOrStdout(), "TauGrid Helm release %s is already absent from namespace %s; nothing was removed.\n", spec.Release, spec.Namespace)
 				return nil
 			}
-			mode, err := installedOperatorMode(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+			mode, err := installedOperatorModeForUninstall(cmd, spec.KubeContext, spec.Release, spec.Namespace)
 			if err != nil {
 				return fmt.Errorf("refusing uninstall without affirmative operator ownership: %w", err)
 			}
@@ -121,6 +121,9 @@ cluster.`)
 func uninstallOwnershipSummary(mode string) string {
 	if mode == operatorModeManaged {
 		return "TauGrid will not remove AKS managed extensions or their CRDs and webhooks."
+	}
+	if mode == operatorModeLegacyPartial {
+		return "The legacy release owns one operator and references one external operator; Helm will remove only release-owned resources."
 	}
 	return "The TauGrid release owns the self-managed Kueue and KubeRay lifecycle."
 }

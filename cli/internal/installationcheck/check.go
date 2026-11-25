@@ -286,16 +286,19 @@ func checkExternalOperatorDeployment(ctx context.Context, runner Runner, compone
 	if err := getJSON(ctx, runner, args, &deployments); err != nil {
 		return fail(string(component.name), fmt.Sprintf("%v; inspect the managed extension deployment", err))
 	}
-	var matches []deploymentDoc
-	for _, deployment := range deployments.Items {
-		if strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], owner.CompatibleChartPrefix) {
-			matches = append(matches, deployment)
-		}
+	if len(deployments.Items) != 1 {
+		return fail(string(component.name), fmt.Sprintf("found %d operator Deployments; expected exactly one", len(deployments.Items)))
 	}
-	if len(matches) != 1 {
-		return fail(string(component.name), fmt.Sprintf("found %d compatible managed Deployments; expected exactly one", len(matches)))
+	deployment := deployments.Items[0]
+	if !strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], owner.CompatibleChartPrefix) {
+		return fail(string(component.name), fmt.Sprintf(
+			"Deployment %s/%s chart %q is outside the supported compatibility line %q",
+			deployment.Metadata.Namespace,
+			deployment.Metadata.Name,
+			deployment.Metadata.Labels["helm.sh/chart"],
+			owner.CompatibleChartPrefix+"x",
+		))
 	}
-	deployment := matches[0]
 	if deployment.Metadata.Namespace != owner.Namespace ||
 		deployment.Metadata.Annotations["meta.helm.sh/release-name"] != owner.Release ||
 		deployment.Metadata.Annotations["meta.helm.sh/release-namespace"] != owner.Namespace {

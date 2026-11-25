@@ -178,6 +178,35 @@ func TestCheckValidatesManagedOperatorDeployments(t *testing.T) {
 	}
 }
 
+func TestCheckRejectsAdditionalIncompatibleManagedOperatorDeployment(t *testing.T) {
+	runner := readyRunner()
+	runner["get deployments --namespace tau-system --selector app.kubernetes.io/instance=taugrid --output=json"] = fakeResponse{
+		output: `{"items":[
+			{"metadata":{"name":"tau-portal","generation":1,"labels":{"helm.sh/chart":"taugrid-core-0.3.0","app.kubernetes.io/component":"portal"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+		]}`,
+	}
+	runner["get deployments --all-namespaces --selector app.kubernetes.io/name=kueue --output=json"] = fakeResponse{
+		output: `{"items":[
+			{"metadata":{"name":"managed-kueue","namespace":"kueue-system","generation":1,"labels":{"helm.sh/chart":"kueue-0.19.10-aks.0.9.5"},"annotations":{"meta.helm.sh/release-name":"aks-kueue","meta.helm.sh/release-namespace":"kueue-system"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}},
+			{"metadata":{"name":"other-kueue","namespace":"other-system","generation":1,"labels":{"helm.sh/chart":"kueue-0.20.0"}},"spec":{"replicas":1},"status":{"observedGeneration":1,"updatedReplicas":1,"readyReplicas":1,"availableReplicas":1}}
+		]}`,
+	}
+	opts := testOptions()
+	opts.DisabledComponents = []Component{ComponentKueue}
+	opts.ExternalComponentOwners = map[Component]ExternalComponentOwner{
+		ComponentKueue: {
+			Release:               "aks-kueue",
+			Namespace:             "kueue-system",
+			CompatibleChartPrefix: "kueue-0.19.",
+		},
+	}
+
+	report := Check(context.Background(), runner, opts)
+	if report.Ready() || !strings.Contains(report.Summary(), "found 2 operator Deployments; expected exactly one") {
+		t.Fatalf("duplicate managed operators were not rejected:\n%s", report.Summary())
+	}
+}
+
 func TestCheckSkipsDisabledPortalWithoutReadingItsDeployment(t *testing.T) {
 	runner := readyRunner()
 	opts := testOptions()

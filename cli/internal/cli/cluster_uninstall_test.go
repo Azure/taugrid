@@ -100,6 +100,23 @@ func TestClusterUninstallManagedLeavesExtensionsOwned(t *testing.T) {
 	}
 }
 
+func TestClusterUninstallAllowsLegacyPartialOperatorOwnership(t *testing.T) {
+	var calls [][]string
+	values := `{"components":{"kueue":{"enabled":false},"kuberayOperator":{"enabled":true}},"baselineQueue":{"enabled":false}}`
+	installFakeHelmWithRelease(t, installedRelease(values, deployedMetadata), recordHelm(&calls))
+
+	out, err := runCluster(t, "uninstall", "--yes")
+	if err != nil {
+		t.Fatalf("legacy partial uninstall errored: %v\n%s", err, out)
+	}
+	if len(calls) != 1 || calls[0][0] != "uninstall" {
+		t.Fatalf("legacy partial uninstall calls = %#v, want Helm uninstall only", calls)
+	}
+	if !strings.Contains(out, "remove only release-owned resources") {
+		t.Fatalf("legacy partial uninstall output omitted ownership boundary:\n%s", out)
+	}
+}
+
 func TestClusterUninstallDrainOmitsDangerousFlags(t *testing.T) {
 	var calls [][]string
 	installFakeHelmWithRelease(t, installedRelease(queueEnabledValues, deployedMetadata), recordHelm(&calls))

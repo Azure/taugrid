@@ -530,6 +530,18 @@ fi
 kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o wide
 kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get workloads.kueue.x-k8s.io -l "kueue.x-k8s.io/job-uid=$(kubectl --request-timeout=10s --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')" -o wide
 
+retained_ray_uid="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')"
+"$TAU_BIN" cluster uninstall \
+  --yes \
+  --drain-queue=false \
+  --release "$TAUGRID_RELEASE" \
+  --namespace "$TAUGRID_NAMESPACE" \
+  --context "$KUBE_CONTEXT" \
+  --timeout 5m
+test "$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')" = "$retained_ray_uid"
+install_taugrid
+test "$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get rayjob.ray.io "$RAY_JOB_NAME" -o jsonpath='{.metadata.uid}')" = "$retained_ray_uid"
+
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" delete rayjob.ray.io "$RAY_JOB_NAME" \
   --cascade=foreground --timeout="$WAIT_TIMEOUT"
 wait_for_ray_cleanup "$WAIT_TIMEOUT"
@@ -585,7 +597,7 @@ head_pod="$(kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" get pod \
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" exec "$head_pod" -- python3 -c \
   'import urllib.request; result = urllib.request.urlopen("http://tau-kind-serve-serve-svc:9000/", timeout=15).read().decode(); assert result == "tau kind serve smoke complete", result'
 
-echo "Tau Kind smoke passed on context ${KUBE_CONTEXT} (Job + RayJob + RayService + legacy CRD upgrade)"
+echo "Tau Kind smoke passed on context ${KUBE_CONTEXT} (Job + RayJob + RayService + retained-CRD reinstall + legacy CRD upgrade)"
 
 if [[ "${TAU_KIND_DELETE_CLUSTER:-0}" == "1" ]]; then
   tau_kind_delete_cluster "$CLUSTER_NAME"

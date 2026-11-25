@@ -45,6 +45,20 @@ type ownedDeploymentList struct {
 	} `json:"items"`
 }
 
+type operatorOwnershipValues struct {
+	Installation struct {
+		Mode string `json:"mode"`
+	} `json:"installation"`
+	Components struct {
+		Kueue struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"kueue"`
+		KubeRay struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"kuberayOperator"`
+	} `json:"components"`
+}
+
 var runOperatorOwnershipPreflight = operatorOwnershipPreflight
 
 func installedOperatorMode(cmd *cobra.Command, kubeContext, release, namespace string) (string, error) {
@@ -55,20 +69,24 @@ func installedOperatorMode(cmd *cobra.Command, kubeContext, release, namespace s
 	return installedOperatorModeForValues(values)
 }
 
-func installedOperatorModeForValues(values []byte) (string, error) {
-	var doc struct {
-		Installation struct {
-			Mode string `json:"mode"`
-		} `json:"installation"`
-		Components struct {
-			Kueue struct {
-				Enabled *bool `json:"enabled"`
-			} `json:"kueue"`
-			KubeRay struct {
-				Enabled *bool `json:"enabled"`
-			} `json:"kuberayOperator"`
-		} `json:"components"`
+func installedOperatorModeForUninstall(cmd *cobra.Command, kubeContext, release, namespace string) (string, error) {
+	values, err := tauGridReleaseValues(cmd, kubeContext, release, namespace)
+	if err != nil {
+		return "", fmt.Errorf("read existing TauGrid operator ownership mode: %w", err)
 	}
+	return installedOperatorModeForUninstallValues(values)
+}
+
+func installedOperatorModeForValues(values []byte) (string, error) {
+	return installedOperatorModeForValuesWithLegacyPartial(values, false)
+}
+
+func installedOperatorModeForUninstallValues(values []byte) (string, error) {
+	return installedOperatorModeForValuesWithLegacyPartial(values, true)
+}
+
+func installedOperatorModeForValuesWithLegacyPartial(values []byte, allowLegacyPartial bool) (string, error) {
+	var doc operatorOwnershipValues
 	if err := json.Unmarshal(values, &doc); err != nil {
 		return "", fmt.Errorf("decode TauGrid operator ownership mode: %w", err)
 	}
@@ -91,6 +109,9 @@ func installedOperatorModeForValues(values []byte) (string, error) {
 		return operatorModeManaged, nil
 	}
 	if kueueEnabled != kubeRayEnabled {
+		if allowLegacyPartial {
+			return operatorModeLegacyPartial, nil
+		}
 		return "", fmt.Errorf("legacy release has a partial external-operator configuration; restore its original values before upgrading to an explicit ownership mode")
 	}
 	return operatorModeHelm, nil
@@ -217,8 +238,13 @@ func validateHelmOperator(name string, deployments ownedDeploymentList, crd owne
 	}
 	crdRelease := crd.Annotations["meta.helm.sh/release-name"]
 	crdNamespace := crd.Annotations["meta.helm.sh/release-namespace"]
-	if releaseExists && crdRelease == "" && crdNamespace == "" && len(deployments.Items) == 1 {
-		return nil
+	if crdRelease == "" && crdNamespace == "" {
+		if releaseExists && len(deployments.Items) == 1 {
+			return nil
+		}
+		if !releaseExists && len(deployments.Items) == 0 {
+			return nil
+		}
 	}
 	return fmt.Errorf("helm mode refuses foreign %s CRD ownership on %s; do not use force-conflicts to transfer Helm ownership", name, crd.Name)
 }
