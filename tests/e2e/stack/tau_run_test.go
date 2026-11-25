@@ -103,6 +103,20 @@ func TestFineWebTauConfig(t *testing.T) {
 	require.ErrorContains(t, err, "requires 16 logical training workers")
 }
 
+func TestNightlyTauPolicyUsesAuthoritativeProfiles(t *testing.T) {
+	for legacy, expected := range map[string][2]string{
+		"nightly.a100.1gpu":  {"azure.research.training.l", "training"},
+		"nightly.h200.8gpu":  {"azure.research.large-memory.xl", "large-memory"},
+		"nightly.h200.16gpu": {"azure.research.large-memory.2node", "large-memory"},
+		"nightly.h200.ib":    {"azure.research.large-memory.2node", "large-memory"},
+	} {
+		policy := e2e.NightlyTauPolicy("research", "jobqueue", legacy)
+		require.Equal(t, expected[0], policy["profile"])
+		require.Equal(t, expected[1], policy["lane"])
+		require.Equal(t, "Never", policy["pod_preemption_policy"])
+	}
+}
+
 func TestNativeTauFineWebRendering(t *testing.T) {
 	t.Setenv("RAY_E2E_IMAGE", "registry.example.com/ray:py3.12-ray2.58.0")
 	binary := e2e.BuildTauForTest(t)
