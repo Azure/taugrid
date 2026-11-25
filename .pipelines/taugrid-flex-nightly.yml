@@ -51,7 +51,7 @@ parameters:
   - name: rdmaNamespace
     displayName: Existing authorized nightly namespace
     type: string
-    default: $(FLEX_NIGHTLY_RDMA_NAMESPACE)
+    default: taugrid-nightly-rdma
   - name: rdmaQueue
     displayName: Existing IB LocalQueue
     type: string

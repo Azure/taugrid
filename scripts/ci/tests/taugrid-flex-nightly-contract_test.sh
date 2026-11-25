@@ -60,6 +60,8 @@ from unittest.mock import patch
 
 pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
+rdma_namespace = re.search(r"  - name: rdmaNamespace\n(.*?)(?=  - name:)", pipeline, re.DOTALL)
+assert rdma_namespace and "default: taugrid-nightly-rdma" in rdma_namespace.group(1)
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
 rdma = next(job for job in jobs if job.splitlines()[0] == "h200_rdma")
 assert "dependsOn:\n      - preflight\n      - hardware_matrix\n" in rdma
