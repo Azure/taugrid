@@ -267,7 +267,7 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 }
 
 func matrixTauConfig(cfg matrixConfig, workload, name string) map[string]any {
-	policy := e2e.GovernedTauPolicy(cfg.namespace, "auto", cfg.profile.name, cfg.profile.lane)
+	policy := e2e.GovernedTauPolicy(cfg.namespace, cfg.queue, cfg.profile.name, cfg.profile.lane)
 	return map[string]any{
 		"name":   name,
 		"engine": "rayjob",
@@ -698,6 +698,7 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 					job := e2e.RenderTauRunOffline(t, binary, matrixTauConfig(cfg, workload, "e2e-matrix-"+workload+"-42-1"),
 						map[string][]byte{workload + "_gpu.py": []byte(script), "runtime_contract.py": []byte(runtimeContractScript)}, platform)
 					require.Equal(t, "RayJob", job.GetKind())
+					require.Equal(t, cfg.queue, job.GetLabels()["kueue.x-k8s.io/queue-name"])
 					require.Equal(t, "taugrid-default", job.GetLabels()["kueue.x-k8s.io/priority-class"])
 					ttl, found, err := unstructured.NestedInt64(job.Object, "spec", "ttlSecondsAfterFinished")
 					require.NoError(t, err)

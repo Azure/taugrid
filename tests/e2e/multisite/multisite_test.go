@@ -147,7 +147,7 @@ func crossSiteTauConfig(namespace, queue, name, image string) map[string]any {
 		"name": name, "engine": "job", "entrypoint": "gpu_site.py",
 		"runtime": map[string]any{"image": image},
 		"compute": map[string]any{"gpus": 1, "cpu_request": "1"},
-		"policy":  e2e.GovernedTauPolicy(namespace, "auto", "azure.research.training.l", "training"),
+		"policy":  e2e.GovernedTauPolicy(namespace, queue, "azure.research.training.l", "training"),
 		"run":     map[string]any{"ttl_seconds_after_finished": 300},
 	}
 }
@@ -378,6 +378,7 @@ func TestNativeTauCrossSiteRendering(t *testing.T) {
 		map[string][]byte{"gpu_site.py": []byte("print('CUDA check')\n")}, platform)
 	require.Equal(t, "Job", job.GetKind())
 	require.Equal(t, "nightly-site", job.GetName())
+	require.Equal(t, "matrix-a100", job.GetLabels()["kueue.x-k8s.io/queue-name"])
 	require.Equal(t, "taugrid-default", job.GetLabels()["kueue.x-k8s.io/priority-class"])
 	spec, _, err := unstructured.NestedMap(job.Object, "spec", "template", "spec")
 	require.NoError(t, err)
