@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/topology"
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -73,7 +74,7 @@ func fineWebTauConfig(name string, workers, steps int, pvc string) (map[string]a
 		"compute": map[string]any{
 			"workers": fineWebRayWorkerPods, "gpus_per_worker": fineWebGPUsPerPod,
 			"head_cpu_request": "2", "head_memory_request": "8Gi",
-			"worker_cpu_request": "4", "worker_memory_request": "48Gi",
+			"worker_cpu_request": "4", "worker_memory_request": "96Gi",
 		},
 		"policy":    e2e.NightlyTauPolicy(stackNamespace, stackLargeGPUQueueForRun(), "nightly.h200.ib"),
 		"storage":   map[string]any{"data_pvc": pvc, "output": checkpoint},
@@ -107,10 +108,10 @@ func TestFineWebTauConfig(t *testing.T) {
 
 func TestNightlyTauPolicyUsesAuthoritativeProfiles(t *testing.T) {
 	for legacy, expected := range map[string][2]string{
-		"nightly.a100.1gpu":  {"azure.research.training.l", "training"},
-		"nightly.h200.8gpu":  {"azure.research.large-memory.xl", "large-memory"},
-		"nightly.h200.16gpu": {"azure.research.large-memory.2node", "large-memory"},
-		"nightly.h200.ib":    {"azure.research.large-memory.2node", "large-memory"},
+		"nightly.a100.1gpu":  {"azure.research.a100.training.l", "training"},
+		"nightly.h200.8gpu":  {"azure.research.h200.large-memory.xl", "large-memory"},
+		"nightly.h200.16gpu": {"azure.research.h200.large-memory.2node", "large-memory"},
+		"nightly.h200.ib":    {"azure.research.h200.large-memory.2node", "large-memory"},
 	} {
 		policy := e2e.NightlyTauPolicy("research", "jobqueue", legacy)
 		require.Equal(t, expected[0], policy["profile"])
@@ -127,9 +128,9 @@ func TestNativeTauFineWebRendering(t *testing.T) {
 	script, err := os.ReadFile("fixtures/fineweb_ray_train.py")
 	require.NoError(t, err)
 	platform := profile.WorkloadProfile{
-		Name: "azure.research.large-memory.2node", WorkerCount: 2, GPUsPerWorker: 8,
+		Name: "azure.research.h200.large-memory.2node", WorkerCount: 2, GPUsPerWorker: 8,
 		Mode: "fixed", Placement: profile.PlacementSameNetworkDomain, DefaultLocalQueue: stackLargeGPUQueueForRun(),
-		NodeSelector: map[string]string{"kueue.azure.com/gpu-series": "nd-h200-v5", "tau.azure.com/site": "test-site"},
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassH200141GB},
 		Priorities:   profile.ProfilePriorities{WorkloadPriorityClassName: "taugrid-default", PodPriorityClassName: "taugrid-default"},
 	}
 	config, err := fineWebTauConfig("nightly-ib", 16, 2, "checkpoint")

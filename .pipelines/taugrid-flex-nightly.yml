@@ -360,7 +360,7 @@ jobs:
             cd "$(Build.SourcesDirectory)/tests/e2e"
             export AI_RUNTIME_E2E=1
             export E2E_HARDWARE_MATRIX=1
-            unset E2E_TAU_RUN
+            export E2E_TAU_RUN=1
             export TAU_BINARY="$(Agent.TempDirectory)/tau"
             export E2E_TAU_RUN_ID="$(Build.BuildId)-$(System.JobAttempt)"
             export E2E_TAU_CONFIG_DIR="${artifact_dir}/tau-runs"
@@ -384,6 +384,11 @@ jobs:
               site="$(jq -r '.expected_site' <<<"${target_json}")"
               queue="${FLEX_NIGHTLY_RDMA_QUEUE}"
               status="$(jq -r '.status' <<<"${target_json}")"
+              if [[ "${target}" == "dgx-spark" ]]; then
+                unset E2E_TAU_RUN
+              else
+                export E2E_TAU_RUN=1
+              fi
 
               shape_available=false
               if [[ "${status}" == "available" ]]; then
@@ -484,7 +489,8 @@ jobs:
               fi
             done < <(jq -c '.targets[]' "${contract}")
 
-            available_targets="$(jq -c '[.targets[] | select(.status == "available") | {name,selector,site:.expected_site}]' "${contract}")"
+            export E2E_TAU_RUN=1
+            available_targets="$(jq -c '[.targets[] | select(.status == "available" and .name != "dgx-spark") | {name,selector,site:.expected_site}]' "${contract}")"
             if [[ "$(jq 'length' <<<"${available_targets}")" -ge 2 ]]; then
               export E2E_MULTISITE_NAMESPACE="${namespace}"
               export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"

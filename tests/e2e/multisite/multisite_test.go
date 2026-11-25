@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/topology"
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/Azure/taugrid/tests/e2e/results"
 )
@@ -98,14 +99,11 @@ func TestConcurrentGPUWorkloadsAcrossHardwareSites(t *testing.T) {
 	jobSites := make(map[string]string, len(targets))
 	for _, target := range targets {
 		selectorKey, selectorValue := parseSimpleSelector(t, target.Selector)
-		jobName := "e2e-multisite-" + dnsLabel(target.Name)
-		if e2e.TauRunEnabled() {
-			jobName = e2e.TauRunName(jobName)
-		}
+		jobName := e2e.TauRunName("e2e-multisite-" + dnsLabel(target.Name))
 		jobSites[jobName] = target.Site
 
 		if e2e.TauRunEnabled() {
-			require.NoError(t, e2e.SubmitTauRun(t, tc.Ctx(), crossSiteTauConfig(namespace, queue, jobName, image),
+			require.NoError(t, e2e.SubmitTauRun(t, tc.Ctx(), crossSiteTauConfig(namespace, queue, jobName, image, target.Name),
 				map[string][]byte{"gpu_site.py": []byte("import subprocess\nimport time\nsubprocess.run(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'], check=True)\ntime.sleep(180)\n")}))
 		} else {
 			job := gpuJob(namespace, queue, jobName, image, selectorKey, selectorValue)
@@ -141,12 +139,20 @@ func TestConcurrentGPUWorkloadsAcrossHardwareSites(t *testing.T) {
 	}
 }
 
-func crossSiteTauConfig(namespace, queue, name, image string) map[string]any {
+func crossSiteTauConfig(namespace, queue, name, image, target string) map[string]any {
+	profileName := ""
+	switch target {
+	case "a100":
+		profileName = "azure.research.a100.training.l"
+	case "h200":
+		profileName = "azure.research.h200.training.l"
+	}
+	policy := e2e.GovernedTauPolicy(namespace, queue, profileName, "training")
 	return map[string]any{
 		"name": name, "engine": "job", "entrypoint": "gpu_site.py",
 		"runtime": map[string]any{"image": image},
 		"compute": map[string]any{"gpus": 1, "cpu_request": "1"},
-		"policy":  e2e.GovernedTauPolicy(namespace, queue, "azure.research.training.l", "training"),
+		"policy":  policy,
 		"run":     map[string]any{"ttl_seconds_after_finished": 300},
 	}
 }
@@ -367,20 +373,23 @@ func TestParseSimpleSelector(t *testing.T) {
 func TestNativeTauCrossSiteRendering(t *testing.T) {
 	binary := e2e.BuildTauForTest(t)
 	platform := profile.WorkloadProfile{
-		Name: "azure.research.training.l", WorkerCount: 1, GPUsPerWorker: 1,
-		Mode: "fixed", Placement: profile.PlacementUnconstrained, DefaultLocalQueue: "matrix-a100",
+		Name: "azure.research.a100.training.l", WorkerCount: 1, GPUsPerWorker: 1,
+		Mode: "fixed", Placement: profile.PlacementUnconstrained, DefaultLocalQueue: "jobqueue",
+		NodeSelector: map[string]string{topology.NodeLabelGPUClass: topology.GPUClassA10080GB},
 		Priorities: profile.ProfilePriorities{
 			WorkloadPriorityClassName: "taugrid-default", PodPriorityClassName: "taugrid-default",
 		},
 	}
-	job := e2e.RenderTauRunOffline(t, binary, crossSiteTauConfig("nightly", "matrix-a100", "nightly-site", "registry.example.com/ray:py3.12-ray2.58.0"),
+	job := e2e.RenderTauRunOffline(t, binary, crossSiteTauConfig("nightly", "jobqueue", "nightly-site", "registry.example.com/ray:py3.12-ray2.58.0", "a100"),
 		map[string][]byte{"gpu_site.py": []byte("print('CUDA check')\n")}, platform)
 	require.Equal(t, "Job", job.GetKind())
 	require.Equal(t, "nightly-site", job.GetName())
-	require.Equal(t, "matrix-a100", job.GetLabels()["kueue.x-k8s.io/queue-name"])
+	require.Equal(t, "jobqueue", job.GetLabels()["kueue.x-k8s.io/queue-name"])
 	require.Equal(t, "taugrid-default", job.GetLabels()["kueue.x-k8s.io/priority-class"])
 	spec, _, err := unstructured.NestedMap(job.Object, "spec", "template", "spec")
 	require.NoError(t, err)
+	nodeSelector := spec["nodeSelector"].(map[string]any)
+	require.Equal(t, topology.GPUClassA10080GB, nodeSelector[topology.NodeLabelGPUClass])
 	require.Equal(t, "taugrid-default", spec["priorityClassName"])
 }
 

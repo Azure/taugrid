@@ -337,11 +337,11 @@ spec:
             resources:
               requests:
                 cpu: "4"
-                memory: "48Gi"
+                memory: "96Gi"
                 nvidia.com/gpu: "{{FINEWEB_GPUS_PER_WORKER}}"
               limits:
                 cpu: "4"
-                memory: "48Gi"
+                memory: "96Gi"
                 nvidia.com/gpu: "{{FINEWEB_GPUS_PER_WORKER}}"
             startupProbe:
               httpGet:

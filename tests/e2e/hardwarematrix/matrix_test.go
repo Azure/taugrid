@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	profile "github.com/Azure/taugrid/core/resourceprofile"
+	"github.com/Azure/taugrid/core/topology"
 	e2e "github.com/Azure/taugrid/tests/e2e"
 	"github.com/Azure/taugrid/tests/e2e/results"
 )
@@ -72,19 +73,26 @@ type matrixProfile struct {
 	placement     string
 }
 
-func authoritativeMatrixProfile(totalGPUs int) (matrixProfile, bool) {
+func authoritativeMatrixProfile(target string, totalGPUs int) (matrixProfile, bool) {
+	prefix := ""
+	switch target {
+	case "a100", "h200":
+		prefix = "azure.research." + target + "."
+	}
 	switch totalGPUs {
 	case 1:
-		return matrixProfile{"azure.research.training.l", "training", 1, 1, profile.PlacementUnconstrained}, true
+		return matrixProfile{prefix + "training.l", "training", 1, 1, profile.PlacementUnconstrained}, true
 	case 2:
-		return matrixProfile{"azure.research.training.2x", "training", 1, 2, profile.PlacementUnconstrained}, true
+		if prefix == "" {
+			return matrixProfile{"azure.research.training.2x", "training", 1, 2, profile.PlacementUnconstrained}, true
+		}
 	case 8:
-		return matrixProfile{"azure.research.large-memory.xl", "large-memory", 1, 8, profile.PlacementSameHost}, true
+		return matrixProfile{prefix + "large-memory.xl", "large-memory", 1, 8, profile.PlacementSameHost}, true
 	case 16:
-		return matrixProfile{"azure.research.large-memory.2node", "large-memory", 2, 8, profile.PlacementSameNetworkDomain}, true
+		return matrixProfile{prefix + "large-memory.2node", "large-memory", 2, 8, profile.PlacementSameNetworkDomain}, true
 	default:
-		return matrixProfile{}, false
 	}
+	return matrixProfile{}, false
 }
 
 func TestAuthoritativeMatrixProfilesMatchTauClusterCatalog(t *testing.T) {
@@ -120,19 +128,23 @@ func TestAuthoritativeMatrixProfilesMatchTauClusterCatalog(t *testing.T) {
 			placement:     item.Placement,
 		}
 	}
-	for _, totalGPUs := range []int{1, 2, 8, 16} {
-		selected, found := authoritativeMatrixProfile(totalGPUs)
-		require.True(t, found)
-		require.Equal(t, catalog[selected.name], selected)
-		require.Equal(t, totalGPUs, selected.workerPods*selected.gpusPerWorker)
+	for _, target := range []string{"a100", "h200"} {
+		for _, totalGPUs := range []int{1, 8, 16} {
+			selected, found := authoritativeMatrixProfile(target, totalGPUs)
+			require.True(t, found)
+			require.Equal(t, catalog[selected.name], selected)
+			require.Equal(t, totalGPUs, selected.workerPods*selected.gpusPerWorker)
+		}
 	}
 }
 
-func TestNightlyPipelinePreservesDirectHardwareRouting(t *testing.T) {
+func TestNightlyPipelinePreservesGovernedHardwareRouting(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join("..", "..", "..", ".pipelines", "taugrid-flex-nightly.yml"))
 	require.NoError(t, err)
 	pipeline := string(contents)
-	require.Contains(t, pipeline, "unset E2E_TAU_RUN")
+	require.Contains(t, pipeline, "export E2E_TAU_RUN=1")
+	require.Contains(t, pipeline, `if [[ "${target}" == "dgx-spark" ]]`)
+	require.Contains(t, pipeline, `available_targets="$(jq -c '[.targets[] | select(.status == "available" and .name != "dgx-spark")`)
 	require.Contains(t, pipeline, `queue="${FLEX_NIGHTLY_RDMA_QUEUE}"`)
 	require.Contains(t, pipeline, `export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"`)
 	require.NotContains(t, pipeline, "E2E_MULTISITE_QUEUE_PREFIX=matrix")
@@ -163,8 +175,8 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 	cfg := configFromEnv(t)
 	workerPods := cfg.workers
 	gpusPerWorker := 1
+	rayJobName = e2e.TauRunName(rayJobName)
 	if e2e.TauRunEnabled() {
-		rayJobName = e2e.TauRunName(rayJobName)
 		workerPods = cfg.profile.workerPods
 		gpusPerWorker = cfg.profile.gpusPerWorker
 	}
@@ -277,6 +289,7 @@ func runMatrixWorkload(t *testing.T, workload, rayJobName, script string) {
 
 func matrixTauConfig(cfg matrixConfig, workload, name string) map[string]any {
 	policy := e2e.GovernedTauPolicy(cfg.namespace, cfg.queue, cfg.profile.name, cfg.profile.lane)
+	workerCPU := strconv.Itoa(cfg.profile.gpusPerWorker)
 	return map[string]any{
 		"name":   name,
 		"engine": "rayjob",
@@ -302,11 +315,22 @@ func matrixTauConfig(cfg matrixConfig, workload, name string) map[string]any {
 			"gpus_per_worker":  cfg.profile.gpusPerWorker,
 			"head_cpu_request": "1", "head_memory_request": "4Gi",
 			"head_cpu_limit": "2", "head_memory_limit": "8Gi",
-			"worker_cpu_request": "1", "worker_memory_request": "4Gi",
-			"worker_cpu_limit": "2", "worker_memory_limit": "8Gi",
+			"worker_cpu_request": workerCPU, "worker_memory_request": "4Gi",
+			"worker_cpu_limit": workerCPU, "worker_memory_limit": "8Gi",
 		},
 		"policy":    policy,
 		"execution": map[string]any{"launcher": "ray-train", "allow_nccl_override": true},
+	}
+}
+
+func matrixGPUClass(target string) string {
+	switch target {
+	case "a100":
+		return topology.GPUClassA10080GB
+	case "h200":
+		return topology.GPUClassH200141GB
+	default:
+		return topology.GPUClassAny
 	}
 }
 
@@ -318,7 +342,8 @@ func configFromEnv(t *testing.T) matrixConfig {
 	t.Helper()
 
 	workers := requirePositiveEnvInt(t, "MATRIX_WORKERS")
-	selectedProfile, found := authoritativeMatrixProfile(workers)
+	target := requireEnv(t, "MATRIX_TARGET")
+	selectedProfile, found := authoritativeMatrixProfile(target, workers)
 	require.True(t, found, "MATRIX_WORKERS must map to an authoritative live workload profile")
 	expectedHosts := requirePositiveEnvInt(t, "MATRIX_EXPECTED_HOSTS")
 	expectedPerHost := requirePositiveEnvInt(t, "MATRIX_EXPECTED_GPUS_PER_HOST")
@@ -333,7 +358,7 @@ func configFromEnv(t *testing.T) matrixConfig {
 	return matrixConfig{
 		namespace:        requireEnv(t, "MATRIX_NAMESPACE"),
 		queue:            requireEnv(t, "MATRIX_QUEUE"),
-		target:           requireEnv(t, "MATRIX_TARGET"),
+		target:           target,
 		site:             requireEnv(t, "MATRIX_SITE"),
 		selectorKey:      selectorKey,
 		selectorValue:    selectorValue,
@@ -679,14 +704,14 @@ func rayVersion(t *testing.T, image string) string {
 
 func TestNativeTauMatrixRendering(t *testing.T) {
 	binary := e2e.BuildTauForTest(t)
-	for target, counts := range map[string][]int{"a100": {1, 8, 16}, "h200": {1, 8, 16}, "dgx-spark": {1, 2}} {
+	for target, counts := range map[string][]int{"a100": {1, 8, 16}, "h200": {1, 8, 16}} {
 		for _, count := range counts {
 			for _, workload := range []string{"serve", "train"} {
 				t.Run(fmt.Sprintf("%s/%dgpu/%s", target, count, workload), func(t *testing.T) {
-					selectedProfile, found := authoritativeMatrixProfile(count)
+					selectedProfile, found := authoritativeMatrixProfile(target, count)
 					require.True(t, found)
 					cfg := matrixConfig{
-						namespace: "nightly", queue: "matrix-" + target, target: target,
+						namespace: "nightly", queue: "jobqueue", target: target,
 						site: "site-" + target, selectorKey: "tau.azure.com/gpu-class", selectorValue: target,
 						image: "registry.example.com/ray:py3.12-ray2.58.0", rayVersion: "2.58.0",
 						torchSpec: "torch==2.7.1", torchIndexURL: "https://download.pytorch.org/whl/cu128",
@@ -696,6 +721,7 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 						Name:        selectedProfile.name,
 						WorkerCount: int32(selectedProfile.workerPods), GPUsPerWorker: int32(selectedProfile.gpusPerWorker),
 						Mode: "fixed", Placement: selectedProfile.placement, DefaultLocalQueue: cfg.queue,
+						NodeSelector: map[string]string{topology.NodeLabelGPUClass: matrixGPUClass(target)},
 						Priorities: profile.ProfilePriorities{
 							WorkloadPriorityClassName: "taugrid-default", PodPriorityClassName: "taugrid-default",
 						},
@@ -724,11 +750,14 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 					}
 					spec, _, err := unstructured.NestedMap(group, "template", "spec")
 					require.NoError(t, err)
+					nodeSelector := spec["nodeSelector"].(map[string]any)
+					require.Equal(t, matrixGPUClass(target), nodeSelector[topology.NodeLabelGPUClass])
 					require.Equal(t, "taugrid-default", spec["priorityClassName"])
 					containers, _, err := unstructured.NestedSlice(spec, "containers")
 					require.NoError(t, err)
 					resources := containers[0].(map[string]any)["resources"].(map[string]any)
 					requests := resources["requests"].(map[string]any)
+					require.Equal(t, fmt.Sprintf("%d", selectedProfile.gpusPerWorker), requests["cpu"])
 					require.Equal(t, int64(selectedProfile.gpusPerWorker), requests["nvidia.com/gpu"])
 					annotations, _, err := unstructured.NestedStringMap(group, "template", "metadata", "annotations")
 					require.NoError(t, err)
@@ -741,6 +770,11 @@ func TestNativeTauMatrixRendering(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestDirectMatrixResourceNamesAreRunScoped(t *testing.T) {
+	t.Setenv("E2E_TAU_RUN_ID", "193191664-2")
+	require.Equal(t, "e2e-matrix-serve-193191664-2", e2e.TauRunName("e2e-matrix-serve"))
 }
 
 func matrixTopologyAdmission(t *testing.T, workerPodSet string, workers int) *unstructured.Unstructured {

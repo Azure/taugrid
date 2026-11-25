@@ -80,7 +80,9 @@ for name in ("hardware_matrix", "h200_rdma"):
         assert setting in job, (name, setting)
         assert job.index(setting) < job.index("go test -v"), (name, setting)
     if name == "hardware_matrix":
-        assert "unset E2E_TAU_RUN" in job, name
+        assert "export E2E_TAU_RUN=1" in job, name
+        assert 'if [[ "${target}" == "dgx-spark" ]]' in job, name
+        assert '.name != "dgx-spark"' in job, name
         assert 'queue="${FLEX_NIGHTLY_RDMA_QUEUE}"' in job, name
         assert 'export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"' in job, name
     else:

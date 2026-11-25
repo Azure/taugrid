@@ -380,3 +380,107 @@ tauCluster:
       priorities:
         workloadPriorityClassName: taugrid-default
         podPriorityClassName: taugrid-default
+    - name: azure.research.a100.training.l
+      description: A100 training workload on one GPU.
+      applicability:
+        teams: [research]
+        lanes: [training]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
+      gpusPerWorker: 1
+      workerCount: 1
+      mode: fixed
+      placement: unconstrained
+      defaultLocalQueue: jobqueue
+      executionTarget: singleCluster
+      nodeSelector:
+        tau.azure.com/gpu-class: a100-80gb
+      priorities:
+        workloadPriorityClassName: taugrid-default
+        podPriorityClassName: taugrid-default
+    - name: azure.research.a100.large-memory.xl
+      description: A100 single-node workload on eight GPUs.
+      applicability:
+        teams: [research]
+        lanes: [large-memory]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
+      gpusPerWorker: 8
+      workerCount: 1
+      mode: fixed
+      placement: same-host
+      defaultLocalQueue: jobqueue
+      executionTarget: singleCluster
+      nodeSelector:
+        tau.azure.com/gpu-class: a100-80gb
+      priorities:
+        workloadPriorityClassName: taugrid-default
+        podPriorityClassName: taugrid-default
+    - name: azure.research.a100.large-memory.2node
+      description: A100 two-node workload with eight GPUs per worker.
+      applicability:
+        teams: [research]
+        lanes: [large-memory]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
+      gpusPerWorker: 8
+      workerCount: 2
+      mode: fixed
+      placement: same-network-domain
+      defaultLocalQueue: jobqueue
+      executionTarget: singleCluster
+      nodeSelector:
+        tau.azure.com/gpu-class: a100-80gb
+      priorities:
+        workloadPriorityClassName: taugrid-default
+        podPriorityClassName: taugrid-default
+    - name: azure.research.h200.training.l
+      description: H200 training workload on one GPU.
+      applicability:
+        teams: [research]
+        lanes: [training]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
+      gpusPerWorker: 1
+      workerCount: 1
+      mode: fixed
+      placement: unconstrained
+      defaultLocalQueue: jobqueue
+      executionTarget: singleCluster
+      nodeSelector:
+        tau.azure.com/gpu-class: h200-141gb
+      priorities:
+        workloadPriorityClassName: taugrid-default
+        podPriorityClassName: taugrid-default
+    - name: azure.research.h200.large-memory.xl
+      description: H200 single-node workload on eight GPUs.
+      applicability:
+        teams: [research]
+        lanes: [large-memory]
+        namespaces: ["{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"]
+      gpusPerWorker: 8
+      workerCount: 1
+      mode: fixed
+      placement: same-host
+      defaultLocalQueue: jobqueue
+      executionTarget: singleCluster
+      nodeSelector:
+        tau.azure.com/gpu-class: h200-141gb
+      priorities:
+        workloadPriorityClassName: taugrid-default
+        podPriorityClassName: taugrid-default
+    - name: azure.research.h200.large-memory.2node
+      description: H200 two-node workload with eight GPUs per worker.
+      applicability:
+        teams: [research]
+        lanes: [large-memory]
+        namespaces:
+          - "{{ .Values.tauCluster.defaultWorkloadProfileNamespace }}"
+          - taugrid-nightly-rdma
+      gpusPerWorker: 8
+      workerCount: 2
+      mode: fixed
+      placement: same-network-domain
+      defaultLocalQueue: jobqueue
+      executionTarget: singleCluster
+      nodeSelector:
+        tau.azure.com/gpu-class: h200-141gb
+      priorities:
+        workloadPriorityClassName: taugrid-default
+        podPriorityClassName: taugrid-default

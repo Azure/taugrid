@@ -87,7 +87,7 @@ tests:
           path: spec.sites
       - lengthEqual:
           path: spec.workloadProfiles
-          count: 16
+          count: 22
       - equal:
           path: spec.workloadProfiles[0].executionTarget
           value: singleCluster
@@ -104,6 +104,18 @@ tests:
           path: spec.workloadProfiles[0].applicability.teams
       - notExists:
           path: spec.workloadProfiles[0].applicability.lanes
+      - equal:
+          path: spec.workloadProfiles[16].name
+          value: azure.research.a100.training.l
+      - equal:
+          path: spec.workloadProfiles[16].nodeSelector["tau.azure.com/gpu-class"]
+          value: a100-80gb
+      - equal:
+          path: spec.workloadProfiles[21].name
+          value: azure.research.h200.large-memory.2node
+      - equal:
+          path: spec.workloadProfiles[21].nodeSelector["tau.azure.com/gpu-class"]
+          value: h200-141gb
 
   - it: renders built-in workload profiles for a custom workspace namespace
     set:
@@ -111,13 +123,16 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.workloadProfiles
-          count: 16
+          count: 22
       - equal:
           path: spec.workloadProfiles[0].applicability.namespaces[0]
           value: team-alpha
       - equal:
-          path: spec.workloadProfiles[15].applicability.namespaces[0]
+          path: spec.workloadProfiles[21].applicability.namespaces[0]
           value: team-alpha
+      - equal:
+          path: spec.workloadProfiles[21].applicability.namespaces[1]
+          value: taugrid-nightly-rdma
 
   - it: replaces the catalog and appends a platform supplied mapping
     set:

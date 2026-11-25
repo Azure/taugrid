@@ -45,11 +45,11 @@ func NightlyTauPolicy(namespace, queue, profile string) map[string]any {
 func authoritativeNightlyProfile(profile string) (string, string) {
 	switch profile {
 	case "nightly.a100.1gpu":
-		return "azure.research.training.l", "training"
+		return "azure.research.a100.training.l", "training"
 	case "nightly.h200.8gpu":
-		return "azure.research.large-memory.xl", "large-memory"
+		return "azure.research.h200.large-memory.xl", "large-memory"
 	case "nightly.h200.16gpu", "nightly.h200.ib":
-		return "azure.research.large-memory.2node", "large-memory"
+		return "azure.research.h200.large-memory.2node", "large-memory"
 	default:
 		return profile, "training"
 	}
