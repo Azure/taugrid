@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/taugrid/cli/internal/manifest"
 	profile "github.com/Azure/taugrid/core/resourceprofile"
 	"github.com/Azure/taugrid/core/runconfig"
 	"github.com/Azure/taugrid/core/workloadmeta"
@@ -148,7 +149,11 @@ func selectRunWorkloadProfile(
 	if !o.profileNameExplicit && (o.explicitPolicyFields != nil || o.selectedWorkloadProfile != nil) {
 		profileName = ""
 	}
-	selection, err := provider.Select(ctx, profile.SelectionRequest{
+	set, err := provider.ProfileSet(ctx)
+	if err != nil {
+		return o, err
+	}
+	request := profile.SelectionRequest{
 		Name:          profileName,
 		Namespace:     o.namespace,
 		Team:          o.team,
@@ -156,9 +161,19 @@ func selectRunWorkloadProfile(
 		GPUsPerWorker: requestedProfileGPUs(o),
 
 		DeferHotVolumeCapacity: o.deferHotVolumeCapacity,
-	})
+	}
+	selection, err := set.Select(request)
 	if err != nil {
-		return o, err
+		cpuRequest, ok := legacyCPULaneRequest(set, request, runRequestsCPUOnly(o, request.GPUsPerWorker))
+		if !ok {
+			return o, err
+		}
+		cpuSelection, cpuErr := set.Select(cpuRequest)
+		if cpuErr != nil {
+			return o, err
+		}
+		selection = cpuSelection
+		o.lane = cpuRequest.Lane
 	}
 	renderProfile, err := selection.Profile.RenderProfile(o.namespace, o.team, o.lane)
 	if err != nil {
@@ -203,6 +218,55 @@ func awaitHotVolumeCapacity(
 		case <-timer.C:
 		}
 	}
+}
+
+func runRequestsCPUOnly(o unresolvedRunOptions, gpus *int32) bool {
+	if gpus != nil {
+		return *gpus == 0
+	}
+	if o.file == "" {
+		return false
+	}
+	raw, err := os.ReadFile(o.file)
+	if err != nil {
+		return false
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return m.IsCPUOnly()
+}
+
+func legacyCPULaneRequest(
+	set profile.ProfileSet,
+	request profile.SelectionRequest,
+	cpuOnly bool,
+) (profile.SelectionRequest, bool) {
+	if strings.TrimSpace(request.Lane) != "" {
+		return request, false
+	}
+	if strings.TrimSpace(request.Name) != "" {
+		if request.GPUsPerWorker != nil && *request.GPUsPerWorker != 0 {
+			return request, false
+		}
+	} else {
+		if !cpuOnly {
+			return request, false
+		}
+		for _, candidate := range set.Profiles {
+			if candidate.GPUsPerWorker != 0 {
+				continue
+			}
+			named := request
+			named.Name = candidate.Name
+			if _, err := set.Select(named); err == nil {
+				return request, false
+			}
+		}
+	}
+	request.Lane = "cpu"
+	return request, true
 }
 
 func applySelectedWorkloadProfile(
