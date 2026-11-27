@@ -32,15 +32,36 @@ func TauRunName(name string) string {
 }
 
 func NightlyTauPolicy(namespace, queue, profile string) map[string]any {
+	profile, lane := authoritativeNightlyProfile(profile)
 	return map[string]any{
-		"namespace":               namespace,
-		"queue":                   queue,
-		"profile":                 profile,
-		"team":                    "research",
-		"lane":                    "training",
-		"workload_priority_class": "aks-low-priority",
-		"pod_priority_class":      "tau-nightly-low",
-		"pod_preemption_policy":   "Never",
+		"namespace": namespace,
+		"queue":     queue,
+		"profile":   profile,
+		"team":      "research",
+		"lane":      lane,
+	}
+}
+
+func authoritativeNightlyProfile(profile string) (string, string) {
+	switch profile {
+	case "nightly.a100.1gpu":
+		return "azure.research.a100.training.l", "training"
+	case "nightly.h200.8gpu":
+		return "azure.research.h200.large-memory.xl", "large-memory"
+	case "nightly.h200.16gpu", "nightly.h200.ib":
+		return "azure.research.h200.large-memory.2node", "large-memory"
+	default:
+		return profile, "training"
+	}
+}
+
+func GovernedTauPolicy(namespace, queue, profile, lane string) map[string]any {
+	return map[string]any{
+		"namespace": namespace,
+		"queue":     queue,
+		"profile":   profile,
+		"team":      "research",
+		"lane":      lane,
 	}
 }
 

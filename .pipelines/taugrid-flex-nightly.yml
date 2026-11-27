@@ -51,7 +51,7 @@ parameters:
   - name: rdmaNamespace
     displayName: Existing authorized nightly namespace
     type: string
-    default: $(FLEX_NIGHTLY_RDMA_NAMESPACE)
+    default: taugrid-nightly-rdma
   - name: rdmaQueue
     displayName: Existing IB LocalQueue
     type: string
@@ -280,6 +280,10 @@ jobs:
               echo "##vso[task.logissue type=error]Nightly requires an existing authorized namespace" >&2
               exit 1
             fi
+            if [[ -z "${FLEX_NIGHTLY_RDMA_QUEUE}" || "${FLEX_NIGHTLY_RDMA_QUEUE}" == '$('* ]]; then
+              echo "##vso[task.logissue type=error]Nightly requires an existing workspace LocalQueue" >&2
+              exit 1
+            fi
             artifact_dir="$(Build.ArtifactStagingDirectory)/hardware-matrix"
             bundle_dir="${artifact_dir}/diagnostics"
             summary="${artifact_dir}/matrix-results.jsonl"
@@ -350,13 +354,8 @@ jobs:
               jq -e --arg workspace "${FLEX_NIGHTLY_WORKSPACE}" \
                 '.metadata.labels["tau.azure.com/workspace"] == $workspace' >/dev/null
 
-            while IFS= read -r target; do
-              name="$(jq -r '.name' <<<"${target}")"
-              queue="matrix-${name}"
-              cluster_queue="$(jq -r '.cluster_queue' <<<"${target}")"
-              kubectl get localqueue "${queue}" -n "${namespace}" -o json |
-                jq -e --arg queue "${cluster_queue}" '.spec.clusterQueue == $queue' >/dev/null
-            done < <(jq -c '.targets[] | select(.status != "disabled")' "${contract}")
+            kubectl get localqueue "${FLEX_NIGHTLY_RDMA_QUEUE}" -n "${namespace}" -o json |
+              jq -e --arg queue "${FLEX_NIGHTLY_CLUSTER_QUEUE}" '.spec.clusterQueue == $queue' >/dev/null
 
             cd "$(Build.SourcesDirectory)/tests/e2e"
             export AI_RUNTIME_E2E=1
@@ -383,8 +382,13 @@ jobs:
               target="$(jq -r '.name' <<<"${target_json}")"
               selector="$(jq -r '.selector' <<<"${target_json}")"
               site="$(jq -r '.expected_site' <<<"${target_json}")"
-              queue="matrix-${target}"
+              queue="${FLEX_NIGHTLY_RDMA_QUEUE}"
               status="$(jq -r '.status' <<<"${target_json}")"
+              if [[ "${target}" == "dgx-spark" ]]; then
+                unset E2E_TAU_RUN
+              else
+                export E2E_TAU_RUN=1
+              fi
 
               shape_available=false
               if [[ "${status}" == "available" ]]; then
@@ -485,10 +489,11 @@ jobs:
               fi
             done < <(jq -c '.targets[]' "${contract}")
 
-            available_targets="$(jq -c '[.targets[] | select(.status == "available") | {name,selector,site:.expected_site}]' "${contract}")"
+            export E2E_TAU_RUN=1
+            available_targets="$(jq -c '[.targets[] | select(.status == "available" and .name != "dgx-spark") | {name,selector,site:.expected_site}]' "${contract}")"
             if [[ "$(jq 'length' <<<"${available_targets}")" -ge 2 ]]; then
               export E2E_MULTISITE_NAMESPACE="${namespace}"
-              export E2E_MULTISITE_QUEUE_PREFIX=matrix
+              export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"
               export E2E_MULTISITE_TARGETS_JSON="${available_targets}"
               cross_site_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               if go test -v -count=1 -timeout 25m \
@@ -518,6 +523,7 @@ jobs:
         env:
           PROFILE: ${{ parameters.profile }}
           FLEX_NIGHTLY_RDMA_NAMESPACE: ${{ parameters.rdmaNamespace }}
+          FLEX_NIGHTLY_RDMA_QUEUE: ${{ parameters.rdmaQueue }}
           FLEX_NIGHTLY_WORKSPACE: ${{ parameters.workspace }}
           FLEX_NIGHTLY_A100_FLAVOR: ${{ parameters.a100Flavor }}
           FLEX_NIGHTLY_H200_FLAVOR: ${{ parameters.h200Flavor }}

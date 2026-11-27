@@ -269,9 +269,9 @@ spec:
             effect: NoSchedule
     workerGroupSpecs:
     - groupName: fineweb-workers
-      replicas: {{FINEWEB_TRAIN_WORKERS}}
-      minReplicas: {{FINEWEB_TRAIN_WORKERS}}
-      maxReplicas: {{FINEWEB_TRAIN_WORKERS}}
+      replicas: {{FINEWEB_RAY_WORKER_PODS}}
+      minReplicas: {{FINEWEB_RAY_WORKER_PODS}}
+      maxReplicas: {{FINEWEB_RAY_WORKER_PODS}}
       rayStartParams: {}
       template:
         metadata:
@@ -337,12 +337,12 @@ spec:
             resources:
               requests:
                 cpu: "4"
-                memory: "48Gi"
-                nvidia.com/gpu: "1"
+                memory: "96Gi"
+                nvidia.com/gpu: "{{FINEWEB_GPUS_PER_WORKER}}"
               limits:
                 cpu: "4"
-                memory: "48Gi"
-                nvidia.com/gpu: "1"
+                memory: "96Gi"
+                nvidia.com/gpu: "{{FINEWEB_GPUS_PER_WORKER}}"
             startupProbe:
               httpGet:
                 path: /api/healthz

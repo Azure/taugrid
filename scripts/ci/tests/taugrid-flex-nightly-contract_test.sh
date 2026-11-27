@@ -60,6 +60,8 @@ from unittest.mock import patch
 
 pipeline = Path(sys.argv[1]).read_text()
 jobs = re.split(r"^  - job: ", pipeline, flags=re.MULTILINE)[1:]
+rdma_namespace = re.search(r"  - name: rdmaNamespace\n(.*?)(?=  - name:)", pipeline, re.DOTALL)
+assert rdma_namespace and "default: taugrid-nightly-rdma" in rdma_namespace.group(1)
 targets = {"preflight": "preflight", "hardware_matrix": "hardware-matrix", "h200_rdma": ""}
 rdma = next(job for job in jobs if job.splitlines()[0] == "h200_rdma")
 assert "dependsOn:\n      - preflight\n      - hardware_matrix\n" in rdma
@@ -77,7 +79,14 @@ for name in ("hardware_matrix", "h200_rdma"):
     ):
         assert setting in job, (name, setting)
         assert job.index(setting) < job.index("go test -v"), (name, setting)
-    assert "export E2E_TAU_RUN=1" in job, name
+    if name == "hardware_matrix":
+        assert "export E2E_TAU_RUN=1" in job, name
+        assert 'if [[ "${target}" == "dgx-spark" ]]' in job, name
+        assert '.name != "dgx-spark"' in job, name
+        assert 'queue="${FLEX_NIGHTLY_RDMA_QUEUE}"' in job, name
+        assert 'export E2E_MULTISITE_QUEUE="${FLEX_NIGHTLY_RDMA_QUEUE}"' in job, name
+    else:
+        assert "export E2E_TAU_RUN=1" in job, name
     assert 'export TAU_BINARY="$(Agent.TempDirectory)/tau"' in job, name
     assert 'cd "$(Build.SourcesDirectory)/cli"\n          make build' in job, name
     assert 'install -m 755 bin/tau "$(Agent.TempDirectory)/tau"' in job, name
@@ -345,6 +354,7 @@ with tempfile.TemporaryDirectory() as temporary:
                 ROUTING_MANIFESTS=str(manifests),
                 FLEX_NIGHTLY_WORKSPACE=workspace,
                 FLEX_NIGHTLY_CLUSTER_QUEUE=queue,
+                FLEX_NIGHTLY_RDMA_QUEUE="jobqueue",
                 TEST_CONTRACT=str(contract),
             )
             result = subprocess.run(
@@ -361,12 +371,14 @@ with tempfile.TemporaryDirectory() as temporary:
             actual = calls.read_text().splitlines()
             assert actual == [
                 "get namespace taugrid-nightly-rdma -o json",
-                "get localqueue matrix-a100 -n taugrid-nightly-rdma -o json",
-                "get localqueue matrix-h200 -n taugrid-nightly-rdma -o json",
+                "get localqueue jobqueue -n taugrid-nightly-rdma -o json",
             ], (name, actual)
             assert not manifests.exists(), "nightly must not mutate platform-owned queues"
 
     matrix = next(job for job in jobs if job.startswith("hardware_matrix\n"))
+    assert 'FLEX_NIGHTLY_RDMA_QUEUE: ${{ parameters.rdmaQueue }}' in matrix
+    assert 'get localqueue "${FLEX_NIGHTLY_RDMA_QUEUE}"' in matrix
+    assert 'queue="matrix-${name}"' not in matrix
     assert "cancelTimeoutInMinutes: 45" in matrix
     cleanup_step = re.search(
         r"      - task: AzureCLI@2\n"

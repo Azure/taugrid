@@ -390,7 +390,7 @@ func TestNanoGPTRayTrainLargeGPU(t *testing.T) {
 	}
 
 	if stackUsesArgoCDQueue() {
-		requireNanoGPTFlavorAssignments(t, admission.Workload, os.Getenv("GPU_NODE_SELECTOR_VALUE"))
+		requireNanoGPTFlavorAssignments(t, admission.Workload, envOrDefault("GPU_RESOURCE_FLAVOR", os.Getenv("GPU_NODE_SELECTOR_VALUE")))
 	}
 
 	cluster, err := conformanceRayCluster(tc.Ctx(), tc.DynamicClient(), stackNamespace, rayJobNameNanoGPT)
@@ -468,9 +468,9 @@ func TestRequireNanoGPTFlavorAssignments(t *testing.T) {
 					map[string]interface{}{
 						"name": "nanogpt-workers",
 						"flavors": map[string]interface{}{
-							"cpu":            "nd-h200-v5",
-							"memory":         "nd-h200-v5",
-							"nvidia.com/gpu": "nd-h200-v5",
+							"cpu":            "nd-h200-v5-tas",
+							"memory":         "nd-h200-v5-tas",
+							"nvidia.com/gpu": "nd-h200-v5-tas",
 						},
 					},
 				},
@@ -478,7 +478,7 @@ func TestRequireNanoGPTFlavorAssignments(t *testing.T) {
 		},
 	}}
 
-	requireNanoGPTFlavorAssignments(t, workload, "nd-h200-v5")
+	requireNanoGPTFlavorAssignments(t, workload, "nd-h200-v5-tas")
 }
 
 func largeGPUUsesManagerWorkloadAccess() bool {
