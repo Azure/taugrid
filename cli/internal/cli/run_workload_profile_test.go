@@ -315,6 +315,9 @@ func TestCapacityJobPolicyGuards(t *testing.T) {
 			now := metav1.Now()
 			cluster.SetDeletionTimestamp(&now)
 		}, want: "Ready TauCluster"},
+		{name: "null catalog", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
+			cluster.Object["spec"].(map[string]any)["workloadProfiles"] = nil
+		}},
 		{name: "malformed catalog", change: func(_ *unresolvedRunOptions, cluster *unstructured.Unstructured) {
 			cluster.Object["spec"].(map[string]any)["workloadProfiles"] = "invalid"
 		}, want: "expected []interface{}"},

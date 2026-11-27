@@ -114,12 +114,15 @@ type TauClusterQueuesSpec struct {
 	// +kubebuilder:validation:Enum=External;Adopt;Manage
 	Ownership string                     `json:"ownership,omitempty"`
 	Topology  *TauClusterObjectReference `json:"topology,omitempty"`
+	// +nullable
 	// +listType=map
 	// +listMapKey=name
 	ResourceFlavors []TauClusterObjectReference `json:"resourceFlavors,omitempty"`
+	// +nullable
 	// +listType=map
 	// +listMapKey=name
 	ClusterQueues []TauClusterObjectReference `json:"clusterQueues,omitempty"`
+	// +nullable
 	// +listType=map
 	// +listMapKey=namespace
 	// +listMapKey=name
@@ -168,6 +171,7 @@ type TauClusterSpec struct {
 	Queues TauClusterQueuesSpec `json:"queues,omitempty"`
 	// +kubebuilder:default={}
 	WorkspaceDefaults TauClusterWorkspaceDefaults `json:"workspaceDefaults,omitempty"`
+	// +nullable
 	// +listType=map
 	// +listMapKey=name
 	WorkloadProfiles []profile.WorkloadProfile `json:"workloadProfiles,omitempty"`
@@ -238,6 +242,7 @@ type PrincipalRef struct {
 }
 
 type TauTeamSpec struct {
+	// +nullable
 	// +kubebuilder:validation:MaxItems=256
 	// +listType=map
 	// +listMapKey=flavor
@@ -316,6 +321,7 @@ type WorkspaceWorkloadIdentity struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.authorization) && self.authorization.mode == 'cluster-wide') ? (!has(self.principalRef) && !has(self.kubernetesSubject) && !has(self.role)) : (has(self.principalRef) && has(self.kubernetesSubject) && has(self.role))",message="cluster-wide authorization must omit principalRef, kubernetesSubject, and role; workspace-rbac requires them"
 type TauWorkspaceSpec struct {
 	TeamRef *TauClusterObjectReference `json:"teamRef,omitempty"`
+	// +nullable
 	// +kubebuilder:validation:MaxItems=256
 	// +listType=map
 	// +listMapKey=flavor
