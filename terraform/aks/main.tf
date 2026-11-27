@@ -384,6 +384,7 @@ resource "terraform_data" "bootstrap_lifecycle_namespace" {
     terraform_data.install_nvidia_device_plugin,
     terraform_data.normalize_gpu_mig,
     terraform_data.install_dcgm_exporter,
+    terraform_data.install_local_csi_driver,
     terraform_data.install_adx_mon,
   ]
 }
@@ -413,6 +414,7 @@ resource "terraform_data" "install_taugrid" {
     terraform_data.install_nvidia_device_plugin,
     terraform_data.install_dcgm_exporter,
     terraform_data.normalize_gpu_mig,
+    terraform_data.install_local_csi_driver,
     terraform_data.bootstrap_lifecycle_namespace,
     azurerm_federated_identity_credential.lifecycle_recorder,
     azapi_resource.lifecycle_recorder_principal_assignment,
@@ -517,6 +519,68 @@ resource "terraform_data" "install_dcgm_exporter" {
   ]
 }
 
+resource "local_file" "local_csi_driver_values" {
+  count           = var.local_nvme_enabled ? 1 : 0
+  filename        = "${local.generated_directory}/local-csi-driver-values.yaml"
+  file_permission = "0600"
+  content = templatefile("${path.module}/local-csi-driver-values.yaml.tftpl", {
+    gpu_node_pool_name = var.gpu_node_pool_name
+  })
+}
+
+resource "terraform_data" "require_no_local_csi_driver" {
+  count = var.local_nvme_enabled ? 1 : 0
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster.this.id,
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG = abspath(local.kubeconfig_path)
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && kubectl wait --for=delete csidriver/localdisk.csi.acstor.io --timeout=10s"
+  }
+
+  depends_on = [
+    azurerm_kubernetes_cluster_node_pool.gpu,
+    terraform_data.install_nvidia_device_plugin,
+    terraform_data.normalize_gpu_mig,
+    terraform_data.install_dcgm_exporter,
+  ]
+}
+
+resource "terraform_data" "install_local_csi_driver" {
+  count = var.local_nvme_enabled ? 1 : 0
+
+  triggers_replace = [
+    azurerm_kubernetes_cluster_node_pool.gpu.id,
+    local_file.local_csi_driver_values[0].content_sha256,
+    filesha256("${path.module}/local-nvme-storage-class.yaml"),
+    var.local_csi_driver_chart_version,
+    join(" ", var.command_interpreter),
+  ]
+
+  provisioner "local-exec" {
+    working_dir = path.module
+    interpreter = var.command_interpreter
+    environment = {
+      KUBECONFIG       = abspath(local.kubeconfig_path)
+      HELM_CONFIG_HOME = local.helm_config_home
+      HELM_CACHE_HOME  = local.helm_cache_home
+      HELM_DATA_HOME   = local.helm_data_home
+    }
+    command = "az aks get-credentials --admin --subscription '${var.subscription_id}' --resource-group '${azurerm_resource_group.this.name}' --name '${azurerm_kubernetes_cluster.this.name}' --file '${local.kubeconfig_path}' --overwrite-existing && helm upgrade --install local-csi-driver oci://localcsidriver.azurecr.io/acstor/charts/local-csi-driver --version '${var.local_csi_driver_chart_version}' --namespace kube-system --values '${local_file.local_csi_driver_values[0].filename}' --wait --timeout 15m && kubectl apply -f local-nvme-storage-class.yaml"
+  }
+
+  depends_on = [
+    local_file.local_csi_driver_values,
+    terraform_data.require_no_local_csi_driver,
+  ]
+}
+
 resource "terraform_data" "install_adx_mon" {
   count = var.enable_adx ? 1 : 0
 
@@ -542,6 +606,7 @@ resource "terraform_data" "install_adx_mon" {
 
   depends_on = [
     terraform_data.install_dcgm_exporter,
+    terraform_data.install_local_csi_driver,
     azurerm_kusto_database_principal_assignment.adx_mon,
     azurerm_kusto_database_principal_assignment.portal,
     azurerm_kusto_database_principal_assignment.portal_cost_tracking,
