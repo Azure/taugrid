@@ -12,8 +12,8 @@ github.com/Azure/azure-sdk-for-go/sdk/data/aztables v1.4.1 h1:j0hhYS006eJ54vusoa
 github.com/Azure/azure-sdk-for-go/sdk/data/aztables v1.4.1/go.mod h1:AdtInaXmK8eYmbjezRWgLz+Qs46nc9Up9GWGwteWNfw=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0 h1:Terj1CMW4+NY5CpWjSRkqLoxh2DkYDdv/FH2z0897Uc=
 github.com/Azure/azure-sdk-for-go/sdk/internal v1.13.0/go.mod h1:7Ut2Qw9vcwpLW5Q4MBy43uSxXS7tK2yjs94OJ6j5thE=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.7.0 h1:Su+wzyfj14nd/cDvZ/B0WJYY+OGT0elZw5yrWY/3pZQ=
-github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.7.0/go.mod h1:NJWUwxR3ahbD53ia/cTjBSr+0hYHCTjSSoIZ0A2cvLo=
+github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.8.0 h1:IIMRGsAy4amvWeVahf0rjfYgaK8hfrikecrj2wD01RM=
+github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/containerservice/armcontainerservice/v9 v9.8.0/go.mod h1:AUvW4aYk9PVLP14x2drKz+/lE8r3/Q32VQKczUDSrdE=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage v1.8.1 h1:/Zt+cDPnpC3OVDm/JKLOs7M2DKmLRIIp3XIx9pHHiig=
 github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage v1.8.1/go.mod h1:Ng3urmn6dYe8gnbCMoHHVl5APYz2txho3koEkV2o2HA=
 github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.3 h1:zoPQ7KXGgzqeUmNWl+b6IwVAqsb5lROEJhqAmqXQtm0=
