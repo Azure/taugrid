@@ -30,7 +30,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/ingestor:v0.3.0
+          value: mcr.microsoft.com/aks/ai-runtime/adx-mon/ingestor:v0.4.1
 
   - it: sets ingestor args from values
     template: ingestor/statefulset.yaml

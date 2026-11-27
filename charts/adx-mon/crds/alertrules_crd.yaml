@@ -79,10 +79,12 @@ spec:
               interval:
                 type: string
                 x-kubernetes-validations:
-                - message: interval must be a valid positive duration
-                  rule: self == '' || duration(self) > duration('0s')
+                - message: interval must be a duration of at least 30s
+                  rule: self != '' && duration(self) >= duration('30s')
               query:
                 type: string
+            required:
+            - interval
             type: object
           status:
             description: AlertRuleStatus defines the observed state of AlertRule
@@ -150,9 +152,18 @@ spec:
               lastAlertTime:
                 format: date-time
                 type: string
+              lastAlertsGenerated:
+                format: int64
+                type: integer
+              lastEvaluationDurationMilliseconds:
+                format: int64
+                type: integer
               lastQueryTime:
                 format: date-time
                 type: string
+              lastRowsReturned:
+                format: int64
+                type: integer
               message:
                 type: string
               status:
