@@ -389,6 +389,40 @@ func TestCapacityJobRetainsReadyProfileSelection(t *testing.T) {
 	}
 }
 
+func TestProfileSelectionDefaultsTeamFromWorkspace(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		team     string
+		wantTeam string
+		wantErr  bool
+	}{
+		{name: "unset team uses workspace team", wantTeam: "research"},
+		{name: "explicit team wins", team: "another", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := readyClusterProfileClientForProfiles(t, 4, false, testRunResolvedProfile(profile.ExecutionTargetSingleCluster, 1, 1, 4))
+			o := defaultRunDispatchOptions()
+			o.engine = runconfig.EngineRayJob
+			o.workspaceTeam, o.team, o.lane, o.namespace = "research", tt.team, "training", "alpha"
+			got, err := selectRunWorkloadProfile(context.Background(), o, profile.NewClusterProvider(client))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("explicit team %q selected profile %#v", tt.team, got.selectedWorkloadProfile)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.team != tt.wantTeam || got.selectedWorkloadProfile == nil ||
+				got.selectedWorkloadProfile.Selection.Profile.Name != "research-profile" ||
+				got.selectedWorkloadProfile.Render.Topology.Team != tt.wantTeam {
+				t.Fatalf("team = %q, selected = %#v", got.team, got.selectedWorkloadProfile)
+			}
+		})
+	}
+}
+
 func TestConnectedClientDryRunFetchesTauClusterProfiles(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "train.sh")

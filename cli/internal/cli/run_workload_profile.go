@@ -148,6 +148,9 @@ func selectRunWorkloadProfile(
 	if !o.profileNameExplicit && (o.explicitPolicyFields != nil || o.selectedWorkloadProfile != nil) {
 		profileName = ""
 	}
+	if strings.TrimSpace(o.team) == "" {
+		o.team = o.workspaceTeam
+	}
 	selection, err := provider.Select(ctx, profile.SelectionRequest{
 		Name:          profileName,
 		Namespace:     o.namespace,
