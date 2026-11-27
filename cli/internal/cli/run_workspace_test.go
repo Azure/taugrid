@@ -591,6 +591,9 @@ func TestWorkspaceRunDispatchStampsJobAndRayJobAdmissionMetadata(t *testing.T) {
 				rendered.Metadata.Annotations[experiment.AnnotationResultScope] != "/data/projects/sample/runs" {
 				t.Fatalf("workspace annotations = %#v", rendered.Metadata.Annotations)
 			}
+			if rendered.Metadata.Annotations[workloadmeta.AnnotationTauVersion] == "" {
+				t.Fatalf("missing %s: %#v", workloadmeta.AnnotationTauVersion, rendered.Metadata.Annotations)
+			}
 			for _, stale := range []string{workloadmeta.AnnotationClusterQueue, workloadmeta.AnnotationResourceFlavor} {
 				if _, ok := rendered.Metadata.Annotations[stale]; ok {
 					t.Fatalf("workspace workload retained stale preset annotation %q: %#v", stale, rendered.Metadata.Annotations)

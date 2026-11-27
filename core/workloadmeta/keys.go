@@ -110,6 +110,7 @@ const (
 	AnnotationExperimentSource       = "tau.azure.com/experiment-source"
 	AnnotationMetricsSession         = "tau.azure.com/metrics-session-id"
 	AnnotationCaptureVersion         = "tau.azure.com/capture-version"
+	AnnotationTauVersion             = "tau.azure.com/tau-version"
 	AnnotationStellarExperimentID    = "tau.azure.com/stellar-experiment-id"
 	AnnotationStellarExperimentTitle = "tau.azure.com/stellar-experiment-title"
 	AnnotationStellarGroup           = "tau.azure.com/stellar-group-value"
