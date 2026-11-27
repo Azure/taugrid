@@ -6,6 +6,7 @@ package queueresolve
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -565,6 +566,35 @@ func TestValidateSelectionSkipsTopologyCapabilityForCPUOnlyConfig(t *testing.T) 
 		if containsString(call, "resourceflavor.kueue.x-k8s.io") {
 			t.Fatalf("CPU-only validation read ResourceFlavor capabilities: %v", call)
 		}
+	}
+}
+
+func TestValidateSelectionExplainsCPUResourceFlavorReadDenial(t *testing.T) {
+	runner := &validationFakeRunner{
+		outputs: map[string]string{
+			validationKey("-n", "workspace", "get", "localqueue.kueue.x-k8s.io", "cpu-queue", "-o", "json"): localQueueObject("cpu-queue", "cpu-cq", nil),
+			validationKey("get", "clusterqueue.kueue.x-k8s.io", "cpu-cq", "-o", "json"): `{
+				"metadata":{"name":"cpu-cq"},
+				"spec":{"resourceGroups":[{"flavors":[
+					{"name":"cpu-tas","resources":[{"name":"cpu","nominalQuota":"100"}]}
+				]}]}
+			}`,
+		},
+		errors: map[string]error{
+			validationKey("get", "resourceflavor.kueue.x-k8s.io", "cpu-tas", "-o", "json"): errors.New("Error from server (Forbidden): resourceflavors.kueue.x-k8s.io is forbidden"),
+		},
+	}
+
+	_, err := ValidateSelection(context.Background(), runner, ValidationOptions{
+		Namespace:       "workspace",
+		QueueName:       "cpu-queue",
+		TopologyRequest: true,
+		CPURequest:      true,
+	})
+	if err == nil ||
+		!strings.Contains(err.Error(), "Forbidden") ||
+		!strings.Contains(err.Error(), "grant read access to ResourceFlavors") {
+		t.Fatalf("CPU ResourceFlavor read denial should be actionable, got %v", err)
 	}
 }
 
