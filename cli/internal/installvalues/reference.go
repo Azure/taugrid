@@ -20,8 +20,9 @@ var catalog = []struct {
 	Path string
 	fieldInfo
 }{
-	{"components.kueue.enabled", fieldInfo{"bool", "true", "Install the Kueue job scheduler"}},
-	{"components.kuberayOperator.enabled", fieldInfo{"bool", "true", "Install the KubeRay operator"}},
+	{"installation.mode", fieldInfo{"string", "managed (CLI), helm (direct chart)", "Operator ownership mode selected by --mode; do not set independently"}},
+	{"components.kueue.enabled", fieldInfo{"bool", "mode-derived", "Managed mode disables the dependency; Helm mode enables and owns it"}},
+	{"components.kuberayOperator.enabled", fieldInfo{"bool", "mode-derived", "Managed mode disables the dependency; Helm mode enables and owns it"}},
 	{"components.tauCoreController.enabled", fieldInfo{"bool", "true", "Install the Tau core controller"}},
 	{"components.taugridCore.enabled", fieldInfo{"bool", "true", "Install the taugrid-core services chart"}},
 	{"components.gpuMonitoring.enabled", fieldInfo{"bool", "unset (follows tauCoreController)", "Install GPU node health monitoring; set explicitly only to override the controller linkage"}},
@@ -39,8 +40,8 @@ var catalog = []struct {
 	{"baselineQueue.gpu.coveredResources", fieldInfo{"list", "nvidia.com/gpu", "GPU resource names covered by the node-resource group"}},
 	{"baselineQueue.gpu.flavors", fieldInfo{"list", "[]", "Optional externally configured GPU ResourceFlavors"}},
 
-	{"kueue.*", fieldInfo{"", "", "Pass-through to the embedded Kueue chart (v0.18)"}},
-	{"kuberay-operator.*", fieldInfo{"", "", "Pass-through to the embedded KubeRay chart (v1.6)"}},
+	{"kueue.*", fieldInfo{"", "", "Helm mode pass-through to the embedded Kueue chart (v0.19)"}},
+	{"kuberay-operator.*", fieldInfo{"", "", "Helm mode pass-through to the embedded KubeRay chart (v1.7)"}},
 	{"tau-core-controller.image.repository", fieldInfo{"string", "mcr.microsoft.com/aks/ai-runtime/tau-core-controller", "Controller image repository"}},
 	{"tau-core-controller.tauCluster.nodeLabelRules", fieldInfo{"list", "reviewed AKS GPU catalog", "VM-size rules that reconcile gpu-class and gpu-series Node labels"}},
 	{"tau-core-controller.tauCluster.extraNodeLabelRules", fieldInfo{"list", "[]", "Additional cluster-specific GPU label reconciliation rules"}},

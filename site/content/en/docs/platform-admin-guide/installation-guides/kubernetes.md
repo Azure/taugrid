@@ -13,9 +13,11 @@ a Kubernetes cluster your platform provisions and operates. This is the
 canonical, provider-neutral installation path.
 
 This page takes a platform operator from an empty workstation to a validated
-TauGrid workspace and a completed smoke workload. The portable path works on
-Kubernetes 1.30 or newer. Provider-specific identity, networking, storage, GPU
-drivers, and cluster lifecycle remain owned by your platform.
+TauGrid workspace and a completed smoke workload. The portable path uses
+explicit self-managed Helm operators and works on Kubernetes 1.30 or newer.
+AKS operators should prefer the managed-extension path in the
+[AKS guide](../aks-setup/). Provider-specific identity, networking, storage,
+GPU drivers, and cluster lifecycle remain owned by your platform.
 
 ## What you will set up
 
@@ -117,7 +119,7 @@ First preview the exact release as a dry run:
 
 ```bash
 tau cluster explain-values
-tau cluster install --context "$TAU_CONTEXT" --dry-run
+tau cluster install --mode helm --context "$TAU_CONTEXT" --dry-run
 ```
 
 The dry run should end with `TauGrid render summary (nothing was applied)`.
@@ -126,11 +128,12 @@ Review the rendered plan before continuing.
 Install TauGrid:
 
 ```bash
-tau cluster install --context "$TAU_CONTEXT"
+tau cluster install --mode helm --context "$TAU_CONTEXT"
 ```
 
-The default distribution installs Kueue, KubeRay, the Tau controller and CRDs,
-a portable baseline queue, GPU monitoring profiles, and the TauGrid Portal.
+Helm mode installs and owns Kueue, KubeRay, their CRDs and webhooks, the Tau
+controller and CRDs, a portable baseline queue, GPU monitoring profiles, and
+the TauGrid Portal. It rejects pre-existing foreign Kueue or KubeRay ownership.
 The chart excludes provider GPU drivers and storage drivers.
 
 If the platform needs different queue quotas, GPU labels, or component
@@ -138,11 +141,13 @@ settings, keep the complete reviewed configuration in one values file:
 
 ```bash
 tau cluster install \
+  --mode helm \
   --context "$TAU_CONTEXT" \
   --values taugrid-values.yaml \
   --dry-run
 
 tau cluster install \
+  --mode helm \
   --context "$TAU_CONTEXT" \
   --values taugrid-values.yaml
 ```
@@ -151,6 +156,10 @@ Pass the same complete values file on later upgrades because installation
 resets omitted settings to chart defaults. The
 [cluster install values reference](../../reference/cluster-install-values/)
 documents every supported setting.
+
+The ownership mode is immutable for an installed release. TauGrid rejects a
+mode change before Helm mutation rather than removing an active singleton
+controller before its replacement can be verified.
 
 Re-run the control-plane readiness gate:
 

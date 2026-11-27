@@ -30,21 +30,29 @@ type Runner interface {
 }
 
 type Options struct {
-	Release            string
-	SystemNamespace    string
-	Timeout            time.Duration
-	PollInterval       time.Duration
-	QueryTimeout       time.Duration
-	DisabledComponents []Component
+	Release                 string
+	SystemNamespace         string
+	Timeout                 time.Duration
+	PollInterval            time.Duration
+	QueryTimeout            time.Duration
+	DisabledComponents      []Component
+	ExternalComponentOwners map[Component]ExternalComponentOwner
+}
+
+type ExternalComponentOwner struct {
+	Release               string
+	Namespace             string
+	CompatibleChartPrefix string
 }
 
 type Component string
 
 const (
-	ComponentKueue   Component = "Kueue"
-	ComponentKubeRay Component = "KubeRay"
-	ComponentTauCore Component = "Tau controller"
-	ComponentPortal  Component = "Portal"
+	ComponentKueue         Component = "Kueue"
+	ComponentKubeRay       Component = "KubeRay"
+	ComponentTauCore       Component = "Tau controller"
+	ComponentPortal        Component = "Portal"
+	ComponentBaselineQueue Component = "Baseline queue"
 )
 
 type chartComponent struct {
@@ -66,7 +74,10 @@ var componentSwitches = []chartComponent{
 
 func DisabledComponents(helmValues []byte) ([]Component, error) {
 	var values struct {
-		Components  map[string]any `json:"components"`
+		Components    map[string]any `json:"components"`
+		BaselineQueue struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"baselineQueue"`
 		TauGridCore struct {
 			Portal struct {
 				Enabled *bool `json:"enabled"`
@@ -91,6 +102,9 @@ func DisabledComponents(helmValues []byte) ([]Component, error) {
 	}
 	if !tauGridCoreEnabled || (values.TauGridCore.Portal.Enabled != nil && !*values.TauGridCore.Portal.Enabled) {
 		disabled = append(disabled, ComponentPortal)
+	}
+	if values.BaselineQueue.Enabled != nil && !*values.BaselineQueue.Enabled {
+		disabled = append(disabled, ComponentBaselineQueue)
 	}
 	return disabled, nil
 }
@@ -218,6 +232,8 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 	for _, component := range chartComponents {
 		name := string(component.name)
 		switch {
+		case opts.ExternalComponentOwners[component.name].Release != "":
+			results = append(results, checkExternalOperatorDeployment(ctx, runner, component, opts.ExternalComponentOwners[component.name]))
 		case slices.Contains(opts.DisabledComponents, component.name):
 			results = append(results, skip(name, fmt.Sprintf("components.%s.enabled is false in the Helm release", component.valuesKey)))
 		case listErr != nil:
@@ -246,13 +262,62 @@ func Check(ctx context.Context, runner Runner, opts Options) Report {
 			checkTauCluster(ctx, runner),
 		)
 	}
-	results = append(results, checkBaselineQueue(ctx, runner, opts.Release))
+	if slices.Contains(opts.DisabledComponents, ComponentBaselineQueue) {
+		results = append(results, skip("Baseline queue", "baselineQueue.enabled is false in the Helm release"))
+	} else {
+		results = append(results, checkBaselineQueue(ctx, runner, opts.Release))
+	}
 	if slices.Contains(opts.DisabledComponents, ComponentTauCore) {
 		results = append(results, skip("Quota guard", "components.tauCoreController.enabled is false in the Helm release"))
 	} else {
 		results = append(results, checkQuotaGuard(ctx, runner))
 	}
 	return Report{Results: results}
+}
+
+func checkExternalOperatorDeployment(ctx context.Context, runner Runner, component chartComponent, owner ExternalComponentOwner) Result {
+	var deployments deploymentListDoc
+	args := []string{
+		"get", "deployments",
+		"--all-namespaces",
+		"--selector", "app.kubernetes.io/name=" + externalComponentAppName(component.name),
+		"--output=json",
+	}
+	if err := getJSON(ctx, runner, args, &deployments); err != nil {
+		return fail(string(component.name), fmt.Sprintf("%v; inspect the managed extension deployment", err))
+	}
+	if len(deployments.Items) != 1 {
+		return fail(string(component.name), fmt.Sprintf("found %d operator Deployments; expected exactly one", len(deployments.Items)))
+	}
+	deployment := deployments.Items[0]
+	if !strings.HasPrefix(deployment.Metadata.Labels["helm.sh/chart"], owner.CompatibleChartPrefix) {
+		return fail(string(component.name), fmt.Sprintf(
+			"Deployment %s/%s chart %q is outside the supported compatibility line %q",
+			deployment.Metadata.Namespace,
+			deployment.Metadata.Name,
+			deployment.Metadata.Labels["helm.sh/chart"],
+			owner.CompatibleChartPrefix+"x",
+		))
+	}
+	if deployment.Metadata.Namespace != owner.Namespace ||
+		deployment.Metadata.Annotations["meta.helm.sh/release-name"] != owner.Release ||
+		deployment.Metadata.Annotations["meta.helm.sh/release-namespace"] != owner.Namespace {
+		return fail(string(component.name), fmt.Sprintf(
+			"Deployment %s/%s is not owned by managed Helm release %s in %s",
+			deployment.Metadata.Namespace,
+			deployment.Metadata.Name,
+			owner.Release,
+			owner.Namespace,
+		))
+	}
+	return deploymentReadinessResult(string(component.name), deployment)
+}
+
+func externalComponentAppName(component Component) string {
+	if component == ComponentKubeRay {
+		return "kuberay-operator"
+	}
+	return "kueue"
 }
 
 func readinessQueryTimeout(opts Options) time.Duration {
@@ -327,9 +392,11 @@ func numericVersionPart(value string) (int, error) {
 
 type deploymentDoc struct {
 	Metadata struct {
-		Name       string            `json:"name"`
-		Generation int64             `json:"generation"`
-		Labels     map[string]string `json:"labels"`
+		Name        string            `json:"name"`
+		Namespace   string            `json:"namespace"`
+		Generation  int64             `json:"generation"`
+		Labels      map[string]string `json:"labels"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
 		Replicas int32 `json:"replicas"`

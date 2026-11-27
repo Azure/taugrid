@@ -1,11 +1,13 @@
 # TauGrid Distribution Chart
 
-Kubernetes-native TauGrid distribution. Installs Kueue, KubeRay, the Tau core controller, GPU node health monitoring, the operator Portal, and a portable baseline queue on fresh AKS clusters.
+Kubernetes-native TauGrid distribution with two explicit operator ownership
+paths. AKS-managed extensions are the preferred CLI default; Helm mode is the
+self-managed a-la-carte path.
 
 ## Install
 
 ```bash
-tau cluster install --version 0.4.8 --values taugrid-values.yaml
+tau cluster install --mode managed --version 0.4.8 --values taugrid-values.yaml
 ```
 
 Or with Helm directly:
@@ -15,11 +17,26 @@ helm upgrade --install taugrid \
   oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid \
   --version 0.4.8 \
   --namespace tau-system --create-namespace \
+  --set installation.mode=helm \
   --values taugrid-values.yaml \
   --wait --atomic
 ```
 
 Use `tau cluster explain-values` to print the full field reference.
+
+## Operator ownership
+
+| Mode | Kueue and KubeRay owner | TauGrid chart behavior |
+|---|---|---|
+| `managed` | AKS `microsoft.kueue` and `microsoft.kuberay` extensions | Requires both component dependencies disabled and renders no operator CRDs, controllers, or webhooks |
+| `helm` | TauGrid Helm release | Requires both dependencies enabled and owns their lifecycle |
+
+The Tau CLI appends the mode-derived component values after user values, so
+`components.kueue.enabled` and `components.kuberayOperator.enabled` cannot
+silently create a mixed ownership combination. The mode is immutable for an
+installed release. `baselineQueue.enabled=false` remains supported when GitOps
+owns queue and priority policy; `tau-core-controller` still owns the
+`taugrid-gpu-topology` contract.
 
 ### Cluster-level ADX query connection
 
@@ -101,8 +118,9 @@ for isolation, tenant authorization, and rollback.
 | taugrid-core | `components.taugridCore.enabled` | Default Portal plus opt-in Stellar, lifecycle recorder, and image prewarm services |
 | gpu-monitoring | follows `components.tauCoreController.enabled` | GPU/IB/NVMe node health checks, DCGM, Node conditions |
 
-All components are enabled by default. Disable any with
-`--set components.<key>.enabled=false`.
+Direct Helm installs default to `installation.mode=helm`. The supported CLI
+derives the two operator component switches from `--mode`; do not use them to
+construct a third ownership combination.
 
 GPU monitoring is deliberately not an unconstrained toggle: a cluster running a
 Tau control plane always gets GPU node health signal, so a fleet cannot end up

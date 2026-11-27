@@ -69,6 +69,19 @@ objects before uninstalling the controller.`,
 			if !spec.DryRun && !spec.AssumeYes {
 				return fmt.Errorf("uninstall removes the TauGrid control plane; rerun with --yes after migrating active TauWorkspace objects")
 			}
+			releaseExists, err := tauGridReleaseExists(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+			if err != nil {
+				return err
+			}
+			if !releaseExists {
+				fmt.Fprintf(cmd.OutOrStdout(), "TauGrid Helm release %s is already absent from namespace %s; nothing was removed.\n", spec.Release, spec.Namespace)
+				return nil
+			}
+			mode, err := installedOperatorModeForUninstall(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+			if err != nil {
+				return fmt.Errorf("refusing uninstall without affirmative operator ownership: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Operator ownership mode: %s. %s\n", mode, uninstallOwnershipSummary(mode))
 			queue := sync.OnceValue(func() baselineQueuePolicy {
 				return tauGridBaselineQueue(cmd, spec)
 			})
@@ -103,6 +116,16 @@ cluster.`)
 	flags.BoolVar(&spec.AssumeYes, "yes", false, "confirm removal of the TauGrid control plane")
 	flags.BoolVar(&spec.DrainQueue, "drain-queue", spec.DrainQueue, "remove the queue policy while Kueue still runs, so its finalizers are released")
 	return cmd
+}
+
+func uninstallOwnershipSummary(mode string) string {
+	if mode == operatorModeManaged {
+		return "TauGrid will not remove AKS managed extensions or their CRDs and webhooks."
+	}
+	if mode == operatorModeLegacyPartial {
+		return "The legacy release owns one operator and references one external operator; Helm will remove only release-owned resources."
+	}
+	return "The TauGrid release owns the self-managed Kueue and KubeRay lifecycle."
 }
 
 func validateClusterUninstallSpec(spec clusterUninstallSpec) error {
@@ -271,7 +294,7 @@ func clusterUninstallDrainArgs(spec clusterUninstallSpec, version string) []stri
 	if spec.NoHooks {
 		args = append(args, "--no-hooks")
 	}
-	return appendForceConflicts(args)
+	return args
 }
 
 func printUninstallRecovery(out io.Writer, queue baselineQueuePolicy) {

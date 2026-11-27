@@ -43,9 +43,9 @@ tau-core-controller, the singleton TauCluster, the Helm-owned baseline
 ClusterQueue, the default Portal, and the narrow fail-closed quota decision
 admission guard. It does not submit a workload or mutate the cluster.
 
-Components the release turned off through components.<name>.enabled are reported
-as SKIP and do not fail validation, so a cluster that keeps its own Kueue or
-KubeRay can still use this command as a gate.`,
+Managed-mode Kueue and KubeRay are validated through their extension-owned
+Deployments. Other components the release turned off are reported as SKIP and
+do not fail validation.`,
 		Example: `  tau cluster validate installation
   tau cluster validate installation --release taugrid --namespace tau-system --timeout 10m`,
 		Args: cobra.NoArgs,
@@ -65,15 +65,21 @@ KubeRay can still use this command as a gate.`,
 				return fmt.Errorf("invalid --poll-interval: must be greater than zero")
 			}
 			disabled := disabledTauGridComponents(cmd, kubeContext, release, namespace)
+			mode, err := installedOperatorMode(cmd, kubeContext, release, namespace)
+			if err != nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "Cannot determine operator ownership mode (%v); validating operators as Helm-owned release components.\n", err)
+				mode = operatorModeHelm
+			}
 			return runTauGridInstallationValidation(
 				cmd.Context(),
 				newInstallationCheckRunner(kubeContext),
 				installationcheck.Options{
-					Release:            release,
-					SystemNamespace:    namespace,
-					Timeout:            timeout,
-					PollInterval:       pollInterval,
-					DisabledComponents: disabled,
+					Release:                 release,
+					SystemNamespace:         namespace,
+					Timeout:                 timeout,
+					PollInterval:            pollInterval,
+					DisabledComponents:      disabled,
+					ExternalComponentOwners: externalOperatorComponents(mode),
 				},
 				cmd.OutOrStdout(),
 			)

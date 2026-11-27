@@ -24,6 +24,9 @@ const (
 	defaultTauGridNamespace    = "tau-system"
 	defaultTauGridChartVersion = "0.4.8"
 	defaultTauGridChart        = "oci://mcr.microsoft.com/aks/ai-runtime/helm/taugrid"
+	operatorModeManaged        = "managed"
+	operatorModeHelm           = "helm"
+	operatorModeLegacyPartial  = "legacy-partial"
 )
 
 type clusterInstallSpec struct {
@@ -32,6 +35,7 @@ type clusterInstallSpec struct {
 	Namespace    string
 	Chart        string
 	Version      string
+	Mode         string
 	Timeout      string
 	ValuesFiles  []string
 	SetValues    []string
@@ -49,6 +53,7 @@ func newClusterInstallCmd() *cobra.Command {
 		Namespace:    defaultTauGridNamespace,
 		Chart:        defaultTauGridChart,
 		Version:      defaultTauGridChartVersion,
+		Mode:         operatorModeManaged,
 		Timeout:      "15m",
 		CreateNS:     true,
 		Wait:         false,
@@ -57,12 +62,18 @@ func newClusterInstallCmd() *cobra.Command {
 	}
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install or upgrade the TauGrid Helm distribution",
+		Short: "Install or upgrade TauGrid with managed or Helm-owned operators",
 		Args:  cobra.NoArgs,
 		Long: `Install the versioned TauGrid distribution on an existing Kubernetes cluster.
 
-The chart owns cluster-scoped installation state: Kueue, KubeRay, Tau APIs,
-tau-core-controller, and the portable baseline queue.
+Managed mode is the default AKS path. The microsoft.kueue and
+microsoft.kuberay extensions must already be installed and ready; TauGrid
+validates their ownership and compatibility, then installs no operator CRDs,
+controllers, or webhooks.
+
+Helm mode is the explicit self-managed path. The TauGrid release owns the
+Kueue and KubeRay lifecycle and refuses existing foreign operator or CRD
+ownership.
 On upgrade, Tau updates its own CRDs from the selected chart before running
 Helm. Existing custom resources are retained; Helm rollback does not revert
 these CRD updates. Third-party CRD migrations remain platform-owned.
@@ -75,6 +86,8 @@ Storage-backed workloads must name an existing PVC in their target namespace.
 The platform pre-provisions and owns that claim, its StorageClass, CSI setup,
 cloud storage, access policy, and lifecycle outside TauGrid.`,
 		Example: `  tau cluster install
+  tau cluster install --mode helm
+  tau cluster install --mode managed --set baselineQueue.enabled=false
   tau cluster install --dry-run
   tau cluster install --namespace tau-system --set portal.enabled=false --wait`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -106,6 +119,24 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 			}
 			installationRunner := newInstallationCheckRunner(spec.KubeContext)
 			if releaseExists {
+				existingMode, err := installedOperatorMode(cmd, spec.KubeContext, spec.Release, spec.Namespace)
+				if err != nil {
+					return err
+				}
+				if existingMode != spec.Mode {
+					return fmt.Errorf(
+						"cannot change operator ownership mode from %s to %s in place; no safe same-cluster transfer can verify the replacement before removing the active singleton controllers: keep the current mode, or provision and verify a separate cluster in %s mode, migrate reviewed workload state, then uninstall the old %s-owned installation",
+						existingMode,
+						spec.Mode,
+						spec.Mode,
+						existingMode,
+					)
+				}
+			}
+			if err := runOperatorOwnershipPreflight(cmd.Context(), installationRunner, spec, releaseExists); err != nil {
+				return err
+			}
+			if releaseExists {
 				if err := ensureSystemNamespaceMigrationSafe(cmd.Context(), installationRunner, spec.Namespace); err != nil {
 					return err
 				}
@@ -113,7 +144,7 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 					return err
 				}
 			}
-			if !releaseExists {
+			if !releaseExists && spec.Mode == operatorModeHelm {
 				if err := runClusterInstallHelm(cmd, spec, cmd.OutOrStdout(), clusterInstallBootstrapArgs(spec)); err != nil {
 					return fmt.Errorf("install TauGrid control plane before queue policy: %w", err)
 				}
@@ -126,11 +157,12 @@ cloud storage, access policy, and lifecycle outside TauGrid.`,
 				cmd.Context(),
 				installationRunner,
 				installationcheck.Options{
-					Release:            spec.Release,
-					SystemNamespace:    spec.Namespace,
-					Timeout:            validationTimeout,
-					PollInterval:       defaultInstallationValidationPollInterval,
-					DisabledComponents: disabled,
+					Release:                 spec.Release,
+					SystemNamespace:         spec.Namespace,
+					Timeout:                 validationTimeout,
+					PollInterval:            defaultInstallationValidationPollInterval,
+					DisabledComponents:      disabled,
+					ExternalComponentOwners: externalOperatorComponents(spec.Mode),
 				},
 				cmd.OutOrStdout(),
 			); err != nil {
@@ -155,6 +187,7 @@ Next:
 	flags.StringVar(&spec.Namespace, "namespace", spec.Namespace, "namespace for all TauGrid system workloads and TauWorkspace objects")
 	flags.StringVar(&spec.Chart, "chart", spec.Chart, "TauGrid chart reference or local chart path")
 	flags.StringVar(&spec.Version, "version", spec.Version, "TauGrid chart version")
+	flags.StringVar(&spec.Mode, "mode", spec.Mode, "operator ownership mode: managed or helm")
 	flags.StringVar(&spec.Timeout, "timeout", spec.Timeout, "timeout for each Helm operation and the readiness wait")
 	flags.StringArrayVarP(&spec.ValuesFiles, "values", "f", nil, "additional Helm values file (repeatable)")
 	flags.StringArrayVar(&spec.SetValues, "set", nil, "set a Helm value (repeatable)")
@@ -173,19 +206,26 @@ func validateClusterInstallSpec(spec clusterInstallSpec) error {
 		"--namespace": spec.Namespace,
 		"--chart":     spec.Chart,
 		"--version":   spec.Version,
+		"--mode":      spec.Mode,
 		"--timeout":   spec.Timeout,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s must not be empty", name)
 		}
 	}
+	if spec.Mode != operatorModeManaged && spec.Mode != operatorModeHelm {
+		return fmt.Errorf("--mode must be %q or %q", operatorModeManaged, operatorModeHelm)
+	}
 	return nil
 }
 
 func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
-	helmWait := "bootstrap only (Tau readiness validation still runs after queue policy)"
+	helmWait := "disabled (Tau component-aware readiness validation still runs)"
+	if spec.Mode == operatorModeHelm {
+		helmWait = "bootstrap only (Tau readiness validation still runs after queue policy)"
+	}
 	if spec.Wait {
-		helmWait = "enabled for both passes"
+		helmWait = "enabled"
 	}
 	rollback := "disabled"
 	if spec.Atomic {
@@ -196,14 +236,16 @@ func printClusterInstallPlan(cmd *cobra.Command, spec clusterInstallSpec) {
   Namespace:  %s
   Chart:      %s
   Version:    %s
+  Mode:       %s
+  Operators:  %s
   Helm wait:  %s
   Rollback:   %s
   Tau CRDs:   update from the selected chart before an existing-release upgrade; not rolled back by Helm
-  Defaults:   Kueue, KubeRay, tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal
+  Defaults:   tau-core-controller, TauCluster, baseline queue, quota admission guard, GPU monitoring, Portal
   Opt-in:     Stellar, lifecycle recorder, image prewarm
   Validation: Kubernetes >=1.30 and all required control-plane and Portal resources ready
 
-`, spec.Release, spec.Namespace, spec.Chart, spec.Version, helmWait, rollback)
+`, spec.Release, spec.Namespace, spec.Chart, spec.Version, spec.Mode, operatorOwnershipSummary(spec.Mode), helmWait, rollback)
 }
 
 func runClusterInstallHelm(cmd *cobra.Command, spec clusterInstallSpec, out io.Writer, args []string) error {
@@ -227,6 +269,7 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 	var releases []struct {
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
+		Status    string `json:"status"`
 	}
 	if err := json.Unmarshal(output.Bytes(), &releases); err != nil {
 		return false, fmt.Errorf("decode Helm release list: %w", err)
@@ -235,6 +278,9 @@ func tauGridReleaseExists(cmd *cobra.Command, kubeContext, release, namespace st
 	foundInTarget := false
 	for _, r := range releases {
 		if r.Name != release {
+			continue
+		}
+		if r.Status == "uninstalled" {
 			continue
 		}
 		if r.Namespace == "" || r.Namespace == namespace {
@@ -347,7 +393,7 @@ func clusterInstallArgs(spec clusterInstallSpec) []string {
 	if spec.Atomic {
 		args = appendRollbackOnFailure(args)
 	}
-	return appendHelmValueArgs(appendForceConflicts(args), spec)
+	return appendHelmValueArgs(args, spec)
 }
 
 func appendHelmValueArgs(args []string, spec clusterInstallSpec) []string {
@@ -360,5 +406,36 @@ func appendHelmValueArgs(args []string, spec clusterInstallSpec) []string {
 	for _, value := range spec.SetString {
 		args = append(args, "--set-string", value)
 	}
+	managed := spec.Mode == operatorModeManaged
+	args = append(args,
+		"--set", "installation.mode="+spec.Mode,
+		"--set", fmt.Sprintf("components.kueue.enabled=%t", !managed),
+		"--set", fmt.Sprintf("components.kuberayOperator.enabled=%t", !managed),
+	)
 	return args
+}
+
+func operatorOwnershipSummary(mode string) string {
+	if mode == operatorModeManaged {
+		return "AKS microsoft.kueue and microsoft.kuberay extensions; TauGrid owns no operator CRDs, controllers, or webhooks"
+	}
+	return "TauGrid Helm release owns Kueue and KubeRay CRDs, controllers, webhooks, upgrades, and removal"
+}
+
+func externalOperatorComponents(mode string) map[installationcheck.Component]installationcheck.ExternalComponentOwner {
+	if mode != operatorModeManaged {
+		return nil
+	}
+	return map[installationcheck.Component]installationcheck.ExternalComponentOwner{
+		installationcheck.ComponentKueue: {
+			Release:               managedKueueRelease,
+			Namespace:             managedKueueNamespace,
+			CompatibleChartPrefix: supportedManagedKueueChart,
+		},
+		installationcheck.ComponentKubeRay: {
+			Release:               managedKubeRayRelease,
+			Namespace:             managedKubeRayNamespace,
+			CompatibleChartPrefix: supportedManagedRayChart,
+		},
+	}
 }

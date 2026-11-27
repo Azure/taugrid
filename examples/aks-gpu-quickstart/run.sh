@@ -230,7 +230,7 @@ cause will be far from here. Investigate with:
 esac
 
 step "3. Install TauGrid"
-run tau cluster install "${CHART_ARGS[@]}" --context "$CLUSTER" \
+run tau cluster install "${CHART_ARGS[@]}" --mode helm --context "$CLUSTER" \
   --wait=false --atomic=false
 run tau cluster validate installation --context "$CLUSTER"
 

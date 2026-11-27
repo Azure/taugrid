@@ -83,14 +83,16 @@ live `workspace-rbac` negative tests and H200/storage signoff.
 
 ## Day 0: platform-owned workspace desired state
 
-Fresh clusters install the TauGrid distribution with `tau cluster install`,
-which prints the Helm plan, performs the two-phase install, and fails unless
-the required control plane passes its readiness report. Re-run the same
-read-only report with `tau cluster validate installation`. Existing managed
-clusters install the same components through their ArgoCD Applications. In
-either case, a platform owner then declares a `TauWorkspace`; the controller
-reconciles its namespace metadata, RBAC, LocalQueue, and optional
-workload-identity ServiceAccount.
+Fresh AKS clusters prefer `tau cluster install --mode managed` after the
+managed Kueue and KubeRay extensions are provisioned. Portable Kubernetes
+clusters use `tau cluster install --mode helm` for self-managed operators.
+Both paths print an ownership plan and fail unless the required control plane
+passes its readiness report. Re-run the same read-only report with
+`tau cluster validate installation`. Existing GitOps clusters can compose
+external queue policy with `baselineQueue.enabled=false`. In every path, a
+platform owner then declares a `TauWorkspace`; the controller reconciles its
+namespace metadata, RBAC, LocalQueue, and optional workload-identity
+ServiceAccount.
 
 TauGrid v0 activates exactly one `TauWorkspace`. A non-GitOps platform owner can
 create it directly through the preview-first admin workflow:
