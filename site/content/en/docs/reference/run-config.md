@@ -114,7 +114,10 @@ compute:
 ```
 
 Run `tau run --config tau.yaml` from a repository connected to the workspace.
-`compute.gpus` is required; set it to `0` for a CPU Job. The workspace and cluster
+`compute.gpus` is required; set it to `0` for a CPU Job. CPU Jobs must also set
+`compute.cpu_request` or `compute.memory_request` (or the matching limit);
+otherwise Tau rejects the run because Kueue cannot admit a pod without resource
+requests. The workspace and cluster
 must be Ready with current observed generations, the cluster must use Reconcile
 mode, and routing must use the workspace's managed LocalQueue and ClusterQueue.
 Jobs remain suspended until Kueue admits them against the shared team pool;

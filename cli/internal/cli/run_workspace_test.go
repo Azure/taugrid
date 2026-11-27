@@ -409,8 +409,12 @@ spec:
 		wantPodCount int
 	}{
 		{
-			name:         "job",
-			opts:         workspaceDirectRunOptions("job", jobScript, "busybox:1.36", "workspace-test", "client", 1, &zeroGPUs),
+			name: "job",
+			opts: func() runDispatchOptions {
+				o := workspaceDirectRunOptions("job", jobScript, "busybox:1.36", "workspace-test", "client", 1, &zeroGPUs)
+				o.cpuRequest = "100m"
+				return o
+			}(),
 			kind:         "kind: Job",
 			wantPodCount: 1,
 		},

@@ -1600,6 +1600,32 @@ func TestRender_DevicePluginDoesNotUseClaims(t *testing.T) {
 	}
 }
 
+func TestRenderCPUOnlyJobRequiresCPUOrMemory(t *testing.T) {
+	cpuProfile := func() profile.Profile {
+		p := trainProfile()
+		p.Resources = profile.Resources{}
+		return p
+	}
+	base := Options{Name: "j", Namespace: "tau", Command: []string{"true"}}
+	if _, err := Render(cpuProfile(), base); err == nil || !strings.Contains(err.Error(), "compute.cpu_request or compute.memory_request") {
+		t.Fatalf("Render error = %v, want missing cpu/memory request error", err)
+	}
+	for name, mutate := range map[string]func(*profile.Profile, *Options){
+		"cpu request":      func(_ *profile.Profile, o *Options) { o.CPURequest = "500m" },
+		"memory limit":     func(_ *profile.Profile, o *Options) { o.MemoryLimit = "1Gi" },
+		"profile requests": func(p *profile.Profile, _ *Options) { p.Resources.Requests = map[string]any{"memory": "1Gi"} },
+		"gpu job":          func(p *profile.Profile, _ *Options) { p.Resources.GPU.Count = 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, o := cpuProfile(), base
+			mutate(&p, &o)
+			if _, err := Render(p, o); err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+		})
+	}
+}
+
 func TestRenderRejectsInvalidResourceQuantities(t *testing.T) {
 	tests := []struct {
 		name      string
