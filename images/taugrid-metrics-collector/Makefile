@@ -13,6 +13,7 @@ ACR_REGISTRY ?= aksairuntime.azurecr.io
 IMG ?= $(ACR_REGISTRY)/unlisted/aks/ai-runtime/$(IMAGE):$(TAG)
 
 PLATFORMS ?= linux/amd64,linux/arm64
+DOCKER_BUILD_ARGS ?=
 SRC := ../../metrics/experiment-metrics-collector
 CONTEXT := ../..
 
@@ -33,6 +34,7 @@ lint:
 
 docker-build:
 	docker buildx build \
+		$(DOCKER_BUILD_ARGS) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg DATE=$(DATE) \
@@ -44,6 +46,7 @@ docker-build:
 
 docker-push:
 	docker buildx build \
+		$(DOCKER_BUILD_ARGS) \
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg DATE=$(DATE) \

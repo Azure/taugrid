@@ -9,6 +9,7 @@ readonly TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/vendor-taugrid-test.XXXXXX")"
 readonly HELM_LOG="${TEST_ROOT}/helm.log"
 readonly ISOLATED_REPO="${TEST_ROOT}/repo"
 readonly TEST_CHART="${ISOLATED_REPO}/charts/taugrid"
+readonly CONTROL_ROOT="${TEST_ROOT}/control"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
 fail() {
@@ -87,6 +88,11 @@ OUTPUT
     done
     touch "${destination}/gpu-monitoring-${version}.tgz"
     ;;
+  "package "*)
+    name="${2##*/}"
+    version=$(awk '$1 == "version:" {print $2; exit}' "$2/Chart.yaml")
+    touch "${4}/${name}-${version}.tgz"
+    ;;
   *)
     exit 64
     ;;
@@ -98,10 +104,10 @@ PATH="${TEST_ROOT}/bin:${PATH}"
 export PATH
 
 mkdir -p \
-  "${ISOLATED_REPO}/scripts/ci" \
+  "${CONTROL_ROOT}/scripts/ci" \
   "${ISOLATED_REPO}/charts/gpu-monitoring" \
   "${TEST_CHART}/charts"
-cp "${TEST_DIR}/../vendor-taugrid-dependencies.sh" "${ISOLATED_REPO}/scripts/ci/"
+cp "${TEST_DIR}/../vendor-taugrid-dependencies.sh" "${CONTROL_ROOT}/scripts/ci/"
 cat >"${ISOLATED_REPO}/charts/gpu-monitoring/Chart.yaml" <<'EOF'
 apiVersion: v2
 name: gpu-monitoring
@@ -114,7 +120,7 @@ version: 0.0.0
 EOF
 touch "$TEST_CHART/charts/source-safety-sentinel"
 # shellcheck source=../vendor-taugrid-dependencies.sh
-source "${ISOLATED_REPO}/scripts/ci/vendor-taugrid-dependencies.sh"
+source "${CONTROL_ROOT}/scripts/ci/vendor-taugrid-dependencies.sh"
 [[ ! -e "$HELM_LOG" ]] || fail "sourcing the vendoring script invoked Helm"
 [[ -f "$TEST_CHART/charts/source-safety-sentinel" ]] ||
   fail "sourcing the vendoring script deleted an existing chart artifact"
@@ -162,6 +168,17 @@ assert_invalid 1.2.3+build..1 1.2.3 "build metadata must contain non-empty"
 assert_invalid 1.2.3+build_1 1.2.3 "build metadata identifier"
 assert_invalid 1.2.3+build+1 1.2.3 "build metadata must contain non-empty"
 assert_invalid 1.2.3 1.2.3-01 "reference chart version"
+
+rm -f "$HELM_LOG"
+export FAKE_DEPENDENCY_VERSION=0.1.4
+vendor_taugrid_dependencies "$TEST_CHART"
+[[ -f "$TEST_CHART/charts/gpu-monitoring-0.1.4.tgz" ]] ||
+  fail "tagged sibling gpu-monitoring chart was not packaged"
+grep -Eq 'package .*/repo/charts/gpu-monitoring --destination ' "$HELM_LOG" ||
+  fail "vendoring did not resolve the first-party chart beside the tagged umbrella"
+if grep -q '^pull ' "$HELM_LOG"; then
+  fail "matching tagged sibling chart unexpectedly pulled from OCI"
+fi
 
 retention_chart="$TEST_ROOT/kueue"
 retention_archive="$TEST_ROOT/kueue-0.19.2.tgz"
